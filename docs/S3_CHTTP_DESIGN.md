@@ -30,9 +30,9 @@ Rejected. This makes the HTTP client responsible for credentials, object
 storage naming, XML schemas, and multipart recovery. It also prevents other
 CHTTP consumers from depending on a narrow HTTP ABI.
 
-### Add a separate Salts::S3 adapter above CHTTP
+### Add a separate CHttp::S3 adapter above CHTTP
 
-Selected. `Salts::S3` owns S3 request construction and parsing, borrows an
+Selected. `CHttp::S3` owns S3 request construction and parsing, borrows an
 injected CHTTP client, and uses the same public call for H1 or H2. CHTTP remains
 the only owner of connections, TLS, HTTP framing, connection pooling, file
 source/sink progress, and protocol shutdown.
@@ -43,16 +43,16 @@ source/sink progress, and protocol shutdown.
 application
     |
     v
-Salts::S3  -- private --> BoringSSL OpenSSL-compatible Crypto target
+CHttp::S3  -- private --> BoringSSL OpenSSL-compatible Crypto target
     |        -- private --> Salts::XmlParser / Salts::CSTL / Salts::Core
     v
-Salts::CHTTP
+CHttp::Client
     v
 Salts::CNet -> NativeIO
 ```
 
-The installed C target is `Salts::S3`; its implementation library is
-`salts_s3`, version and SOVERSION 1. Public headers include CHTTP types but do
+The installed C target is `CHttp::S3`; its implementation library is
+`chttp_s3`, version and SOVERSION 1. Public headers include CHTTP types but do
 not expose BoringSSL, llhttp, the XML engine, CoroNet, or H3 types.
 
 ## Public model

@@ -37,5 +37,5 @@ foreach(test_file ${TEST_FILES})
     endif()
     
     add_test(NAME ${test_name} COMMAND ${test_name})
-    set_target_properties(${test_name} PROPERTIES FOLDER chhttp/internal/tests)
+    set_target_properties(${test_name} PROPERTIES FOLDER vendor/cjwt/tests)
 endforeach()

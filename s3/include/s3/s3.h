@@ -1,7 +1,7 @@
 #ifndef S3_S3_H
 #define S3_S3_H
 
-#include <chttp/chttp.h>
+#include <http_client/http.h>
 #include <s3/s3_credentials.h>
 
 #include <stddef.h>

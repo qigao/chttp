@@ -1,0 +1,4 @@
+add_executable(crpc_server_example crpc_server_example.c)
+target_compile_features(crpc_server_example PRIVATE c_std_11)
+target_link_libraries(crpc_server_example PRIVATE CHttp::Server)
+set_target_properties(crpc_server_example PROPERTIES FOLDER "http_server/examples")

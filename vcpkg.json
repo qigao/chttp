@@ -1,6 +1,11 @@
 {
   "name": "http-services",
   "version-semver": "1.0.0",
-  "dependencies": ["llhttp", "boringssl"],
+  "dependencies": [
+    "llhttp",
+    "boringssl",
+    "tree-sitter",
+    "tree-sitter-c"
+  ],
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
 }

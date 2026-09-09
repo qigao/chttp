@@ -1,214 +1,479 @@
 {
-  "version": 6,
-  "configurePresets": [
-    {
-      "name": "paths",
-      "hidden": true,
-      "environment": {
-        "PROJECT_ROOT": "$penv{PROJECT_ROOT}",
-        "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
-        "VCPKG_ROOT": "$penv{VCPKG_ROOT}",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
-      },
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-      "cacheVariables": {
-        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
-        "VCPKG_MANIFEST_MODE": "ON"
-      }
-    },
-    {
-      "name": "win-dev-user",
-      "inherits": [
-        "base",
-        "flags-msvc",
-        "paths"
-      ],
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "binaryDir": "${sourceDir}/build/Msvc",
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/debug",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "ENABLE_SANITIZER_ADDRESS": "ON"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
-      "toolset": {
-        "value": "host=x64",
-        "strategy": "external"
-      }
-    },
-    {
-      "name": "win-release-user",
-      "inherits": [
-        "base",
-        "flags-msvc",
-        "paths"
-      ],
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "binaryDir": "${sourceDir}/build/Msvc-Release",
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/release",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "ENABLE_SANITIZER_ADDRESS": "OFF"
-      },
-      "architecture": {
-        "value": "x64",
-        "strategy": "external"
-      },
-      "toolset": {
-        "value": "host=x64",
-        "strategy": "external"
-      }
-    },
-    {
-      "name": "linux-dev-user",
-      "inherits": [
-        "base",
-        "flags-gnu",
-        "paths"
-      ],
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      },
-      "binaryDir": "${sourceDir}/build/linux-gcc-debug",
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-        "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/debug",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug",
-        "VCPKG_TARGET_TRIPLET": "x64-linux",
-        "ENABLE_SANITIZER_ADDRESS": "ON"
-      }
-    },
-    {
-      "name": "linux-release-user",
-      "inherits": [
-        "base",
-        "flags-gnu",
-        "paths"
-      ],
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Linux"
-      },
-      "binaryDir": "${sourceDir}/build/linux-gcc-release",
-      "environment": {
-        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-        "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/release",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
-        "VCPKG_TARGET_TRIPLET": "x64-linux",
-        "ENABLE_SANITIZER_ADDRESS": "OFF"
-      }
-    }
-  ],
-  "buildPresets": [
-    {
-      "name": "win-dev-user",
-      "configurePreset": "win-dev-user"
-    },
-    {
-      "name": "install-win-dev-user",
-      "configurePreset": "win-dev-user",
-      "targets": [
-        "install"
-      ]
-    },
-    {
-      "name": "win-release-user",
-      "configurePreset": "win-release-user"
-    },
-    {
-      "name": "install-win-release-user",
-      "configurePreset": "win-release-user",
-      "targets": [
-        "install"
-      ]
-    },
-    {
-      "name": "linux-dev-user",
-      "configurePreset": "linux-dev-user"
-    },
-    {
-      "name": "install-linux-dev-user",
-      "configurePreset": "linux-dev-user",
-      "targets": [
-        "install"
-      ]
-    },
-    {
-      "name": "linux-release-user",
-      "configurePreset": "linux-release-user"
-    },
-    {
-      "name": "install-linux-release-user",
-      "configurePreset": "linux-release-user",
-      "targets": [
-        "install"
-      ]
-    }
-  ],
-  "testPresets": [
-    {
-      "name": "win-dev-user",
-      "configurePreset": "win-dev-user",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "win-release-user",
-      "configurePreset": "win-release-user",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "linux-dev-user",
-      "configurePreset": "linux-dev-user",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "linux-release-user",
-      "configurePreset": "linux-release-user",
-      "output": {
-        "outputOnFailure": true
-      }
-    }
-  ]
+    "version": 6,
+    "include": [
+        "CMakePresets.json"
+    ],
+    "configurePresets": [
+        {
+            "name": "http-services-package",
+            "hidden": true,
+            "cacheVariables": {
+                "VCPKG_OVERLAY_PORTS": ""
+            }
+        },
+        {
+            "name": "win-toolchain",
+            "hidden": true,
+            "environment": {
+                "PROJECT_ROOT": "$penv{PROJECT_ROOT}",
+                "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_ROOT": "$penv{VCPKG_ROOT}"
+            }
+        },
+        {
+            "name": "win-paths",
+            "hidden": true,
+            "inherits": "win-toolchain",
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "VCPKG_MANIFEST_MODE": "ON"
+            },
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "toolset": {
+                "value": "host=x64",
+                "strategy": "external"
+            }
+        },
+        {
+            "name": "linux-paths",
+            "hidden": true,
+            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": {
+                "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+                "VCPKG_TARGET_TRIPLET": "x64-linux",
+                "VCPKG_MANIFEST_MODE": "ON"
+            },
+            "environment": {
+                "PROJECT_ROOT": "$penv{PROJECT_ROOT}",
+                "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "VCPKG_ROOT": "$penv{VCPKG_ROOT}"
+            }
+        },
+        {
+            "name": "android-win-environment",
+            "hidden": true,
+            "inherits": "win-toolchain",
+            "environment": {
+                "ANDROID_SDK_ROOT": "$penv{LOCALAPPDATA}/Android/Sdk",
+                "ANDROID_NDK_VERSION": "28.2.13676358",
+                "ANDROID_NDK_HOME": "$env{ANDROID_SDK_ROOT}/ndk/$env{ANDROID_NDK_VERSION}"
+            }
+        },
+        {
+            "name": "android-dependencies-debug",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/debug",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services-android/debug"
+            }
+        },
+        {
+            "name": "android-dependencies-release",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/release",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services-android/release"
+            }
+        },
+        {
+            "name": "win-dev-user",
+            "cacheVariables": {
+                "ENABLE_SANITIZER_ADDRESS": "ON",
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug"
+            },
+            "inherits": [
+                "http-services-package",
+                "base-win-dev-user",
+                "win-paths"
+            ]
+        },
+        {
+            "name": "win-release-user",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release"
+            },
+            "inherits": [
+                "http-services-package",
+                "base-win-release-user",
+                "win-paths"
+            ]
+        },
+        {
+            "name": "linux-dev-user",
+            "cacheVariables": {
+                "ENABLE_SANITIZER_ADDRESS": "ON",
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+                "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug"
+            },
+            "inherits": [
+                "http-services-package",
+                "base-linux-dev-user",
+                "linux-paths"
+            ]
+        },
+        {
+            "name": "linux-release-user",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+                "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release"
+            },
+            "inherits": [
+                "http-services-package",
+                "release-linux-ninja",
+                "linux-paths"
+            ]
+        },
+        {
+            "name": "linux-sdk-package",
+            "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
+                "ENABLE_SANITIZER_ADDRESS": "OFF",
+                "ENABLE_TESTS": "OFF",
+                "BUILD_TESTS": "OFF",
+                "BUILD_EXAMPLES": "OFF"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+                "PATH": "${sourceDir}/build/linux-gcc-sdk-package/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release"
+            },
+            "inherits": [
+                "http-services-package",
+                "release-linux-ninja",
+                "linux-paths"
+            ]
+        },
+        {
+            "name": "android-arm64-v8a-debug-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-arm64-v8a-debug"
+            },
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-debug",
+                "android-arm64-v8a-debug",
+                "android-win-paths",
+                "android-win-environment"
+            ]
+        },
+        {
+            "name": "android-arm64-v8a-release-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-arm64-v8a-release"
+            },
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-release",
+                "android-arm64-v8a-release",
+                "android-win-paths",
+                "android-win-environment"
+            ]
+        },
+        {
+            "name": "android-x86_64-debug-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86_64-debug"
+            },
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-debug",
+                "android-x86_64-debug",
+                "android-win-paths",
+                "android-win-environment"
+            ]
+        },
+        {
+            "name": "android-x86_64-release-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86_64-release"
+            },
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-release",
+                "android-x86_64-release",
+                "android-win-paths",
+                "android-win-environment"
+            ]
+        },
+        {
+            "name": "android-x86-debug-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86-debug"
+            },
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-debug",
+                "android-x86-debug",
+                "android-win-paths",
+                "android-win-environment"
+            ]
+        },
+        {
+            "name": "android-x86-release-win",
+            "environment": {
+                "ANDROID_BUILD_VARIANT": "android-x86-release"
+            },
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-release",
+                "android-x86-release",
+                "android-win-paths",
+                "android-win-environment"
+            ]
+        },
+        {
+            "name": "win-clang-user",
+            "cacheVariables": {
+                "ENABLE_SANITIZER_ADDRESS": "OFF",
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+                "PATH": "${sourceDir}/build/Clang/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug"
+            },
+            "inherits": [
+                "http-services-package",
+                "base-win-dev-clang-user",
+                "win-paths"
+            ]
+        },
+        {
+            "name": "win-clang-release-user",
+            "cacheVariables": {
+                "ENABLE_SANITIZER_ADDRESS": "OFF",
+                "ENABLE_TESTS": "ON",
+                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
+            },
+            "environment": {
+                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+                "PATH": "${sourceDir}/build/Clang-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release"
+            },
+            "inherits": [
+                "http-services-package",
+                "base-win-release-clang-user",
+                "win-paths"
+            ]
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "win-dev-user",
+            "configurePreset": "win-dev-user"
+        },
+        {
+            "name": "win-release-user",
+            "configurePreset": "win-release-user"
+        },
+        {
+            "name": "linux-dev-user",
+            "configurePreset": "linux-dev-user"
+        },
+        {
+            "name": "linux-release-user",
+            "configurePreset": "linux-release-user"
+        },
+        {
+            "name": "linux-sdk-package",
+            "configurePreset": "linux-sdk-package"
+        },
+        {
+            "name": "install-win-dev-user",
+            "configurePreset": "win-dev-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-win-release-user",
+            "configurePreset": "win-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-linux-dev-user",
+            "configurePreset": "linux-dev-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-linux-release-user",
+            "configurePreset": "linux-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-linux-sdk-package",
+            "configurePreset": "linux-sdk-package",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "android-arm64-v8a-debug-win",
+            "configurePreset": "android-arm64-v8a-debug-win"
+        },
+        {
+            "name": "android-arm64-v8a-release-win",
+            "configurePreset": "android-arm64-v8a-release-win"
+        },
+        {
+            "name": "android-x86_64-debug-win",
+            "configurePreset": "android-x86_64-debug-win"
+        },
+        {
+            "name": "android-x86_64-release-win",
+            "configurePreset": "android-x86_64-release-win"
+        },
+        {
+            "name": "android-x86-debug-win",
+            "configurePreset": "android-x86-debug-win"
+        },
+        {
+            "name": "android-x86-release-win",
+            "configurePreset": "android-x86-release-win"
+        },
+        {
+            "name": "install-android-arm64-v8a-debug-win",
+            "configurePreset": "android-arm64-v8a-debug-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-arm64-v8a-release-win",
+            "configurePreset": "android-arm64-v8a-release-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86_64-debug-win",
+            "configurePreset": "android-x86_64-debug-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86_64-release-win",
+            "configurePreset": "android-x86_64-release-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86-debug-win",
+            "configurePreset": "android-x86-debug-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-android-x86-release-win",
+            "configurePreset": "android-x86-release-win",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "win-clang-user",
+            "configurePreset": "win-clang-user"
+        },
+        {
+            "name": "win-clang-release-user",
+            "configurePreset": "win-clang-release-user"
+        },
+        {
+            "name": "install-win-clang-user",
+            "configurePreset": "win-clang-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "install-win-clang-release-user",
+            "configurePreset": "win-clang-release-user",
+            "targets": [
+                "install"
+            ]
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "win-dev-user",
+            "inherits": "base-test",
+            "configurePreset": "win-dev-user"
+        },
+        {
+            "name": "win-release-user",
+            "inherits": "base-test",
+            "configurePreset": "win-release-user"
+        },
+        {
+            "name": "linux-dev-user",
+            "inherits": "base-test",
+            "configurePreset": "linux-dev-user"
+        },
+        {
+            "name": "linux-release-user",
+            "inherits": "base-test",
+            "configurePreset": "linux-release-user"
+        },
+        {
+            "name": "win-clang-user",
+            "inherits": "base-test",
+            "configurePreset": "win-clang-user"
+        },
+        {
+            "name": "win-clang-release-user",
+            "inherits": "base-test",
+            "configurePreset": "win-clang-release-user"
+        }
+    ]
 }

@@ -14,41 +14,45 @@ if(MSVC)
   add_compile_options(/experimental:c11atomics)
 endif()
 
-option(BUILD_TESTS "Build test suite" ON)
-option(BUILD_EXAMPLES "Build example programs" ON)
-option(BUILD_BENCHMARKS "Build benchmark executables" OFF)
+include(ProjectOptions.cmake)
 include(CTest)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include(CmakeUtils)
 include(Sanitizers)
-include(FindSalts)
+find_package(Salts CONFIG REQUIRED PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
+find_package(llhttp CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 add_subdirectory(vendor/turbo_crypto)
-add_subdirectory(chttp)
+add_subdirectory(vendor/cjwt)
+add_subdirectory(http_common)
+add_subdirectory(http_client)
+add_subdirectory(http_server)
 add_subdirectory(s3)
-add_subdirectory(crpc)
+if(BUILD_OPENAPI)
+  add_subdirectory(openapi)
+endif()
+if(BUILD_TESTS)
+  add_subdirectory(http_common/tests)
+  add_subdirectory(http_common/tests/integration)
+  add_subdirectory(http_client/tests)
+  add_subdirectory(s3/tests)
+  add_subdirectory(http_server/tests)
+endif()
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
   cmake/HTTPServicesConfig.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfig.cmake"
-  INSTALL_DESTINATION lib/cmake/HTTPServices)
+  INSTALL_DESTINATION lib/cmake/HTTPServices
+  NO_SET_AND_CHECK_MACRO NO_CHECK_REQUIRED_COMPONENTS_MACRO)
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfigVersion.cmake"
-  VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+  VERSION ${PROJECT_VERSION} COMPATIBILITY ExactVersion)
 install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfig.cmake"
   "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfigVersion.cmake"
-  cmake/FindSalts.cmake
   DESTINATION lib/cmake/HTTPServices)
-install(EXPORT HTTPServicesTargets NAMESPACE Salts::
+install(EXPORT HTTPServicesTargets NAMESPACE CHttp::
   DESTINATION lib/cmake/HTTPServices)
-
-add_custom_target(verify_installed_package
-  COMMAND "${CMAKE_COMMAND}"
-    "-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
-    "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
-    "-DBUILD_CONFIG=$<CONFIG>"
-    "-DBUILD_GENERATOR=${CMAKE_GENERATOR}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake"
-  DEPENDS salts_chttp salts_s3 salts_crpc VERBATIM)
+install(FILES "${llhttp_DIR}/copyright"
+  DESTINATION share/licenses/HTTPServices/llhttp)

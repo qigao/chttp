@@ -1,6 +1,6 @@
 # Salts S3
 
-`Salts::S3` 是建立在 CHTTP 之上的有界 S3 客户端协议层。它提供同一套 HTTP/1.1、HTTP/2
+`CHttp::S3` 是建立在 CHTTP 之上的有界 S3 客户端协议层。它提供同一套 HTTP/1.1、HTTP/2
 API，包括 SigV4、path/virtual-hosted addressing、bucket/object CRUD、分页 list、copy、
 presigned URL、SSE、文件上传下载、可恢复 multipart，以及 lifecycle、notification、
 replication 子资源。HTTP/3 不在模块范围内，也不会从 H2 静默回退到 H1。
@@ -12,7 +12,7 @@ S3 client 借用调用方创建的 CHTTP client；S3 不初始化、不轮询、
 CHTTP async client，适合 Executor、Actor 或批量事件循环。
 
 ```text
-application -> Salts::S3 -> Salts::CHTTP -> Salts::CNet -> NativeIO
+application -> CHttp::S3 -> CHttp::Client -> Salts::CNet -> NativeIO
 ```
 
 `connection_uri` 选择连接目标，`authority` 同时用于 HTTP authority 与 SigV4 host，`protocol`
@@ -106,7 +106,7 @@ SSE-C handle 会持有后续 `UploadPart` 所需的派生 header，destroy 时�
 
 ```cmake
 find_package(Salts CONFIG REQUIRED)
-target_link_libraries(app PRIVATE Salts::S3)
+target_link_libraries(app PRIVATE CHttp::S3)
 ```
 
 BoringSSL、XML parser 和 llhttp 等实现依赖不会以第三方类型出现在 S3 公开 API 中。

@@ -35,7 +35,7 @@ headers 或 body hash。
 
 ### 下游依赖边界
 
-`llhttp` 与 `c-ares` 是实现细节。安装包使用者只链接 `Salts::CHTTP`、
+`llhttp` 与 `c-ares` 是实现细节。安装包使用者只链接 `CHttp::Client` / `CHttp::Server`、
 `Salts::CNet` 或更高层 target，不需要发现、链接或配置这两个包。由于静态库的 PRIVATE
 依赖仍会以 link-only 形式进入 CMake export，CNet 与 CHTTP 使用共享库边界封装各自私有
 依赖；Windows 生成 import library/DLL，Linux 生成带项目版本的 shared object。公开
@@ -175,14 +175,11 @@ ABI 与 handler API 无需随之改变。
 ## 兼容性、验证与回滚
 
 新增字段只追加到公开配置结构尾部；零初始化保持 HTTP/1.1。源码兼容，重新编译后生效。
-由于 C 结构大小变化，本阶段把 CHTTP library version 提升到 2.0.0、ABI/SOVERSION 提升到 2。
-Unix 通过 `libsalts_chttp.so.2` SONAME、Windows 通过 `salts_chttp-2.dll` 与对应 import library
-隔离旧布局；`Salts::CHTTP` 的 CMake target 名保持不变。ABI 1 二进制不会意外装载 ABI 2，源码
-使用者仍必须使用匹配头文件重新编译、链接。未来继续扩展公开 options 时，应引入
-`struct_size`/版本化 options 或再次提升 ABI major，不能假定追加字段天然二进制兼容。
+当前 HTTPServices 按两端导出动态库，调用方需要迁移头文件与目标名并重新编译。
+结构布局与版本必须匹配，不能假定追加字段天然二进制兼容。
 
 验证按 frame、HPACK、in-memory protocol、CNet h2c、TLS ALPN、同步/异步 API、shutdown、
-S3 signer/URL/XML、mock-server CRUD、streaming/multipart、C/C++ header、installed consumer
+S3 signer/URL/XML、mock-server CRUD、streaming/multipart、C/C++ header
 逐层进行，再运行 Release、ASan 与相邻 CNet/CHTTP/CRPC 回归。
 
 协议核心、CNet adapter 和 S3 是独立提交。某一层回滚不得改变较低层公开接口；未完成的

@@ -56,7 +56,7 @@ target_link_libraries(turbo_crypto PRIVATE Salts::Platform)
 
 set_target_properties(
   turbo_crypto
-  PROPERTIES FOLDER "chttp/internal"
+  PROPERTIES FOLDER "vendor/turbo_crypto"
              C_VISIBILITY_PRESET hidden)
 
 if(BUILD_TESTS)

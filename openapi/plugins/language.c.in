@@ -1,0 +1,9 @@
+#include <openapi/plugin.h>
+extern const TSLanguage *@PLUGIN_SYMBOL@(void);
+static const oa_language_plugin provider = {
+    OA_PLUGIN_ABI_V1, sizeof(oa_language_plugin), "@PLUGIN_NAME@",
+    @PLUGIN_SYMBOL@, "@PLUGIN_QUERY@", "@PLUGIN_NAME_QUERY@"
+};
+OA_PLUGIN_EXPORT const oa_language_plugin *openapi_language_plugin_v1(void) {
+    return &provider;
+}
