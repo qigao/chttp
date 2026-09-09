@@ -24,5 +24,5 @@ target_include_directories(chttp_s3
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(chttp_s3 PUBLIC CHttp::Client
   PRIVATE Salts::Core Salts::XmlParser OpenSSL::Crypto)
-install(TARGETS chttp_s3 EXPORT HTTPServicesTargets)
+install(TARGETS chttp_s3 EXPORT ChttpTargets)
 install(DIRECTORY include/s3 DESTINATION include)

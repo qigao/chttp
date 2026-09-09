@@ -1,4 +1,4 @@
-# HTTPServices
+# Chttp
 
 基于 Salts 的 C11/C++17 HTTP、JSON-RPC 与 S3 库。
 
@@ -54,7 +54,7 @@ CMake 直接使用配置中的环境变量，通过原生 `find_package(... REQU
 消费工程设置 `SALTS_ROOT`、`HTTP_SERVICES_ROOT` 后按需链接：
 
 ```cmake
-find_package(HTTPServices CONFIG REQUIRED
+find_package(Chttp CONFIG REQUIRED
   PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```

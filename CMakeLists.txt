@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(HTTPServices VERSION 1.0.0 LANGUAGES C CXX)
+project(Chttp VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -41,18 +41,18 @@ endif()
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
-  cmake/HTTPServicesConfig.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfig.cmake"
-  INSTALL_DESTINATION lib/cmake/HTTPServices
+  cmake/ChttpConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
+  INSTALL_DESTINATION lib/cmake/Chttp
   NO_SET_AND_CHECK_MACRO NO_CHECK_REQUIRED_COMPONENTS_MACRO)
 write_basic_package_version_file(
-  "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfigVersion.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfigVersion.cmake"
   VERSION ${PROJECT_VERSION} COMPATIBILITY ExactVersion)
 install(FILES
-  "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfig.cmake"
-  "${CMAKE_CURRENT_BINARY_DIR}/HTTPServicesConfigVersion.cmake"
-  DESTINATION lib/cmake/HTTPServices)
-install(EXPORT HTTPServicesTargets NAMESPACE CHttp::
-  DESTINATION lib/cmake/HTTPServices)
+  "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfigVersion.cmake"
+  DESTINATION lib/cmake/Chttp)
+install(EXPORT ChttpTargets NAMESPACE CHttp::
+  DESTINATION lib/cmake/Chttp)
 install(FILES "${llhttp_DIR}/copyright"
-  DESTINATION share/licenses/HTTPServices/llhttp)
+  DESTINATION share/licenses/Chttp/llhttp)

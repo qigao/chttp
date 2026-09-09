@@ -34,5 +34,5 @@ target_link_libraries(chttp_client
   PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
           Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
           OpenSSL::Crypto chttp_cjwt)
-install(TARGETS chttp_client EXPORT HTTPServicesTargets)
+install(TARGETS chttp_client EXPORT ChttpTargets)
 install(DIRECTORY include/http_client DESTINATION include)

@@ -34,7 +34,7 @@ target_link_libraries(chttp_server
   PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
           Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
           OpenSSL::Crypto chttp_cjwt Salts::DateTimeParser Salts::CSTL)
-install(TARGETS chttp_server EXPORT HTTPServicesTargets)
+install(TARGETS chttp_server EXPORT ChttpTargets)
 install(DIRECTORY include/http_server DESTINATION include)
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)

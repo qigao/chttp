@@ -175,7 +175,7 @@ ABI 与 handler API 无需随之改变。
 ## 兼容性、验证与回滚
 
 新增字段只追加到公开配置结构尾部；零初始化保持 HTTP/1.1。源码兼容，重新编译后生效。
-当前 HTTPServices 按两端导出动态库，调用方需要迁移头文件与目标名并重新编译。
+当前 Chttp 按两端导出动态库，调用方需要迁移头文件与目标名并重新编译。
 结构布局与版本必须匹配，不能假定追加字段天然二进制兼容。
 
 验证按 frame、HPACK、in-memory protocol、CNet h2c、TLS ALPN、同步/异步 API、shutdown、
