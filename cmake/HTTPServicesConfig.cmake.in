@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/FindSalts.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/HTTPServicesTargets.cmake")
+foreach(_http_services_component IN ITEMS CHTTP S3 CRPC)
+  set_property(TARGET Salts::${_http_services_component}
+    PROPERTY HTTP_SERVICES_PACKAGE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+  set(HTTPServices_${_http_services_component}_FOUND TRUE)
+endforeach()
+check_required_components(HTTPServices)

@@ -1,0 +1,214 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "paths",
+      "hidden": true,
+      "environment": {
+        "PROJECT_ROOT": "$penv{PROJECT_ROOT}",
+        "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+        "VCPKG_ROOT": "$penv{VCPKG_ROOT}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
+      },
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+        "VCPKG_MANIFEST_MODE": "ON"
+      }
+    },
+    {
+      "name": "win-dev-user",
+      "inherits": [
+        "base",
+        "flags-msvc",
+        "paths"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "binaryDir": "${sourceDir}/build/Msvc",
+      "environment": {
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/debug",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "ENABLE_SANITIZER_ADDRESS": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "win-release-user",
+      "inherits": [
+        "base",
+        "flags-msvc",
+        "paths"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "binaryDir": "${sourceDir}/build/Msvc-Release",
+      "environment": {
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/release",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "ENABLE_SANITIZER_ADDRESS": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "inherits": [
+        "base",
+        "flags-gnu",
+        "paths"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "binaryDir": "${sourceDir}/build/linux-gcc-debug",
+      "environment": {
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+        "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/debug",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug",
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "ENABLE_SANITIZER_ADDRESS": "ON"
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "inherits": [
+        "base",
+        "flags-gnu",
+        "paths"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "binaryDir": "${sourceDir}/build/linux-gcc-release",
+      "environment": {
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+        "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/http-services/release",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "ENABLE_SANITIZER_ADDRESS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win-dev-user",
+      "configurePreset": "win-dev-user"
+    },
+    {
+      "name": "install-win-dev-user",
+      "configurePreset": "win-dev-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user"
+    },
+    {
+      "name": "install-win-release-user",
+      "configurePreset": "win-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "linux-dev-user",
+      "configurePreset": "linux-dev-user"
+    },
+    {
+      "name": "install-linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user"
+    },
+    {
+      "name": "install-linux-release-user",
+      "configurePreset": "linux-release-user",
+      "targets": [
+        "install"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "win-dev-user",
+      "configurePreset": "win-dev-user",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

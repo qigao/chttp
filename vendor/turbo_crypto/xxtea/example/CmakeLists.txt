@@ -1,0 +1,5 @@
+set(TARGET_NAME xxtea-demo)
+set(SRCS base64.c test.c)
+add_executable(${TARGET_NAME} ${SRCS})
+target_link_libraries(${TARGET_NAME} xxtea_static)
+set_target_properties(${TARGET_NAME} PROPERTIES FOLDER vendor/xxtea)
