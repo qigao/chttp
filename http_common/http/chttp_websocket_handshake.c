@@ -6,6 +6,7 @@
 #include <llhttp.h>
 #include <openssl/evp.h>
 #include <salts/random.h>
+#include <vstr.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,6 +14,7 @@
 #include <string.h>
 
 #define CHTTP_WEBSOCKET_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+#define CHTTP_VSTR_LITERAL(text) vstr_from_buf((text), sizeof(text) - 1u)
 
 enum {
   CHTTP_WEBSOCKET_NONCE_BYTES = 16,
@@ -20,64 +22,27 @@ enum {
   CHTTP_WEBSOCKET_ACCEPT_SOURCE_BYTES = CHTTP_WEBSOCKET_KEY_BYTES + sizeof(CHTTP_WEBSOCKET_GUID) - 1
 };
 
-static unsigned char chttp_websocket_ascii_lower(unsigned char value) {
-  return value >= (unsigned char)'A' && value <= (unsigned char)'Z'
-             ? (unsigned char)(value + ((unsigned char)'a' - (unsigned char)'A'))
-             : value;
-}
+static vstr chttp_websocket_trim_ows(vstr value) { return vstr_trim(value, " \t"); }
 
-static bool chttp_websocket_ascii_equal_n(const char *left, size_t left_size, const char *right) {
-  size_t index;
-  if (left == NULL || right == NULL || strlen(right) != left_size) return false;
-  for (index = 0u; index < left_size; ++index)
-    if (chttp_websocket_ascii_lower((unsigned char)left[index]) !=
-        chttp_websocket_ascii_lower((unsigned char)right[index]))
-      return false;
-  return true;
-}
-
-static bool chttp_websocket_header_name(const chttp_header *header, const char *name) {
-  return header != NULL && header->name != NULL &&
-         chttp_websocket_ascii_equal_n(header->name, strlen(header->name), name);
-}
-
-static const char *chttp_websocket_trim_ows(const char *value, size_t *out_size) {
-  const char *end;
-  if (value == NULL || out_size == NULL) return NULL;
-  while (*value == ' ' || *value == '\t')
-    ++value;
-  end = value + strlen(value);
-  while (end != value && (end[-1] == ' ' || end[-1] == '\t'))
-    --end;
-  *out_size = (size_t)(end - value);
-  return value;
-}
-
-static bool chttp_websocket_header_has_token(const char *value, const char *wanted) {
-  const char *cursor = value;
-  if (value == NULL || wanted == NULL) return false;
-  while (*cursor != '\0') {
-    const char *end = strchr(cursor, ',');
-    const char *token_end;
-    if (end == NULL) end = cursor + strlen(cursor);
-    while (cursor != end && (*cursor == ' ' || *cursor == '\t'))
-      ++cursor;
-    token_end = end;
-    while (token_end != cursor && (token_end[-1] == ' ' || token_end[-1] == '\t'))
-      --token_end;
-    if (chttp_websocket_ascii_equal_n(cursor, (size_t)(token_end - cursor), wanted)) return true;
-    cursor = *end == ',' ? end + 1 : end;
+static bool chttp_websocket_header_has_token(vstr value, vstr wanted) {
+  vstr rest = value;
+  while (!vstr_empty(rest)) {
+    const size_t comma = vstr_find_char(rest, ',');
+    const size_t token_size = comma == VSTR_NPOS ? rest.len : comma;
+    const vstr token = chttp_websocket_trim_ows(vstr_sub(rest, 0u, token_size));
+    if (vstr_ieq(token, wanted)) return true;
+    if (comma == VSTR_NPOS) break;
+    rest = vstr_sub(rest, comma + 1u, rest.len - comma - 1u);
   }
   return false;
 }
 
-static bool chttp_websocket_content_length_zero(const char *value) {
-  size_t size = 0u;
-  const char *trimmed = chttp_websocket_trim_ows(value, &size);
+static bool chttp_websocket_content_length_zero(vstr value) {
+  const vstr trimmed = chttp_websocket_trim_ows(value);
   size_t index;
-  if (trimmed == NULL || size == 0u) return false;
-  for (index = 0u; index < size; ++index)
-    if (trimmed[index] != '0') return false;
+  if (vstr_empty(trimmed)) return false;
+  for (index = 0u; index < trimmed.len; ++index)
+    if (trimmed.data[index] != '0') return false;
   return true;
 }
 
@@ -115,14 +80,15 @@ typedef struct chttp_websocket_client_handshake_parser {
   llhttp_settings_t settings;
   char *field;
   char *value;
-  const char *expected_accept;
-  const char *expected_subprotocol;
+  vstr expected_accept;
+  vstr expected_subprotocol;
   size_t capacity;
   size_t field_size;
   size_t value_size;
   size_t accept_count;
   size_t subprotocol_count;
   unsigned int http_status;
+  bool expect_subprotocol;
   bool upgrade;
   bool connection_upgrade;
   bool accept_matches;
@@ -150,9 +116,7 @@ static int chttp_websocket_client_header_field(llhttp_t *parser, const char *at,
 static int chttp_websocket_client_header_field_complete(llhttp_t *parser) {
   chttp_websocket_client_handshake_parser *context =
       (chttp_websocket_client_handshake_parser *)parser->data;
-  if (context == NULL || context->field_size >= context->capacity) return HPE_USER;
-  context->field[context->field_size] = '\0';
-  return 0;
+  return context == NULL || context->field_size > context->capacity ? HPE_USER : 0;
 }
 
 static int chttp_websocket_client_header_value(llhttp_t *parser, const char *at, size_t length) {
@@ -171,37 +135,32 @@ static int chttp_websocket_client_header_value(llhttp_t *parser, const char *at,
 static int chttp_websocket_client_header_value_complete(llhttp_t *parser) {
   chttp_websocket_client_handshake_parser *context =
       (chttp_websocket_client_handshake_parser *)parser->data;
-  if (context == NULL || context->value_size >= context->capacity) return HPE_USER;
-  context->value[context->value_size] = '\0';
-  if (chttp_websocket_ascii_equal_n(context->field, context->field_size, "Upgrade"))
+  vstr field;
+  vstr value;
+  if (context == NULL || context->value_size > context->capacity) return HPE_USER;
+  field = vstr_from_buf(context->field, context->field_size);
+  value = vstr_from_buf(context->value, context->value_size);
+  if (vstr_ieq(field, CHTTP_VSTR_LITERAL("Upgrade")))
     context->upgrade =
-        context->upgrade || chttp_websocket_header_has_token(context->value, "websocket");
-  else if (chttp_websocket_ascii_equal_n(context->field, context->field_size, "Connection"))
-    context->connection_upgrade =
-        context->connection_upgrade || chttp_websocket_header_has_token(context->value, "upgrade");
-  else if (chttp_websocket_ascii_equal_n(context->field, context->field_size,
-                                         "Sec-WebSocket-Accept")) {
-    size_t size = 0u;
-    const char *trimmed = chttp_websocket_trim_ows(context->value, &size);
+        context->upgrade || chttp_websocket_header_has_token(value, CHTTP_VSTR_LITERAL("websocket"));
+  else if (vstr_ieq(field, CHTTP_VSTR_LITERAL("Connection")))
+    context->connection_upgrade = context->connection_upgrade ||
+                                  chttp_websocket_header_has_token(value,
+                                                                   CHTTP_VSTR_LITERAL("upgrade"));
+  else if (vstr_ieq(field, CHTTP_VSTR_LITERAL("Sec-WebSocket-Accept"))) {
+    const vstr trimmed = chttp_websocket_trim_ows(value);
     ++context->accept_count;
-    context->accept_matches =
-        trimmed != NULL && size == CHTTP_WEBSOCKET_ACCEPT_BYTES &&
-        memcmp(trimmed, context->expected_accept, CHTTP_WEBSOCKET_ACCEPT_BYTES) == 0;
-  } else if (chttp_websocket_ascii_equal_n(context->field, context->field_size, "Content-Length") ||
-             chttp_websocket_ascii_equal_n(context->field, context->field_size,
-                                           "Transfer-Encoding"))
+    context->accept_matches = trimmed.len == CHTTP_WEBSOCKET_ACCEPT_BYTES &&
+                              vstr_eq(trimmed, context->expected_accept);
+  } else if (vstr_ieq(field, CHTTP_VSTR_LITERAL("Content-Length")) ||
+             vstr_ieq(field, CHTTP_VSTR_LITERAL("Transfer-Encoding")))
     context->invalid_framing = true;
-  else if (chttp_websocket_ascii_equal_n(context->field, context->field_size,
-                                         "Sec-WebSocket-Protocol")) {
-    size_t size = 0u;
-    const char *trimmed = chttp_websocket_trim_ows(context->value, &size);
+  else if (vstr_ieq(field, CHTTP_VSTR_LITERAL("Sec-WebSocket-Protocol"))) {
+    const vstr trimmed = chttp_websocket_trim_ows(value);
     ++context->subprotocol_count;
     context->subprotocol_matches =
-        context->expected_subprotocol != NULL && trimmed != NULL &&
-        size == strlen(context->expected_subprotocol) &&
-        memcmp(trimmed, context->expected_subprotocol, size) == 0;
-  } else if (chttp_websocket_ascii_equal_n(context->field, context->field_size,
-                                            "Sec-WebSocket-Extensions"))
+        context->expect_subprotocol && vstr_eq(trimmed, context->expected_subprotocol);
+  } else if (vstr_ieq(field, CHTTP_VSTR_LITERAL("Sec-WebSocket-Extensions")))
     context->unsupported_negotiation = true;
   context->field_size = 0u;
   context->value_size = 0u;
@@ -237,8 +196,11 @@ int chttp_websocket_client_handshake_validate(const void *data, size_t size,
     status = SALTS_ENOMEM;
     goto cleanup;
   }
-  context.expected_accept = expected_accept;
-  context.expected_subprotocol = expected_subprotocol;
+  context.expected_accept = vstr_from_buf(expected_accept, CHTTP_WEBSOCKET_ACCEPT_BYTES);
+  if (expected_subprotocol != NULL) {
+    context.expected_subprotocol = vstr_from_cstr(expected_subprotocol);
+    context.expect_subprotocol = true;
+  }
   context.capacity = size + 1u;
   llhttp_settings_init(&context.settings);
   context.settings.on_header_field = chttp_websocket_client_header_field;
@@ -253,8 +215,8 @@ int chttp_websocket_client_handshake_validate(const void *data, size_t size,
   if ((parse_status == HPE_PAUSED_UPGRADE || parse_status == HPE_OK) && context.headers_complete &&
       context.protocol_version && context.http_status == 101u && context.upgrade &&
       context.connection_upgrade && context.accept_count == 1u && context.accept_matches &&
-      ((expected_subprotocol == NULL && context.subprotocol_count == 0u) ||
-       (expected_subprotocol != NULL && context.subprotocol_count == 1u &&
+      ((!context.expect_subprotocol && context.subprotocol_count == 0u) ||
+       (context.expect_subprotocol && context.subprotocol_count == 1u &&
         context.subprotocol_matches)) &&
       !context.invalid_framing && !context.unsupported_negotiation)
     status = SALTS_OK;
@@ -266,15 +228,14 @@ cleanup:
   return status;
 }
 
-static int chttp_websocket_key_validate(const char *value, char *key) {
+static int chttp_websocket_key_validate(vstr value, char *key) {
   tn_base64_bytes_result_t decoded;
   char canonical[CHTTP_WEBSOCKET_KEY_CAPACITY];
-  size_t size = 0u;
-  const char *trimmed = chttp_websocket_trim_ows(value, &size);
+  const vstr trimmed = chttp_websocket_trim_ows(value);
   int status = SALTS_EPROTO;
-  if (trimmed == NULL || size != CHTTP_WEBSOCKET_KEY_BYTES) return SALTS_EPROTO;
-  memcpy(key, trimmed, size);
-  key[size] = '\0';
+  if (trimmed.len != CHTTP_WEBSOCKET_KEY_BYTES) return SALTS_EPROTO;
+  memcpy(key, trimmed.data, trimmed.len);
+  key[trimmed.len] = '\0';
   decoded = tn_base64_decode_ex(key);
   if (!decoded.ok) return decoded.error == TN_BASE64_ERR_NO_MEMORY ? SALTS_ENOMEM : SALTS_EPROTO;
   if (decoded.value.len == CHTTP_WEBSOCKET_NONCE_BYTES &&
@@ -290,10 +251,12 @@ int chttp_websocket_server_handshake_validate(const chttp_server_request_view *r
                                               char *accept, size_t accept_capacity,
                                               unsigned int *out_http_status) {
   char key[CHTTP_WEBSOCKET_KEY_CAPACITY];
-  const char *key_value = NULL;
-  const char *version_value = NULL;
+  vstr key_value = {0};
+  vstr version_value = {0};
   bool upgrade = false;
   bool connection_upgrade = false;
+  bool key_seen = false;
+  bool version_seen = false;
   size_t host_count = 0u;
   size_t key_count = 0u;
   size_t version_count = 0u;
@@ -311,41 +274,45 @@ int chttp_websocket_server_handshake_validate(const chttp_server_request_view *r
   }
   for (index = 0u; index < request->header_count; ++index) {
     const chttp_header *header = &request->headers[index];
+    vstr name;
+    vstr value;
     if (header->name == NULL || header->value == NULL) {
       *out_http_status = 400u;
       return SALTS_EPROTO;
     }
-    if (chttp_websocket_header_name(header, "Host")) ++host_count;
-    else if (chttp_websocket_header_name(header, "Upgrade"))
-      upgrade = upgrade || chttp_websocket_header_has_token(header->value, "websocket");
-    else if (chttp_websocket_header_name(header, "Connection"))
-      connection_upgrade =
-          connection_upgrade || chttp_websocket_header_has_token(header->value, "upgrade");
-    else if (chttp_websocket_header_name(header, "Sec-WebSocket-Key")) {
+    name = vstr_from_cstr(header->name);
+    value = vstr_from_cstr(header->value);
+    if (vstr_ieq(name, CHTTP_VSTR_LITERAL("Host"))) ++host_count;
+    else if (vstr_ieq(name, CHTTP_VSTR_LITERAL("Upgrade")))
+      upgrade = upgrade ||
+                chttp_websocket_header_has_token(value, CHTTP_VSTR_LITERAL("websocket"));
+    else if (vstr_ieq(name, CHTTP_VSTR_LITERAL("Connection")))
+      connection_upgrade = connection_upgrade ||
+                           chttp_websocket_header_has_token(value,
+                                                            CHTTP_VSTR_LITERAL("upgrade"));
+    else if (vstr_ieq(name, CHTTP_VSTR_LITERAL("Sec-WebSocket-Key"))) {
       ++key_count;
-      key_value = header->value;
-    } else if (chttp_websocket_header_name(header, "Sec-WebSocket-Version")) {
+      key_value = value;
+      key_seen = true;
+    } else if (vstr_ieq(name, CHTTP_VSTR_LITERAL("Sec-WebSocket-Version"))) {
       ++version_count;
-      version_value = header->value;
-    } else if (chttp_websocket_header_name(header, "Transfer-Encoding") ||
-               (chttp_websocket_header_name(header, "Content-Length") &&
-                !chttp_websocket_content_length_zero(header->value))) {
+      version_value = value;
+      version_seen = true;
+    } else if (vstr_ieq(name, CHTTP_VSTR_LITERAL("Transfer-Encoding")) ||
+               (vstr_ieq(name, CHTTP_VSTR_LITERAL("Content-Length")) &&
+                !chttp_websocket_content_length_zero(value))) {
       *out_http_status = 400u;
       return SALTS_EPROTO;
     }
   }
   if (host_count != 1u || !upgrade || !connection_upgrade || key_count != 1u ||
-      version_count != 1u) {
+      version_count != 1u || !key_seen || !version_seen) {
     *out_http_status = 400u;
     return SALTS_EPROTO;
   }
-  {
-    size_t version_size = 0u;
-    const char *version = chttp_websocket_trim_ows(version_value, &version_size);
-    if (version == NULL || version_size != 2u || memcmp(version, "13", 2u) != 0) {
-      *out_http_status = 426u;
-      return SALTS_EPROTONOSUPPORT;
-    }
+  if (!vstr_eq(chttp_websocket_trim_ows(version_value), CHTTP_VSTR_LITERAL("13"))) {
+    *out_http_status = 426u;
+    return SALTS_EPROTONOSUPPORT;
   }
   status = chttp_websocket_key_validate(key_value, key);
   if (status != SALTS_OK) {
