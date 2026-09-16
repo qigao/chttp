@@ -9,15 +9,14 @@ on:
 permissions:
   contents: read
 
-jobs:
-  verify:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SALTS_SHA: 3970219065e89a08a7c648dba62d6c0e0ce0b78b
-      SALTS_UTILS_SHA: ddbd7e557c8d5647529262de4be9dc7d04c4b1ea
-      VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+env:
+  SALTS_SHA: 3970219065e89a08a7c648dba62d6c0e0ce0b78b
+  SALTS_UTILS_SHA: ddbd7e557c8d5647529262de4be9dc7d04c4b1ea
+  VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
+jobs:
+  ownership-gate:
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact Chttp head
         uses: actions/checkout@v4
@@ -48,6 +47,17 @@ jobs:
           grep -n 'RAND_bytes' vendor/cjwt/src/jwe_openssl_3.c
           grep -n '"boringssl"' vcpkg.json
           git diff --check
+
+  build-and-test:
+    needs: ownership-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact Chttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Checkout exact Salts
         uses: actions/checkout@v4
