@@ -17,7 +17,7 @@ env:
 jobs:
   static-gates:
     name: static-${{ matrix.gate }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "$GITHUB_SHA"
+          git fetch --depth=2 origin "$GITHUB_SHA"
           git checkout --detach FETCH_HEAD
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -84,7 +84,7 @@ jobs:
 
   build-and-test:
     needs: static-gates
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout exact Chttp head
