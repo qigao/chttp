@@ -46,7 +46,8 @@ find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
 foreach(required_salts_utils_target IN ITEMS
         Salts::Crypto
         Salts::JsonParser
-        Salts::JsonCSerdeAdapter)
+        Salts::JsonCSerdeAdapter
+        Salts::DateTimeParser)
   if(NOT TARGET ${required_salts_utils_target})
     message(FATAL_ERROR
             "SALTS_UTILS_ROOT package is missing required target ${required_salts_utils_target}")
