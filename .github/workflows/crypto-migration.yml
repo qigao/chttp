@@ -15,8 +15,19 @@ env:
   VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
 jobs:
-  ownership-gate:
+  static-gates:
+    name: static-${{ matrix.gate }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        gate:
+          - vendor-removed
+          - no-turbo-ref
+          - ed448-routing
+          - boringssl-primitives
+          - cmake-boundary
+          - format
     steps:
       - name: Checkout exact Chttp head
         uses: actions/checkout@v4
@@ -24,32 +35,49 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Verify BoringSSL and SaltsUtils crypto boundary
+      - name: Verify gate
         shell: bash
+        env:
+          GATE: ${{ matrix.gate }}
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test ! -e vendor/turbo_crypto
-          if git grep -n 'turbo_crypto' -- ':!.github/workflows/crypto-migration.yml'; then
-            echo 'turbo_crypto reference remains after ownership cutover' >&2
-            exit 1
-          fi
-          if git grep -n 'EVP_PKEY_ED448' -- vendor/cjwt; then
-            echo 'cjwt must not route Ed448 through BoringSSL EVP' >&2
-            exit 1
-          fi
-          grep -n 'find_package(SaltsUtils CONFIG REQUIRED' CMakeLists.txt
-          grep -n 'Salts::Crypto' vendor/cjwt/CMakeLists.txt
-          grep -n 'Salts::Crypto' vendor/cjwt/tests/CMakeLists.txt
-          grep -n 'salts_crypto_ed448_' vendor/cjwt/src/jws_openssl_3.c
-          grep -n 'CRYPTO_memcmp' vendor/cjwt/src/jws_openssl_3.c
-          grep -n 'PKCS5_PBKDF2_HMAC' vendor/cjwt/src/jwe_openssl_3.c
-          grep -n 'RAND_bytes' vendor/cjwt/src/jwe_openssl_3.c
-          grep -n '"boringssl"' vcpkg.json
-          git diff --check
+          case "$GATE" in
+            vendor-removed)
+              test ! -e vendor/turbo_crypto
+              ;;
+            no-turbo-ref)
+              if git grep -n 'turbo_crypto' -- ':!.github/workflows/crypto-migration.yml'; then
+                echo 'turbo_crypto reference remains after ownership cutover' >&2
+                exit 1
+              fi
+              ;;
+            ed448-routing)
+              if git grep -n 'EVP_PKEY_ED448' -- vendor/cjwt; then
+                echo 'cjwt must not route Ed448 through BoringSSL EVP' >&2
+                exit 1
+              fi
+              grep -n 'salts_crypto_ed448_' vendor/cjwt/src/jws_openssl_3.c
+              grep -n 'CRYPTO_memcmp' vendor/cjwt/src/jws_openssl_3.c
+              ;;
+            boringssl-primitives)
+              grep -n 'PKCS5_PBKDF2_HMAC' vendor/cjwt/src/jwe_openssl_3.c
+              grep -n 'RAND_bytes' vendor/cjwt/src/jwe_openssl_3.c
+              grep -n 'OPENSSL_cleanse' vendor/cjwt/src/jws_openssl_3.c vendor/cjwt/src/jwe_openssl_3.c
+              grep -n '"boringssl"' vcpkg.json
+              ;;
+            cmake-boundary)
+              grep -n 'find_package(SaltsUtils CONFIG REQUIRED' CMakeLists.txt
+              grep -n 'Salts::Crypto' vendor/cjwt/CMakeLists.txt
+              grep -n 'Salts::Crypto' vendor/cjwt/tests/CMakeLists.txt
+              ;;
+            format)
+              git diff --check
+              ;;
+          esac
 
   build-and-test:
-    needs: ownership-gate
+    needs: static-gates
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
