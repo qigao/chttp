@@ -10,10 +10,16 @@ permissions:
   contents: read
 
 jobs:
-  ownership-gate:
+  verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SALTS_SHA: 3970219065e89a08a7c648dba62d6c0e0ce0b78b
+      SALTS_UTILS_SHA: ddbd7e557c8d5647529262de4be9dc7d04c4b1ea
+      VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+
     steps:
-      - name: Checkout exact head
+      - name: Checkout exact Chttp head
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -25,11 +31,145 @@ jobs:
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           test ! -e vendor/turbo_crypto
-          if git grep -n 'turbo_crypto' -- ':!README.md' ':!.github/workflows/crypto-migration.yml'; then
+          if git grep -n 'turbo_crypto' -- ':!.github/workflows/crypto-migration.yml'; then
             echo 'turbo_crypto reference remains after ownership cutover' >&2
+            exit 1
+          fi
+          if git grep -n 'EVP_PKEY_ED448' -- vendor/cjwt; then
+            echo 'cjwt must not route Ed448 through BoringSSL EVP' >&2
             exit 1
           fi
           grep -n 'find_package(SaltsUtils CONFIG REQUIRED' CMakeLists.txt
           grep -n 'Salts::Crypto' vendor/cjwt/CMakeLists.txt
           grep -n 'Salts::Crypto' vendor/cjwt/tests/CMakeLists.txt
+          grep -n 'salts_crypto_ed448_' vendor/cjwt/src/jws_openssl_3.c
+          grep -n 'CRYPTO_memcmp' vendor/cjwt/src/jws_openssl_3.c
+          grep -n 'PKCS5_PBKDF2_HMAC' vendor/cjwt/src/jwe_openssl_3.c
+          grep -n 'RAND_bytes' vendor/cjwt/src/jwe_openssl_3.c
+          grep -n '"boringssl"' vcpkg.json
           git diff --check
+
+      - name: Checkout exact Salts
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_SHA }}
+          path: salts
+          persist-credentials: false
+
+      - name: Checkout exact SaltsUtils
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_SHA }}
+          path: salts-utils
+          persist-credentials: false
+
+      - name: Checkout pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_SHA }}
+          path: vcpkg
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          sudo mkdir -p /opt/salts
+          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+          bash salts-utils/cmake/ci/install-re2c.sh
+
+      - name: Build and install exact Salts
+        shell: bash
+        working-directory: salts
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$SALTS_SHA"
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target install -j2
+
+      - name: Expose exact Salts profile to SaltsUtils
+        shell: bash
+        run: |
+          set -euxo pipefail
+          package="$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
+          test -f "$package/lib/cmake/Salts/SaltsConfig.cmake"
+          sudo ln -sfn "$package" /opt/salts/debug
+
+      - name: Build standalone host Lemon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build salts-utils/build/host-lemon --target lemon -j2
+
+      - name: Build and install exact SaltsUtils
+        shell: bash
+        working-directory: salts-utils
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$SALTS_UTILS_SHA"
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
+          cmake --build build/linux-gcc-debug --target install -j2
+          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
+
+      - name: Configure exact Chttp head
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+
+      - name: Build full Chttp graph
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+
+      - name: Run full Chttp CTest graph
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=no)"
