@@ -30,10 +30,17 @@ jobs:
           - format
     steps:
       - name: Checkout exact Chttp head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Verify gate
         shell: bash
@@ -41,7 +48,6 @@ jobs:
           GATE: ${{ matrix.gate }}
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           case "$GATE" in
             vendor-removed)
               test ! -e vendor/turbo_crypto
@@ -72,7 +78,7 @@ jobs:
               grep -n 'Salts::Crypto' vendor/cjwt/tests/CMakeLists.txt
               ;;
             format)
-              git diff --check
+              git diff --check HEAD^
               ;;
           esac
 
@@ -82,35 +88,37 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout exact Chttp head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=2 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Checkout exact Salts
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts
-          ref: ${{ env.SALTS_SHA }}
-          path: salts
-          persist-credentials: false
+      - name: Checkout exact public dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git init salts
+          git -C salts remote add origin https://github.com/qigao/salts.git
+          git -C salts fetch --depth=1 origin "$SALTS_SHA"
+          git -C salts checkout --detach FETCH_HEAD
+          test "$(git -C salts rev-parse HEAD)" = "$SALTS_SHA"
 
-      - name: Checkout exact SaltsUtils
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: ${{ env.SALTS_UTILS_SHA }}
-          path: salts-utils
-          persist-credentials: false
+          git init salts-utils
+          git -C salts-utils remote add origin https://github.com/qigao/salts-utils.git
+          git -C salts-utils fetch --depth=1 origin "$SALTS_UTILS_SHA"
+          git -C salts-utils checkout --detach FETCH_HEAD
+          test "$(git -C salts-utils rev-parse HEAD)" = "$SALTS_UTILS_SHA"
 
-      - name: Checkout pinned vcpkg
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_SHA }}
-          path: vcpkg
-          fetch-depth: 0
-          persist-credentials: false
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          git -C vcpkg checkout --detach "$VCPKG_SHA"
+          test "$(git -C vcpkg rev-parse HEAD)" = "$VCPKG_SHA"
 
       - name: Prepare toolchain
         shell: bash
@@ -131,7 +139,6 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$SALTS_SHA"
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF
@@ -160,7 +167,6 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "$SALTS_UTILS_SHA"
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF \
@@ -177,7 +183,7 @@ jobs:
           LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF
@@ -209,5 +215,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
