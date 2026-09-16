@@ -1,0 +1,35 @@
+name: Crypto ownership migration
+
+on:
+  push:
+    branches:
+      - migration/remove-turbo-crypto
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify BoringSSL and SaltsUtils crypto boundary
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test ! -e vendor/turbo_crypto
+          if git grep -n 'turbo_crypto' -- ':!README.md' ':!.github/workflows/crypto-migration.yml'; then
+            echo 'turbo_crypto reference remains after ownership cutover' >&2
+            exit 1
+          fi
+          grep -n 'find_package(SaltsUtils CONFIG REQUIRED' CMakeLists.txt
+          grep -n 'Salts::Crypto' vendor/cjwt/CMakeLists.txt
+          grep -n 'Salts::Crypto' vendor/cjwt/tests/CMakeLists.txt
+          git diff --check
