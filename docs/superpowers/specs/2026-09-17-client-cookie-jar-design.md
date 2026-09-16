@@ -6,69 +6,61 @@ Base: `master` at `d2643228b458ee6438dc856261f7434143c8eccf`
 
 ## 1. Context
 
-`qigao/chttp` currently transports arbitrary request/response headers, so callers can manually send `Cookie` and inspect `Set-Cookie`. The server also has a cookie-backed bounded session store. The client does not currently own cookie state: it has no Set-Cookie ingestion, domain/path matching, expiry handling, secure-cookie filtering, or automatic Cookie replay.
+CHTTP currently transports arbitrary request/response headers, so callers can manually send `Cookie` and inspect `Set-Cookie`. The server also has a bounded cookie-backed Session implementation. The client does not own cookie state: it has no Set-Cookie ingestion, scope matching, expiry handling, secure-cookie protection, public-suffix protection, or automatic Cookie replay.
 
-The requirement is that the client support HTTP cookies as a first-class capability rather than as manually managed header strings. The cookie implementation must preserve the repository's existing constraints:
-
-- bounded memory and explicit capacity limits;
-- one owner for mutable client state;
-- HTTP/1.1 and HTTP/2 sharing one semantic implementation;
-- fail-fast request admission when a request cannot be serialized safely;
-- no silent truncation;
-- no public ABI break in existing structs;
-- no duplicate implementation of protocol parsing or public-suffix data when a maintained dependency is available.
+The requirement is a real client cookie jar shared by HTTP/1.1 and HTTP/2. It must preserve repository constraints: bounded memory, single-owner mutable state, fail-fast request admission, no silent truncation, no existing public-struct ABI break, and no duplicated protocol/public-suffix implementation when a maintained dependency exists.
 
 ## 2. Protocol baseline
 
-The implementation targets the user-agent algorithms of RFC 6265 together with the current HTTP Working Group successor, `draft-ietf-httpbis-rfc6265bis-22`, for behavior that is applicable to a generic HTTP client.
+The implementation targets RFC 6265 plus the user-agent algorithms applicable to a generic HTTP client in `draft-ietf-httpbis-rfc6265bis-22`.
 
-The successor draft is still work in progress, so implementation tests must encode the intended behavior explicitly instead of assuming that a future RFC will remain byte-for-byte identical.
+The successor document is still work in progress, so tests must lock the intended behavior rather than assuming a later RFC will be identical. The following draft-22 behavior is part of this design:
 
-The following draft-22 details are normative for this design:
-
-- one response may contain multiple independent `Set-Cookie` fields and they must not be comma-combined;
-- cookie name plus value is limited to 4096 octets;
-- Domain and Path attribute values longer than 1024 octets are not used as valid scope attributes;
-- `Max-Age` takes precedence over `Expires`;
-- secure cookies cannot be created by a non-secure origin;
-- an insecure response cannot overwrite an overlapping secure cookie;
+- multiple Set-Cookie response fields are independent and must not be comma-combined;
+- cookie name+value over 4096 octets is rejected;
+- Domain/Path attribute values over 1024 octets are not accepted as valid scope attributes;
+- Max-Age takes precedence over Expires;
+- a non-secure response cannot create a Secure cookie;
+- an insecure response cannot overwrite/shadow an overlapping Secure cookie;
 - cookie uniqueness is `(name, domain, host-only-flag, path)`;
-- cookie names are case-sensitive, while `__Secure-` and `__Host-` prefix enforcement uses the draft's case-insensitive prefix test;
-- implementations should reject public-suffix Domain cookies when a current public-suffix implementation is available;
-- a general-use implementation should be capable of at least 50 cookies per domain and 3000 cookies in total.
+- cookie names are case-sensitive;
+- protected prefix detection for `__Secure-` and `__Host-` follows the draft's case-insensitive requirement check;
+- public-suffix Domain cookies are rejected when PSL support is available;
+- default capability is at least 50 cookies per domain and 3000 total.
 
-Browser navigation policy is deliberately separated from generic HTTP cookie state. CHTTP has no browsing context, top-level navigation, document, script API, or first-/third-party concept. SameSite is parsed and retained, but a normal CHTTP request is treated as an HTTP retrieval with no browser client/site-for-cookies context. CHTTP therefore does not invent browser-only cross-site navigation state.
+CHTTP is not a browser. It has no document, script API, top-level navigation, first-/third-party state, or site-for-cookies input. SameSite metadata is parsed and retained, but CHTTP does not invent browser navigation context.
 
 ## 3. Goals
 
-1. Automatically ingest all valid `Set-Cookie` response fields from HTTP/1.1 and HTTP/2.
-2. Store cookies in one client-owned bounded jar.
-3. Automatically attach matching cookies to later HTTP/1.1 and HTTP/2 requests.
-4. Correctly implement host-only, Domain, Path, Secure, HttpOnly, SameSite, Max-Age, Expires, deletion, replacement, prefixes, and public-suffix rejection.
-5. Preserve distinct cookies with the same name when their scope identity differs.
-6. Preserve deterministic retrieval ordering.
-7. Allow callers to override automatic cookies for one request with an explicit `Cookie` header.
-8. Keep response success independent from malformed or rejected individual Set-Cookie fields.
-9. Keep the jar bounded and deterministic under pressure.
-10. Preserve current CHTTP public ABI and existing behavior for callers that do not rely on cookies.
+1. Ingest every valid Set-Cookie field from H1 and H2 responses.
+2. Store cookies in one bounded client-owned jar.
+3. Automatically attach matching cookies to subsequent H1/H2 requests.
+4. Support host-only, Domain, Path, Secure, HttpOnly, SameSite, Max-Age, Expires, replacement, deletion, prefixes, and public-suffix rejection.
+5. Preserve same-name cookies when scope identity differs.
+6. Use deterministic retrieval ordering and deterministic eviction.
+7. Let an explicit request `Cookie` header override automatic cookies for that request only.
+8. Never fail an otherwise valid HTTP response solely because one Set-Cookie field is malformed/rejected/evicted.
+9. Never silently truncate generated Cookie headers.
+10. Preserve existing ABI and ordinary behavior outside cookie automation.
 
 ## 4. Non-goals
 
-The first implementation does not add:
+This feature does not add:
 
-- durable disk persistence across process/client destruction;
+- durable cookie persistence across process/client destruction;
 - JavaScript/non-HTTP cookie APIs;
-- browser navigation, top-level-site, third-party-cookie, tracking-prevention, or storage-partition policy;
-- a public iterator exposing HttpOnly cookie contents;
+- browser third-party/tracking/navigation policy;
+- storage partitioning/browser-vendor policy;
+- public iteration over HttpOnly cookie values;
 - HTTP/3;
-- a second public-suffix parser or vendored PSL snapshot;
+- a vendored PSL snapshot;
 - CMake install-verification production code.
 
-Persistent cookies still honor Expires/Max-Age for the lifetime of the client-owned jar. Durable persistence is a separate storage-policy feature and is not required for automatic HTTP cookie correctness.
+Persistent cookies honor Expires/Max-Age for the lifetime of the client jar. Disk persistence is a separate storage-policy feature, just as many HTTP session clients keep a cookie jar only for the session object lifetime.
 
-## 5. Architecture
+## 5. Ownership and architecture
 
-Each `chttp_client` / `chttp_async_client` owner contains exactly one cookie jar. The jar is not owned by a connection, HTTP/1 slot, HTTP/2 session, or request.
+Each `chttp_client` / `chttp_async_client` owner has exactly one cookie jar. The jar is not connection-owned, slot-owned, or HTTP/2-session-owned.
 
 ```text
 chttp_client / chttp_async_client
@@ -77,78 +69,83 @@ chttp_client / chttp_async_client
         +-- request slots
         +-- cookie jar
               +-- bounded records
-              +-- expiry / lazy purge
-              +-- domain/path/security matcher
               +-- Set-Cookie parser
+              +-- expiry/deletion/replacement
+              +-- domain/path/security matching
+              +-- PSL validation
               +-- Cookie serializer
 ```
 
-The same jar feeds both transports:
+Request flow:
 
 ```text
-request authority + target + connection security
-        -> canonical request cookie context
+authority + target + transport security
+        -> canonical cookie context
         -> purge expired
-        -> select matching cookies
-        -> deterministic sort
-        -> one generated Cookie header
+        -> select + sort matching cookies
+        -> one generated Cookie field
         -> H1 serializer or H2 HPACK
 ```
 
-Responses use the inverse path:
+Response flow:
 
 ```text
 all Set-Cookie fields
         -> parse independently
-        -> validate response origin and scope
+        -> validate origin/scope/security
         -> delete / replace / insert
-        -> same client-owned jar
+        -> same jar
 ```
 
-This separation is required because cookie scope is based on host/domain/path/security, not on physical connection identity. HTTP/2 multiplexing and connection reuse make connection-owned cookie state incorrect.
+This state cannot live in the connection pool because cookie scope is based on domain/path/security, while connections are reused and H2 multiplexes unrelated request streams.
 
 ## 6. Public API and ABI
 
-### 6.1 Existing structs remain layout-compatible
+### 6.1 Do not extend existing public config structs
 
-`chttp_client_config` does not currently contain a `size` or version field. Appending cookie fields would make a new shared library read beyond an older caller's struct. Therefore this design does **not** change the layout of `chttp_client_config`, `chttp_options`, or `chttp_request_options`.
+`chttp_client_config` has no `size`/version field. Extending it would let a newer shared library read past an older caller's struct. Therefore this design does not change the layout of `chttp_client_config`, `chttp_options`, or `chttp_request_options`.
 
 ### 6.2 Default behavior
 
-Automatic cookie support is enabled by default for newly initialized clients. Existing callers gain standards-compatible cookie replay without changing request code.
+Automatic cookie handling is enabled by default for newly initialized clients.
 
-The implementation must not impose unbounded memory. Default limits are named library constants and meet the current general-user-agent minimums:
+Named defaults must provide at least:
 
-- total cookie capacity: at least 3000;
-- per-domain retained capacity: at least 50;
-- per-cookie name+value acceptance: 4096 octets as required by the target algorithm;
-- Domain/Path accepted attribute value: at most 1024 octets;
-- generated Cookie header: additionally bounded by CHTTP's existing request/header byte limits.
+- 3000 cookies total;
+- 50 cookies per canonical cookie domain bucket;
+- the protocol's 4096-octet name+value acceptance bound;
+- the protocol's 1024-octet Domain/Path attribute bound;
+- generated Cookie header bounded by existing CHTTP header/request limits.
 
 ### 6.3 Adjustable policy without ABI break
 
-Because repository policy requires capacity limits to be adjustable, add a new versioned options type rather than extending an existing struct:
+Add a new versioned options type:
 
 ```c
 typedef struct chttp_cookie_jar_options {
   size_t size;
+  int enabled;
   size_t cookie_capacity;
   size_t cookies_per_domain;
   size_t max_cookie_header_bytes;
 } chttp_cookie_jar_options;
+
+#define CHTTP_COOKIE_JAR_OPTIONS_INIT \
+  {sizeof(chttp_cookie_jar_options), 1, 0u, 0u, 0u}
 ```
 
-The exact names may be adjusted to existing naming conventions during implementation, but semantics are fixed:
+Semantics are fixed even if exact identifier spelling changes to match repository conventions:
 
-- `size` versions the new structure;
-- zero values select documented defaults;
-- a caller may explicitly set `cookie_capacity == 0` only through an explicit disable flag or dedicated API, not ambiguously through a default-valued field;
-- configured limits may be stricter than browser-style minimums if the caller deliberately chooses a constrained embedded profile;
-- `max_cookie_header_bytes == 0` derives from existing CHTTP request header limits.
+- absence of an explicit options call means automatic cookies enabled with defaults;
+- `enabled == 0` explicitly disables automatic storage/replay;
+- `enabled != 0` enables the jar;
+- zero capacity/header values select documented defaults;
+- callers may intentionally choose smaller embedded limits;
+- `max_cookie_header_bytes == 0` derives from existing request/header limits.
 
-Configuration is applied before the first admitted request. The implementation may defer allocation until first request/first cookie. Reconfiguration after request admission or after cookie state exists returns `SALTS_EBUSY` rather than silently discarding state.
+Options are configurable only before the first admitted request. Allocation may be lazy. Reconfiguration after request admission or cookie state creation returns `SALTS_EBUSY`; it never silently discards state.
 
-Provide symmetric blocking and advanced-client entry points, for example:
+Provide symmetric APIs:
 
 ```c
 int chttp_client_set_cookie_jar_options(
@@ -158,11 +155,7 @@ int chttp_client_set_cookie_jar_options(
 int chttp_async_client_set_cookie_jar_options(
     chttp_async_client *client,
     const chttp_cookie_jar_options *options);
-```
 
-Also provide minimal management APIs:
-
-```c
 int chttp_client_cookies_clear(chttp_client *client);
 int chttp_async_client_cookies_clear(chttp_async_client *client);
 
@@ -171,32 +164,29 @@ int chttp_async_client_cookie_count(const chttp_async_client *client,
                                     size_t *out_count);
 ```
 
-No public cookie iterator is included in this phase. This avoids prematurely freezing the internal cookie representation and avoids exposing HttpOnly state through a generic inspection API.
+`cookie_count` reports currently unexpired records; it may compute the count without mutating a const client. `cookies_clear` removes all jar state but does not change enable/configuration policy.
 
-## 7. Explicit Cookie header override
+No public cookie iterator is added in this phase. That avoids freezing internal storage and avoids exposing HttpOnly state through a generic inspection API.
 
-A request that contains an explicit caller-provided `Cookie` header is a complete per-request override.
+## 7. Explicit Cookie override
 
-For that request only:
+If a request supplies any explicit caller `Cookie` header, automatic Cookie generation is skipped for that request. The library does not string-merge caller and jar values.
 
-- the jar does not append or merge automatic cookies;
-- the caller's existing header serialization rules apply unchanged;
-- response Set-Cookie fields are still ingested into the jar.
+Response Set-Cookie fields from that request are still ingested into the jar.
 
-This avoids ambiguous duplicate-name behavior such as an explicit `sid=user` colliding with a stored `sid=jar`.
+This makes manual per-request override deterministic and avoids duplicate-name ambiguity such as `sid=user` plus `sid=stored`.
 
-The jar itself generates at most one Cookie header. CHTTP may receive multiple Cookie fields from callers if existing header validation permits them, but the automatic path never produces an ambiguous partial merge.
+The automatic path emits at most one Cookie field. Existing caller-provided header rules remain unchanged.
 
-## 8. Internal cookie record
+## 8. Internal record and identity
 
-The internal representation stores at least:
+Each record stores at least:
 
 ```text
 name
 value
 domain
 path
-expiry time
 creation sequence
 last-access sequence
 host-only flag
@@ -204,115 +194,114 @@ secure-only flag
 http-only flag
 same-site mode
 persistent flag
+expiry kind + expiry value
 used flag
 ```
 
 Cookie names remain case-sensitive.
 
-Cookie uniqueness and replacement use exactly:
+Replacement identity is exactly:
 
 ```text
 (name, domain, host-only-flag, path)
 ```
 
-The host-only flag is intentionally part of identity because draft-22 changes the older RFC 6265 replacement identity in this area.
+Unknown attributes are ignored for forward compatibility. Known attributes are normalized; raw Set-Cookie strings do not become a second truth source.
 
-Unknown cookie attributes are ignored as required for forward compatibility. Known attributes are normalized into flags/values; raw Set-Cookie strings are not retained after successful parsing.
+## 9. Canonical request/response cookie context
 
-## 9. Request cookie context
+Derive cookie context from existing CHTTP request facts:
 
-Every cookie operation derives a normalized context from the request/response already known to CHTTP:
+- host: `authority` host component, excluding port, canonicalized to lower-case ASCII/ACE;
+- path: `target` path component, excluding query;
+- secure: true only for the request's established TLS path;
+- API type: HTTP.
 
-- host: from `authority`, excluding port and normalizing DNS case;
-- request path: path component of `target`, excluding query;
-- secure channel: true for the established TLS request path, false for plaintext TCP;
-- HTTP API: always true for normal CHTTP requests/responses.
+IPv6 brackets/ports must not become part of the cookie domain. Cookie matching is port-independent, including `__Host-` cookies.
 
-IPv6 bracket syntax and optional authority ports must be handled without treating the port as part of the cookie domain.
+Reuse existing URI/domain parsing where possible. Raw Unicode Domain attributes are not accepted unless already in an ASCII-compatible encoding required by the protocol baseline.
 
-The cookie algorithm is port-independent, including `__Host-` cookies.
+## 10. Set-Cookie processing
 
-ASCII/ACE host canonicalization must reuse existing URI/domain parsing where possible. Unicode DNS names are not accepted as raw cookie Domain strings unless they have already been converted to the ASCII-compatible form required by the target cookie algorithm.
+Each Set-Cookie field is parsed independently. A rejected field does not fail the HTTP response.
 
-## 10. Set-Cookie field processing
-
-Each Set-Cookie field is processed independently. A malformed field is ignored without failing the HTTP response.
-
-The parser must not split Set-Cookie on comma because Expires values contain commas and multiple Set-Cookie values are separate fields.
+Never split Set-Cookie on comma because Expires contains commas and multiple cookies are separate fields.
 
 ### 10.1 Name/value
 
-- process the first `=` according to the target user-agent algorithm;
-- trim the algorithm-defined surrounding whitespace;
-- reject control characters as required by draft-22;
-- ignore a Set-Cookie field when name+value exceeds 4096 octets;
+- follow the target algorithm around the first `=` and surrounding WSP;
+- enforce control-character rules;
+- ignore the field when name+value exceeds 4096 octets;
 - preserve cookie-name case;
-- support the draft's nameless-cookie parsing behavior, including the prefix-mimic rejection rule.
+- support the draft's nameless-cookie behavior and protected-prefix mimic rejection.
 
 ### 10.2 Domain
 
-If Domain is absent:
+Without Domain:
 
-- set `host_only = true`;
-- store the canonical response host.
+- `host_only = true`;
+- domain = canonical response host.
 
-If Domain is present:
+With Domain:
 
-- use the last valid Domain attribute according to the target algorithm;
+- use the last valid Domain attribute selected by the target algorithm;
 - ignore a leading dot;
-- lowercase/canonicalize it;
-- reject non-ASCII raw Domain values;
-- reject if the response host does not domain-match it;
-- reject widened Domain scope for IP literals;
-- set `host_only = false` only when the Domain attribute is accepted.
+- lowercase/canonicalize;
+- reject raw non-ASCII Domain values;
+- reject if response host does not domain-match;
+- do not widen an IP literal with Domain matching;
+- set `host_only = false` only after the Domain attribute is accepted.
 
 ### 10.3 Public suffix protection
 
-Full domain-cookie support must reject Domain attributes that resolve to public suffixes, except for the exact-host behavior permitted by the target algorithm.
+Reject Domain attributes resolving to public suffixes, except the exact-host handling permitted by the target algorithm.
 
-Do not vendor a Public Suffix List in CHTTP. Add `libpsl` as a **private** client implementation dependency and use its built-in PSL data. The current repository vcpkg baseline already contains `libpsl` 0.21.5 and pins a Mozilla Public Suffix List snapshot.
+Do not vendor PSL data. Add `libpsl` as a private CHTTP client implementation dependency. The repository's pinned vcpkg baseline provides libpsl 0.21.5 and a pinned Mozilla PSL snapshot.
 
-This dependency must remain private to `CHttp::Client`; it must not be added to the public Chttp package dependency surface unless static/export mechanics demonstrably require it.
+`libpsl` must not become part of the public Chttp package dependency surface unless static/export mechanics prove that unavoidable. Platform support must be verified before production merge.
 
 ### 10.4 Path
 
-If Path is absent, empty, invalid, or does not begin with `/`, compute the RFC default-path from the request path.
+If Path is missing, empty, invalid, or does not begin with `/`, compute the protocol default-path from the request path.
 
-Retrieval uses RFC path-match:
+Path-match is true only for:
 
-- exact path, or
-- cookie path is a prefix ending in `/`, or
-- cookie path is a prefix and the next request-path character is `/`.
+- exact path;
+- cookie path prefix ending in `/`;
+- cookie path prefix where the next request-path character is `/`.
 
-Plain prefix matching is insufficient and must not be used.
+A naive string-prefix check is incorrect.
 
-### 10.5 Max-Age and Expires
+### 10.5 Max-Age, Expires, and clocks
 
-- the last valid Max-Age controls expiry when present;
-- Max-Age takes precedence over Expires;
-- non-positive Max-Age removes the matching stored cookie;
-- valid Expires creates a persistent cookie when no controlling Max-Age exists;
-- unparseable Expires does not invalidate the cookie; it becomes a session cookie unless another valid persistence attribute controls it;
-- arithmetic must saturate rather than overflow;
-- expired records are removed lazily before insert/retrieval and may also be purged during maintenance operations.
+Max-Age and Expires use different internal clocks so wall-clock changes do not corrupt relative TTLs:
 
-Reuse `Salts::DateTimeParser` when it can express the cookie-date compatibility grammar. If it cannot cover the required historical HTTP-date forms, add a cookie-local compatibility parser rather than changing unrelated public date parsing behavior.
+- a valid controlling `Max-Age > 0` stores a **monotonic deadline** computed from receipt monotonic time;
+- `Max-Age <= 0` deletes the matching cookie;
+- valid controlling `Expires` stores an **absolute UTC/wall-clock deadline**;
+- Max-Age takes precedence when both are present;
+- a session cookie has no expiry deadline;
+- arithmetic saturates rather than wrapping.
+
+Expiry checks evaluate the corresponding clock kind. The implementation must not convert a Max-Age cookie into a wall-clock deadline just for convenience.
+
+Reuse `Salts::DateTimeParser` for cookie-date when it covers required legacy HTTP-date forms. Otherwise use a cookie-local compatibility parser; do not broaden unrelated public date behavior.
+
+Unparseable Expires does not reject the cookie; without a valid controlling persistence attribute it remains a session cookie.
 
 ### 10.6 Secure and secure-cookie integrity
 
-A Secure cookie is accepted only from a secure response context.
+Secure cookies are accepted only from secure response contexts and retrieved only on secure requests.
 
-Additionally, an insecure response must not overwrite or shadow an existing secure cookie when the target algorithm says the existing secure cookie overlaps by name/domain/path rules. This is required to protect secure-cookie integrity against active plaintext origins.
-
-A Secure cookie is only retrieved for secure requests.
+An insecure response must not overwrite or shadow an existing overlapping Secure cookie when the target algorithm's name/domain/path conditions protect it.
 
 ### 10.7 HttpOnly
 
-HttpOnly is stored and transmitted normally because CHTTP's jar is an HTTP API. No non-HTTP script API is exposed.
+HttpOnly is stored and sent normally because CHTTP is an HTTP API. No non-HTTP access API exists.
 
 ### 10.8 SameSite
 
-Store one of:
+Store:
 
 ```text
 unspecified/default
@@ -321,138 +310,116 @@ strict
 none
 ```
 
-Unknown SameSite values use the target algorithm's default enforcement value.
+Unknown values use the target default mode. `SameSite=None` must satisfy the current Secure requirement.
 
-`SameSite=None` must satisfy the Secure requirement of the current target behavior.
+CHTTP does not fabricate browser navigation context. SameSite metadata is therefore retained without adding top-level-site/navigation APIs to this feature.
 
-CHTTP does not fabricate browser navigation context. Normal CHTTP retrieval is treated as an HTTP retrieval with no browsing client/site-for-cookies context, so SameSite metadata is preserved without introducing a fake top-level-site API in this feature.
+### 10.9 Protected prefixes
 
-### 10.9 Cookie name prefixes
+Enforce `__Secure-` and `__Host-` using the target user-agent algorithm.
 
-Enforce `__Secure-` and `__Host-` requirements using the target user-agent algorithm.
+Prefix requirement detection is case-insensitive even though cookie-name identity is case-sensitive.
 
-Important draft-22 detail: prefix requirement detection is case-insensitive even though cookie names themselves are case-sensitive.
-
-`__Secure-` requires:
-
-- secure response origin;
-- Secure attribute.
+`__Secure-` requires a secure response and Secure attribute.
 
 `__Host-` requires:
 
-- secure response origin;
+- secure response;
 - Secure attribute;
-- host-only scope (no accepted Domain attribute);
-- an explicit Path attribute whose effective value is exactly `/`.
+- host-only scope/no accepted Domain;
+- an explicit Path attribute whose effective path is exactly `/`.
 
 Nameless cookies whose value begins with a protected prefix are rejected as required by the draft.
 
 ## 11. Replacement and deletion
 
-Before inserting a new cookie:
+Before insert:
 
 1. purge expired records;
-2. compute canonical cookie identity `(name, domain, host-only, path)`;
-3. if a record with that identity exists, preserve the old creation time/sequence where the protocol requires it, replace the remaining fields, and refresh access metadata;
-4. if the new cookie is already expired, remove the matching old record instead of inserting a new record;
-5. enforce secure-cookie overwrite protection before modifying state.
+2. compute `(name, domain, host-only, path)`;
+3. enforce secure-overwrite protection;
+4. if an existing exact identity exists, preserve its creation sequence/time when required and replace remaining fields;
+5. if the new cookie is already expired, remove the exact old identity instead of inserting.
 
-A deletion Set-Cookie only deletes the exact cookie identity selected by the protocol; it does not delete same-name cookies at other paths/domains/host-only scope.
+Deletion never removes same-name cookies at other scopes.
 
-## 12. Bounded storage and eviction
+## 12. Bounded storage and deterministic eviction
 
-Storage is preallocated or lazily allocated to fixed configured bounds. No request or response may cause unbounded cookie allocation.
+Storage is preallocated or lazily allocated to fixed configured limits. No response can cause unbounded growth.
 
-When inserting and capacity is exhausted:
+When pressure exists:
 
-1. purge expired cookies;
+1. purge expired;
 2. enforce per-domain capacity;
-3. if still over a bound, evict deterministically by least-recent access;
-4. break ties by older creation sequence, then stable slot order.
+3. enforce total capacity;
+4. evict least-recently-accessed candidates;
+5. break ties by older creation sequence, then stable slot order.
 
-Eviction is not an HTTP response error. User agents are allowed to evict cookies, and failing an otherwise valid response because its cookie could not be retained would couple application success to cache-like state.
+Eviction does not fail the HTTP response. A deliberately smaller configured profile is explicit caller policy.
 
-The implementation must maintain at least the configured minimum per-domain and total capability. A deliberately smaller embedded configuration is explicit caller policy rather than silent library degradation.
+The default profile meets the general-user-agent minimums.
 
-## 13. Cookie retrieval and serialization
+## 13. Retrieval and serialization
 
-Before serializing a request:
+Before request serialization:
 
-1. if caller supplied an explicit Cookie field, skip automatic retrieval;
+1. explicit caller Cookie present -> skip automatic retrieval;
 2. derive canonical host/path/secure context;
-3. purge expired records;
-4. select records that satisfy domain/host-only matching;
-5. require RFC path-match;
-6. exclude Secure cookies on plaintext requests;
-7. apply HTTP-only semantics (all normal CHTTP requests qualify);
-8. apply the generic-client SameSite policy described above;
-9. update last-access sequence for selected records;
-10. sort selected cookies by longer path first, then earlier creation sequence;
-11. serialize one `Cookie` field using `name=value; name2=value2`.
+3. purge expired;
+4. require host-only/domain match;
+5. require path-match;
+6. exclude Secure cookies on plaintext;
+7. apply HTTP-only semantics;
+8. apply the generic-client SameSite policy above;
+9. update access sequence for selected records;
+10. sort by longer path first, then earlier creation sequence;
+11. serialize `name=value; name2=value2` into one automatic Cookie field.
 
-The implementation must not truncate a Cookie field to fit a request.
+Never truncate. If the generated field exceeds cookie-policy or existing request/header bounds, admission returns `SALTS_EMSGSIZE` before any request bytes are sent.
 
-If the generated field would exceed either the cookie policy bound or CHTTP's existing request/header serialization bound, request admission returns `SALTS_EMSGSIZE` before bytes are sent.
+## 14. H1/H2 integration
 
-This fail-fast behavior prevents silent loss of authentication/session cookies.
+### HTTP/1.1
 
-## 14. HTTP/1.1 integration
+Generate Cookie before final request header serialization. Ingest every Set-Cookie field before terminal completion is delivered, so a subsequently admitted request sees the updated jar. The owning response still exposes the original response headers unchanged.
 
-H1 request construction calls the jar before final header serialization.
+### HTTP/2
 
-H1 response completion passes every stored `Set-Cookie` field to the jar before delivering the terminal completion callback/owning response to the caller. Therefore a subsequent request admitted after completion observes the newly stored cookies.
+Use the same jar functions/store. H2 response mutations occur on the existing CHTTP owner thread in deterministic event-processing order. Each stream gets the cookie snapshot present at its own header admission; later Set-Cookie responses do not mutate already-submitted stream headers.
 
-The owning response still exposes the original Set-Cookie fields unchanged.
+One automatic Cookie field is sufficient semantically even though H2 can split Cookie fields for compression.
 
-Cookie processing does not change connection keep-alive decisions.
+### Repeated response headers
 
-## 15. HTTP/2 integration
+Cookie ingestion must iterate the complete header array. `chttp_response_header()` and `chttp_response_view_header()` may continue returning the first matching header as convenience APIs; they are not used for Set-Cookie ingestion.
 
-H2 uses the same jar functions and data store as H1.
+If any parser path currently coalesces repeated Set-Cookie values, that path must be corrected before cookie-jar integration.
 
-Response Set-Cookie fields are applied on the CHTTP owner thread in deterministic completion/header-processing order. Concurrent H2 streams never mutate the jar from multiple threads.
+## 15. Error semantics
 
-Automatic Cookie generation occurs at stream admission/header construction. Each admitted stream receives the cookie snapshot selected at that point; later Set-Cookie responses do not retroactively alter headers already submitted on another stream.
-
-The implementation may emit one Cookie field even though HTTP/2 permits splitting Cookie fields for compression. Splitting is an optimization, not required for semantic correctness.
-
-## 16. Response header representation requirement
-
-The existing response parser must preserve multiple Set-Cookie header fields independently. If any current code path coalesces repeated header names or only exposes the first Set-Cookie, that behavior must be corrected for Set-Cookie before jar integration.
-
-General `chttp_response_header()` / `chttp_response_view_header()` may continue to return the first matching header for convenience. Cookie ingestion must iterate the underlying complete header array, not call the first-header helper.
-
-## 17. Error semantics
-
-### Response-side cookie errors
-
-The following do **not** fail an HTTP response:
+Response-side cookie rejection does not fail the response for:
 
 - malformed Set-Cookie;
-- invalid Domain scope;
+- invalid Domain;
 - public-suffix rejection;
 - insecure Secure cookie;
-- invalid prefix contract;
+- protected-prefix violation;
 - oversized cookie;
-- jar eviction;
-- unparseable Expires.
+- unparseable Expires;
+- eviction.
 
-These affect only cookie state.
+Request admission fails before transport for:
 
-### Request-side cookie errors
+- invalid cookie context derived from otherwise inconsistent authority/target state;
+- generated Cookie overflow;
+- lazy jar allocation failure;
+- internal invariant failure.
 
-Request admission fails before transport when:
+Use existing Salts/CHTTP errors such as `SALTS_EINVAL`, `SALTS_EMSGSIZE`, `SALTS_ENOMEM`, and `SALTS_EBUSY`.
 
-- canonical request cookie context cannot be derived from an otherwise accepted authority/target invariant;
-- generated Cookie serialization exceeds configured/existing header bounds;
-- cookie jar internal invariants are violated;
-- required allocation during lazy initialization fails.
+## 16. Source layout
 
-Use existing Salts/CHTTP errors (`SALTS_EINVAL`, `SALTS_EMSGSIZE`, `SALTS_ENOMEM`, `SALTS_EBUSY`, etc.) rather than introducing ad-hoc negative codes.
-
-## 18. Source layout
-
-Keep cookie protocol logic out of the already large client state-machine file:
+Keep protocol logic out of the already-large client state machine:
 
 ```text
 http_client/src/
@@ -460,198 +427,152 @@ http_client/src/
   chttp_cookie_jar.h
 ```
 
-The module owns:
+The module owns parsing, storage, expiry, replacement, domain/path/security matching, PSL validation, eviction, ordering, and Cookie serialization.
 
-- cookie record storage;
-- Set-Cookie parsing;
-- domain/default-path/path matching;
-- PSL checks;
-- expiry/deletion/replacement;
-- eviction;
-- retrieval ordering;
-- Cookie serialization.
+Public declarations remain in `http_client/include/http_client/http.h`.
 
-`chttp_client.c`, H1 request serialization, and H2 header construction should only provide context and call this module.
+Expected integration touches are limited to the client owner, H1 request/response path, H2 header/completion path, tests, client CMake, and vcpkg manifest.
 
-Public API declarations remain under `http_client/include/http_client/http.h`.
+## 17. Dependency impact
 
-## 19. Dependency impact
+Add `libpsl` privately to `CHttp::Client`. The pinned vcpkg port uses libidn2 on non-Windows and ICU on Windows and embeds a pinned Mozilla PSL snapshot.
 
-Add `libpsl` to `vcpkg.json` and link it privately from `chttp_client`.
+Before production merge, verify dependency/build behavior on the repository's supported Linux, macOS, Windows, and Android paths. No PSL data is committed to CHTTP.
 
-The current pinned vcpkg baseline provides libpsl 0.21.5. The port itself pins a Mozilla PSL snapshot and selects libidn2 on non-Windows or ICU on Windows. Implementation planning must verify Linux, macOS, Windows, and Android compatibility before production merge.
+`Salts::DateTimeParser` remains the preferred date parser when its accepted grammar is sufficient.
 
-No duplicate PSL data is committed to this repository.
+## 18. Testing strategy
 
-Salts DateTimeParser remains the preferred date dependency when compatible with cookie-date parsing.
+### RED gate
 
-## 20. Testing strategy
+Before production implementation, add behavior tests that fail on current master because automatic client cookie state does not exist. A source-text-only failure is insufficient.
 
-### 20.1 RED gate
-
-Before implementation, add tests that fail against current master because no client jar exists.
-
-A valid RED must exercise user-visible cookie behavior, not only inspect source text.
-
-### 20.2 Unit tests: parser/store
+### Unit tests
 
 Cover at least:
 
-- basic Set-Cookie;
-- empty name/value and draft nameless rules;
+- basic and nameless Set-Cookie;
 - control characters;
-- 4096 name+value boundary;
-- host-only Domain absence;
-- accepted Domain widening to parent domain;
-- rejected unrelated Domain;
-- IP literal Domain behavior;
-- public suffix rejection;
+- 4096 boundary;
+- host-only vs Domain;
+- parent-domain acceptance and unrelated-domain rejection;
+- IP literals;
+- PSL rejection;
 - leading-dot normalization;
-- default Path calculation;
-- exact and directory path-match boundaries;
-- Max-Age precedence;
-- Max-Age zero/negative deletion;
-- Expires compatibility formats;
-- unparseable Expires -> session cookie;
+- default Path and path-match boundaries;
+- Max-Age precedence, positive TTL, zero/negative deletion;
+- Expires compatibility and invalid Expires session fallback;
+- monotonic Max-Age unaffected by wall-clock test jump;
+- absolute Expires responding to wall-clock test time;
 - Secure creation/retrieval;
-- insecure overwrite protection for existing Secure cookie;
-- HttpOnly storage/retrieval;
-- SameSite values and default;
-- SameSite=None Secure requirement;
-- `__Secure-` prefix, including mixed-case prefix recognition;
-- `__Host-` prefix, including explicit Path requirement;
+- insecure overwrite protection;
+- HttpOnly;
+- SameSite modes and None+Secure;
+- case-insensitive `__Secure-` / `__Host-` requirement detection;
 - nameless prefix-mimic rejection;
-- unknown attributes ignored;
-- same-name cookies at different paths;
-- same name/domain/path with different host-only flags;
-- exact replacement identity;
-- deterministic expiry purge;
-- deterministic LRU eviction;
-- per-domain capacity pressure;
-- total capacity pressure.
+- unknown attributes;
+- same-name different scopes;
+- host-only flag in replacement identity;
+- deterministic purge and LRU eviction;
+- per-domain and total pressure.
 
-### 20.3 Request synthesis tests
+### Request synthesis
 
 Cover:
 
-- no match -> no automatic Cookie field;
-- one cookie;
-- many cookies;
-- domain matching;
-- path matching;
-- longer path sorts first;
+- no match -> no Cookie;
+- one/many matches;
+- domain/path matching;
+- longer path first;
 - creation-order tie break;
-- expired cookie omitted;
+- expired omitted;
 - Secure omitted on plaintext;
-- explicit Cookie header completely overrides jar for one request;
-- later response Set-Cookie still updates jar after an overridden request;
-- generated field overflow -> `SALTS_EMSGSIZE` and zero request bytes sent.
+- explicit Cookie complete override;
+- Set-Cookie still ingested after an overridden request;
+- generated overflow -> `SALTS_EMSGSIZE` with zero bytes sent.
 
-### 20.4 H1 integration
+### H1 integration
 
-Use a deterministic test server flow:
+A deterministic server returns multiple Set-Cookie fields, verifies automatic replay, updates/deletes cookies, and verifies caller response visibility remains unchanged.
 
-1. response returns multiple Set-Cookie fields;
-2. next request automatically includes all matching cookies;
-3. path-specific and secure constraints are observed;
-4. update/deletion responses affect later requests;
-5. caller still sees original Set-Cookie response headers.
+### H2 integration
 
-### 20.5 H2 integration
+Verify one stream's Set-Cookie affects a later-admitted stream, already-admitted concurrent streams retain their original headers, duplicate Set-Cookie fields survive HPACK/header storage, and H1/H2 selection uses identical jar semantics.
 
-Cover:
+### ABI/header regression
 
-- Set-Cookie on one stream affects a subsequently admitted stream;
-- concurrent already-admitted streams keep their original header snapshot;
-- multiple Set-Cookie fields survive HPACK/header representation;
-- H1 and H2 requests issued through the same client owner observe the same jar where the existing client architecture permits both protocol modes under that owner;
-- H2 retrieval ordering matches H1 exactly.
+Compile existing-style callers with unchanged public config layouts. Add C and C++ compile tests for the new versioned options/manage APIs.
 
-### 20.6 ABI/header regression
+### Full regression
 
-Compile existing-style callers using the unchanged `chttp_client_config` layout.
+After cookie-specific tests pass, run full CHTTP build + full CTest. WebSocket, JWT, S3, file streaming, cancellation, connection reuse, and explicit headers remain green.
 
-Add C and C++ header compile tests for the new versioned cookie options and management APIs.
+## 19. CI acceptance gate
 
-### 20.7 Full regression
+Production code is not ready to merge until exact-head evidence shows:
 
-Run the complete CHTTP build and full CTest suite after cookie-specific tests pass.
-
-WebSocket behavior, JWT, S3, file streaming, request cancellation, connection reuse, and existing explicit header behavior must remain green.
-
-## 21. CI acceptance gate
-
-The production change is not ready to merge until an exact-head run demonstrates all of:
-
-1. cookie RED evidence existed before implementation;
-2. cookie parser/store unit tests pass;
-3. H1 cookie integration passes;
-4. H2 cookie integration passes;
-5. C/C++ public header compile tests pass;
-6. full CHTTP build graph passes;
+1. valid RED existed before implementation;
+2. cookie unit tests pass;
+3. H1 integration passes;
+4. H2 integration passes;
+5. C/C++ public-header tests pass;
+6. full CHTTP build passes;
 7. full CTest passes;
-8. supported-platform dependency/build coverage required by the repository passes, including libpsl on the active platform matrix;
+8. required platform/dependency coverage passes, including libpsl on the active matrix;
 9. exact-head / clean tracked source check passes.
 
-Do not add CMake install-verification production code. Verification belongs in CI/workflow logic.
+Do not add CMake install-verification production code. Verification remains in CI/workflow logic.
 
-## 22. Compatibility and migration
+## 20. Compatibility
 
-### Source compatibility
+### Source/binary compatibility
 
-Existing callers compile without modifying existing config struct initializers because their layouts do not change.
-
-### Binary compatibility
-
-Existing public struct layouts are unchanged. New exported functions and a new versioned struct are additive.
+Existing public struct layouts do not change. New functions and the new versioned options struct are additive.
 
 ### Behavioral compatibility
 
-A client that receives Set-Cookie and later talks to a matching origin will now automatically send Cookie unless the request explicitly supplies a Cookie field or automatic cookie handling is explicitly disabled through the new cookie policy API.
+Existing callers that never receive Set-Cookie behave as before. A client that receives Set-Cookie and later addresses a matching scope now automatically sends Cookie unless explicitly disabled or overridden with a request Cookie header. That behavior change is intentional and is the feature requirement.
 
-This is an intentional feature behavior change required by the client-cookie requirement.
+### Package compatibility
 
-### Dependency compatibility
+libpsl is private implementation detail unless export/link mechanics demonstrate otherwise. The implementation plan must verify the actual CMake target/export behavior rather than guessing.
 
-libpsl is private implementation detail. The implementation plan must validate CMake target naming/export behavior and platform availability before production code is merged.
+## 21. Security properties
 
-## 23. Security properties
+The design prevents:
 
-The design specifically prevents:
+- invalid Domain widening;
+- public-suffix cookie leakage;
+- plaintext Secure-cookie creation;
+- plaintext overwrite/shadowing of protected Secure cookies;
+- invalid protected-prefix cookies;
+- silent cookie-header truncation;
+- ambiguous caller/jar same-name merge;
+- connection reuse changing cookie scope;
+- divergent H1/H2 cookie truth sources.
 
-- Domain cookies escaping their valid origin scope;
-- public-suffix cookies such as broad registry-level cookies;
-- plaintext creation of Secure cookies;
-- plaintext overwrite/shadowing of existing Secure cookies;
-- incorrect `__Secure-` / `__Host-` acceptance;
-- silent cookie truncation;
-- mixing caller-explicit and automatic same-name cookies;
-- connection reuse accidentally widening/narrowing cookie scope;
-- H1/H2 maintaining divergent cookie truth sources.
+Path is routing scope, not a security boundary.
 
-Path is treated as a routing scope, not as a security boundary.
+## 22. Performance and memory
 
-## 24. Performance and memory
+Cookie work is bounded by configured capacity. A flat preallocated record array is acceptable as the first implementation if measurement at the default 3000-record capacity shows request selection cost is negligible relative to HTTP/network cost. Do not introduce mutable multi-index complexity without evidence.
 
-Cookie operations are bounded by configured cookie capacity. Initial implementation may use a flat preallocated record array because the protocol minimum is only thousands of records and deterministic bounded scans are simpler to audit than a multi-index mutable structure.
+No unbounded per-request allocation is allowed. Generated Cookie serialization uses a bounded request-owned buffer derived from policy/header limits.
 
-Before implementation, the plan should benchmark/estimate worst-case request selection cost at the default 3000-record capacity. If a flat scan is acceptable relative to network/request costs, prefer it. Introduce indexing only if measured evidence requires it.
+## 23. State and failure invariants
 
-No per-request unbounded allocation is permitted. Cookie header serialization may use a bounded request-owned buffer sized from the configured/header limit.
+The jar is the sole fact source for automatic client cookie state.
 
-## 25. State ownership and failure state
+- responses mutate it only on the client owner thread;
+- H1/H2 do not maintain shadow jars;
+- request serialization reads one consistent store;
+- configuration cannot race with admitted work;
+- rejected Set-Cookie leaves unrelated valid state unchanged;
+- request Cookie serialization failure sends no partial request;
+- clear removes records atomically from the owner perspective.
 
-The cookie jar is the sole fact source for automatic client cookie state.
-
-- response processing commits accepted cookie mutations on the client owner thread;
-- request serialization reads from the same store;
-- no connection/session maintains a shadow cookie cache;
-- clear/configuration operations cannot race because public client ownership rules already prohibit concurrent mutation;
-- response cookie rejection leaves the previous valid store unchanged except where the protocol explicitly defines deletion/replacement;
-- request serialization failure sends no partial request.
-
-## 26. Implementation gate
+## 24. Implementation gate
 
 This document is the committed design gate only.
 
-After review approval, the next step is to write a separate implementation plan. Production code must not begin before that plan is committed/reviewed under the repository workflow.
+After user review approval, the next step is a separate implementation plan. Production code does not begin before that plan is written and reviewed under the repository workflow.
