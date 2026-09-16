@@ -17,7 +17,7 @@ foreach(test_file ${TEST_FILES})
     get_filename_component(test_stem ${test_file} NAME_WE)
     set(test_name chttp_cjwt_${test_stem})
     add_executable(${test_name} ${test_file})
-    target_link_libraries(${test_name} PRIVATE chttp_cjwt Salts::JsonParser Salts::TinyTest turbo_crypto)
+    target_link_libraries(${test_name} PRIVATE chttp_cjwt Salts::JsonParser Salts::TinyTest Salts::Crypto)
     target_include_directories(${test_name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${CMAKE_CURRENT_SOURCE_DIR}/../include/cjwt
