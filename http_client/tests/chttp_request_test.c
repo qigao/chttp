@@ -136,4 +136,29 @@ spec("CHTTP bounded request serializer") {
     check_null(data);
     check_equal(size, (size_t)0u);
   }
+
+  it("serializes more headers than the inline view cache capacity") {
+    chttp_header headers[17];
+    chttp_request_options options = {.connection_uri = "tcp://127.0.0.1:80",
+                                     .authority = "example.test",
+                                     .target = "/many",
+                                     .method = CHTTP_METHOD_GET,
+                                     .headers = headers,
+                                     .header_count = 17u,
+                                     .on_complete = chttp_request_test_complete};
+    chttp_limits limits = chttp_request_test_limits();
+    unsigned char *data = NULL;
+    size_t size = 0u;
+    size_t index;
+
+    for (index = 0u; index < 17u; ++index) headers[index] = (chttp_header){"X-Test", "v"};
+    limits.max_header_count = 24u;
+    limits.max_header_bytes = 1024u;
+    limits.max_request_bytes = 2048u;
+
+    check_equal(chttp_request_build(&options, &limits, &data, &size), SALTS_OK);
+    check_not_null(data);
+    check(size > 0u);
+    free(data);
+  }
 }
