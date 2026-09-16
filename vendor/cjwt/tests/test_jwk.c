@@ -1,10 +1,10 @@
 #include "tinytest.h"
 #include "cjwt.h"
-#include "turbo_crypto.h"
+#include <salts/crypto.h>
 #include <string.h>
 #include <stdlib.h>
 
-static const uint8_t ed448_private_key[TURBO_CRYPTO_ED448_PRIVATE_KEY_SIZE] = {
+static const uint8_t ed448_private_key[SALTS_CRYPTO_ED448_PRIVATE_KEY_SIZE] = {
     0x6c, 0x82, 0xa5, 0x62, 0xcb, 0x80, 0x8d, 0x10,
     0xd6, 0x32, 0xbe, 0x89, 0xc8, 0x51, 0x3e, 0xbf,
     0x6c, 0x92, 0x9f, 0x34, 0xdd, 0xfa, 0x8c, 0x9f,
@@ -15,7 +15,7 @@ static const uint8_t ed448_private_key[TURBO_CRYPTO_ED448_PRIVATE_KEY_SIZE] = {
     0x5b
 };
 
-static const uint8_t ed448_public_key[TURBO_CRYPTO_ED448_PUBLIC_KEY_SIZE] = {
+static const uint8_t ed448_public_key[SALTS_CRYPTO_ED448_PUBLIC_KEY_SIZE] = {
     0x5f, 0xd7, 0x44, 0x9b, 0x59, 0xb4, 0x61, 0xfd,
     0x2c, 0xe7, 0x87, 0xec, 0x61, 0x6a, 0xd4, 0x6a,
     0x1d, 0xa1, 0x34, 0x24, 0x85, 0xa7, 0x0e, 0x1f,
@@ -194,7 +194,7 @@ suite("cjwt jwk") {
     it("rejects an Ed448 token verified with the wrong key") {
       char *token = NULL;
       cjwt_t *decoded = NULL;
-      uint8_t wrong_key[TURBO_CRYPTO_ED448_PUBLIC_KEY_SIZE];
+      uint8_t wrong_key[SALTS_CRYPTO_ED448_PUBLIC_KEY_SIZE];
 
       memcpy(wrong_key, ed448_public_key, sizeof(wrong_key));
       wrong_key[0] ^= 0x01U;

@@ -9,7 +9,8 @@
 | 独立 S3 客户端 | `CHttp::S3` | `<s3/s3.h>` |
 
 `Client` 和 `Server` 分别包含本侧 RPC 实现，两端独立链接。S3 位于独立的 `s3/` 模块，
-链接 `CHttp::Client`。底层连接、执行器、解析器等能力依赖安装后的 Salts SDK。
+链接 `CHttp::Client`。底层连接、执行器等能力依赖安装后的 Salts SDK；JSON parser 和
+Ed448 能力来自 SaltsUtils。通用密码学能力由 vcpkg 的 BoringSSL 提供。
 
 ## 目录归属
 
@@ -18,7 +19,7 @@ http_client/  include/http_client/、src/、rpc/、tests/
 http_server/  include/http_server/、src/、rpc/、tests/、examples/
 http_common/  include/http_common/、http/、rpc/、tests/
 s3/           include/s3/、src/、tests/
-vendor/       cjwt/、turbo_crypto/
+vendor/       cjwt/
 ```
 
 每个模块的 `include/` 管理公开声明，`src/` 或协议子目录管理实现，`tests/` 管理模块测试。
@@ -36,8 +37,9 @@ Server 支持 Cookie Session、全局/路由级 middleware；RPC 可通过 `crpc
 
 ## 构建与使用
 
-要求 CMake 3.25+、Ninja、vcpkg、C11/C++17 编译器和匹配配置的 Salts SDK。
-设置 `PROJECT_ROOT`、`VCPKG_ROOT`，路径使用 `/`；Windows 在 MSVC 开发环境中运行：
+要求 CMake 3.25+、Ninja、vcpkg、C11/C++17 编译器，以及匹配配置的 Salts 和
+SaltsUtils SDK。构建 Chttp 前设置 `SALTS_ROOT`、`SALTS_UTILS_ROOT`、`PROJECT_ROOT`
+和 `VCPKG_ROOT`；路径使用 `/`。Windows 在 MSVC 开发环境中运行：
 
 ```powershell
 cmake --preset win-release-user
@@ -48,8 +50,8 @@ cmake --build --preset install-win-release-user
 
 `CMakePresets.json` 与 `presets/` 完整复制 Salts。Windows 默认入口
 `win-dev-user` / `win-release-user` 使用 MSVC，C/C++ 编译器为 `cl`。
-`CMakeUserPresets.json` 定义本仓库安装路径和依赖根。
-CMake 直接使用配置中的环境变量，通过原生 `find_package(... REQUIRED)` 加载依赖。
+`CMakeUserPresets.json` 定义本仓库安装路径和基础依赖根；`SALTS_UTILS_ROOT` 可由调用环境
+显式提供。CMake 对 Salts 和 SaltsUtils 都使用 fail-fast 的配置包查找，不回退到其他 profile。
 
 消费工程设置 `SALTS_ROOT`、`HTTP_SERVICES_ROOT` 后按需链接：
 
@@ -59,8 +61,8 @@ find_package(Chttp CONFIG REQUIRED
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```
 
-服务端选择 `CHttp::Server`，S3 应用选择 `CHttp::S3`。Windows 运行环境需要两个 SDK
-及 vcpkg 的运行库路径。头文件路径和库名已变更，调用方需要更新 include、链接配置并重新编译。
+服务端选择 `CHttp::Server`，S3 应用选择 `CHttp::S3`。Windows 运行环境需要已安装的运行库
+及 vcpkg 运行库路径。头文件路径和库名已变更，调用方需要更新 include、链接配置并重新编译。
 
 ## 来源
 

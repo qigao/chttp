@@ -6,6 +6,9 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <openssl/mem.h>
+#include <openssl/rand.h>
+#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -13,7 +16,6 @@
 #include "jwe.h"
 #include "jws.h"
 #include "utils.h"
-#include <turbo_crypto.h>
 
 static int aes_kw_unwrap(const uint8_t *kek, size_t kek_len, const uint8_t *in, size_t in_len, uint8_t *out) {
     AES_KEY aes_key;
@@ -131,7 +133,7 @@ rsa_cleanup:
         const EVP_MD *md = NULL;
         size_t kek_len = 0;
 
-        if (jwt->header.alg == alg_pbes2_hs256_a128kw) { kek_len = 16; }
+        if (jwt->header.alg == alg_pbes2_hs256_a128kw) { md = EVP_sha256(); kek_len = 16; }
         else if (jwt->header.alg == alg_pbes2_hs384_a192kw) { md = EVP_sha384(); kek_len = 24; }
         else if (jwt->header.alg == alg_pbes2_hs512_a256kw) { md = EVP_sha512(); kek_len = 32; }
 
@@ -149,25 +151,25 @@ rsa_cleanup:
         /* PBKDF2 Salt: alg_str || 0x00 || p2s_raw */
         size_t salt_len = strlen(alg_str) + 1 + p2s_raw_len;
         uint8_t *salt = malloc(salt_len);
+        if (!salt) {
+            free(raw_enc_key); free(p2s_raw);
+            return CJWTE_OUT_OF_MEMORY;
+        }
         memcpy(salt, alg_str, strlen(alg_str));
         salt[strlen(alg_str)] = 0;
         memcpy(salt + strlen(alg_str) + 1, p2s_raw, p2s_raw_len);
 
         uint8_t kek[32];
         int p2c = (int)json_number(p2c_val);
-        if (p2c <= 0) {
+        if (p2c <= 0 || key_len > INT_MAX || salt_len > INT_MAX || kek_len > INT_MAX) {
             free(raw_enc_key); free(p2s_raw); free(salt);
             return CJWTE_INVALID_PARAMETERS;
         }
-        int kdf_ok = jwt->header.alg == alg_pbes2_hs256_a128kw
-                         ? turbo_crypto_pbkdf2_hmac_sha256(
-                               key_data, key_len, salt, salt_len, (uint32_t)p2c,
-                               kek, kek_len) == TURBO_CRYPTO_OK
-                         : PKCS5_PBKDF2_HMAC((const char *)key_data, (int)key_len,
-                                             salt, (int)salt_len, p2c, md,
-                                             (int)kek_len, kek) > 0;
+        int kdf_ok = PKCS5_PBKDF2_HMAC((const char *)key_data, (int)key_len,
+                                        salt, (int)salt_len, p2c, md,
+                                        (int)kek_len, kek) > 0;
         if (!kdf_ok) {
-            turbo_crypto_wipe(kek, sizeof(kek));
+            OPENSSL_cleanse(kek, sizeof(kek));
             free(raw_enc_key); free(p2s_raw); free(salt); return CJWTE_SIGNATURE_VALIDATION_FAILED;
         }
 
@@ -181,7 +183,7 @@ rsa_cleanup:
             *cek_len = (size_t)unwrapped_len;
         }
 
-        turbo_crypto_wipe(kek, sizeof(kek));
+        OPENSSL_cleanse(kek, sizeof(kek));
         free(p2s_raw); free(salt);
     } else {
         rv = CJWTE_SIGNATURE_UNSUPPORTED_ALG;
@@ -302,11 +304,11 @@ cjwt_code_t jwe_pbes2_prepare(cjwt_t *jwt)
 
         if (!p2s_str) {
             uint8_t p2s_raw[16];
-            if (turbo_crypto_random(p2s_raw, sizeof(p2s_raw)) != TURBO_CRYPTO_OK) {
+            if (RAND_bytes(p2s_raw, sizeof(p2s_raw)) != 1) {
                 return CJWTE_OUT_OF_MEMORY;
             }
             char *p2s_b64 = b64url_encode_with_alloc(p2s_raw, sizeof(p2s_raw), NULL);
-            turbo_crypto_wipe(p2s_raw, sizeof(p2s_raw));
+            OPENSSL_cleanse(p2s_raw, sizeof(p2s_raw));
             if (!p2s_b64) return CJWTE_OUT_OF_MEMORY;
             if (!jwt->header.private_headers) jwt->header.private_headers = json_create_object();
             json_object_set_string(jwt->header.private_headers, "p2s", p2s_b64);
@@ -404,7 +406,7 @@ static cjwt_code_t encrypt_cek(const cjwt_t *jwt, const uint8_t *key_data, size_
         const EVP_MD *md = NULL;
         size_t kek_len = 0;
 
-        if (jwt->header.alg == alg_pbes2_hs256_a128kw) { kek_len = 16; }
+        if (jwt->header.alg == alg_pbes2_hs256_a128kw) { md = EVP_sha256(); kek_len = 16; }
         else if (jwt->header.alg == alg_pbes2_hs384_a192kw) { md = EVP_sha384(); kek_len = 24; }
         else if (jwt->header.alg == alg_pbes2_hs512_a256kw) { md = EVP_sha512(); kek_len = 32; }
 
@@ -426,27 +428,33 @@ static cjwt_code_t encrypt_cek(const cjwt_t *jwt, const uint8_t *key_data, size_
 
         int p2c = (int)json_number(p2c_val);
         if (p2c <= 0) {
-            turbo_crypto_wipe(p2s_raw, sizeof(p2s_raw));
+            OPENSSL_cleanse(p2s_raw, sizeof(p2s_raw));
             return CJWTE_INVALID_PARAMETERS;
         }
 
         /* Derive KEK */
         size_t salt_len = strlen(alg_str) + 1 + actual_p2s_len;
         uint8_t *salt = malloc(salt_len);
+        if (!salt) {
+            OPENSSL_cleanse(p2s_raw, sizeof(p2s_raw));
+            return CJWTE_OUT_OF_MEMORY;
+        }
         memcpy(salt, alg_str, strlen(alg_str));
         salt[strlen(alg_str)] = 0;
         memcpy(salt + strlen(alg_str) + 1, p2s_raw, actual_p2s_len);
 
         uint8_t kek[32];
-        int kdf_ok = jwt->header.alg == alg_pbes2_hs256_a128kw
-                         ? turbo_crypto_pbkdf2_hmac_sha256(
-                               key_data, key_len, salt, salt_len, (uint32_t)p2c,
-                               kek, kek_len) == TURBO_CRYPTO_OK
-                         : PKCS5_PBKDF2_HMAC((const char *)key_data, (int)key_len,
-                                             salt, (int)salt_len, p2c, md,
-                                             (int)kek_len, kek) > 0;
+        if (key_len > INT_MAX || salt_len > INT_MAX || kek_len > INT_MAX) {
+            OPENSSL_cleanse(p2s_raw, sizeof(p2s_raw));
+            free(salt);
+            return CJWTE_INVALID_PARAMETERS;
+        }
+        int kdf_ok = PKCS5_PBKDF2_HMAC((const char *)key_data, (int)key_len,
+                                        salt, (int)salt_len, p2c, md,
+                                        (int)kek_len, kek) > 0;
         if (!kdf_ok) {
-            turbo_crypto_wipe(kek, sizeof(kek));
+            OPENSSL_cleanse(kek, sizeof(kek));
+            OPENSSL_cleanse(p2s_raw, sizeof(p2s_raw));
             free(salt);
             return CJWTE_SIGNATURE_VALIDATION_FAILED;
         }
@@ -457,8 +465,8 @@ static cjwt_code_t encrypt_cek(const cjwt_t *jwt, const uint8_t *key_data, size_
         int wrapped_len = aes_kw_wrap(kek, kek_len, cek, cek_len, *enc_cek);
         *enc_cek_len = (size_t)wrapped_len;
 
-        turbo_crypto_wipe(kek, sizeof(kek));
-        turbo_crypto_wipe(p2s_raw, sizeof(p2s_raw));
+        OPENSSL_cleanse(kek, sizeof(kek));
+        OPENSSL_cleanse(p2s_raw, sizeof(p2s_raw));
         free(salt);
         return CJWTE_OK;
     }
@@ -490,19 +498,19 @@ cjwt_code_t jwe_encrypt(const cjwt_t *jwt, const char *header_b64,
         if (key_len < cek_len) return CJWTE_SIGNATURE_INVALID_KEY;
         memcpy(cek, key_data, cek_len);
     } else {
-        if (turbo_crypto_random(cek, cek_len) != TURBO_CRYPTO_OK)
+        if (RAND_bytes(cek, cek_len) != 1)
             return CJWTE_OUT_OF_MEMORY;
     }
 
     rv = encrypt_cek(jwt, key_data, key_len, jwk, cek, cek_len, &enc_cek, &enc_cek_len);
     if (rv != CJWTE_OK) {
-        turbo_crypto_wipe(cek, sizeof(cek));
+        OPENSSL_cleanse(cek, sizeof(cek));
         return rv;
     }
 
-    if (turbo_crypto_random(iv, sizeof(iv)) != TURBO_CRYPTO_OK) {
+    if (RAND_bytes(iv, sizeof(iv)) != 1) {
         free(enc_cek);
-        turbo_crypto_wipe(cek, sizeof(cek));
+        OPENSSL_cleanse(cek, sizeof(cek));
         return CJWTE_OUT_OF_MEMORY;
     }
 
@@ -528,8 +536,8 @@ cjwt_code_t jwe_encrypt(const cjwt_t *jwt, const char *header_b64,
 
     free(enc_cek); free(ciphertext);
     free(enc_cek_b64); free(iv_b64); free(ct_b64); free(tag_b64);
-    turbo_crypto_wipe(cek, sizeof(cek));
-    turbo_crypto_wipe(tag, sizeof(tag));
+    OPENSSL_cleanse(cek, sizeof(cek));
+    OPENSSL_cleanse(tag, sizeof(tag));
     
     return CJWTE_OK;
 }

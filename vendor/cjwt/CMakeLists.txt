@@ -13,7 +13,7 @@ target_include_directories(
           "${CHTTP_CJWT_ROOT}/src")
 target_link_libraries(
   chttp_cjwt
-  PRIVATE Salts::JsonParser OpenSSL::Crypto turbo_crypto)
+  PRIVATE Salts::JsonParser Salts::Crypto OpenSSL::Crypto)
 
 
 if(BUILD_TESTS)

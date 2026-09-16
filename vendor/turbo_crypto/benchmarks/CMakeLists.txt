@@ -1,3 +1,0 @@
-add_executable(turbo_crypto_benchmark benchmark_turbo_crypto.c)
-target_link_libraries(turbo_crypto_benchmark PRIVATE turbo_crypto Salts::TinyTest)
-set_target_properties(turbo_crypto_benchmark PROPERTIES FOLDER "vendor/turbo_crypto/benchmarks")
