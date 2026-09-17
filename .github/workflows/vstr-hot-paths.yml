@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
+  SALTS_SHA: 3cf8ce72a9bcba2a044729de62ade8cd2d08e7c7
   SALTS_UTILS_SHA: c6662ccd382a4311ff648ff80570d8d8f98028a8
   VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
@@ -89,7 +89,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-3cf8ce72a9bcba2a044729de62ade8cd2d08e7c7-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
       - name: Build and install exact Salts
         if: steps.salts-package-cache.outputs.cache-hit != 'true'
@@ -110,7 +110,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-3cf8ce72a9bcba2a044729de62ade8cd2d08e7c7-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
       - name: Expose exact Salts profile to SaltsUtils
         shell: bash
