@@ -53,10 +53,38 @@ spec("CHTTP strict incremental response parser") {
     check_equal(parser.response.http_minor, 1u);
     check_equal(parser.response.status_code, 200u);
     check_equal(parser.response.reason, "OK");
+    check_equal(parser.reason_view.len, (size_t)2u);
+    check_equal(parser.reason_view.data, "OK", 2u);
     check_equal(parser.response.header_count, (size_t)3u);
     check_equal(chttp_response_view_header(&parser.response, "content-type"), "text/plain");
+    check_equal(chttp_response_view_header(&parser.response, "CONTENT-TYPE"), "text/plain");
+    check_null(chttp_response_view_header(&parser.response, "content"));
+    check_true(vstr_empty(parser.current_field));
+    check_true(vstr_empty(parser.current_value));
     check_equal(parser.response.body_size, (size_t)5u);
     check_equal(parser.response.body, "hello", 5u);
+    chttp_response_parser_destroy(&parser);
+  }
+
+  it("keeps length-bearing views correct across split status and header callbacks") {
+    static const char part1[] = "HTTP/1.1 200 Cre";
+    static const char part2[] = "ated\r\nX-Frag";
+    static const char part3[] = "ment: va";
+    static const char part4[] = "lue\r\nContent-Length: 0\r\n\r\n";
+    chttp_limits limits = chttp_response_test_limits();
+    chttp_response_parser parser;
+
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, part1, sizeof(part1) - 1u), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, part2, sizeof(part2) - 1u), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, part3, sizeof(part3) - 1u), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, part4, sizeof(part4) - 1u), SALTS_OK);
+    check_true(parser.complete);
+    check_equal(parser.reason_view.len, sizeof("Created") - 1u);
+    check_equal(parser.reason_view.data, "Created", sizeof("Created") - 1u);
+    check_equal(chttp_response_view_header(&parser.response, "x-fragment"), "value");
+    check_true(vstr_empty(parser.current_field));
+    check_true(vstr_empty(parser.current_value));
     chttp_response_parser_destroy(&parser);
   }
 
