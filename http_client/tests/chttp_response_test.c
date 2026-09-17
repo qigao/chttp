@@ -1,6 +1,7 @@
 #include "chttp_internal.h"
 #include "tinytest.h"
 
+#include <stdint.h>
 #include <string.h>
 
 typedef struct chttp_response_sink_probe {
@@ -152,6 +153,50 @@ spec("CHTTP strict incremental response parser") {
     check_equal(chttp_response_parser_execute(&parser, trailing, sizeof(trailing) - 1u),
                 SALTS_EPROTO);
     chttp_response_parser_destroy(&parser);
+  }
+
+  it("owns one bounded arena in buffered mode") {
+    chttp_limits limits = chttp_response_test_limits();
+    chttp_response_parser parser;
+    const unsigned char *arena_end;
+
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_not_null(parser.arena);
+    check_true(parser.arena_capacity > 0u);
+    arena_end = parser.arena + parser.arena_capacity;
+    check_true((const unsigned char *)parser.headers >= parser.arena);
+    check_true((const unsigned char *)parser.header_storage >= parser.arena);
+    check_true((const unsigned char *)parser.reason_storage >= parser.arena);
+    check_true((const unsigned char *)parser.body_storage >= parser.arena);
+    check_true((const unsigned char *)parser.body_storage < arena_end);
+    chttp_response_parser_destroy(&parser);
+    check_null(parser.arena);
+  }
+
+  it("does not reserve buffered body storage for streaming sinks") {
+    chttp_response_sink_probe probe = {0};
+    const chttp_body_sink sink = {.write = chttp_response_test_sink, .user = &probe};
+    chttp_limits limits = chttp_response_test_limits();
+    chttp_response_parser parser;
+    chttp_file_sink_transfer *file_sink = (chttp_file_sink_transfer *)(uintptr_t)1u;
+
+    check_equal(chttp_response_parser_init_with_sink(&parser, CHTTP_METHOD_GET, &limits, &sink),
+                SALTS_OK);
+    check_not_null(parser.arena);
+    check_null(parser.body_storage);
+    chttp_response_parser_destroy(&parser);
+
+    check_equal(chttp_response_parser_init_with_sinks(
+                    &parser, CHTTP_METHOD_GET, &limits, NULL, file_sink),
+                SALTS_OK);
+    check_not_null(parser.arena);
+    check_null(parser.body_storage);
+    check_equal(parser.file_sink_transfer, file_sink);
+    chttp_response_parser_destroy(&parser);
+
+    check_equal(chttp_response_parser_init_with_sinks(
+                    &parser, CHTTP_METHOD_GET, &limits, &sink, file_sink),
+                SALTS_EINVAL);
   }
 
   it("delivers body fragments to a bounded sink without retaining a body copy") {
