@@ -165,7 +165,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
-            chttp_request_test chttp_websocket_handshake_test -j2
+            chttp_request_test chttp_response_test chttp_websocket_handshake_test -j2
 
       - name: Run focused tests
         shell: bash
@@ -174,7 +174,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_request_test|chttp_websocket_handshake_test)$' \
+            -R '^(chttp_request_test|chttp_response_test|chttp_websocket_handshake_test)$' \
             --output-on-failure
 
       - name: Build full Chttp graph
