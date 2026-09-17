@@ -72,6 +72,9 @@ static void chttp_response_reset_message(chttp_response_parser *parser) {
   parser->field_offset = 0u;
   parser->value_offset = 0u;
   parser->reason_size = 0u;
+  parser->current_field = (vstr){0};
+  parser->current_value = (vstr){0};
+  parser->reason_view = (vstr){0};
   parser->field_open = false;
   parser->value_open = false;
   parser->reason_terminated = false;
@@ -100,7 +103,9 @@ static int chttp_response_on_status(llhttp_t *llparser, const char *at, size_t l
 static int chttp_response_on_status_complete(llhttp_t *llparser) {
   chttp_response_parser *parser = chttp_parser_context(llparser);
   if (parser == NULL || parser->reason_size > parser->max_reason_bytes) return -1;
+  parser->reason_view = vstr_from_buf(parser->reason_storage, parser->reason_size);
   parser->reason_storage[parser->reason_size] = '\0';
+  parser->response.reason = parser->reason_view.data;
   parser->reason_terminated = true;
   return 0;
 }
@@ -124,13 +129,20 @@ static int chttp_response_on_header_field(llhttp_t *llparser, const char *at, si
 
 static int chttp_response_on_header_field_complete(llhttp_t *llparser) {
   chttp_response_parser *parser = chttp_parser_context(llparser);
+  size_t field_size;
   if (parser == NULL || !parser->field_open ||
       parser->response.header_count >= parser->max_header_count)
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response header count exceeds configured bound");
+  if (parser->header_storage_used < parser->field_offset)
+    return chttp_response_fail_callback(parser, SALTS_EPROTO, "headers",
+                                        "HTTP response header field offsets are invalid");
+  field_size = parser->header_storage_used - parser->field_offset;
   if (!chttp_response_storage_append(parser, "\0", 1u))
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response header storage exhausted");
+  parser->current_field =
+      vstr_from_buf(parser->header_storage + parser->field_offset, field_size);
   parser->field_open = false;
   parser->value_offset = parser->header_storage_used;
   parser->value_open = true;
@@ -153,16 +165,25 @@ static int chttp_response_on_header_value(llhttp_t *llparser, const char *at, si
 static int chttp_response_on_header_value_complete(llhttp_t *llparser) {
   chttp_response_parser *parser = chttp_parser_context(llparser);
   chttp_header *header;
+  size_t value_size;
   if (parser == NULL || !parser->value_open ||
       parser->response.header_count >= parser->max_header_count)
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response header count exceeds configured bound");
+  if (parser->header_storage_used < parser->value_offset)
+    return chttp_response_fail_callback(parser, SALTS_EPROTO, "headers",
+                                        "HTTP response header value offsets are invalid");
+  value_size = parser->header_storage_used - parser->value_offset;
   if (!chttp_response_wire_add(parser, 4u) || !chttp_response_storage_append(parser, "\0", 1u))
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response headers exceed configured byte bound");
+  parser->current_value =
+      vstr_from_buf(parser->header_storage + parser->value_offset, value_size);
   header = &parser->headers[parser->response.header_count++];
-  header->name = parser->header_storage + parser->field_offset;
-  header->value = parser->header_storage + parser->value_offset;
+  header->name = parser->current_field.data;
+  header->value = parser->current_value.data;
+  parser->current_field = (vstr){0};
+  parser->current_value = (vstr){0};
   parser->value_open = false;
   return 0;
 }
@@ -177,7 +198,9 @@ static int chttp_response_on_headers_complete(llhttp_t *llparser) {
     return chttp_response_fail_callback(parser, SALTS_EPROTO, "headers",
                                         "HTTP response ended with an incomplete header");
   if (!parser->reason_terminated) {
+    parser->reason_view = vstr_from_buf(parser->reason_storage, parser->reason_size);
     parser->reason_storage[parser->reason_size] = '\0';
+    parser->response.reason = parser->reason_view.data;
     parser->reason_terminated = true;
   }
   parser->response.http_major = major;
