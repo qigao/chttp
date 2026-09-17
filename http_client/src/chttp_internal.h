@@ -3,6 +3,7 @@
 
 #include <http_client/http.h>
 #include <llhttp.h>
+#include <vstr.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -24,10 +25,15 @@ typedef struct chttp_response_parser {
   llhttp_t parser;
   llhttp_settings_t settings;
   chttp_response_view response;
+  unsigned char *arena;
+  size_t arena_capacity;
   chttp_header *headers;
   char *header_storage;
   char *reason_storage;
   unsigned char *body_storage;
+  vstr current_field;
+  vstr current_value;
+  vstr reason_view;
   chttp_body_sink body_sink;
   chttp_file_sink_transfer *file_sink_transfer;
   size_t header_storage_capacity;
@@ -60,6 +66,10 @@ int chttp_response_parser_init(chttp_response_parser *parser, chttp_method metho
                                const chttp_limits *limits);
 int chttp_response_parser_init_with_sink(chttp_response_parser *parser, chttp_method method,
                                          const chttp_limits *limits, const chttp_body_sink *sink);
+int chttp_response_parser_init_with_sinks(chttp_response_parser *parser, chttp_method method,
+                                          const chttp_limits *limits,
+                                          const chttp_body_sink *sink,
+                                          chttp_file_sink_transfer *file_sink_transfer);
 void chttp_response_parser_destroy(chttp_response_parser *parser);
 int chttp_response_parser_execute(chttp_response_parser *parser, const void *data, size_t size);
 int chttp_response_parser_finish(chttp_response_parser *parser);
