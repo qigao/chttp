@@ -1,11 +1,20 @@
 #include "chttp_internal.h"
 
+#include <vstr.h>
+
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { CHTTP_GENERATED_HEADER_COUNT = 3 };
+enum { CHTTP_GENERATED_HEADER_COUNT = 3, CHTTP_HEADER_VIEW_INLINE_CAPACITY = 16 };
+
+#define CHTTP_VSTR_LITERAL(text) vstr_from_buf((text), sizeof(text) - 1u)
+
+typedef struct chttp_header_view {
+  vstr name;
+  vstr value;
+} chttp_header_view;
 
 static bool chttp_size_add(size_t left, size_t right, size_t *out) {
   if (out == NULL || left > SIZE_MAX - right) return false;
@@ -50,31 +59,33 @@ static bool chttp_header_name_byte(unsigned char value) {
          value == '^' || value == '_' || value == '`' || value == '|' || value == '~';
 }
 
-static int chttp_header_valid(const chttp_header *header, size_t limit, size_t *out_name_size,
-                              size_t *out_value_size) {
+static int chttp_header_valid(const chttp_header *header, size_t limit,
+                              chttp_header_view *out_view) {
+  chttp_header_view view = {0};
   size_t name_size = 0u;
   size_t value_size = 0u;
   size_t index;
   int status;
-  if (header == NULL || out_name_size == NULL || out_value_size == NULL) return SALTS_EINVAL;
+  if (header == NULL || out_view == NULL) return SALTS_EINVAL;
   status = chttp_bounded_length(header->name, limit, &name_size);
   if (status != SALTS_OK) return status;
   status = chttp_bounded_length(header->value, limit, &value_size);
   if (status != SALTS_OK) return status;
   if (name_size == 0u) return SALTS_EINVAL;
-  for (index = 0u; index < name_size; ++index)
-    if (!chttp_header_name_byte((unsigned char)header->name[index])) return SALTS_EINVAL;
-  for (index = 0u; index < value_size; ++index) {
-    const unsigned char value = (unsigned char)header->value[index];
+  view.name = vstr_from_buf(header->name, name_size);
+  view.value = vstr_from_buf(header->value, value_size);
+  for (index = 0u; index < view.name.len; ++index)
+    if (!chttp_header_name_byte((unsigned char)view.name.data[index])) return SALTS_EINVAL;
+  for (index = 0u; index < view.value.len; ++index) {
+    const unsigned char value = (unsigned char)view.value.data[index];
     if ((value < 0x20u && value != '\t') || value == 0x7fu) return SALTS_EINVAL;
   }
-  if (chttp_ascii_equal(header->name, "host") ||
-      chttp_ascii_equal(header->name, "content-length") ||
-      chttp_ascii_equal(header->name, "transfer-encoding") ||
-      chttp_ascii_equal(header->name, "connection"))
+  if (vstr_ieq(view.name, CHTTP_VSTR_LITERAL("host")) ||
+      vstr_ieq(view.name, CHTTP_VSTR_LITERAL("content-length")) ||
+      vstr_ieq(view.name, CHTTP_VSTR_LITERAL("transfer-encoding")) ||
+      vstr_ieq(view.name, CHTTP_VSTR_LITERAL("connection")))
     return SALTS_EINVAL;
-  *out_name_size = name_size;
-  *out_value_size = value_size;
+  *out_view = view;
   return SALTS_OK;
 }
 
@@ -152,6 +163,8 @@ int chttp_request_build(const chttp_request_options *options, const chttp_limits
   static const char length_prefix[] = "Content-Length: ";
   static const char chunked_header[] = "Transfer-Encoding: chunked\r\n";
   static const char keep_alive_header[] = "Connection: keep-alive\r\n";
+  chttp_header_view inline_header_views[CHTTP_HEADER_VIEW_INLINE_CAPACITY];
+  chttp_header_view *header_views = inline_header_views;
   const char *method_name;
   size_t method_size;
   size_t target_size = 0u;
@@ -218,23 +231,42 @@ int chttp_request_build(const chttp_request_options *options, const chttp_limits
     return SALTS_EMSGSIZE;
   }
 
-  for (index = 0u; index < options->header_count; ++index) {
-    size_t name_size = 0u;
-    size_t value_size = 0u;
-    status = chttp_header_valid(&options->headers[index], limits->max_header_bytes, &name_size,
-                                &value_size);
-    if (status != SALTS_OK) return status;
-    if (!chttp_add_header_size(name_size, value_size, &header_bytes)) return SALTS_EMSGSIZE;
+  if (options->header_count > CHTTP_HEADER_VIEW_INLINE_CAPACITY) {
+    if (options->header_count > SIZE_MAX / sizeof(*header_views)) return SALTS_ERANGE;
+    header_views =
+        (chttp_header_view *)malloc(options->header_count * sizeof(*header_views));
+    if (header_views == NULL) return SALTS_ENOMEM;
   }
-  if (header_bytes > limits->max_header_bytes) return SALTS_EMSGSIZE;
+  for (index = 0u; index < options->header_count; ++index) {
+    status = chttp_header_valid(&options->headers[index], limits->max_header_bytes,
+                                &header_views[index]);
+    if (status != SALTS_OK) {
+      if (header_views != inline_header_views) free(header_views);
+      return status;
+    }
+    if (!chttp_add_header_size(header_views[index].name.len, header_views[index].value.len,
+                               &header_bytes)) {
+      if (header_views != inline_header_views) free(header_views);
+      return SALTS_EMSGSIZE;
+    }
+  }
+  if (header_bytes > limits->max_header_bytes) {
+    if (header_views != inline_header_views) free(header_views);
+    return SALTS_EMSGSIZE;
+  }
   if (!chttp_size_add(request_line_bytes, header_bytes, &total_size) ||
       !chttp_size_add(total_size, 2u, &total_size) ||
       !chttp_size_add(total_size, serialized_body_size, &total_size) ||
-      total_size > limits->max_request_bytes)
+      total_size > limits->max_request_bytes) {
+    if (header_views != inline_header_views) free(header_views);
     return SALTS_EMSGSIZE;
+  }
 
   data = (unsigned char *)malloc(total_size);
-  if (data == NULL) return SALTS_ENOMEM;
+  if (data == NULL) {
+    if (header_views != inline_header_views) free(header_views);
+    return SALTS_ENOMEM;
+  }
   cursor = data;
   cursor = chttp_copy(cursor, method_name, method_size);
   *cursor++ = ' ';
@@ -252,15 +284,14 @@ int chttp_request_build(const chttp_request_options *options, const chttp_limits
   }
   cursor = chttp_copy(cursor, keep_alive_header, sizeof(keep_alive_header) - 1u);
   for (index = 0u; index < options->header_count; ++index) {
-    const size_t name_size = strlen(options->headers[index].name);
-    const size_t value_size = strlen(options->headers[index].value);
-    cursor = chttp_copy(cursor, options->headers[index].name, name_size);
+    cursor = chttp_copy(cursor, header_views[index].name.data, header_views[index].name.len);
     cursor = chttp_copy(cursor, ": ", 2u);
-    cursor = chttp_copy(cursor, options->headers[index].value, value_size);
+    cursor = chttp_copy(cursor, header_views[index].value.data, header_views[index].value.len);
     cursor = chttp_copy(cursor, "\r\n", 2u);
   }
   cursor = chttp_copy(cursor, "\r\n", 2u);
   (void)chttp_copy(cursor, options->body, serialized_body_size);
+  if (header_views != inline_header_views) free(header_views);
   *out_data = data;
   *out_size = total_size;
   return SALTS_OK;
