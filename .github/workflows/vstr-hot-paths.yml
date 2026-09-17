@@ -3,7 +3,7 @@ name: VStr hot path verification
 on:
   push:
     branches:
-      - perf/vstr-hot-paths
+      - perf/http1-response-vstr-arena
   workflow_dispatch:
 
 permissions:
