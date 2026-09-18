@@ -41,16 +41,16 @@ static const cmeta_type_desc OA_UI_DOCUMENT_TYPE = {
     CMETA_T_OBJECT, NULL, NULL, &OA_UI_DOCUMENT_ID
 };
 
-#define OA_UI_LAYOUT_FIELD(type_, member_) \
-    {#member_, #member_, offsetof(type_, member_), sizeof(((type_ *)0)->member_), \
-     _Alignof(__typeof__(((type_ *)0)->member_)), NULL, NULL}
+#define OA_UI_LAYOUT_FIELD(owner_, field_type_, member_) \
+    {#member_, #field_type_, offsetof(owner_, member_), sizeof(((owner_ *)0)->member_), \
+     _Alignof(field_type_), NULL, NULL}
 
 static const cmeta_field_desc OA_UI_PARAMETER_LAYOUT_FIELDS[] = {
-    OA_UI_LAYOUT_FIELD(oa_ui_parameter, name),
-    OA_UI_LAYOUT_FIELD(oa_ui_parameter, location),
-    OA_UI_LAYOUT_FIELD(oa_ui_parameter, description),
-    OA_UI_LAYOUT_FIELD(oa_ui_parameter, schema_json),
-    OA_UI_LAYOUT_FIELD(oa_ui_parameter, required)
+    OA_UI_LAYOUT_FIELD(oa_ui_parameter, vstr, name),
+    OA_UI_LAYOUT_FIELD(oa_ui_parameter, vstr, location),
+    OA_UI_LAYOUT_FIELD(oa_ui_parameter, vstr, description),
+    OA_UI_LAYOUT_FIELD(oa_ui_parameter, vstr, schema_json),
+    OA_UI_LAYOUT_FIELD(oa_ui_parameter, bool, required)
 };
 static const cmeta_struct_desc OA_UI_PARAMETER_LAYOUT = {
     "oa_ui_parameter", sizeof(oa_ui_parameter), _Alignof(oa_ui_parameter),
@@ -75,16 +75,16 @@ static const cmeta_data_desc OA_UI_PARAMETER_DATA = {
 };
 
 static const cmeta_field_desc OA_UI_OPERATION_LAYOUT_FIELDS[] = {
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, method),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, path),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, operation_id),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, summary),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, description),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, deprecated),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, parameters),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, parameter_count),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, request_body_json),
-    OA_UI_LAYOUT_FIELD(oa_ui_operation, responses_json)
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, method),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, path),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, operation_id),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, summary),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, description),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, bool, deprecated),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, const oa_ui_parameter *, parameters),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, size_t, parameter_count),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, request_body_json),
+    OA_UI_LAYOUT_FIELD(oa_ui_operation, vstr, responses_json)
 };
 static const cmeta_struct_desc OA_UI_OPERATION_LAYOUT = {
     "oa_ui_operation", sizeof(oa_ui_operation), _Alignof(oa_ui_operation),
@@ -113,11 +113,11 @@ static const cmeta_data_desc OA_UI_OPERATION_DATA = {
 };
 
 static const cmeta_field_desc OA_UI_DOCUMENT_LAYOUT_FIELDS[] = {
-    OA_UI_LAYOUT_FIELD(oa_ui_document, title),
-    OA_UI_LAYOUT_FIELD(oa_ui_document, version),
-    OA_UI_LAYOUT_FIELD(oa_ui_document, openapi_version),
-    OA_UI_LAYOUT_FIELD(oa_ui_document, operations),
-    OA_UI_LAYOUT_FIELD(oa_ui_document, operation_count)
+    OA_UI_LAYOUT_FIELD(oa_ui_document, vstr, title),
+    OA_UI_LAYOUT_FIELD(oa_ui_document, vstr, version),
+    OA_UI_LAYOUT_FIELD(oa_ui_document, vstr, openapi_version),
+    OA_UI_LAYOUT_FIELD(oa_ui_document, const oa_ui_operation *, operations),
+    OA_UI_LAYOUT_FIELD(oa_ui_document, size_t, operation_count)
 };
 static const cmeta_struct_desc OA_UI_DOCUMENT_LAYOUT = {
     "oa_ui_document", sizeof(oa_ui_document), _Alignof(oa_ui_document),
