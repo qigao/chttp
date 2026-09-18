@@ -1,45 +1,96 @@
-# Chttp
+# CHTTP
 
-基于 Salts 的 C11/C++17 HTTP、JSON-RPC 与 S3 库。
+**C11/C++17 HTTP, JSON-RPC, S3, WebSocket, and OpenAPI infrastructure built on Salts.**
 
-| 模块 | CMake target | 公开入口 |
-| --- | --- | --- |
-| HTTP/RPC 客户端 | `CHttp::Client` | `<http_client/http.h>`、`<http_client/rpc.h>` |
-| HTTP/RPC 服务端 | `CHttp::Server` | `<http_server/http.h>`、`<http_server/rpc.h>` |
-| 独立 S3 客户端 | `CHttp::S3` | `<s3/s3.h>` |
+CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses Salts transport, lifecycle, bounded execution, and typed semantics instead of embedding a separate networking runtime.
 
-`Client` 和 `Server` 分别包含本侧 RPC 实现，两端独立链接。S3 位于独立的 `s3/` 模块，
-链接 `CHttp::Client`。底层连接、执行器等能力依赖安装后的 Salts SDK；JSON parser 和
-Ed448 能力来自 SaltsUtils。通用密码学能力由 vcpkg 的 BoringSSL 提供。
+**Tags:** C11 · C++17 · HTTP · JSON-RPC · S3 · WebSocket · OpenAPI · TLS · networking · async-io
 
-## 目录归属
+## Built on Salts
+
+CHTTP depends on the installed [Salts](https://github.com/qigao/salts) SDK and selected [SaltsUtils](https://github.com/qigao/salts-utils) components.
+
+That gives the library a shared foundation:
+
+- **CNet / NativeIO** for transport, connection progress, async I/O, TLS/session ownership, and shutdown semantics.
+- **CMeta / CFlow** for typed metadata and execution boundaries where required.
+- **SaltsUtils parsers** for JSON and related higher-level formats.
+- **SaltsUtils crypto helpers** where explicitly required by protocol features.
+- **BoringSSL/OpenSSL-compatible package dependencies** for the low-level cryptographic provider selected by the build.
+
+CHTTP owns HTTP, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
+
+## Ecosystem role
 
 ```text
-http_client/  include/http_client/、src/、rpc/、tests/
-http_server/  include/http_server/、src/、rpc/、tests/、examples/
-http_common/  include/http_common/、http/、rpc/、tests/
-s3/           include/s3/、src/、tests/
-vendor/       cjwt/
+Salts
+  ├── salts-utils
+  ├── salts-net
+  └── DataBind
+        ↓
+      CHTTP
+        ↓
+  application / workflow / service layers
 ```
 
-每个模块的 `include/` 管理公开声明，`src/` 或协议子目录管理实现，`tests/` 管理模块测试。
-`http_common/` 仅存放 HTTP/RPC 共享协议类型和机制，不持有客户端或服务端的业务状态。
-其对象代码编译一次，分别链接进两端库，不导出独立 CMake target。
-共享 fixture 和两端集成测试放在 `http_common/tests/`。后续模块按能力增加自己的目录。
-第三方库及其测试、benchmark target 均归入对应 `vendor/` 分组。
+CHTTP is domain infrastructure: higher-level projects can depend on it for HTTP-family protocols while still sharing the same Salts ownership, error, and async-I/O model.
 
-Server 支持 Cookie Session、全局/路由级 middleware；RPC 可通过 `crpc_server_http()`
-取得 HTTP owner，在启动前配置中间件。详见 [服务端](http_server/README.md)、
-[客户端](http_client/README.md)、[S3](s3/README.md)。
+## Modules
 
-可选 [OpenAPI 生成器](openapi/README.md) 从 C 源码注释生成 OpenAPI 3.1 文档，
-支持标准 schema 约束；使用 `BUILD_OPENAPI=ON` 启用。
+| Module | CMake target | Public entry points |
+| --- | --- | --- |
+| HTTP / RPC client | `CHttp::Client` | `<http_client/http.h>`, `<http_client/rpc.h>` |
+| HTTP / RPC server | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
+| S3 client | `CHttp::S3` | `<s3/s3.h>` |
 
-## 构建与使用
+Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
 
-要求 CMake 3.25+、Ninja、vcpkg、C11/C++17 编译器，以及匹配配置的 Salts 和
-SaltsUtils SDK。构建 Chttp 前设置 `SALTS_ROOT`、`SALTS_UTILS_ROOT`、`PROJECT_ROOT`
-和 `VCPKG_ROOT`；路径使用 `/`。Windows 在 MSVC 开发环境中运行：
+## Repository layout
+
+```text
+http_client/  include/http_client/  src/  rpc/  tests/
+http_server/  include/http_server/  src/  rpc/  tests/  examples/
+http_common/  include/http_common/  http/  rpc/  tests/
+s3/           include/s3/  src/  tests/
+openapi/      OpenAPI generation support
+vendor/       local third-party integration
+```
+
+`http_common/` owns shared HTTP/RPC protocol types and mechanisms only. It does not own client/server application state and is not exported as an independent public package target.
+
+## HTTP server features
+
+The server supports Cookie Session plus global and route-level middleware. RPC users can obtain the HTTP owner through `crpc_server_http()` and configure middleware before startup.
+
+See:
+
+- [HTTP server](http_server/README.md)
+- [HTTP client](http_client/README.md)
+- [S3 client](s3/README.md)
+
+## OpenAPI
+
+The optional [OpenAPI generator](openapi/README.md) produces OpenAPI 3.1 documents from C source annotations and supports standard schema constraints.
+
+Enable it with:
+
+```text
+BUILD_OPENAPI=ON
+```
+
+## Build and test
+
+Requirements:
+
+- CMake 3.25+
+- Ninja
+- vcpkg
+- C11/C++17 compiler
+- matching installed Salts and SaltsUtils SDK profiles
+
+Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, and `VCPKG_ROOT` before configuration.
+
+Windows Release:
 
 ```powershell
 cmake --preset win-release-user
@@ -48,25 +99,49 @@ ctest --preset win-release-user
 cmake --build --preset install-win-release-user
 ```
 
-`CMakePresets.json` 与 `presets/` 完整复制 Salts。Windows 默认入口
-`win-dev-user` / `win-release-user` 使用 MSVC，C/C++ 编译器为 `cl`。
-`CMakeUserPresets.json` 定义本仓库安装路径和基础依赖根；`SALTS_UTILS_ROOT` 可由调用环境
-显式提供。CMake 对 Salts 和 SaltsUtils 都使用 fail-fast 的配置包查找，不回退到其他 profile。
+Linux uses the corresponding `linux-*` presets.
 
-消费工程设置 `SALTS_ROOT`、`HTTP_SERVICES_ROOT` 后按需链接：
+The current presets retain the historical environment variable `HTTP_SERVICES_ROOT` as the install-prefix variable. It names the CHTTP package root; it should not be interpreted as a separate runtime or repository boundary.
+
+## Using CHTTP from CMake
 
 ```cmake
 find_package(Chttp CONFIG REQUIRED
-  PATHS "$ENV{HTTP_SERVICES_ROOT}" NO_DEFAULT_PATH)
+  PATHS "$ENV{HTTP_SERVICES_ROOT}"
+  NO_DEFAULT_PATH)
+
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```
 
-服务端选择 `CHttp::Server`，S3 应用选择 `CHttp::S3`。Windows 运行环境需要已安装的运行库
-及 vcpkg 运行库路径。头文件路径和库名已变更，调用方需要更新 include、链接配置并重新编译。
+Use `CHttp::Server` for server applications and `CHttp::S3` for S3 consumers.
 
-## 来源
+The package resolves Salts and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
 
-源码由 Salts commit `65a16c66ddee3495d08fbea10b0901e7f9bf3720` 迁移。
-原有请求生命周期、状态归属、协议和错误语义保留。上游来源、许可证及本地修改说明随模块保留。
-运行时说明见 [HTTP](docs/HTTP.md)、[RPC](docs/RPC.md)，结构决策见
-[模块组织](docs/plans/2026-09-09-server-client-layout.md)。
+## Runtime boundaries
+
+CHTTP follows the same explicit system rules as Salts:
+
+- connection/session ownership is explicit;
+- async work is bounded;
+- shutdown and drain are explicit operations;
+- protocol errors propagate through stable domain/runtime boundaries;
+- no hidden product/session state is inserted below the public HTTP/RPC layer;
+- no alternate runtime is selected when a configured dependency fails.
+
+## Relationship to downstream projects
+
+CHTTP is intended to be reused by higher layers such as TurboFlow, Flowie, service applications, and product adapters. Those projects own their business/session/workflow semantics; CHTTP owns only the HTTP-family protocol and service infrastructure.
+
+## Origin and migration
+
+This repository was extracted from the earlier Salts-hosted HTTP services implementation. Existing request lifecycle, state ownership, protocol, and error semantics were preserved through that move while package boundaries were made explicit.
+
+Additional technical references:
+
+- [HTTP runtime notes](docs/HTTP.md)
+- [RPC runtime notes](docs/RPC.md)
+- [module layout decision](docs/plans/2026-09-09-server-client-layout.md)
+
+---
+
+**Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
