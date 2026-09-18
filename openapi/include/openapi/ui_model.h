@@ -12,6 +12,22 @@
 extern "C" {
 #endif
 
+typedef struct json_value_s json_value_t;
+
+/*
+ * Renderer-neutral immutable sequence view.
+ *
+ * The model owns the backing storage. A non-empty view has non-NULL data,
+ * nonzero stride, and a valid element descriptor. All views and elements
+ * remain stable until oa_ui_model_free().
+ */
+typedef struct oa_ui_sequence_view {
+    const void *data;
+    size_t count;
+    size_t stride;
+    const cmeta_data_desc *element;
+} oa_ui_sequence_view;
+
 typedef struct oa_ui_parameter {
     vstr name;
     vstr location;
@@ -26,33 +42,33 @@ typedef struct oa_ui_operation {
     vstr operation_id;
     vstr summary;
     vstr description;
-    bool deprecated;
-    const oa_ui_parameter *parameters;
-    size_t parameter_count;
+    oa_ui_sequence_view tags;
+    oa_ui_sequence_view parameters;
     vstr request_body_json;
     vstr responses_json;
+    bool deprecated;
 } oa_ui_operation;
 
 typedef struct oa_ui_document {
     vstr title;
     vstr version;
     vstr openapi_version;
-    const oa_ui_operation *operations;
-    size_t operation_count;
+    oa_ui_sequence_view operations;
 } oa_ui_document;
 
 typedef struct oa_ui_model oa_ui_model;
 
-/* Creates a deep-owned immutable presentation model. The returned model does
- * not borrow from document and remains valid after oa_document_free(document).
- * Optional text is represented by an empty vstr. */
+/*
+ * Create an immutable presentation snapshot.
+ *
+ * The returned model owns all storage needed by its views. The source document
+ * or JSON DOM may be changed or destroyed after this call returns successfully.
+ */
 oa_ui_model *oa_ui_model_create(const oa_document *document, oa_error *error);
+oa_ui_model *oa_ui_model_create_json(const json_value_t *root, oa_error *error);
+const oa_ui_document *oa_ui_model_view(const oa_ui_model *model);
 void oa_ui_model_free(oa_ui_model *model);
-const oa_ui_document *oa_ui_model_document(const oa_ui_model *model);
 
-/* Canonical scalar/record descriptors. Sequence storage remains an explicit
- * typed pointer/count boundary; a renderer may adapt it without inspecting the
- * generator's json_value_t representation. */
 const cmeta_data_desc *oa_ui_parameter_cmeta_data(void);
 const cmeta_data_desc *oa_ui_operation_cmeta_data(void);
 const cmeta_data_desc *oa_ui_document_cmeta_data(void);
