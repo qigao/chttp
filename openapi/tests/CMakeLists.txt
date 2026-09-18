@@ -7,6 +7,13 @@ target_compile_definitions(test_generator PRIVATE
 add_dependencies(test_generator openapi_c)
 add_test(NAME generator COMMAND test_generator)
 
+add_executable(test_ui_model test_ui_model.c)
+set_target_properties(test_ui_model PROPERTIES FOLDER "tests")
+target_link_libraries(test_ui_model PRIVATE "${OPENAPI_C_GRAMMAR_LIBRARY}" openapi_generator)
+target_compile_definitions(test_ui_model PRIVATE C_PLUGIN="$<TARGET_FILE:openapi_c>")
+add_dependencies(test_ui_model openapi_c)
+add_test(NAME openapi_ui_model COMMAND test_ui_model)
+
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_program(OPENAPI_NODE_EXECUTABLE NAMES node REQUIRED)
 add_test(NAME generator_conformance
