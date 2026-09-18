@@ -3,7 +3,7 @@ name: OpenAPI UI model verification
 on:
   push:
     branches:
-      - feat/openapi-ui-cmeta-model
+      - verify/openapi-ui-model-red
   workflow_dispatch:
 
 permissions:
