@@ -38,16 +38,16 @@ static const cmeta_type_desc OA_UI_SEQUENCE_TYPE = {
     CMETA_T_OBJECT, NULL, NULL, &OA_UI_SEQUENCE_IDENTITY
 };
 
-#define OA_LAYOUT_FIELD(owner, member, type_name_, type_) \
+#define OA_LAYOUT_FIELD(owner, member, field_type_, type_name_, type_) \
     {#member, type_name_, offsetof(owner, member), sizeof(((owner *)0)->member), \
-     _Alignof(__typeof__(((owner *)0)->member)), type_, NULL}
+     _Alignof(field_type_), type_, NULL}
 
 static const cmeta_field_desc OA_UI_PARAMETER_LAYOUT_FIELDS[] = {
-    OA_LAYOUT_FIELD(oa_ui_parameter, name, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, location, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, description, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, schema_json, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, required, "bool", NULL)
+    OA_LAYOUT_FIELD(oa_ui_parameter, name, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, location, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, description, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, schema_json, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, required, bool, "bool", NULL)
 };
 static const cmeta_struct_desc OA_UI_PARAMETER_LAYOUT = {
     "oa_ui_parameter", sizeof(oa_ui_parameter), _Alignof(oa_ui_parameter),
@@ -80,16 +80,16 @@ static const cmeta_data_desc OA_UI_PARAMETER_DATA = {
 };
 
 static const cmeta_field_desc OA_UI_OPERATION_LAYOUT_FIELDS[] = {
-    OA_LAYOUT_FIELD(oa_ui_operation, method, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, path, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, operation_id, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, summary, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, description, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, tags, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
-    OA_LAYOUT_FIELD(oa_ui_operation, parameters, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
-    OA_LAYOUT_FIELD(oa_ui_operation, request_body_json, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, responses_json, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, deprecated, "bool", NULL)
+    OA_LAYOUT_FIELD(oa_ui_operation, method, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, path, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, operation_id, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, summary, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, description, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, tags, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
+    OA_LAYOUT_FIELD(oa_ui_operation, parameters, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
+    OA_LAYOUT_FIELD(oa_ui_operation, request_body_json, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, responses_json, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, deprecated, bool, "bool", NULL)
 };
 static const cmeta_struct_desc OA_UI_OPERATION_LAYOUT = {
     "oa_ui_operation", sizeof(oa_ui_operation), _Alignof(oa_ui_operation),
@@ -127,10 +127,10 @@ static const cmeta_data_desc OA_UI_OPERATION_DATA = {
 };
 
 static const cmeta_field_desc OA_UI_DOCUMENT_LAYOUT_FIELDS[] = {
-    OA_LAYOUT_FIELD(oa_ui_document, title, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, version, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, openapi_version, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, operations, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE)
+    OA_LAYOUT_FIELD(oa_ui_document, title, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, version, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, openapi_version, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE)
 };
 static const cmeta_struct_desc OA_UI_DOCUMENT_LAYOUT = {
     "oa_ui_document", sizeof(oa_ui_document), _Alignof(oa_ui_document),
