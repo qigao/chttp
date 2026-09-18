@@ -116,6 +116,133 @@ static int chttp_server_parser_test_execute_fragments(chttp_server_parser *parse
 }
 
 spec("CHTTP server request parser") {
+  it("enforces the exact header wire limit at every fragment size and after reuse") {
+    static const char start_line[] = "GET / HTTP/1.1\r\n";
+    static const char fields[] = "Host: x\r\nX-Empty:\r\nX-Value: abcdefghijklmnopqrstuvwxyz\r\n\r\n";
+    char wire[sizeof(start_line) + sizeof(fields) - 2u];
+    memcpy(wire, start_line, sizeof(start_line) - 1u);
+    memcpy(wire + sizeof(start_line) - 1u, fields, sizeof(fields) - 1u);
+    for (size_t fragment = 1u; fragment <= sizeof(wire); ++fragment) {
+      for (size_t shortage = 0u; shortage <= 1u; ++shortage) {
+        chttp_server_parser_probe probe = {0};
+        chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+        chttp_server_parser parser = {0};
+        unsigned int http_status = 0u;
+        config.max_header_bytes = sizeof(fields) - 1u - shortage;
+        check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+        const int status = chttp_server_parser_test_execute_fragments(
+          &parser, wire, sizeof(wire), fragment, &http_status);
+        check_equal(status, shortage == 0u ? SALTS_OK : SALTS_EPROTO);
+        check_equal(http_status, shortage == 0u ? 0u : 431u);
+        check_equal(probe.requests, shortage == 0u ? 1 : 0);
+        if (shortage == 0u) {
+          check_equal(chttp_server_parser_test_execute_fragments(
+            &parser, wire, sizeof(wire), fragment, &http_status), SALTS_OK);
+          check_equal(probe.requests, 2);
+        }
+        chttp_server_parser_destroy(&parser);
+      }
+    }
+  }
+
+  it("validates mixed-case fields and OWS across fragmented adjacent headers") {
+    static const char wire[] = "POST / HTTP/1.1\r\n"
+      "Host-Extra: ignored\r\nHoSt: \texample.test \t\r\n"
+      "ExPeCt: \t100-CoNtInUe \t\r\nEmpty: \r\n"
+      "TrAnSfEr-EnCoDiNg: \tChUnKeD\r\n\r\n0\r\n\r\n";
+    chttp_server_parser_probe probe = {0};
+    chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+    chttp_server_parser parser = {0};
+    unsigned int http_status = 0u;
+    config.max_header_bytes = sizeof(wire);
+    check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+    const int status = chttp_server_parser_test_execute_fragments(
+      &parser, wire, sizeof(wire) - 1u, 1u, &http_status);
+    info("HTTP status: %u", http_status);
+    check_equal(status, SALTS_OK);
+    check_equal(probe.requests, 1);
+    check_equal(probe.continues, 1);
+    check_equal(probe.body_size, (size_t)0u);
+    chttp_server_parser_destroy(&parser);
+  }
+
+  it("preserves rejection of empty duplicate and prefix-only control fields") {
+    static const struct { const char *wire; unsigned int status; } cases[] = {
+      {"GET / HTTP/1.1\r\nHost: \t \r\n\r\n", 400u},
+      {"GET / HTTP/1.1\r\nHost: x\r\nhOsT: x\r\n\r\n", 400u},
+      {"GET / HTTP/1.1\r\nHost-Extra: x\r\n\r\n", 400u},
+      {"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked \t\r\n\r\n0\r\n\r\n", 501u},
+      {"POST / HTTP/1.1\r\nHost: x\r\nExpect: \t\r\nContent-Length: 0\r\n\r\n", 417u},
+      {"POST / HTTP/1.1\r\nHost: x\r\nExpect: 100-continue-extra\r\nContent-Length: 0\r\n\r\n", 417u},
+      {"POST / HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\neXpEcT: 100-continue\r\nContent-Length: 0\r\n\r\n", 417u}
+    };
+    for (size_t index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+      chttp_server_parser_probe probe = {0};
+      chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+      chttp_server_parser parser = {0};
+      unsigned int http_status = 0u;
+      check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+      check_not_equal(chttp_server_parser_test_execute(&parser, cases[index].wire,
+                                                      &http_status), SALTS_OK);
+      check_equal(http_status, cases[index].status);
+      check_equal(probe.requests, 0);
+      chttp_server_parser_destroy(&parser);
+    }
+  }
+
+  bench("HTTP1 parsing workloads") {
+    enum { SAMPLES = 128, REQUESTS_PER_SAMPLE = 1024, HEADER_LIMIT = 32 };
+    static const char typical[] = "GET /api/items HTTP/1.1\r\nHost: example.test\r\n"
+        "User-Agent: benchmark/1.0\r\nAccept: application/json\r\n"
+        "Accept-Encoding: gzip, deflate\r\nAccept-Language: en-US\r\n"
+        "Connection: keep-alive\r\nCookie: session=example\r\n"
+        "Authorization: Bearer example\r\n\r\n";
+    static const struct { const char *label; const char *wire; size_t fragment; } cases[] = {
+      {"HTTP1 minimal", "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n", 0u},
+      {"HTTP1 typical", typical, 0u},
+      {"HTTP1 many headers", "GET /api/items HTTP/1.1\r\n"
+        "User-Agent: benchmark/1.0\r\nAccept: application/json\r\n"
+        "Accept-Encoding: gzip, deflate\r\nAccept-Language: en-US\r\n"
+        "Connection: keep-alive\r\nCookie: session=example\r\n"
+        "Authorization: Bearer example\r\nCache-Control: no-cache\r\n"
+        "If-None-Match: example\r\nOrigin: https://example.test\r\n"
+        "Referer: https://example.test/items\r\nX-Request-Id: example\r\n"
+        "X-Forwarded-For: 127.0.0.1\r\nX-Forwarded-Proto: https\r\n"
+        "Sec-Fetch-Mode: cors\r\nHost: example.test\r\n\r\n", 0u},
+      {"HTTP1 one-byte fragments", typical, 1u},
+      {"HTTP1 16-byte fragments", typical, 16u}
+    };
+    for (size_t index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+      chttp_server_parser_probe probe = {0};
+      chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+      chttp_server_parser parser = {0};
+      unsigned int http_status = 0u;
+      const size_t wire_size = strlen(cases[index].wire);
+      int status = SALTS_OK;
+      config.max_header_count = HEADER_LIMIT;
+      config.max_header_bytes = wire_size;
+      check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+      check_equal(chttp_server_parser_execute(&parser, cases[index].wire, wire_size,
+                                               &http_status), SALTS_OK);
+      check_equal(probe.requests, 1);
+      check_equal(probe.host, "example.test");
+      /* One operation is a complete keep-alive request, including its callback. */
+      benchmark_ops(cases[index].label, SAMPLES, REQUESTS_PER_SAMPLE) {
+        for (size_t request = 0u; request < REQUESTS_PER_SAMPLE; ++request) {
+          status = cases[index].fragment == 0u
+            ? chttp_server_parser_execute(&parser, cases[index].wire, wire_size, &http_status)
+            : chttp_server_parser_test_execute_fragments(&parser, cases[index].wire,
+                wire_size, cases[index].fragment, &http_status);
+          if (status != SALTS_OK) break;
+        }
+      }
+      check_equal(status, SALTS_OK);
+      check_equal(probe.requests, 1 + SAMPLES * REQUESTS_PER_SAMPLE);
+      check_equal(http_status, 0u);
+      chttp_server_parser_destroy(&parser);
+    }
+  }
+
   it("generates Date for successful and built-in error responses without replacing application Date") {
     chttp_server_config config = {.max_response_header_count = 1,
       .max_response_header_bytes = 128, .max_response_body_bytes = 128,

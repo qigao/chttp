@@ -2,6 +2,7 @@
 
 #include <llhttp.h>
 #include <uri_parser.h>
+#include <vstr.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -672,6 +673,21 @@ static int chttp_server_parser_scan_head(chttp_server_parser_impl *parser, const
 
     if (parser->header_wire_bytes >= parser->max_header_bytes)
       return chttp_server_parser_wire_fail(parser, 431u, out_http_status);
+    /* Skip ordinary bytes without crossing CR or the wire budget. The existing
+     * CR/LF transitions retain fragment state; llhttp validates bare LF too. */
+    if (size - index > 1u && byte != '\r' && byte != '\n') {
+      const size_t budget = parser->max_header_bytes - parser->header_wire_bytes;
+      const size_t remaining = size - index;
+      const size_t scan_size = remaining < budget ? remaining : budget;
+      const vstr rest = vstr_from_buf(data + index, scan_size);
+      const size_t cr = vstr_find_char(rest, '\r');
+      const size_t consumed = cr == VSTR_NPOS ? scan_size : cr;
+      parser->header_wire_bytes += consumed;
+      parser->wire_line_bytes += consumed;
+      parser->wire_previous_was_cr = false;
+      index += consumed - 1u;
+      continue;
+    }
     ++parser->header_wire_bytes;
     ++parser->wire_line_bytes;
     if (parser->wire_previous_was_cr && byte == '\n') {
