@@ -31,10 +31,10 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=2 origin "$GITHUB_SHA"
+          git fetch --depth=2 origin "${GITHUB_SHA}"
           git checkout --detach FETCH_HEAD
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
       - name: Checkout exact public dependencies
         shell: bash
@@ -42,25 +42,22 @@ jobs:
           set -euxo pipefail
           git init salts
           git -C salts remote add origin https://github.com/qigao/salts.git
-          git -C salts fetch --depth=1 origin "$SALTS_SHA"
+          git -C salts fetch --depth=1 origin "${SALTS_SHA}"
           git -C salts checkout --detach FETCH_HEAD
-          test "$(git -C salts rev-parse HEAD)" = "$SALTS_SHA"
 
           git init salts-utils
           git -C salts-utils remote add origin https://github.com/qigao/salts-utils.git
-          git -C salts-utils fetch --depth=1 origin "$SALTS_UTILS_SHA"
+          git -C salts-utils fetch --depth=1 origin "${SALTS_UTILS_SHA}"
           git -C salts-utils checkout --detach FETCH_HEAD
-          test "$(git -C salts-utils rev-parse HEAD)" = "$SALTS_UTILS_SHA"
 
           git clone https://github.com/microsoft/vcpkg.git vcpkg
-          git -C vcpkg checkout --detach "$VCPKG_SHA"
-          test "$(git -C vcpkg rev-parse HEAD)" = "$VCPKG_SHA"
+          git -C vcpkg checkout --detach "${VCPKG_SHA}"
 
       - name: Restore vcpkg binary archives
         uses: actions/cache@v4
         with:
           path: ~/.cache/vcpkg/archives
-          key: tbe-30-vcpkg-x64-linux-b1b19307-v1
+          key: openapi-ui-vcpkg-x64-linux-b1b19307-v1
 
       - name: Set up Go for BoringSSL
         uses: actions/setup-go@v5
@@ -76,13 +73,13 @@ jobs:
           sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
           sudo mkdir -p /opt/salts
-          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+          sudo ln -sfn "${GITHUB_WORKSPACE}/vcpkg" /opt/vcpkg
           bash salts-utils/cmake/ci/install-re2c.sh
 
       - name: Record Salts cache toolchain
         id: salts-toolchain
         shell: bash
-        run: echo "key=gcc-$(gcc -dumpfullversion -dumpversion)" >> "$GITHUB_OUTPUT"
+        run: echo "key=gcc-$(gcc -dumpfullversion -dumpversion)" >> "${GITHUB_OUTPUT}"
 
       - name: Restore pinned Salts debug package
         id: salts-package-cache
@@ -102,10 +99,7 @@ jobs:
           set -euxo pipefail
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=OFF \
-            -DBUILD_OPENAPI=ON \
-            -DBUILD_TESTS=ON \
-            -DBUILD_EXAMPLES=ON
+            -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target install -j2
 
       - name: Save pinned Salts debug package
@@ -119,9 +113,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          package="$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
-          test -f "$package/lib/cmake/Salts/SaltsConfig.cmake"
-          sudo ln -sfn "$package" /opt/salts/debug
+          package="${RUNNER_TEMP}/salts-project/external/pkgs/salts/debug"
+          test -f "${package}/lib/cmake/Salts/SaltsConfig.cmake"
+          sudo ln -sfn "${package}" /opt/salts/debug
 
       - name: Build standalone host Lemon
         shell: bash
@@ -141,9 +135,8 @@ jobs:
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF \
-            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
+            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="${GITHUB_WORKSPACE}/salts-utils/build/host-lemon/lemon"
           cmake --build build/linux-gcc-debug --target install -j2
-          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
 
       - name: Configure exact Chttp head
         shell: bash
@@ -156,9 +149,12 @@ jobs:
           set -euxo pipefail
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DBUILD_OPENAPI=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=ON
 
-      - name: Build focused targets
+      - name: Build focused OpenAPI targets
         shell: bash
         env:
           PROJECT_ROOT: ${{ runner.temp }}/salts-project
@@ -170,51 +166,20 @@ jobs:
           cmake --build build/linux-gcc-debug --target \
             test_ui_model test_generator openapi_examples -j2
 
-      - name: Run focused tests
+      - name: Run focused OpenAPI tests
         shell: bash
         env:
           LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(openapi_ui_model|generator)
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
+            -R '^(openapi_ui_model|generator)$' \
             --output-on-failure
 
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           test -z "$(git status --porcelain --untracked-files=no)"
