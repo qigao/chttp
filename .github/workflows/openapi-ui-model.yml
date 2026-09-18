@@ -137,6 +137,15 @@ jobs:
             -DENABLE_SANITIZER_UNDEFINED=OFF \
             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="${GITHUB_WORKSPACE}/salts-utils/build/host-lemon/lemon"
           cmake --build build/linux-gcc-debug --target install -j2
+          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
+
+      - name: Expose exact SaltsUtils profile to Chttp preset
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
+          ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
+          test -f "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
 
       - name: Configure exact Chttp head
         shell: bash
