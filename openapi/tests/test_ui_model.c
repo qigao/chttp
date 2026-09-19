@@ -29,20 +29,48 @@ static int check_parsed_json_entry(oa_error *error) {
         "\"paths\":{\"/ping\":{\"get\":{\"operationId\":\"ping\","
         "\"responses\":{\"204\":{\"description\":\"OK\"}}}}}}}";
     json_value_t *root = json_parse(text, strlen(text));
-    if (!root) return 0;
+    if (!root) {
+        snprintf(error->message, sizeof(error->message), "direct JSON parse failed: %s",
+                 json_get_error() ? json_get_error() : "unknown");
+        return 0;
+    }
     oa_ui_model *model = oa_ui_model_create_json(root, error);
     json_free(root);
     if (!model) return 0;
     const oa_ui_document *view = oa_ui_model_view(model);
-    int ok = view && view_is(view->title, "Direct") &&
-             view->operations.count == 1u;
-    if (ok) {
-        const oa_ui_operation *op =
-            (const oa_ui_operation *)view->operations.data;
-        ok = view_is(op[0].path, "/ping") && view_is(op[0].method, "get");
+    if (!view) {
+        snprintf(error->message, sizeof(error->message), "direct JSON view missing");
+        oa_ui_model_free(model);
+        return 0;
+    }
+    if (!view_is(view->title, "Direct")) {
+        snprintf(error->message, sizeof(error->message),
+                 "direct JSON title mismatch len=%zu", view->title.len);
+        oa_ui_model_free(model);
+        return 0;
+    }
+    if (view->operations.count != 1u) {
+        snprintf(error->message, sizeof(error->message),
+                 "direct JSON operation count=%zu", view->operations.count);
+        oa_ui_model_free(model);
+        return 0;
+    }
+    const oa_ui_operation *op =
+        (const oa_ui_operation *)view->operations.data;
+    if (!op || !view_is(op[0].path, "/ping")) {
+        snprintf(error->message, sizeof(error->message),
+                 "direct JSON path mismatch");
+        oa_ui_model_free(model);
+        return 0;
+    }
+    if (!view_is(op[0].method, "get")) {
+        snprintf(error->message, sizeof(error->message),
+                 "direct JSON method mismatch");
+        oa_ui_model_free(model);
+        return 0;
     }
     oa_ui_model_free(model);
-    return ok;
+    return 1;
 }
 
 int main(void) {
