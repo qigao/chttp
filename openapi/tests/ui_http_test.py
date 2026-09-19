@@ -23,6 +23,9 @@ try:
             assert response.headers["X-Content-Type-Options"] == "nosniff"
             content = response.read()
             assert content
+            if path in ("/docs", "/docs/"):
+                assert b'<meta name="openapi-rendered-title" content="Pets API">' in content
+                assert b"{{ title }}" not in content
             if path == "/openapi.json":
                 assert json.loads(content)["openapi"] == "3.1.0"
     try:

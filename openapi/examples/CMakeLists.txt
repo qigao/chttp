@@ -15,5 +15,6 @@ add_custom_target(openapi_examples DEPENDS ${example_documents})
 set_target_properties(openapi_examples PROPERTIES FOLDER "examples")
 
 add_executable(openapi_ui_server ui_server.c)
-target_link_libraries(openapi_ui_server PRIVATE CHttp::Server Salts::Core)
+target_link_libraries(openapi_ui_server PRIVATE
+  CHttp::Server Salts::Core Salts::JsonParser openapi_ui_renderer)
 set_target_properties(openapi_ui_server PROPERTIES FOLDER "examples")

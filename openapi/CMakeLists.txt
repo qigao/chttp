@@ -10,6 +10,15 @@ target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sit
 add_executable(openapi-gen src/main.c)
 target_link_libraries(openapi-gen PRIVATE openapi_generator)
 
+if(BUILD_EXAMPLES OR (BUILD_TESTS AND BUILD_TESTING))
+  add_library(openapi_ui_renderer STATIC ui/renderer.c)
+  target_include_directories(openapi_ui_renderer PUBLIC ui)
+  target_link_libraries(openapi_ui_renderer
+    PUBLIC openapi_generator
+    PRIVATE Salts::JinjaCMeta)
+  set_target_properties(openapi_ui_renderer PROPERTIES FOLDER "openapi/ui")
+endif()
+
 set(PLUGIN_NAME c)
 set(PLUGIN_SYMBOL tree_sitter_c)
 foreach(query IN ITEMS PLUGIN_QUERY PLUGIN_NAME_QUERY)
