@@ -403,3 +403,19 @@ After the final gate, the project should be able to make this accurate claim:
 > CHttp::Web is an optional native-C server-driven web application layer combining CHTTP's routing, middleware, sessions, security, asynchronous response and protocol capabilities with typed CMeta models and Jinja CMeta server-side rendering.
 
 It should **not** claim to be a client-side UI framework or Wt-style server widget toolkit.
+
+## 18. GitHub tracking
+
+Parent epic: #19
+
+- #20 — package boundary and typed Jinja rendering core
+- #21 — standard request context and HTMX fragment helpers
+- #22 — bounded form parsing and typed CMeta/DataBind binding
+- #23 — CSRF protection and session-backed flash messages
+- #24 — production web security middleware
+- #25 — deferred worker rendering contract
+- #26 — SSE response helper on CHTTP streaming
+- #27 — migrate OpenAPI UI onto the generic web layer
+- #28 — product-readiness, benchmarks, packaging, and reference apps
+
+Execution order is defined by #19. The spec is authoritative for architecture and boundaries; the issues are authoritative for implementation acceptance and sequencing.
