@@ -1,0 +1,93 @@
+#include "renderer.h"
+
+#include <json_parser.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define REQUIRE(x) do { \
+    if (!(x)) { \
+        fprintf(stderr, "line %d: %s (status=%d message=%s)\n", \
+                __LINE__, #x, (int)error.status, error.message); \
+        return 1; \
+    } \
+} while (0)
+
+static const char DOCUMENT[] =
+    "{\"openapi\":\"3.1.0\","
+    "\"info\":{\"title\":\"<Pets & Co>\",\"version\":\"1\"},"
+    "\"paths\":{\"/pets\":{\"get\":{"
+      "\"operationId\":\"listPets\","
+      "\"tags\":[\"read\"],"
+      "\"parameters\":[{\"name\":\"q\",\"in\":\"query\","
+        "\"required\":false,\"schema\":{\"type\":\"string\"}}],"
+      "\"responses\":{\"200\":{\"description\":\"OK\"}}"
+    "}}}}";
+
+static const char TEMPLATE[] =
+    "{{ title }}|"
+    "{% for op in operations %}"
+      "{{ op.method }} {{ op.path }}"
+      "{% for tag in op.tags %}[{{ tag }}]{% endfor %}"
+      "{% for p in op.parameters %}({{ p.name }}){% endfor %}"
+    "{% endfor %}";
+
+int main(void) {
+    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
+    json_value_t *root = json_parse(DOCUMENT, strlen(DOCUMENT));
+    REQUIRE(root);
+
+    oa_error model_error = {{0}};
+    oa_ui_model *model = oa_ui_model_create_json(root, &model_error);
+    json_free(root);
+    REQUIRE(model);
+    const oa_ui_document *document = oa_ui_model_view(model);
+    REQUIRE(document);
+
+    oa_ui_renderer renderer = {0};
+    oa_ui_renderer_config config = (oa_ui_renderer_config)OA_UI_RENDERER_CONFIG_INIT;
+    REQUIRE(oa_ui_renderer_init(&renderer, document,
+        vstr_from_cstr("docs/index.html"), vstr_from_cstr(TEMPLATE),
+        &config, &error) == OA_UI_RENDERER_OK);
+
+    char *html = NULL;
+    size_t html_size = 0u;
+    REQUIRE(oa_ui_renderer_render(&renderer, &html, &html_size, &error) ==
+            OA_UI_RENDERER_OK);
+    REQUIRE(html);
+    static const char EXPECTED[] =
+        "&lt;Pets &amp; Co&gt;|get /pets[read](q)";
+    REQUIRE(html_size == sizeof(EXPECTED) - 1u);
+    REQUIRE(memcmp(html, EXPECTED, html_size) == 0);
+    oa_ui_renderer_output_free(html);
+    html = NULL;
+
+    oa_ui_renderer_destroy(&renderer);
+
+    oa_ui_renderer invalid = {0};
+    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
+    REQUIRE(oa_ui_renderer_init(&invalid, document,
+        vstr_from_cstr("bad.html"), vstr_from_cstr("{% if %}"),
+        &config, &error) == OA_UI_RENDERER_TEMPLATE);
+    REQUIRE(invalid.impl == NULL);
+    oa_ui_renderer_destroy(&invalid);
+
+    oa_ui_renderer bounded = {0};
+    oa_ui_renderer_config small = config;
+    small.max_output_bytes = 8u;
+    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
+    REQUIRE(oa_ui_renderer_init(&bounded, document,
+        vstr_from_cstr("small.html"), vstr_from_cstr(TEMPLATE),
+        &small, &error) == OA_UI_RENDERER_OK);
+    html_size = 99u;
+    REQUIRE(oa_ui_renderer_render(&bounded, &html, &html_size, &error) ==
+            OA_UI_RENDERER_CAPACITY);
+    REQUIRE(html == NULL);
+    REQUIRE(html_size == 0u);
+    oa_ui_renderer_destroy(&bounded);
+
+    oa_ui_model_free(model);
+    puts("openapi Jinja renderer passed");
+    return 0;
+}
