@@ -3,6 +3,15 @@
   <p><strong>{{ p.name }}</strong> <span class="muted">{{ p.location }}</span>
   {% if p.required %}<span class="required">必填</span>{% endif %}</p>
   <p class="muted">{{ p.description }}</p>
+  <label>
+    Try-it value
+    <input data-tryit-parameter
+           data-in="{{ p.location }}"
+           data-name="{{ p.name }}"
+           data-required="{% if p.required %}true{% else %}false{% endif %}"
+           data-schema="{{ p.schema_json }}"
+           autocomplete="off" maxlength="8192">
+  </label>
   {% if p.schema_json %}
   <details>
     <summary>Schema 与约束</summary>

@@ -26,6 +26,31 @@
   </section>
   {% endif %}
 
+  <form data-tryit
+        data-method="{{ op.method }}"
+        data-path="{{ op.path }}"
+        data-server-url="{{ server_url }}"
+        data-request-body="{{ op.request_body_json }}">
+    <section class="try">
+      <h3>Try it <span class="muted">发送真实请求</span></h3>
+      <label>服务地址
+        <input type="url" data-tryit-base value="{{ server_url }}" required>
+      </label>
+      {% if op.request_body_json %}
+      <label>媒体类型
+        <select data-tryit-media></select>
+      </label>
+      <label>请求内容
+        <textarea data-tryit-body rows="7" maxlength="65536"></textarea>
+      </label>
+      {% endif %}
+      <p class="muted">仅在点击后发送。跨域服务需允许 CORS；请求不携带浏览器凭据。</p>
+      <button class="primary" type="submit" data-tryit-submit>发送请求 →</button>
+      <p class="error" data-tryit-error hidden></p>
+      <pre class="response" data-tryit-result hidden></pre>
+    </section>
+  </form>
+
   <section>
     {{ render_responses(op) }}
   </section>

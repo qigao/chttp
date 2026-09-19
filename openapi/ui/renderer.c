@@ -41,6 +41,7 @@ typedef struct oa_ui_jinja_document {
     vstr title;
     vstr version;
     vstr openapi_version;
+    vstr server_url;
     JINJA_CMETA_SEQUENCE_VIEW operations;
     JINJA_CMETA_SEQUENCE_VIEW operation_keys;
     JINJA_CMETA_SEQUENCE_VIEW selected_operations;
@@ -64,7 +65,7 @@ typedef struct oa_ui_renderer_impl {
     cmeta_data_struct_shape operation_shape;
     cmeta_data_desc operation_data;
 
-    cmeta_data_field_desc document_fields[6];
+    cmeta_data_field_desc document_fields[7];
     cmeta_data_struct_shape document_shape;
     cmeta_data_desc document_data;
 } oa_ui_renderer_impl;
@@ -108,6 +109,7 @@ static const cmeta_field_desc OA_DOCUMENT_LAYOUT_FIELDS[] = {
     OA_LAYOUT_FIELD(oa_ui_jinja_document, title, vstr, "vstr"),
     OA_LAYOUT_FIELD(oa_ui_jinja_document, version, vstr, "vstr"),
     OA_LAYOUT_FIELD(oa_ui_jinja_document, openapi_version, vstr, "vstr"),
+    OA_LAYOUT_FIELD(oa_ui_jinja_document, server_url, vstr, "vstr"),
     OA_LAYOUT_FIELD(oa_ui_jinja_document, operations, JINJA_CMETA_SEQUENCE_VIEW,
                     "JINJA_CMETA_SEQUENCE_VIEW"),
     OA_LAYOUT_FIELD(oa_ui_jinja_document, operation_keys, JINJA_CMETA_SEQUENCE_VIEW,
@@ -286,12 +288,15 @@ static void oa_ui_renderer_init_descriptors(oa_ui_renderer_impl *impl) {
         "openapi.ui.jinja.document.openapi_version", "openapi_version",
         offsetof(oa_ui_jinja_document, openapi_version), text};
     impl->document_fields[3] = (cmeta_data_field_desc){
+        "openapi.ui.jinja.document.server_url", "server_url",
+        offsetof(oa_ui_jinja_document, server_url), text};
+    impl->document_fields[4] = (cmeta_data_field_desc){
         "openapi.ui.jinja.document.operations", "operations",
         offsetof(oa_ui_jinja_document, operations), sequence};
-    impl->document_fields[4] = (cmeta_data_field_desc){
+    impl->document_fields[5] = (cmeta_data_field_desc){
         "openapi.ui.jinja.document.operation_keys", "operation_keys",
         offsetof(oa_ui_jinja_document, operation_keys), sequence};
-    impl->document_fields[5] = (cmeta_data_field_desc){
+    impl->document_fields[6] = (cmeta_data_field_desc){
         "openapi.ui.jinja.document.selected_operations", "selected_operations",
         offsetof(oa_ui_jinja_document, selected_operations), sequence};
     impl->document_shape = (cmeta_data_struct_shape){
@@ -319,6 +324,7 @@ static int oa_ui_renderer_adapt_document(oa_ui_renderer_impl *impl) {
     impl->root.title = source->title;
     impl->root.version = source->version;
     impl->root.openapi_version = source->openapi_version;
+    impl->root.server_url = source->server_url;
     impl->root.operations = (JINJA_CMETA_SEQUENCE_VIEW){
         source->operations.data, source->operations.count,
         sizeof(oa_ui_operation), &impl->operation_data};
