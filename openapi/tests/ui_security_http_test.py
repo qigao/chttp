@@ -3,6 +3,7 @@
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,18 @@ document = {
                         },
                     }
                 ],
+                "requestBody": {
+                    "required": True,
+                    "description": "body <script>b</script> &",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "description": "body schema <script>bs</script>",
+                            }
+                        }
+                    },
+                },
                 "responses": {
                     "200": {
                         "description": "resp <script>r</script> &",
@@ -78,7 +91,9 @@ with tempfile.TemporaryDirectory() as tmp:
         assert response.headers.get_content_type() == "text/html"
         assert b"&lt;script&gt;alert" in docs
         assert b'<script>alert("title")</script>' not in docs
+        assert b'<script>alert("summary")</script>' not in docs
         assert b"x-data=" not in docs
+        assert b"hx-on" not in docs
         assert b"/docs/htmx.js" in docs
         assert b"/docs/tryit.js" in docs
 
@@ -87,7 +102,19 @@ with tempfile.TemporaryDirectory() as tmp:
         assert b"&lt;script&gt;alert" in detail
         assert b"&lt;b&gt;bold&lt;/b&gt;" in detail
         assert b"&lt;script&gt;s&lt;/script&gt;" in detail
+        assert b"&lt;script&gt;b&lt;/script&gt;" in detail
+        assert b"&lt;script&gt;bs&lt;/script&gt;" in detail
         assert b"&lt;script&gt;r&lt;/script&gt;" in detail
+        for raw_html in (
+            b'<script>alert("summary")</script>',
+            b"<b>bold</b>",
+            b"<script>p</script>",
+            b"<script>s</script>",
+            b"<script>b</script>",
+            b"<script>bs</script>",
+            b"<script>r</script>",
+        ):
+            assert raw_html not in detail
         assert b'data-tryit' in detail
         assert b'https://api.example.test/v1' in detail
 
@@ -110,16 +137,47 @@ with tempfile.TemporaryDirectory() as tmp:
             raise
         assert process.returncode == 0, stderr
 
-    missing_assets = pathlib.Path(tmp) / "missing-assets"
-    missing_assets.mkdir()
-    failed = subprocess.run(
-        [server, str(document_path), str(missing_assets)],
-        input="\n",
-        capture_output=True,
-        text=True,
-        timeout=10,
+    def copy_assets(name):
+        destination = pathlib.Path(tmp) / name
+        shutil.copytree(assets, destination)
+        return destination
+
+    def startup_failure(asset_root):
+        failed = subprocess.run(
+            [server, str(document_path), str(asset_root)],
+            input="\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert failed.returncode != 0
+        return failed.stderr
+
+    missing_template = copy_assets("missing-template")
+    (missing_template / "templates" / "docs.html").unlink()
+    stderr = startup_failure(missing_template)
+    assert "docs.html" in stderr
+    assert "Asset" in stderr
+
+    missing_static = copy_assets("missing-static")
+    (missing_static / "style.css").unlink()
+    stderr = startup_failure(missing_static)
+    assert "style.css" in stderr
+    assert "Asset" in stderr
+
+    invalid_template = copy_assets("invalid-template")
+    (invalid_template / "templates" / "docs.html").write_text(
+        "{% if %}", encoding="utf-8"
     )
-    assert failed.returncode != 0
-    assert "Asset" in failed.stderr or "Template" in failed.stderr
+    stderr = startup_failure(invalid_template)
+    assert "renderer startup failed" in stderr
+
+    oversized_template = copy_assets("oversized-template")
+    (oversized_template / "templates" / "docs.html").write_text(
+        "x" * (64 * 1024 + 1), encoding="utf-8"
+    )
+    stderr = startup_failure(oversized_template)
+    assert "65536" in stderr
+    assert "docs.html" in stderr
 
 print("OpenAPI UI final escaping/security acceptance passed")
