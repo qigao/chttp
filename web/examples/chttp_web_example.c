@@ -2,6 +2,7 @@
 
 #include <cmeta/struct.h>
 #include <salts/error_codes.h>
+#include <salts_cmeta_data.h>
 #include <vstr.h>
 
 #include <stdint.h>
@@ -19,6 +20,22 @@ enum {
   WEB_EXAMPLE_COMMAND_BUFFER_BYTES = 512 * 1024,
   WEB_EXAMPLE_BUFFER_CAPACITY_BYTES = 2 * 1024 * 1024,
   WEB_EXAMPLE_PATH_BYTES = 1024
+};
+
+
+static const cmeta_data_buffer_shape WEB_VSTR_SHAPE = {
+  CMETA_DATA_BUFFER_BORROWED
+};
+
+static const cmeta_data_desc WEB_VSTR_DATA = {
+  .struct_size = sizeof(cmeta_data_desc),
+  .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+  .stable_id = "chttp.web.vstr.data",
+  .display_name = "CHttp Web borrowed vstr",
+  .kind = CMETA_DATA_STRING,
+  .storage_type = &salts_vstr_cmeta_type,
+  .shape = &WEB_VSTR_SHAPE,
+  .buffer_ops = &salts_vstr_cmeta_buffer_ops
 };
 
 typedef struct web_example_model {
@@ -50,7 +67,7 @@ static cmeta_data_desc web_example_model_desc(
     cmeta_data_field_desc fields[1], cmeta_data_struct_shape *shape) {
   fields[0] = (cmeta_data_field_desc){
       "chttp.web.example.model.title", "title",
-      offsetof(web_example_model, title), jinja_cmeta_vstr_data()};
+      offsetof(web_example_model, title), &WEB_VSTR_DATA};
   *shape = (cmeta_data_struct_shape){
       &WEB_EXAMPLE_MODEL_LAYOUT, fields, 1u};
   return (cmeta_data_desc){
