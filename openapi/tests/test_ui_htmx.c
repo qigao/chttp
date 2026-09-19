@@ -24,7 +24,7 @@ static const char DOCUMENT[] =
       "\"post\":{\"operationId\":\"createPet\",\"summary\":\"Create pet\","
         "\"tags\":[\"pets\",\"write\"],"
         "\"responses\":{\"201\":{\"description\":\"Created\"}}}"
-    "}}}}";
+    "}}}";
 
 int main(void) {
     oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
