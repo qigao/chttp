@@ -75,6 +75,26 @@ int main(void) {
     REQUIRE(strstr(html, "listPets=") != NULL);
     REQUIRE(strstr(html, "createPet=") != NULL);
     oa_ui_renderer_output_free(html);
+    html = NULL;
+
+    char oversized[257];
+    memset(oversized, 'x', sizeof(oversized));
+    size = 99u;
+    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
+    REQUIRE(oa_ui_renderer_render_operation_list(
+        &renderer, vstr_from_buf(oversized, sizeof(oversized)),
+        &html, &size, &error) == OA_UI_RENDERER_CAPACITY);
+    REQUIRE(html == NULL);
+    REQUIRE(size == 0u);
+
+    const char invalid_utf8[] = {(char)0xff};
+    size = 99u;
+    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
+    REQUIRE(oa_ui_renderer_render_operation_list(
+        &renderer, vstr_from_buf(invalid_utf8, sizeof(invalid_utf8)),
+        &html, &size, &error) == OA_UI_RENDERER_INVALID_ARGUMENT);
+    REQUIRE(html == NULL);
+    REQUIRE(size == 0u);
 
     oa_ui_renderer_destroy(&renderer);
     oa_ui_model_free(model);

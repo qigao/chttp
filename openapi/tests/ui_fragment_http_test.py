@@ -32,6 +32,9 @@ try:
     assert b"Pets API" in docs
     assert b'/docs/htmx.js' in docs
     assert b'/docs/alpine.js' not in docs
+    assert b'/docs/app.js' not in docs
+    for legacy in (b'x-data=', b'x-for=', b'x-model=', b'x-show='):
+        assert legacy not in docs
     assert b'hx-get="/docs/operations/list_pets"' in docs
     assert b'hx-target="#operation-detail"' in docs
     assert b'hx-get="/docs/operations"' in docs
@@ -53,11 +56,16 @@ try:
     assert b"createPet" in restored
     assert b"list_pets" in restored
 
-    try:
-        urllib.request.urlopen(origin + "/docs/operations?q=" + ("x" * 257), timeout=5)
-        raise AssertionError("Oversized search query unexpectedly succeeded")
-    except urllib.error.HTTPError as error:
-        assert error.code == 400
+    for bad_query in (("x" * 257), "%ZZ", "%FF", "%00"):
+        try:
+            urllib.request.urlopen(
+                origin + "/docs/operations?q=" + bad_query, timeout=5
+            )
+            raise AssertionError(
+                "Malformed/oversized search query unexpectedly succeeded"
+            )
+        except urllib.error.HTTPError as error:
+            assert error.code == 400
 
     list_detail = fetch(origin, "/docs/operations/list_pets")
     assert b"List pets" in list_detail
