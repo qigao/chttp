@@ -18,9 +18,7 @@
              hx-swap="outerHTML"
              hx-trigger="input changed delay:250ms, search"
              hx-sync="this:replace"
-             hx-indicator="#operation-search-indicator"
-             hx-on::before-request="document.getElementById('operation-search-error').hidden=true"
-             hx-on::response:error="document.getElementById('operation-search-error').hidden=false">
+             hx-indicator="#operation-search-indicator">
     </label>
     <span id="operation-search-indicator" class="htmx-indicator" aria-live="polite">筛选中…</span>
     <p id="operation-search-error" class="error" hidden>接口筛选失败，请重试。</p>
