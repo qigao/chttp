@@ -409,9 +409,10 @@ static int oa_ui_project_parameters(oa_ui_model *model, oa_ui_operation *out,
     return 1;
 }
 
-static int oa_ui_project_operation(oa_ui_operation *out,
+static int oa_ui_project_operation(oa_ui_model *model, oa_ui_operation *out,
                                    const char *path, size_t path_length,
                                    const char *method,
+                                   const json_value_t *path_item,
                                    const json_value_t *operation,
                                    oa_error *error) {
     const json_value_t *deprecated;
@@ -427,8 +428,8 @@ static int oa_ui_project_operation(oa_ui_operation *out,
         !oa_ui_borrow_string(&out->description,
                              json_object_get(operation, "description"),
                              "description", 0, error) ||
-        !oa_ui_project_tags(out, operation, error) ||
-        !oa_ui_project_parameters(out, operation, error) ||
+        !oa_ui_project_tags(model, out, operation, error) ||
+        !oa_ui_project_parameters(model, out, path_item, operation, error) ||
         !oa_ui_serialize(&out->request_body_json,
                          json_object_get(operation, "requestBody"),
                          "request body", error) ||
@@ -467,7 +468,8 @@ static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
     model->document.operations =
         oa_ui_sequence_empty(sizeof(oa_ui_operation), &OA_UI_OPERATION_DATA);
     if (operation_count) {
-        model->operations = calloc(operation_count, sizeof(*model->operations));
+        model->operations =
+            oa_ui_calloc(model, operation_count, sizeof(*model->operations));
         if (!model->operations)
             return oa_fail(error, "out of memory constructing OpenAPI UI operations");
         model->document.operations.data = model->operations;
@@ -485,9 +487,10 @@ static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
                 json_object_get(path_item, OA_UI_METHODS[m]);
             if (!operation) continue;
             if (operation_index >= operation_count ||
-                !oa_ui_project_operation(&model->operations[operation_index],
+                !oa_ui_project_operation(model,
+                                         &model->operations[operation_index],
                                          path, path_length, OA_UI_METHODS[m],
-                                         operation, error))
+                                         path_item, operation, error))
                 return 0;
             ++operation_index;
         }
