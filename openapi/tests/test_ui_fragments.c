@@ -48,20 +48,27 @@ static const char DUPLICATE_IDS[] =
         "\"responses\":{\"200\":{\"description\":\"OK\"}}}}"
     "}}";
 
-static const oa_ui_renderer_template TEMPLATES[] = {
-    {{"layout.html", 11u},
-     {"<html>{% block body %}{% endblock %}</html>", 45u}},
-    {{"docs.html", 9u},
-     {"{% extends \"layout.html\" %}{% block body %}{{ title }}|"
-      "{% include \"operation_list.html\" %}|"
-      "{% include \"operation_detail.html\" %}{% endblock %}", 152u}},
-    {{"operation_list.html", 19u},
-     {"{% for op in operations %}{{ operation_keys[loop.index0] }}="
-      "{{ op.method }} {{ op.path }};{% endfor %}", 105u}},
-    {{"operation_detail.html", 21u},
-     {"{% for op in selected_operations %}DETAIL={{ op.method }} "
-      "{{ op.path }}{% endfor %}", 86u}}
-};
+static void make_templates(oa_ui_renderer_template templates[4]) {
+    templates[0] = (oa_ui_renderer_template){
+        vstr_from_cstr("layout.html"),
+        vstr_from_cstr("<html>{% block body %}{% endblock %}</html>")};
+    templates[1] = (oa_ui_renderer_template){
+        vstr_from_cstr("docs.html"),
+        vstr_from_cstr(
+            "{% extends \"layout.html\" %}{% block body %}{{ title }}|"
+            "{% include \"operation_list.html\" %}|"
+            "{% include \"operation_detail.html\" %}{% endblock %}")};
+    templates[2] = (oa_ui_renderer_template){
+        vstr_from_cstr("operation_list.html"),
+        vstr_from_cstr(
+            "{% for op in operations %}{{ operation_keys[loop.index0] }}="
+            "{{ op.method }} {{ op.path }};{% endfor %}")};
+    templates[3] = (oa_ui_renderer_template){
+        vstr_from_cstr("operation_detail.html"),
+        vstr_from_cstr(
+            "{% for op in selected_operations %}DETAIL={{ op.method }} "
+            "{{ op.path }}{% endfor %}")};
+}
 
 int main(void) {
     oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
@@ -74,11 +81,13 @@ int main(void) {
     REQUIRE(model);
 
     oa_ui_renderer renderer = {0};
+    oa_ui_renderer_template templates[4];
+    make_templates(templates);
     oa_ui_renderer_config config =
         (oa_ui_renderer_config)OA_UI_RENDERER_CONFIG_INIT;
     REQUIRE(oa_ui_renderer_init_bundle(
         &renderer, oa_ui_model_view(model),
-        TEMPLATES, sizeof(TEMPLATES) / sizeof(TEMPLATES[0]),
+        templates, sizeof(templates) / sizeof(templates[0]),
         &config, &error) == OA_UI_RENDERER_OK);
 
     REQUIRE(oa_ui_renderer_operation_count(&renderer) == 3u);
@@ -135,7 +144,7 @@ int main(void) {
     error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
     REQUIRE(oa_ui_renderer_init_bundle(
         &renderer, oa_ui_model_view(model),
-        TEMPLATES, sizeof(TEMPLATES) / sizeof(TEMPLATES[0]),
+        templates, sizeof(templates) / sizeof(templates[0]),
         &config, &error) == OA_UI_RENDERER_INVALID_ARGUMENT);
     REQUIRE(renderer.impl == NULL);
     oa_ui_model_free(model);
