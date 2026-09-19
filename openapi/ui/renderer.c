@@ -466,3 +466,60 @@ void oa_ui_renderer_destroy(oa_ui_renderer *renderer) {
     oa_ui_renderer_impl_destroy((oa_ui_renderer_impl *)renderer->impl);
     renderer->impl = NULL;
 }
+
+oa_ui_renderer_status oa_ui_renderer_init_bundle(
+    oa_ui_renderer *renderer,
+    const oa_ui_document *document,
+    const oa_ui_renderer_template *templates,
+    size_t template_count,
+    const oa_ui_renderer_config *config,
+    oa_ui_renderer_error *error) {
+    (void)document;
+    (void)templates;
+    (void)template_count;
+    (void)config;
+    if (!renderer)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "renderer is required");
+    renderer->impl = NULL;
+    return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
+                               "Jinja template bundles are not implemented");
+}
+
+oa_ui_renderer_status oa_ui_renderer_render_named(
+    oa_ui_renderer *renderer,
+    vstr template_name,
+    size_t selected_operation,
+    char **out_html,
+    size_t *out_size,
+    oa_ui_renderer_error *error) {
+    (void)template_name;
+    (void)selected_operation;
+    if (out_html) *out_html = NULL;
+    if (out_size) *out_size = 0u;
+    if (!renderer || !out_html || !out_size)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "named render arguments are invalid");
+    return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
+                               "named Jinja rendering is not implemented");
+}
+
+size_t oa_ui_renderer_operation_count(const oa_ui_renderer *renderer) {
+    (void)renderer;
+    return 0u;
+}
+
+vstr oa_ui_renderer_operation_key(const oa_ui_renderer *renderer, size_t index) {
+    (void)renderer;
+    (void)index;
+    return (vstr){NULL, 0u};
+}
+
+oa_ui_renderer_status oa_ui_renderer_find_operation(
+    const oa_ui_renderer *renderer, vstr key, size_t *out_index) {
+    (void)renderer;
+    (void)key;
+    if (out_index) *out_index = OA_UI_RENDERER_NO_SELECTION;
+    if (!out_index) return OA_UI_RENDERER_INVALID_ARGUMENT;
+    return OA_UI_RENDERER_UNSUPPORTED;
+}

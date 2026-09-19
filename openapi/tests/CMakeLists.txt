@@ -20,6 +20,11 @@ set_target_properties(test_ui_renderer PROPERTIES FOLDER "tests")
 target_link_libraries(test_ui_renderer PRIVATE openapi_ui_renderer Salts::JsonParser)
 add_test(NAME openapi_ui_renderer COMMAND test_ui_renderer)
 
+add_executable(test_ui_fragments test_ui_fragments.c)
+set_target_properties(test_ui_fragments PROPERTIES FOLDER "tests")
+target_link_libraries(test_ui_fragments PRIVATE openapi_ui_renderer Salts::JsonParser)
+add_test(NAME openapi_ui_fragments COMMAND test_ui_fragments)
+
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_program(OPENAPI_NODE_EXECUTABLE NAMES node REQUIRED)
 add_test(NAME generator_conformance
