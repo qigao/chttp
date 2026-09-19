@@ -281,8 +281,8 @@ static size_t oa_ui_count_operations(const json_value_t *paths) {
     return count;
 }
 
-static int oa_ui_project_tags(oa_ui_operation *out, const json_value_t *operation,
-                              oa_error *error) {
+static int oa_ui_project_tags(oa_ui_model *model, oa_ui_operation *out,
+                              const json_value_t *operation, oa_error *error) {
     const json_value_t *tags = json_object_get(operation, "tags");
     out->tags = oa_ui_sequence_empty(sizeof(vstr), &OA_UI_VSTR_DATA);
     if (!tags) return 1;
@@ -290,7 +290,7 @@ static int oa_ui_project_tags(oa_ui_operation *out, const json_value_t *operatio
         return oa_fail(error, "OpenAPI UI tags must be an array");
     size_t count = json_array_size(tags);
     if (!count) return 1;
-    vstr *items = calloc(count, sizeof(*items));
+    vstr *items = oa_ui_calloc(model, count, sizeof(*items));
     if (!items) return oa_fail(error, "out of memory constructing OpenAPI UI tags");
     out->tags.data = items;
     out->tags.count = count;
