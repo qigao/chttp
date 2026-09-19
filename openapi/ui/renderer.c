@@ -6,6 +6,7 @@
 #include <cmeta/struct.h>
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,6 +104,64 @@ static const cmeta_struct_desc OA_DOCUMENT_LAYOUT = {
 };
 
 #undef OA_LAYOUT_FIELD
+
+typedef struct oa_ui_render_buffer {
+    char *data;
+    size_t size;
+    size_t capacity;
+    size_t limit;
+    oa_ui_renderer_status failure;
+} oa_ui_render_buffer;
+
+static int oa_ui_render_buffer_write(const char *text, size_t size, void *userdata) {
+    oa_ui_render_buffer *buffer = (oa_ui_render_buffer *)userdata;
+    size_t required;
+    size_t storage;
+    size_t max_capacity;
+    size_t next_capacity;
+    char *grown;
+
+    if (!buffer || (size != 0u && !text)) return -1;
+    if (buffer->failure != OA_UI_RENDERER_OK) return -1;
+    if (buffer->size > buffer->limit || size > buffer->limit - buffer->size) {
+        buffer->failure = OA_UI_RENDERER_CAPACITY;
+        return -1;
+    }
+
+    required = buffer->size + size;
+    if (required == SIZE_MAX) {
+        buffer->failure = OA_UI_RENDERER_CAPACITY;
+        return -1;
+    }
+    storage = required + 1u;
+    if (storage > buffer->capacity) {
+        max_capacity =
+            buffer->limit == SIZE_MAX ? SIZE_MAX : buffer->limit + 1u;
+        next_capacity = buffer->capacity ? buffer->capacity : 256u;
+        if (next_capacity > max_capacity) next_capacity = max_capacity;
+        while (next_capacity < storage) {
+            if (next_capacity > max_capacity / 2u) {
+                next_capacity = max_capacity;
+                break;
+            }
+            next_capacity *= 2u;
+        }
+        if (next_capacity < storage) next_capacity = storage;
+        grown = (char *)realloc(buffer->data, next_capacity);
+        if (!grown) {
+            buffer->failure = OA_UI_RENDERER_OUT_OF_MEMORY;
+            return -1;
+        }
+        buffer->data = grown;
+        buffer->capacity = next_capacity;
+    }
+
+    if (size != 0u)
+        memcpy(buffer->data + buffer->size, text, size);
+    buffer->size = required;
+    buffer->data[buffer->size] = '\0';
+    return 0;
+}
 
 static oa_ui_renderer_status oa_ui_renderer_fail(
     oa_ui_renderer_error *error, oa_ui_renderer_status status, const char *message) {
@@ -354,8 +413,9 @@ oa_ui_renderer_status oa_ui_renderer_render(
     oa_ui_renderer_error *error) {
     oa_ui_renderer_impl *impl;
     JINJA_CMETA_ERROR jerror = JINJA_CMETA_ERROR_INIT;
+    const JINJA_CMETA_RENDERER output_renderer = {oa_ui_render_buffer_write};
+    oa_ui_render_buffer buffer = {0};
     JINJA_CMETA_STATUS status;
-    char *html = NULL;
 
     if (out_html) *out_html = NULL;
     if (out_size) *out_size = 0u;
@@ -364,16 +424,36 @@ oa_ui_renderer_status oa_ui_renderer_render(
                                    "render arguments are invalid");
 
     impl = (oa_ui_renderer_impl *)renderer->impl;
-    status = jinja_cmeta_render_string_ex(
+    buffer.limit = impl->render_options.max_string_bytes;
+    status = jinja_cmeta_render_ex(
         impl->templ, &impl->document_data, &impl->root,
-        &impl->render_options, impl->runtime, &html, &jerror);
-    if (status != JINJA_CMETA_OK) {
-        free(html);
-        return oa_ui_renderer_from_jinja(error, status, 0);
+        &impl->render_options, impl->runtime,
+        &output_renderer, &buffer, &jerror);
+    if (status != JINJA_CMETA_OK || buffer.failure != OA_UI_RENDERER_OK) {
+        oa_ui_renderer_status result;
+        if (buffer.failure == OA_UI_RENDERER_CAPACITY) {
+            result = oa_ui_renderer_fail(
+                error, OA_UI_RENDERER_CAPACITY, "render exceeds renderer limits");
+        } else if (buffer.failure == OA_UI_RENDERER_OUT_OF_MEMORY) {
+            result = oa_ui_renderer_fail(
+                error, OA_UI_RENDERER_OUT_OF_MEMORY, "renderer is out of memory");
+        } else {
+            result = oa_ui_renderer_from_jinja(error, status, 0);
+        }
+        free(buffer.data);
+        return result;
     }
 
-    *out_size = strlen(html);
-    *out_html = html;
+    if (!buffer.data) {
+        buffer.data = (char *)malloc(1u);
+        if (!buffer.data)
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                       "renderer is out of memory");
+        buffer.data[0] = '\0';
+    }
+
+    *out_html = buffer.data;
+    *out_size = buffer.size;
     return oa_ui_renderer_fail(error, OA_UI_RENDERER_OK, NULL);
 }
 

@@ -25,6 +25,8 @@ static const char DOCUMENT[] =
       "\"responses\":{\"200\":{\"description\":\"OK\"}}"
     "}}}}";
 
+static const char BINARY_TEMPLATE[] = {'A', '\0', 'B'};
+
 static const char TEMPLATE[] =
     "{{ title }}|"
     "{% for op in operations %}"
@@ -95,6 +97,32 @@ int main(void) {
     REQUIRE(html == NULL);
     REQUIRE(html_size == 0u);
     oa_ui_renderer_destroy(&bounded);
+
+    oa_ui_renderer oversized = {0};
+    oa_ui_renderer_config tiny_template = config;
+    tiny_template.max_template_bytes = 4u;
+    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
+    REQUIRE(oa_ui_renderer_init(&oversized, document,
+        vstr_from_cstr("oversized.html"), vstr_from_cstr(TEMPLATE),
+        &tiny_template, &error) == OA_UI_RENDERER_CAPACITY);
+    REQUIRE(oversized.impl == NULL);
+    oa_ui_renderer_destroy(&oversized);
+
+    oa_ui_renderer binary = {0};
+    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
+    REQUIRE(oa_ui_renderer_init(&binary, document,
+        vstr_from_cstr("binary.html"),
+        vstr_from_buf(BINARY_TEMPLATE, sizeof(BINARY_TEMPLATE)),
+        &config, &error) == OA_UI_RENDERER_OK);
+    html_size = 99u;
+    REQUIRE(oa_ui_renderer_render(&binary, &html, &html_size, &error) ==
+            OA_UI_RENDERER_OK);
+    REQUIRE(html != NULL);
+    REQUIRE(html_size == sizeof(BINARY_TEMPLATE));
+    REQUIRE(memcmp(html, BINARY_TEMPLATE, sizeof(BINARY_TEMPLATE)) == 0);
+    oa_ui_renderer_output_free(html);
+    html = NULL;
+    oa_ui_renderer_destroy(&binary);
 
     oa_ui_model_free(model);
     puts("openapi Jinja renderer passed");
