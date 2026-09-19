@@ -1,5 +1,5 @@
 add_executable(chttp_web_renderer_test test_chttp_web_renderer.c)
-target_link_libraries(chttp_web_renderer_test PRIVATE CHttp::Web Salts::TinyTest)
+target_link_libraries(chttp_web_renderer_test PRIVATE CHttp::Web Salts::Core Salts::TinyTest)
 set_target_properties(chttp_web_renderer_test PROPERTIES
   FOLDER "web/tests"
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
