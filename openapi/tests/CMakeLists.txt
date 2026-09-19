@@ -25,6 +25,11 @@ set_target_properties(test_ui_fragments PROPERTIES FOLDER "tests")
 target_link_libraries(test_ui_fragments PRIVATE openapi_ui_renderer Salts::JsonParser)
 add_test(NAME openapi_ui_fragments COMMAND test_ui_fragments)
 
+add_executable(test_ui_htmx test_ui_htmx.c)
+set_target_properties(test_ui_htmx PROPERTIES FOLDER "tests")
+target_link_libraries(test_ui_htmx PRIVATE openapi_ui_renderer Salts::JsonParser)
+add_test(NAME openapi_ui_htmx COMMAND test_ui_htmx)
+
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_program(OPENAPI_NODE_EXECUTABLE NAMES node REQUIRED)
 add_test(NAME generator_conformance

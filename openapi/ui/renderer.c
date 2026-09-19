@@ -943,3 +943,19 @@ oa_ui_renderer_status oa_ui_renderer_find_operation(
     return OA_UI_RENDERER_NOT_FOUND;
 }
 
+
+oa_ui_renderer_status oa_ui_renderer_render_operation_list(
+    oa_ui_renderer *renderer,
+    vstr query,
+    char **out_html,
+    size_t *out_size,
+    oa_ui_renderer_error *error) {
+    (void)query;
+    if (out_html) *out_html = NULL;
+    if (out_size) *out_size = 0u;
+    if (!renderer || !renderer->impl || !out_html || !out_size)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "operation-list render arguments are invalid");
+    return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
+                               "operation-list filtering is not implemented");
+}
