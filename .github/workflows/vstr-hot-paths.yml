@@ -169,6 +169,56 @@ jobs:
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF
 
+      - name: Audit Server transitive dependency boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          graph="$RUNNER_TEMP/chttp-targets.dot"
+          cmake --graphviz="$graph" build/linux-gcc-debug
+          python3 - "$graph" <<'PY'
+          import re
+          import sys
+          from collections import defaultdict, deque
+
+          graph_path = sys.argv[1]
+          text = open(graph_path, encoding="utf-8").read()
+          labels = {
+              node: label.replace(r"\n", " ")
+              for node, label in re.findall(
+                  r'"(node\d+)"\s*\[\s*label\s*=\s*"([^"]+)"', text
+              )
+          }
+          edges = defaultdict(set)
+          for src, dst in re.findall(r'"(node\d+)"\s*->\s*"(node\d+)"', text):
+              edges[src].add(dst)
+
+          roots = {
+              node for node, label in labels.items()
+              if "chttp_server" in label or "CHttp::Server" in label
+          }
+          if not roots:
+              raise SystemExit("dependency audit could not find chttp_server")
+
+          queue = deque(roots)
+          seen = set(roots)
+          while queue:
+              node = queue.popleft()
+              label = labels.get(node, "")
+              if re.search(r"jinja", label, re.IGNORECASE):
+                  raise SystemExit(
+                      f"CHttp::Server transitively reaches Jinja target: {label}"
+                  )
+              for dep in edges.get(node, ()):
+                  if dep not in seen:
+                      seen.add(dep)
+                      queue.append(dep)
+
+          print(
+              f"CHttp::Server transitive dependency audit passed "
+              f"({len(seen)} reachable targets, no Jinja)"
+          )
+          PY
+
       - name: Build focused targets
         shell: bash
         env:
