@@ -1,0 +1,31 @@
+{% extends "layout.html" %}
+{% block body %}
+<header>
+  <a class="brand" href="/docs"><span class="logo">{ }</span> API Explorer</a>
+  <a href="/openapi.json" download>下载 OpenAPI ↗</a>
+</header>
+<div class="layout">
+  <aside aria-label="接口导航">
+    <p class="eyebrow">API REFERENCE</p>
+    <h1>{{ title }}</h1>
+    <p class="muted">版本 {{ version }} · OpenAPI {{ openapi_version }}</p>
+    <label class="search" for="operation-search">
+      搜索接口
+      <input id="operation-search" type="search" name="q"
+             autocomplete="off" aria-controls="operation-list"
+             hx-get="/docs/operations"
+             hx-target="#operation-list"
+             hx-swap="outerHTML"
+             hx-trigger="input changed delay:250ms, search"
+             hx-sync="this:replace"
+             hx-indicator="#operation-search-indicator">
+    </label>
+    <span id="operation-search-indicator" class="htmx-indicator" aria-live="polite">筛选中…</span>
+    <p id="operation-search-error" class="error" hidden>接口筛选失败，请重试。</p>
+    {% include "operation_list.html" %}
+  </aside>
+  <main id="operation-detail">
+    {% include "operation_detail.html" %}
+  </main>
+</div>
+{% endblock %}

@@ -15,16 +15,27 @@ try:
     assert match, f"Server did not start: {line}"
     origin = match.group()
     for path, mime in (("/docs", "text/html"), ("/docs/", "text/html"),
-                       ("/docs/app.js", "text/javascript"), ("/docs/style.css", "text/css"),
-                       ("/docs/alpine.js", "text/javascript"), ("/openapi.json", "application/json")):
+                       ("/docs/style.css", "text/css"),
+                       ("/docs/htmx.js", "text/javascript"),
+                       ("/docs/tryit.js", "text/javascript"),
+                       ("/openapi.json", "application/json")):
         with urllib.request.urlopen(origin + path, timeout=5) as response:
             assert response.status == 200
             assert response.headers.get_content_type() == mime
             assert response.headers["X-Content-Type-Options"] == "nosniff"
             content = response.read()
             assert content
+            if path in ("/docs", "/docs/"):
+                assert b'<meta name="openapi-rendered-title" content="Pets API">' in content
+                assert b"{{ title }}" not in content
             if path == "/openapi.json":
                 assert json.loads(content)["openapi"] == "3.1.0"
+    for removed in ("/docs/app.js", "/docs/alpine.js"):
+        try:
+            urllib.request.urlopen(origin + removed, timeout=5)
+            raise AssertionError(f"Removed migration asset still served: {removed}")
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
     try:
         urllib.request.urlopen(origin + "/docs/../README.md", timeout=5)
         raise AssertionError("Unmapped asset was exposed")

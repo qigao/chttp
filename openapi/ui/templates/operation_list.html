@@ -1,0 +1,15 @@
+<nav id="operation-list" aria-label="接口列表">
+{% for op in operations %}
+  <button class="nav-item" type="button"
+          data-operation-key="{{ operation_keys[loop.index0] }}"
+          aria-controls="operation-detail"
+          hx-get="/docs/operations/{{ operation_keys[loop.index0] }}"
+          hx-target="#operation-detail"
+          hx-swap="innerHTML"
+          hx-sync="#operation-detail:replace">
+    <span class="method" data-method="{{ op.method }}">{{ op.method|upper }}</span>
+    <span>{{ op.path }}</span>
+    <span class="muted">{{ op.summary }}</span>
+  </button>
+{% endfor %}
+</nav>

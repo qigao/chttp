@@ -1,7 +1,7 @@
 find_package(unofficial-tree-sitter CONFIG REQUIRED)
 find_library(OPENAPI_C_GRAMMAR_LIBRARY NAMES tree-sitter-c REQUIRED)
 
-add_library(openapi_generator STATIC src/plugin.c src/extract.c src/document.c src/comment.c)
+add_library(openapi_generator STATIC src/plugin.c src/extract.c src/document.c src/comment.c src/ui_model.c)
 add_library(OpenAPI::Generator ALIAS openapi_generator)
 target_include_directories(openapi_generator PUBLIC include PRIVATE src)
 target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sitter
@@ -9,6 +9,15 @@ target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sit
   PRIVATE ${CMAKE_DL_LIBS})
 add_executable(openapi-gen src/main.c)
 target_link_libraries(openapi-gen PRIVATE openapi_generator)
+
+if(BUILD_EXAMPLES OR (BUILD_TESTS AND BUILD_TESTING))
+  add_library(openapi_ui_renderer STATIC ui/renderer.c)
+  target_include_directories(openapi_ui_renderer PUBLIC ui)
+  target_link_libraries(openapi_ui_renderer
+    PUBLIC openapi_generator
+    PRIVATE Salts::JinjaCMeta)
+  set_target_properties(openapi_ui_renderer PROPERTIES FOLDER "openapi/ui")
+endif()
 
 set(PLUGIN_NAME c)
 set(PLUGIN_SYMBOL tree_sitter_c)
