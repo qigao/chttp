@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { requestFor, boundedText, resolveServerUrl, LIMITS } = require('../ui/tryit.js');
+const { requestFor, boundedText, resolveServerUrl, operationFromForm, LIMITS } = require('../ui/tryit.js');
 
 test('resolve relative OpenAPI server URLs against the docs page', () => {
   assert.equal(resolveServerUrl('/v1', 'https://docs.example.test/docs'),
@@ -24,6 +24,34 @@ test('encode paths, query and headers without losing server prefix', () => {
   assert.equal(r.init.redirect, 'error');
   assert.throws(() => requestFor(op, 'https://example.test', {}, '', ''), /必填/);
   assert.throws(() => requestFor(op, 'https://example.test', { 0: '..' }, '', ''), /点路径/);
+});
+
+test('preserve rendered request-body metadata through DOM form conversion', () => {
+  const form = {
+    dataset: {
+      method: 'post',
+      path: '/pets',
+      tryitRequestBody: JSON.stringify({
+        required: true,
+        content: { 'application/json': { schema: { type: 'object' } } }
+      })
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, '[data-tryit-parameter]');
+      return [];
+    }
+  };
+
+  const operation = operationFromForm(form);
+  assert.equal(operation.requestBody.required, true);
+  assert.ok(operation.requestBody.content['application/json']);
+  assert.throws(() => requestFor(
+    operation, 'https://example.test', {}, '', 'application/json'), /请求体为必填/);
+
+  form.dataset.tryitRequestBody = JSON.stringify({ $ref: '#/components/requestBodies/Pet' });
+  const referenced = operationFromForm(form);
+  assert.throws(() => requestFor(
+    referenced, 'https://example.test', {}, '{}', 'application/json'), /引用请求体/);
 });
 
 test('unsupported or unsafe input fails before fetch', () => {
