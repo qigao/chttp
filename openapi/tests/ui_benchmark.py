@@ -113,14 +113,17 @@ def measure(server, assets, count, startup_samples, warmup, samples):
             return {
                 "operations": count,
                 "document_bytes": document.stat().st_size,
+                "warmup": warmup,
                 "startup_ms": {
                     "samples": startup_samples,
+                    "total": sum(startup),
                     "mean": statistics.fmean(startup),
                     "p50": percentile(startup, 0.50),
                     "p95": percentile(startup, 0.95),
                 },
                 "docs_render_http_ms": {
                     "samples": samples,
+                    "total": sum(docs),
                     "mean": statistics.fmean(docs),
                     "p50": percentile(docs, 0.50),
                     "p95": percentile(docs, 0.95),
@@ -128,6 +131,7 @@ def measure(server, assets, count, startup_samples, warmup, samples):
                 },
                 "detail_render_http_ms": {
                     "samples": samples,
+                    "total": sum(details),
                     "mean": statistics.fmean(details),
                     "p50": percentile(details, 0.50),
                     "p95": percentile(details, 0.95),
@@ -152,8 +156,18 @@ def main():
     metadata = {
         "kind": "environment",
         "commit": os.environ.get("GITHUB_SHA", "unknown"),
+        "salts_sha": os.environ.get("SALTS_SHA", "unknown"),
+        "salts_utils_sha": os.environ.get("SALTS_UTILS_SHA", "unknown"),
+        "vcpkg_sha": os.environ.get("VCPKG_SHA", "unknown"),
         "platform": platform.platform(),
+        "machine": platform.machine(),
         "python": platform.python_version(),
+        "gcc": subprocess.check_output(
+            ["gcc", "-dumpfullversion", "-dumpversion"], text=True
+        ).strip(),
+        "cmake": subprocess.check_output(
+            ["cmake", "--version"], text=True
+        ).splitlines()[0],
         "cpu_count": os.cpu_count(),
         "note": (
             "startup includes process launch, OpenAPI parse/model projection, "
