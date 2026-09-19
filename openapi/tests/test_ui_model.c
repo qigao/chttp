@@ -27,7 +27,7 @@ static int check_parsed_json_entry(oa_error *error) {
     const char *text =
         "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Direct\",\"version\":\"1\"},"
         "\"paths\":{\"/ping\":{\"get\":{\"operationId\":\"ping\","
-        "\"responses\":{\"204\":{\"description\":\"OK\"}}}}}}}";
+        "\"responses\":{\"204\":{\"description\":\"OK\"}}}}}}";
     json_value_t *root = json_parse(text, strlen(text));
     if (!root) {
         snprintf(error->message, sizeof(error->message), "direct JSON parse failed: %s",
