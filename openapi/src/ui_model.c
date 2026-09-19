@@ -324,25 +324,88 @@ static int oa_ui_project_parameter(oa_ui_parameter *out,
     return 1;
 }
 
-static int oa_ui_project_parameters(oa_ui_operation *out,
+static int oa_ui_parameter_same_key(const oa_ui_parameter *left,
+                                    const oa_ui_parameter *right) {
+    return left && right && vstr_eq(left->name, right->name) &&
+           vstr_eq(left->location, right->location);
+}
+
+static int oa_ui_parameter_upsert(oa_ui_parameter *items, size_t *count,
+                                  size_t capacity, const json_value_t *parameter,
+                                  oa_error *error) {
+    oa_ui_parameter candidate = {0};
+    if (!items || !count || *count > capacity)
+        return oa_fail(error, "invalid OpenAPI UI parameter projection");
+    if (!oa_ui_project_parameter(&candidate, parameter, error)) {
+        oa_ui_parameter_free(&candidate);
+        return 0;
+    }
+    for (size_t i = 0u; i < *count; ++i) {
+        if (!oa_ui_parameter_same_key(&items[i], &candidate)) continue;
+        oa_ui_parameter_free(&items[i]);
+        items[i] = candidate;
+        return 1;
+    }
+    if (*count >= capacity) {
+        oa_ui_parameter_free(&candidate);
+        return oa_fail(error, "OpenAPI UI parameter projection exceeded capacity");
+    }
+    items[*count] = candidate;
+    ++*count;
+    return 1;
+}
+
+static int oa_ui_parameter_array_valid(const json_value_t *parameters,
+                                       const char *scope, oa_error *error) {
+    return !parameters || json_type(parameters) == JSON_ARRAY ||
+           oa_fail(error, "OpenAPI UI %s parameters must be an array", scope);
+}
+
+static int oa_ui_project_parameters(oa_ui_model *model, oa_ui_operation *out,
+                                    const json_value_t *path_item,
                                     const json_value_t *operation,
                                     oa_error *error) {
-    const json_value_t *parameters = json_object_get(operation, "parameters");
+    const json_value_t *path_parameters = json_object_get(path_item, "parameters");
+    const json_value_t *operation_parameters = json_object_get(operation, "parameters");
+    size_t path_count;
+    size_t operation_count;
+    size_t capacity;
+    size_t count = 0u;
+
     out->parameters =
         oa_ui_sequence_empty(sizeof(oa_ui_parameter), &OA_UI_PARAMETER_DATA);
-    if (!parameters) return 1;
-    if (json_type(parameters) != JSON_ARRAY)
-        return oa_fail(error, "OpenAPI UI parameters must be an array");
-    size_t count = json_array_size(parameters);
-    if (!count) return 1;
-    oa_ui_parameter *items = calloc(count, sizeof(*items));
+    if (!oa_ui_parameter_array_valid(path_parameters, "path", error) ||
+        !oa_ui_parameter_array_valid(operation_parameters, "operation", error))
+        return 0;
+
+    path_count = path_parameters ? json_array_size(path_parameters) : 0u;
+    operation_count =
+        operation_parameters ? json_array_size(operation_parameters) : 0u;
+    if (path_count > SIZE_MAX - operation_count)
+        return oa_fail(error, "OpenAPI UI parameter count exceeds capacity");
+    capacity = path_count + operation_count;
+    if (!capacity) return 1;
+
+    oa_ui_parameter *items = oa_ui_calloc(model, capacity, sizeof(*items));
     if (!items)
         return oa_fail(error, "out of memory constructing OpenAPI UI parameters");
     out->parameters.data = items;
-    out->parameters.count = count;
-    for (size_t i = 0u; i < count; ++i)
-        if (!oa_ui_project_parameter(&items[i], json_array_get(parameters, i), error))
+
+    for (size_t i = 0u; i < path_count; ++i) {
+        if (!oa_ui_parameter_upsert(items, &count, capacity,
+                                    json_array_get(path_parameters, i), error)) {
+            out->parameters.count = count;
             return 0;
+        }
+    }
+    for (size_t i = 0u; i < operation_count; ++i) {
+        if (!oa_ui_parameter_upsert(items, &count, capacity,
+                                    json_array_get(operation_parameters, i), error)) {
+            out->parameters.count = count;
+            return 0;
+        }
+    }
+    out->parameters.count = count;
     return 1;
 }
 
