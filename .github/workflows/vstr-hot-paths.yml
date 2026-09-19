@@ -15,7 +15,7 @@ concurrency:
 
 env:
   SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_SHA: c6662ccd382a4311ff648ff80570d8d8f98028a8
+  SALTS_UTILS_SHA: 8016a93f9b0f14c053ba87ce5a18d40f77fa8770
   VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
 jobs:
@@ -149,6 +149,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
           ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
           test -f "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+
+      - name: Install OpenAPI conformance test requirements
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m pip install -r openapi/tests/requirements-conformance.txt
 
       - name: Configure exact Chttp head
         shell: bash
