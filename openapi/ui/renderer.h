@@ -17,7 +17,8 @@ typedef enum oa_ui_renderer_status {
     OA_UI_RENDERER_CAPACITY = -3,
     OA_UI_RENDERER_OUT_OF_MEMORY = -4,
     OA_UI_RENDERER_RENDER = -5,
-    OA_UI_RENDERER_UNSUPPORTED = -6
+    OA_UI_RENDERER_UNSUPPORTED = -6,
+    OA_UI_RENDERER_NOT_FOUND = -7
 } oa_ui_renderer_status;
 
 typedef struct oa_ui_renderer_config {
@@ -41,6 +42,40 @@ typedef struct oa_ui_renderer_error {
 typedef struct oa_ui_renderer {
     void *impl;
 } oa_ui_renderer;
+
+typedef struct oa_ui_renderer_template {
+    vstr name;
+    vstr source;
+} oa_ui_renderer_template;
+
+#define OA_UI_RENDERER_NO_SELECTION ((size_t)-1)
+
+/* Compile a fixed bundle through one bounded Jinja environment. Every named
+ * template and dependency must compile before this function succeeds. The
+ * source/name views are borrowed only until return. */
+oa_ui_renderer_status oa_ui_renderer_init_bundle(
+    oa_ui_renderer *renderer,
+    const oa_ui_document *document,
+    const oa_ui_renderer_template *templates,
+    size_t template_count,
+    const oa_ui_renderer_config *config,
+    oa_ui_renderer_error *error);
+
+/* Render one already-compiled named template. selected_operation is either a
+ * document operation index or OA_UI_RENDERER_NO_SELECTION. */
+oa_ui_renderer_status oa_ui_renderer_render_named(
+    oa_ui_renderer *renderer,
+    vstr template_name,
+    size_t selected_operation,
+    char **out_html,
+    size_t *out_size,
+    oa_ui_renderer_error *error);
+
+/* Startup-frozen operation route keys used by Jinja templates and HTTP lookup. */
+size_t oa_ui_renderer_operation_count(const oa_ui_renderer *renderer);
+vstr oa_ui_renderer_operation_key(const oa_ui_renderer *renderer, size_t index);
+oa_ui_renderer_status oa_ui_renderer_find_operation(
+    const oa_ui_renderer *renderer, vstr key, size_t *out_index);
 
 /* Compiles one named HTML template and borrows document until destroy.
  * Source/name bytes are copied by Jinja during compilation. */

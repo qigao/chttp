@@ -1,0 +1,13 @@
+{% macro render_parameter(p) %}
+<div class="parameter">
+  <p><strong>{{ p.name }}</strong> <span class="muted">{{ p.location }}</span>
+  {% if p.required %}<span class="required">必填</span>{% endif %}</p>
+  <p class="muted">{{ p.description }}</p>
+  {% if p.schema_json %}
+  <details>
+    <summary>Schema 与约束</summary>
+    <pre>{{ p.schema_json }}</pre>
+  </details>
+  {% endif %}
+</div>
+{% endmacro %}

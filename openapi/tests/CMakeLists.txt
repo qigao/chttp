@@ -20,6 +20,11 @@ set_target_properties(test_ui_renderer PROPERTIES FOLDER "tests")
 target_link_libraries(test_ui_renderer PRIVATE openapi_ui_renderer Salts::JsonParser)
 add_test(NAME openapi_ui_renderer COMMAND test_ui_renderer)
 
+add_executable(test_ui_fragments test_ui_fragments.c)
+set_target_properties(test_ui_fragments PROPERTIES FOLDER "tests")
+target_link_libraries(test_ui_fragments PRIVATE openapi_ui_renderer Salts::JsonParser)
+add_test(NAME openapi_ui_fragments COMMAND test_ui_fragments)
+
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 find_program(OPENAPI_NODE_EXECUTABLE NAMES node REQUIRED)
 add_test(NAME generator_conformance
@@ -33,6 +38,10 @@ add_test(NAME openapi_ui_logic
 if(BUILD_EXAMPLES)
   add_test(NAME openapi_ui_http
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_http_test.py"
+      "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
+  add_test(NAME openapi_ui_fragment_http
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_fragment_http_test.py"
       "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
       "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
 endif()

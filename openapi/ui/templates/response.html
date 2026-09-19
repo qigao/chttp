@@ -1,0 +1,6 @@
+{% macro render_responses(op) %}
+<h3>响应定义</h3>
+{% if op.responses_json %}
+<pre>{{ op.responses_json }}</pre>
+{% endif %}
+{% endmacro %}
