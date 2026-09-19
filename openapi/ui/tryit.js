@@ -94,6 +94,11 @@ function requestFor(operation, base, values, body, media) {
   return { url: url.href, init };
 }
 
+function resolveServerUrl(serverUrl, pageUrl) {
+  const page = new URL(pageUrl);
+  return serverUrl ? new URL(serverUrl, page.href).href : page.origin;
+}
+
 function parseJsonAttribute(value, fallback) {
   if (!value) return fallback;
   return JSON.parse(value);
@@ -103,7 +108,13 @@ function initializeForm(form) {
   if (!form || form.dataset.tryitReady === '1') return;
   form.dataset.tryitReady = '1';
   const base = form.querySelector('[data-tryit-base]');
-  if (base && !base.value && typeof location !== 'undefined') base.value = location.origin;
+  if (base && typeof location !== 'undefined') {
+    try {
+      base.value = resolveServerUrl(base.value, location.href);
+    } catch (_) {
+      /* Keep the original value; requestFor will reject it before fetch. */
+    }
+  }
 
   const requestBody = parseJsonAttribute(form.dataset.requestBody, null);
   const media = form.querySelector('[data-tryit-media]');
@@ -194,5 +205,5 @@ if (typeof document !== 'undefined') {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { LIMITS, requestFor, boundedText };
+  module.exports = { LIMITS, requestFor, boundedText, resolveServerUrl };
 }

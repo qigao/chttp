@@ -1,6 +1,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { requestFor, boundedText, LIMITS } = require('../ui/tryit.js');
+const { requestFor, boundedText, resolveServerUrl, LIMITS } = require('../ui/tryit.js');
+
+test('resolve relative OpenAPI server URLs against the docs page', () => {
+  assert.equal(resolveServerUrl('/v1', 'https://docs.example.test/docs'),
+               'https://docs.example.test/v1');
+  assert.equal(resolveServerUrl('v1', 'https://docs.example.test/docs'),
+               'https://docs.example.test/v1');
+  assert.equal(resolveServerUrl('', 'https://docs.example.test/docs'),
+               'https://docs.example.test');
+});
 
 test('encode paths, query and headers without losing server prefix', () => {
   const op = { method: 'get', path: '/pets/{id}', parameters: [
