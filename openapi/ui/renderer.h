@@ -77,6 +77,15 @@ vstr oa_ui_renderer_operation_key(const oa_ui_renderer *renderer, size_t index);
 oa_ui_renderer_status oa_ui_renderer_find_operation(
     const oa_ui_renderer *renderer, vstr key, size_t *out_index);
 
+/* Render the already-compiled operation-list fragment through a bounded
+ * server-side filter. Query is UTF-8 bytes; empty selects all operations. */
+oa_ui_renderer_status oa_ui_renderer_render_operation_list(
+    oa_ui_renderer *renderer,
+    vstr query,
+    char **out_html,
+    size_t *out_size,
+    oa_ui_renderer_error *error);
+
 /* Compiles one named HTML template and borrows document until destroy.
  * Source/name bytes are copied by Jinja during compilation. */
 oa_ui_renderer_status oa_ui_renderer_init(

@@ -16,7 +16,8 @@ try:
     origin = match.group()
     for path, mime in (("/docs", "text/html"), ("/docs/", "text/html"),
                        ("/docs/app.js", "text/javascript"), ("/docs/style.css", "text/css"),
-                       ("/docs/alpine.js", "text/javascript"), ("/openapi.json", "application/json")):
+                       ("/docs/alpine.js", "text/javascript"), ("/docs/htmx.js", "text/javascript"),
+                       ("/openapi.json", "application/json")):
         with urllib.request.urlopen(origin + path, timeout=5) as response:
             assert response.status == 200
             assert response.headers.get_content_type() == mime

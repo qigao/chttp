@@ -19,6 +19,7 @@ enum {
     UI_CHUNK_BYTES = 65536,
     UI_FILE_BYTES = 2 * 1024 * 1024,
     UI_TEMPLATE_FILE_BYTES = 64 * 1024,
+    UI_SEARCH_BYTES = 256,
     UI_SEND_BYTES = UI_FILE_BYTES + UI_HEADER_BYTES + 16 * 1024,
     UI_COMMAND_BUFFER_BYTES = 4 * 1024 * 1024,
     UI_BUFFER_CAPACITY_BYTES = 32 * 1024 * 1024,
@@ -147,13 +148,90 @@ static int serve_docs(void *user, const chttp_server_request_view *request,
     return reply_named(renderer, "docs.html", selected, response);
 }
 
+static int search_hex_value(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+static int parse_search_query(
+    const chttp_server_request_view *request,
+    char output[UI_SEARCH_BYTES + 1u],
+    size_t *out_size) {
+    const char *input;
+    size_t size = 0u;
+
+    if (!request || !request->target || !output || !out_size)
+        return SALTS_EINVAL;
+    output[0] = '\0';
+    *out_size = 0u;
+
+    input = strchr(request->target, '?');
+    if (!input || input[1] == '\0') return SALTS_OK;
+    ++input;
+    if (input[0] != 'q' || input[1] != '=') return SALTS_EINVAL;
+    input += 2;
+
+    while (*input) {
+        unsigned char value;
+        if (*input == '&') return SALTS_EINVAL;
+        if (*input == '+') {
+            value = (unsigned char)' ';
+            ++input;
+        } else if (*input == '%') {
+            if (input[1] == '\0' || input[2] == '\0')
+                return SALTS_EINVAL;
+            const int high = search_hex_value(input[1]);
+            const int low = search_hex_value(input[2]);
+            if (high < 0 || low < 0) return SALTS_EINVAL;
+            value = (unsigned char)((high << 4) | low);
+            input += 3;
+        } else {
+            value = (unsigned char)*input++;
+        }
+
+        if (value == 0u) return SALTS_EINVAL;
+        if (size == UI_SEARCH_BYTES) return SALTS_EMSGSIZE;
+        output[size++] = (char)value;
+    }
+
+    output[size] = '\0';
+    if (vstr_utf8_invalid_offset(vstr_from_buf(output, size)) != VSTR_NPOS)
+        return SALTS_EINVAL;
+    *out_size = size;
+    return SALTS_OK;
+}
+
 static int serve_operation_list(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
-    (void)request;
-    return reply_named(
-        (oa_ui_renderer *)user, "operation_list.html",
-        OA_UI_RENDERER_NO_SELECTION, response);
+    static const char bad_query[] = "Invalid OpenAPI operation search query\n";
+    oa_ui_renderer *renderer = (oa_ui_renderer *)user;
+    char query[UI_SEARCH_BYTES + 1u];
+    size_t query_size = 0u;
+
+    int status = response_nosniff(response);
+    if (status != SALTS_OK) return status;
+    if (parse_search_query(request, query, &query_size) != SALTS_OK)
+        return chttp_server_reply(
+            response, 400u, "text/plain; charset=utf-8",
+            bad_query, sizeof(bad_query) - 1u);
+
+    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
+    char *html = NULL;
+    size_t html_size = 0u;
+    const oa_ui_renderer_status rendered =
+        oa_ui_renderer_render_operation_list(
+            renderer, vstr_from_buf(query, query_size),
+            &html, &html_size, &error);
+    if (rendered != OA_UI_RENDERER_OK)
+        return reply_render_failure(response, rendered, &error);
+
+    status = chttp_server_reply(
+        response, 200u, "text/html; charset=utf-8", html, html_size);
+    oa_ui_renderer_output_free(html);
+    return status;
 }
 
 static int serve_operation_detail(
@@ -335,13 +413,16 @@ int main(int argc, char **argv) {
     config.poll_slice_ms = 1u;
 
     const char *routes[] = {
-        "/docs/style.css", "/docs/app.js", "/docs/alpine.js", "/openapi.json"
+        "/docs/style.css", "/docs/app.js", "/docs/alpine.js",
+        "/docs/htmx.js", "/openapi.json"
     };
     const char *files[] = {
-        "style.css", "app.js", "vendor/alpine-3.14.9.min.js", NULL
+        "style.css", "app.js", "vendor/alpine-3.14.9.min.js",
+        "vendor/htmx-4.0.0.min.js", NULL
     };
     const char *types[] = {
         "text/css; charset=utf-8",
+        "text/javascript; charset=utf-8",
         "text/javascript; charset=utf-8",
         "text/javascript; charset=utf-8",
         "application/json"
