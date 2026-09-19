@@ -14,6 +14,25 @@
     } \
 } while (0)
 
+static int expect_bytes(const char *actual, size_t actual_size,
+                        const char *expected, size_t expected_size) {
+    if (actual && actual_size == expected_size &&
+        memcmp(actual, expected, expected_size) == 0)
+        return 1;
+    fprintf(stderr, "rendered bytes mismatch: actual=%zu expected=%zu\n",
+            actual_size, expected_size);
+    fputs("actual hex:", stderr);
+    if (actual) {
+        for (size_t i = 0u; i < actual_size; ++i)
+            fprintf(stderr, " %02x", (unsigned char)actual[i]);
+    }
+    fputs("\nexpected hex:", stderr);
+    for (size_t i = 0u; i < expected_size; ++i)
+        fprintf(stderr, " %02x", (unsigned char)expected[i]);
+    fputc('\n', stderr);
+    return 0;
+}
+
 static const char DOCUMENT[] =
     "{\"openapi\":\"3.1.0\","
     "\"info\":{\"title\":\"<Pets & Co>\",\"version\":\"1\"},"
@@ -69,16 +88,14 @@ int main(void) {
             fprintf(stderr, "%02x", (unsigned)(unsigned char)html[i]);
         fputc('\n', stderr);
     }
-    REQUIRE(html_size == sizeof(EXPECTED) - 1u);
-    REQUIRE(memcmp(html, EXPECTED, html_size) == 0);
+    REQUIRE(expect_bytes(html, html_size, EXPECTED, sizeof(EXPECTED) - 1u));
     oa_ui_renderer_output_free(html);
     html = NULL;
 
     /* A compiled renderer is reusable for sequential owner-thread requests. */
     REQUIRE(oa_ui_renderer_render(&renderer, &html, &html_size, &error) ==
             OA_UI_RENDERER_OK);
-    REQUIRE(html_size == sizeof(EXPECTED) - 1u);
-    REQUIRE(memcmp(html, EXPECTED, html_size) == 0);
+    REQUIRE(expect_bytes(html, html_size, EXPECTED, sizeof(EXPECTED) - 1u));
     oa_ui_renderer_output_free(html);
     html = NULL;
 
