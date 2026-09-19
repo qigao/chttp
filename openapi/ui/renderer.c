@@ -31,11 +31,19 @@ _Static_assert(offsetof(oa_ui_sequence_view, element) ==
                    offsetof(JINJA_CMETA_SEQUENCE_VIEW, element),
                "sequence element offsets must match");
 
+typedef struct oa_ui_renderer_template_entry {
+    vstr name;
+    vstr source;
+    JINJA_CMETA_TEMPLATE *templ;
+} oa_ui_renderer_template_entry;
+
 typedef struct oa_ui_jinja_document {
     vstr title;
     vstr version;
     vstr openapi_version;
     JINJA_CMETA_SEQUENCE_VIEW operations;
+    JINJA_CMETA_SEQUENCE_VIEW operation_keys;
+    JINJA_CMETA_SEQUENCE_VIEW selected_operations;
 } oa_ui_jinja_document;
 
 typedef struct oa_ui_renderer_impl {
@@ -47,11 +55,16 @@ typedef struct oa_ui_renderer_impl {
     JINJA_CMETA_RUNTIME_CONFIG *runtime;
     JINJA_CMETA_RENDER_OPTIONS render_options;
 
+    oa_ui_renderer_template_entry *templates;
+    size_t template_count;
+    vstr *operation_keys;
+    char *operation_key_bytes;
+
     cmeta_data_field_desc operation_fields[10];
     cmeta_data_struct_shape operation_shape;
     cmeta_data_desc operation_data;
 
-    cmeta_data_field_desc document_fields[4];
+    cmeta_data_field_desc document_fields[6];
     cmeta_data_struct_shape document_shape;
     cmeta_data_desc document_data;
 } oa_ui_renderer_impl;
@@ -96,6 +109,10 @@ static const cmeta_field_desc OA_DOCUMENT_LAYOUT_FIELDS[] = {
     OA_LAYOUT_FIELD(oa_ui_jinja_document, version, vstr, "vstr"),
     OA_LAYOUT_FIELD(oa_ui_jinja_document, openapi_version, vstr, "vstr"),
     OA_LAYOUT_FIELD(oa_ui_jinja_document, operations, JINJA_CMETA_SEQUENCE_VIEW,
+                    "JINJA_CMETA_SEQUENCE_VIEW"),
+    OA_LAYOUT_FIELD(oa_ui_jinja_document, operation_keys, JINJA_CMETA_SEQUENCE_VIEW,
+                    "JINJA_CMETA_SEQUENCE_VIEW"),
+    OA_LAYOUT_FIELD(oa_ui_jinja_document, selected_operations, JINJA_CMETA_SEQUENCE_VIEW,
                     "JINJA_CMETA_SEQUENCE_VIEW")
 };
 static const cmeta_struct_desc OA_DOCUMENT_LAYOUT = {
@@ -271,6 +288,12 @@ static void oa_ui_renderer_init_descriptors(oa_ui_renderer_impl *impl) {
     impl->document_fields[3] = (cmeta_data_field_desc){
         "openapi.ui.jinja.document.operations", "operations",
         offsetof(oa_ui_jinja_document, operations), sequence};
+    impl->document_fields[4] = (cmeta_data_field_desc){
+        "openapi.ui.jinja.document.operation_keys", "operation_keys",
+        offsetof(oa_ui_jinja_document, operation_keys), sequence};
+    impl->document_fields[5] = (cmeta_data_field_desc){
+        "openapi.ui.jinja.document.selected_operations", "selected_operations",
+        offsetof(oa_ui_jinja_document, selected_operations), sequence};
     impl->document_shape = (cmeta_data_struct_shape){
         &OA_DOCUMENT_LAYOUT, impl->document_fields,
         OA_ARRAY_COUNT(impl->document_fields)};
@@ -299,14 +322,31 @@ static int oa_ui_renderer_adapt_document(oa_ui_renderer_impl *impl) {
     impl->root.operations = (JINJA_CMETA_SEQUENCE_VIEW){
         source->operations.data, source->operations.count,
         sizeof(oa_ui_operation), &impl->operation_data};
+    impl->root.operation_keys = (JINJA_CMETA_SEQUENCE_VIEW){
+        NULL, 0u, sizeof(vstr), jinja_cmeta_vstr_data()};
+    impl->root.selected_operations = (JINJA_CMETA_SEQUENCE_VIEW){
+        NULL, 0u, sizeof(oa_ui_operation), &impl->operation_data};
     return 1;
 }
 
 static void oa_ui_renderer_impl_destroy(oa_ui_renderer_impl *impl) {
     if (!impl) return;
     jinja_cmeta_release(impl->templ);
+    if (impl->templates) {
+        for (size_t i = 0u; i < impl->template_count; ++i)
+            jinja_cmeta_release(impl->templates[i].templ);
+    }
     jinja_cmeta_runtime_config_destroy(impl->runtime);
     jinja_cmeta_env_destroy(impl->env);
+    if (impl->templates) {
+        for (size_t i = 0u; i < impl->template_count; ++i) {
+            free((void *)impl->templates[i].name.data);
+            free((void *)impl->templates[i].source.data);
+        }
+    }
+    free(impl->templates);
+    free(impl->operation_keys);
+    free(impl->operation_key_bytes);
     free(impl);
 }
 
@@ -467,6 +507,289 @@ void oa_ui_renderer_destroy(oa_ui_renderer *renderer) {
     renderer->impl = NULL;
 }
 
+
+enum {
+    OA_UI_RENDERER_MAX_OPERATIONS = 4096,
+    OA_UI_RENDERER_MAX_OPERATION_KEY_BYTES = 128
+};
+
+static int oa_ui_renderer_copy_view(vstr source, vstr *out) {
+    char *copy;
+    if (!out || !vstr_is_valid(source) || source.len == SIZE_MAX) return 0;
+    copy = (char *)malloc(source.len + 1u);
+    if (!copy) return 0;
+    if (source.len != 0u) memcpy(copy, source.data, source.len);
+    copy[source.len] = '\0';
+    *out = vstr_from_buf(copy, source.len);
+    return 1;
+}
+
+static int oa_ui_renderer_key_safe(vstr key) {
+    if (!vstr_is_valid(key) || key.len == 0u ||
+        key.len > OA_UI_RENDERER_MAX_OPERATION_KEY_BYTES)
+        return 0;
+    for (size_t i = 0u; i < key.len; ++i) {
+        const unsigned char ch = (unsigned char)key.data[i];
+        if ((ch >= (unsigned char)'A' && ch <= (unsigned char)'Z') ||
+            (ch >= (unsigned char)'a' && ch <= (unsigned char)'z') ||
+            (ch >= (unsigned char)'0' && ch <= (unsigned char)'9') ||
+            ch == (unsigned char)'-' || ch == (unsigned char)'.' ||
+            ch == (unsigned char)'_' || ch == (unsigned char)'~')
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
+static oa_ui_renderer_status oa_ui_renderer_build_operation_keys(
+    oa_ui_renderer_impl *impl, oa_ui_renderer_error *error) {
+    const oa_ui_operation *operations;
+    const size_t count = impl->source->operations.count;
+    size_t total = 0u;
+    char fallback[32];
+
+    if (count > OA_UI_RENDERER_MAX_OPERATIONS)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_CAPACITY,
+                                   "operation count exceeds renderer limit");
+    if (count == 0u) {
+        impl->root.operation_keys = (JINJA_CMETA_SEQUENCE_VIEW){
+            NULL, 0u, sizeof(vstr), jinja_cmeta_vstr_data()};
+        return OA_UI_RENDERER_OK;
+    }
+
+    operations = (const oa_ui_operation *)impl->source->operations.data;
+    for (size_t i = 0u; i < count; ++i) {
+        size_t length;
+        if (oa_ui_renderer_key_safe(operations[i].operation_id)) {
+            length = operations[i].operation_id.len;
+        } else {
+            const int written = snprintf(fallback, sizeof(fallback), "op-%zu", i);
+            if (written < 0 || (size_t)written >= sizeof(fallback))
+                return oa_ui_renderer_fail(error, OA_UI_RENDERER_CAPACITY,
+                                           "operation route key is too large");
+            length = (size_t)written;
+        }
+        if (total > SIZE_MAX - length - 1u)
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_CAPACITY,
+                                       "operation route keys exceed capacity");
+        total += length + 1u;
+    }
+
+    impl->operation_keys = (vstr *)calloc(count, sizeof(*impl->operation_keys));
+    impl->operation_key_bytes = (char *)malloc(total);
+    if (!impl->operation_keys || !impl->operation_key_bytes)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                   "unable to allocate operation route keys");
+
+    char *cursor = impl->operation_key_bytes;
+    for (size_t i = 0u; i < count; ++i) {
+        const vstr id = operations[i].operation_id;
+        size_t length;
+        if (oa_ui_renderer_key_safe(id)) {
+            length = id.len;
+            memcpy(cursor, id.data, length);
+        } else {
+            const int written = snprintf(fallback, sizeof(fallback), "op-%zu", i);
+            if (written < 0 || (size_t)written >= sizeof(fallback))
+                return oa_ui_renderer_fail(error, OA_UI_RENDERER_CAPACITY,
+                                           "operation route key is too large");
+            length = (size_t)written;
+            memcpy(cursor, fallback, length);
+        }
+        cursor[length] = '\0';
+        impl->operation_keys[i] = vstr_from_buf(cursor, length);
+        for (size_t j = 0u; j < i; ++j) {
+            if (vstr_eq(impl->operation_keys[j], impl->operation_keys[i]))
+                return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                           "operation route keys must be unique");
+        }
+        cursor += length + 1u;
+    }
+
+    impl->root.operation_keys = (JINJA_CMETA_SEQUENCE_VIEW){
+        impl->operation_keys, count, sizeof(vstr), jinja_cmeta_vstr_data()};
+    return OA_UI_RENDERER_OK;
+}
+
+static JINJA_CMETA_STATUS oa_ui_renderer_bundle_load(
+    void *userdata, vstr name, JINJA_CMETA_SOURCE *source,
+    JINJA_CMETA_ERROR *error) {
+    oa_ui_renderer_impl *impl = (oa_ui_renderer_impl *)userdata;
+    (void)error;
+    if (!impl || !source || !vstr_is_valid(name))
+        return JINJA_CMETA_ERR_INVALID_ARGUMENT;
+    for (size_t i = 0u; i < impl->template_count; ++i) {
+        if (!vstr_eq(impl->templates[i].name, name)) continue;
+        *source = (JINJA_CMETA_SOURCE){
+            .text = impl->templates[i].source,
+            .lease = &impl->templates[i]
+        };
+        return JINJA_CMETA_OK;
+    }
+    return JINJA_CMETA_ERR_NOT_FOUND;
+}
+
+static void oa_ui_renderer_bundle_release(
+    void *userdata, JINJA_CMETA_SOURCE *source) {
+    (void)userdata;
+    if (source) *source = (JINJA_CMETA_SOURCE){0};
+}
+
+static oa_ui_renderer_status oa_ui_renderer_copy_bundle(
+    oa_ui_renderer_impl *impl,
+    const oa_ui_renderer_template *templates,
+    size_t template_count,
+    const oa_ui_renderer_config *config,
+    size_t *out_source_bytes,
+    oa_ui_renderer_error *error) {
+    size_t source_bytes = 0u;
+    if (!impl || !templates || !out_source_bytes ||
+        template_count == 0u ||
+        template_count > JINJA_CMETA_MAX_CACHED_TEMPLATES)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "template bundle is invalid");
+
+    impl->templates = (oa_ui_renderer_template_entry *)calloc(
+        template_count, sizeof(*impl->templates));
+    if (!impl->templates)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                   "unable to allocate template bundle");
+    impl->template_count = template_count;
+
+    for (size_t i = 0u; i < template_count; ++i) {
+        if (!vstr_is_valid(templates[i].name) ||
+            !vstr_is_valid(templates[i].source) ||
+            templates[i].name.len == 0u ||
+            templates[i].name.len > JINJA_CMETA_MAX_TEMPLATE_BYTES)
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                       "template bundle entry is invalid");
+        for (size_t j = 0u; j < i; ++j) {
+            if (vstr_eq(templates[j].name, templates[i].name))
+                return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                           "template names must be unique");
+        }
+        if (templates[i].source.len > config->max_template_bytes ||
+            source_bytes > config->max_template_bytes - templates[i].source.len)
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_CAPACITY,
+                                       "template bundle exceeds renderer limit");
+        source_bytes += templates[i].source.len;
+
+        if (!oa_ui_renderer_copy_view(
+                templates[i].name, &impl->templates[i].name) ||
+            !oa_ui_renderer_copy_view(
+                templates[i].source, &impl->templates[i].source))
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                       "unable to copy template bundle");
+    }
+    *out_source_bytes = source_bytes;
+    return OA_UI_RENDERER_OK;
+}
+
+static oa_ui_renderer_status oa_ui_renderer_init_runtime(
+    oa_ui_renderer_impl *impl,
+    const oa_ui_renderer_config *config,
+    oa_ui_renderer_error *error) {
+    JINJA_CMETA_ERROR jerror = JINJA_CMETA_ERROR_INIT;
+    impl->runtime = jinja_cmeta_runtime_config_create(&jerror);
+    if (!impl->runtime)
+        return oa_ui_renderer_from_jinja(error, jerror.status, 0);
+
+    if (jinja_cmeta_runtime_config_set_limit(
+            impl->runtime, JINJA_CMETA_RESOURCE_CELLS,
+            config->max_nodes, &jerror) != JINJA_CMETA_OK ||
+        jinja_cmeta_runtime_config_set_limit(
+            impl->runtime, JINJA_CMETA_RESOURCE_ACTIVATIONS,
+            config->max_nodes, &jerror) != JINJA_CMETA_OK ||
+        jinja_cmeta_runtime_config_set_limit(
+            impl->runtime, JINJA_CMETA_RESOURCE_VALUES,
+            config->max_value_visits, &jerror) != JINJA_CMETA_OK)
+        return oa_ui_renderer_from_jinja(error, jerror.status, 0);
+
+    impl->render_options =
+        (JINJA_CMETA_RENDER_OPTIONS)JINJA_CMETA_RENDER_OPTIONS_INIT;
+    impl->render_options.max_nodes = config->max_nodes;
+    impl->render_options.max_string_bytes = config->max_output_bytes;
+    impl->render_options.max_render_depth = config->max_render_depth;
+    impl->render_options.max_value_visits = config->max_value_visits;
+    return OA_UI_RENDERER_OK;
+}
+
+static oa_ui_renderer_status oa_ui_renderer_render_compiled(
+    oa_ui_renderer_impl *impl,
+    const JINJA_CMETA_TEMPLATE *templ,
+    size_t selected_operation,
+    char **out_html,
+    size_t *out_size,
+    oa_ui_renderer_error *error) {
+    JINJA_CMETA_ERROR jerror = JINJA_CMETA_ERROR_INIT;
+    const JINJA_CMETA_RENDERER output_renderer = {oa_ui_render_buffer_write};
+    oa_ui_render_buffer buffer = {0};
+    oa_ui_jinja_document root;
+    JINJA_CMETA_STATUS status;
+
+    if (out_html) *out_html = NULL;
+    if (out_size) *out_size = 0u;
+    if (!impl || !templ || !out_html || !out_size)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "render arguments are invalid");
+    if (selected_operation != OA_UI_RENDERER_NO_SELECTION &&
+        selected_operation >= impl->source->operations.count)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "selected operation is out of range");
+
+    root = impl->root;
+    if (selected_operation != OA_UI_RENDERER_NO_SELECTION) {
+        const unsigned char *operations =
+            (const unsigned char *)impl->source->operations.data;
+        root.selected_operations = (JINJA_CMETA_SEQUENCE_VIEW){
+            operations + selected_operation * sizeof(oa_ui_operation),
+            1u, sizeof(oa_ui_operation), &impl->operation_data
+        };
+    }
+
+    buffer.limit = impl->render_options.max_string_bytes;
+    status = jinja_cmeta_render_ex(
+        templ, &impl->document_data, &root,
+        &impl->render_options, impl->runtime,
+        &output_renderer, &buffer, &jerror);
+    if (status != JINJA_CMETA_OK || buffer.failure != OA_UI_RENDERER_OK) {
+        oa_ui_renderer_status result;
+        if (buffer.failure == OA_UI_RENDERER_CAPACITY) {
+            result = oa_ui_renderer_fail(
+                error, OA_UI_RENDERER_CAPACITY,
+                "render exceeds renderer limits");
+        } else if (buffer.failure == OA_UI_RENDERER_OUT_OF_MEMORY) {
+            result = oa_ui_renderer_fail(
+                error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                "renderer is out of memory");
+        } else {
+            result = oa_ui_renderer_from_jinja(error, status, 0);
+        }
+        free(buffer.data);
+        return result;
+    }
+
+    if (!buffer.data) {
+        buffer.data = (char *)malloc(1u);
+        if (!buffer.data)
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                       "renderer is out of memory");
+        buffer.data[0] = '\0';
+    }
+    *out_html = buffer.data;
+    *out_size = buffer.size;
+    return oa_ui_renderer_fail(error, OA_UI_RENDERER_OK, NULL);
+}
+
+static oa_ui_renderer_template_entry *oa_ui_renderer_template_find(
+    oa_ui_renderer_impl *impl, vstr name) {
+    if (!impl || !vstr_is_valid(name)) return NULL;
+    for (size_t i = 0u; i < impl->template_count; ++i)
+        if (vstr_eq(impl->templates[i].name, name))
+            return &impl->templates[i];
+    return NULL;
+}
+
 oa_ui_renderer_status oa_ui_renderer_init_bundle(
     oa_ui_renderer *renderer,
     const oa_ui_document *document,
@@ -474,16 +797,92 @@ oa_ui_renderer_status oa_ui_renderer_init_bundle(
     size_t template_count,
     const oa_ui_renderer_config *config,
     oa_ui_renderer_error *error) {
-    (void)document;
-    (void)templates;
-    (void)template_count;
-    (void)config;
-    if (!renderer)
+    JINJA_CMETA_ERROR jerror = JINJA_CMETA_ERROR_INIT;
+    JINJA_CMETA_ENV_OPTIONS env_options = JINJA_CMETA_ENV_OPTIONS_INIT;
+    oa_ui_renderer_impl *impl;
+    oa_ui_renderer_status result;
+    size_t source_bytes = 0u;
+
+    if (!renderer || !document || !oa_ui_renderer_config_valid(config) ||
+        !templates || template_count == 0u)
         return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
-                                   "renderer is required");
+                                   "renderer bundle arguments are invalid");
     renderer->impl = NULL;
-    return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
-                               "Jinja template bundles are not implemented");
+
+    impl = (oa_ui_renderer_impl *)calloc(1u, sizeof(*impl));
+    if (!impl)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                   "renderer is out of memory");
+    impl->source = document;
+    oa_ui_renderer_init_descriptors(impl);
+    if (!cmeta_data_desc_valid(&impl->operation_data) ||
+        !cmeta_data_desc_valid(&impl->document_data)) {
+        result = oa_ui_renderer_fail(error, OA_UI_RENDERER_RENDER,
+                                     "renderer metadata is invalid");
+        goto fail;
+    }
+    if (!oa_ui_renderer_adapt_document(impl)) {
+        result = oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                     "OpenAPI UI model is invalid");
+        goto fail;
+    }
+
+    result = oa_ui_renderer_build_operation_keys(impl, error);
+    if (result != OA_UI_RENDERER_OK) goto fail;
+    result = oa_ui_renderer_copy_bundle(
+        impl, templates, template_count, config, &source_bytes, error);
+    if (result != OA_UI_RENDERER_OK) goto fail;
+
+    env_options.loader = (JINJA_CMETA_LOADER){
+        oa_ui_renderer_bundle_load, oa_ui_renderer_bundle_release, impl};
+    env_options.max_loaded_templates = template_count;
+    env_options.max_loaded_source_bytes = source_bytes ? source_bytes : 1u;
+    env_options.autoescape_selector = oa_ui_html_autoescape;
+    impl->env = jinja_cmeta_env_create(&env_options, &jerror);
+    if (!impl->env) {
+        result = oa_ui_renderer_from_jinja(error, jerror.status, 1);
+        goto fail;
+    }
+
+    for (size_t i = 0u; i < template_count; ++i) {
+        impl->templates[i].templ = jinja_cmeta_env_load(
+            impl->env, impl->templates[i].name, &jerror);
+        if (!impl->templates[i].templ) {
+            result = oa_ui_renderer_from_jinja(error, jerror.status, 1);
+            goto fail;
+        }
+    }
+
+    result = oa_ui_renderer_init_runtime(impl, config, error);
+    if (result != OA_UI_RENDERER_OK) goto fail;
+
+    /* Probe every compiled entry so include/extends dependencies are resolved
+     * during startup rather than by the first request. */
+    for (size_t i = 0u; i < template_count; ++i) {
+        char *probe = NULL;
+        size_t probe_size = 0u;
+        const size_t selected =
+            document->operations.count ? 0u : OA_UI_RENDERER_NO_SELECTION;
+        result = oa_ui_renderer_render_compiled(
+            impl, impl->templates[i].templ, selected,
+            &probe, &probe_size, error);
+        free(probe);
+        if (result != OA_UI_RENDERER_OK) {
+            if (result != OA_UI_RENDERER_CAPACITY &&
+                result != OA_UI_RENDERER_OUT_OF_MEMORY)
+                result = oa_ui_renderer_fail(
+                    error, OA_UI_RENDERER_TEMPLATE,
+                    "template dependency validation failed");
+            goto fail;
+        }
+    }
+
+    renderer->impl = impl;
+    return oa_ui_renderer_fail(error, OA_UI_RENDERER_OK, NULL);
+
+fail:
+    oa_ui_renderer_impl_destroy(impl);
+    return result;
 }
 
 oa_ui_renderer_status oa_ui_renderer_render_named(
@@ -493,33 +892,54 @@ oa_ui_renderer_status oa_ui_renderer_render_named(
     char **out_html,
     size_t *out_size,
     oa_ui_renderer_error *error) {
-    (void)template_name;
-    (void)selected_operation;
+    oa_ui_renderer_impl *impl;
+    oa_ui_renderer_template_entry *entry;
     if (out_html) *out_html = NULL;
     if (out_size) *out_size = 0u;
-    if (!renderer || !out_html || !out_size)
+    if (!renderer || !renderer->impl || !out_html || !out_size ||
+        !vstr_is_valid(template_name))
         return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
                                    "named render arguments are invalid");
-    return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
-                               "named Jinja rendering is not implemented");
+    impl = (oa_ui_renderer_impl *)renderer->impl;
+    if (!impl->templates)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
+                                   "renderer has no template bundle");
+    entry = oa_ui_renderer_template_find(impl, template_name);
+    if (!entry)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_NOT_FOUND,
+                                   "template name was not found");
+    return oa_ui_renderer_render_compiled(
+        impl, entry->templ, selected_operation, out_html, out_size, error);
 }
 
 size_t oa_ui_renderer_operation_count(const oa_ui_renderer *renderer) {
-    (void)renderer;
-    return 0u;
+    const oa_ui_renderer_impl *impl =
+        renderer ? (const oa_ui_renderer_impl *)renderer->impl : NULL;
+    return impl && impl->source ? impl->source->operations.count : 0u;
 }
 
 vstr oa_ui_renderer_operation_key(const oa_ui_renderer *renderer, size_t index) {
-    (void)renderer;
-    (void)index;
-    return (vstr){NULL, 0u};
+    const oa_ui_renderer_impl *impl =
+        renderer ? (const oa_ui_renderer_impl *)renderer->impl : NULL;
+    if (!impl || !impl->operation_keys ||
+        index >= impl->source->operations.count)
+        return (vstr){NULL, 0u};
+    return impl->operation_keys[index];
 }
 
 oa_ui_renderer_status oa_ui_renderer_find_operation(
     const oa_ui_renderer *renderer, vstr key, size_t *out_index) {
-    (void)renderer;
-    (void)key;
+    const oa_ui_renderer_impl *impl =
+        renderer ? (const oa_ui_renderer_impl *)renderer->impl : NULL;
     if (out_index) *out_index = OA_UI_RENDERER_NO_SELECTION;
-    if (!out_index) return OA_UI_RENDERER_INVALID_ARGUMENT;
-    return OA_UI_RENDERER_UNSUPPORTED;
+    if (!impl || !out_index || !vstr_is_valid(key))
+        return OA_UI_RENDERER_INVALID_ARGUMENT;
+    if (!impl->operation_keys) return OA_UI_RENDERER_UNSUPPORTED;
+    for (size_t i = 0u; i < impl->source->operations.count; ++i) {
+        if (!vstr_eq(impl->operation_keys[i], key)) continue;
+        *out_index = i;
+        return OA_UI_RENDERER_OK;
+    }
+    return OA_UI_RENDERER_NOT_FOUND;
 }
+

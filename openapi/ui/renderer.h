@@ -17,7 +17,8 @@ typedef enum oa_ui_renderer_status {
     OA_UI_RENDERER_CAPACITY = -3,
     OA_UI_RENDERER_OUT_OF_MEMORY = -4,
     OA_UI_RENDERER_RENDER = -5,
-    OA_UI_RENDERER_UNSUPPORTED = -6
+    OA_UI_RENDERER_UNSUPPORTED = -6,
+    OA_UI_RENDERER_NOT_FOUND = -7
 } oa_ui_renderer_status;
 
 typedef struct oa_ui_renderer_config {
