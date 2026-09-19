@@ -63,6 +63,15 @@ int main(void) {
     oa_ui_renderer_output_free(html);
     html = NULL;
 
+    /* A compiled renderer is reusable for sequential owner-thread requests. */
+    REQUIRE(oa_ui_renderer_render(&renderer, &html, &html_size, &error) ==
+            OA_UI_RENDERER_OK);
+    REQUIRE(html_size == sizeof(EXPECTED) - 1u);
+    REQUIRE(memcmp(html, EXPECTED, html_size) == 0);
+    oa_ui_renderer_output_free(html);
+    html = NULL;
+
+    oa_ui_renderer_destroy(&renderer);
     oa_ui_renderer_destroy(&renderer);
 
     oa_ui_renderer invalid = {0};

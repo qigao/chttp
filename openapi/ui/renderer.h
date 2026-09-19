@@ -52,7 +52,12 @@ oa_ui_renderer_status oa_ui_renderer_init(
     const oa_ui_renderer_config *config,
     oa_ui_renderer_error *error);
 
-/* Fully buffered render. Failure publishes no output. */
+/* Synchronous, non-reentrant render. One renderer belongs to one execution
+ * context and must not be used concurrently. Current CHTTP route handlers run
+ * serially on the server owner thread; deferred/external-thread use requires a
+ * separate synchronization design.
+ *
+ * Fully buffered render: failure publishes no output. */
 oa_ui_renderer_status oa_ui_renderer_render(
     oa_ui_renderer *renderer,
     char **out_html,

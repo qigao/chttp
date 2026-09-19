@@ -173,7 +173,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
-            test_ui_renderer test_ui_model test_generator openapi_examples -j2
+            test_ui_renderer test_ui_model test_generator openapi_ui_server openapi_examples -j2
 
       - name: Run focused OpenAPI tests
         shell: bash
@@ -182,7 +182,17 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(openapi_ui_renderer|openapi_ui_model|generator)$' \
+            -R '^(openapi_ui_renderer|openapi_ui_model|openapi_ui_http|generator)
+            --output-on-failure
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
             --output-on-failure
 
       - name: Verify exact head and clean tracked source
