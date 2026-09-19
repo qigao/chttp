@@ -139,7 +139,7 @@ function operationFromForm(form) {
     method: form.dataset.method,
     path: form.dataset.path,
     parameters,
-    requestBody: parseJsonAttribute(form.dataset.requestBody, undefined)
+    requestBody: parseJsonAttribute(form.dataset.tryitRequestBody, undefined)
   };
 }
 
@@ -205,5 +205,5 @@ if (typeof document !== 'undefined') {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { LIMITS, requestFor, boundedText, resolveServerUrl };
+  module.exports = { LIMITS, requestFor, boundedText, resolveServerUrl, operationFromForm };
 }
