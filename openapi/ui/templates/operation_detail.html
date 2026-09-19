@@ -18,7 +18,7 @@
         data-method="{{ op.method }}"
         data-path="{{ op.path }}"
         data-server-url="{{ server_url }}"
-        data-request-body="{{ op.request_body_json }}">
+        data-tryit-request-body="{{ op.request_body_json }}">
     <section>
       <h3>参数</h3>
       {% for p in op.parameters %}{{ render_parameter(p) }}{% endfor %}

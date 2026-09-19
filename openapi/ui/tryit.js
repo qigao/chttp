@@ -116,7 +116,7 @@ function initializeForm(form) {
     }
   }
 
-  const requestBody = parseJsonAttribute(form.dataset.requestBody, null);
+  const requestBody = parseJsonAttribute(form.dataset.tryitRequestBody, null);
   const media = form.querySelector('[data-tryit-media]');
   if (media && requestBody && requestBody.content) {
     for (const type of Object.keys(requestBody.content)) {
