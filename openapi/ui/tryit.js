@@ -189,6 +189,12 @@ async function executeForm(form) {
   }
 }
 
+function setOperationSearchError(root, event, hidden) {
+  if (!root || event?.target?.id !== 'operation-search') return;
+  const box = root.getElementById?.('operation-search-error');
+  if (box) box.hidden = hidden;
+}
+
 if (typeof document !== 'undefined') {
   const initialize = root => {
     if (root?.matches?.('[data-tryit]')) initializeForm(root);
@@ -196,6 +202,10 @@ if (typeof document !== 'undefined') {
   };
   document.addEventListener('DOMContentLoaded', () => initialize(document));
   document.addEventListener('htmx:afterSwap', event => initialize(event.target));
+  document.addEventListener('htmx:before:request',
+    event => setOperationSearchError(document, event, true));
+  document.addEventListener('htmx:response:error',
+    event => setOperationSearchError(document, event, false));
   document.addEventListener('submit', event => {
     const form = event.target.closest?.('[data-tryit]');
     if (!form) return;
@@ -205,5 +215,5 @@ if (typeof document !== 'undefined') {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { LIMITS, requestFor, boundedText, resolveServerUrl, operationFromForm };
+  module.exports = { LIMITS, requestFor, boundedText, resolveServerUrl, operationFromForm, setOperationSearchError };
 }
