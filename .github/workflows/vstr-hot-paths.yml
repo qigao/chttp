@@ -174,7 +174,8 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_request_test|chttp_response_test|chttp_file_sink_test|chttp_requests_test)
+            -R '^(chttp_request_test|chttp_response_test|chttp_file_sink_test|chttp_requests_test)$' \
+            --output-on-failure
 
       - name: Build full Chttp graph
         shell: bash
@@ -213,71 +214,7 @@ jobs:
             -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target chttp_response_test -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_response_test \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+            -R '^chttp_response_test$' --output-on-failure
 
       - name: Verify exact head and clean tracked source
         if: always()
