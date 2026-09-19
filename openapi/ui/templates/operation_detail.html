@@ -14,36 +14,38 @@
   {% if op.operation_id %}<p class="muted">operationId: {{ op.operation_id }}</p>{% endif %}
   {% if op.deprecated %}<p class="deprecated">此接口已弃用</p>{% endif %}
 
-  <section>
-    <h3>参数</h3>
-    {% for p in op.parameters %}{{ render_parameter(p) }}{% endfor %}
-  </section>
-
-  {% if op.request_body_json %}
-  <section>
-    <h3>请求体</h3>
-    <pre>{{ op.request_body_json }}</pre>
-  </section>
-  {% endif %}
-
   <form data-tryit
         data-method="{{ op.method }}"
         data-path="{{ op.path }}"
         data-server-url="{{ server_url }}"
         data-request-body="{{ op.request_body_json }}">
-    <section class="try">
-      <h3>Try it <span class="muted">发送真实请求</span></h3>
-      <label>服务地址
-        <input type="url" data-tryit-base value="{{ server_url }}" required>
-      </label>
-      {% if op.request_body_json %}
+    <section>
+      <h3>参数</h3>
+      {% for p in op.parameters %}{{ render_parameter(p) }}{% endfor %}
+      {% if not op.parameters %}<p class="muted">无需请求参数。</p>{% endif %}
+    </section>
+
+    {% if op.request_body_json %}
+    <section>
+      <h3>请求体</h3>
+      <details>
+        <summary>请求体定义</summary>
+        <pre>{{ op.request_body_json }}</pre>
+      </details>
       <label>媒体类型
         <select data-tryit-media></select>
       </label>
       <label>请求内容
         <textarea data-tryit-body rows="7" maxlength="65536"></textarea>
       </label>
-      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="try">
+      <h3>Try it <span class="muted">发送真实请求</span></h3>
+      <label>服务地址
+        <input type="url" data-tryit-base value="{{ server_url }}" required>
+      </label>
       <p class="muted">仅在点击后发送。跨域服务需允许 CORS；请求不携带浏览器凭据。</p>
       <button class="primary" type="submit" data-tryit-submit>发送请求 →</button>
       <p class="error" data-tryit-error hidden></p>

@@ -25,6 +25,15 @@ try:
         assert b'/docs/tryit.js' in docs
 
     with urllib.request.urlopen(
+        origin + "/docs/operations/list_pets", timeout=5
+    ) as response:
+        detail = response.read()
+        assert response.status == 200
+        assert b'data-tryit-parameter' in detail
+        assert b'data-in="query"' in detail
+        assert b'data-name="limit"' in detail
+
+    with urllib.request.urlopen(
         origin + "/docs/operations/createPet", timeout=5
     ) as response:
         detail = response.read()
