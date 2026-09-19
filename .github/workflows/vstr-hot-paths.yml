@@ -171,6 +171,12 @@ jobs:
 
       - name: Audit Server transitive dependency boundary
         shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_ROOT: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:${{ runner.temp }}/salts-project/external/pkgs/salts/debug/lib
         run: |
           set -euo pipefail
           graph="$RUNNER_TEMP/chttp-targets.dot"
