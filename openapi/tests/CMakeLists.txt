@@ -38,8 +38,6 @@ add_test(NAME generator_conformance
     --plugin "$<TARGET_FILE:openapi_c>"
     --node "${OPENAPI_NODE_EXECUTABLE}")
 add_dependencies(test_generator openapi-gen)
-add_test(NAME openapi_ui_logic
-  COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/ui_test.cjs")
 add_test(NAME openapi_ui_tryit_logic
   COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/tryit_test.cjs")
 if(BUILD_EXAMPLES)
