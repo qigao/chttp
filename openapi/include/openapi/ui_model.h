@@ -53,6 +53,8 @@ typedef struct oa_ui_document {
     vstr title;
     vstr version;
     vstr openapi_version;
+    /* Optional first OpenAPI servers[0].url, snapshot-backed. */
+    vstr server_url;
     oa_ui_sequence_view operations;
 } oa_ui_document;
 
