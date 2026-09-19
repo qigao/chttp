@@ -5,12 +5,24 @@
 [JSON Schema 2020-12](https://json-schema.org/draft/2020-12/json-schema-validation)。
 目前内置 C 语言插件；不从函数参数或结构体自动推断请求 schema。
 
-## HTML / Alpine.js 接口页面
+## HTML / Jinja + HTMX 接口页面
 
-[ui/index.html](ui/index.html) 提供 Swagger 风格的接口导航、搜索、参数与 schema 查看、
-请求体编辑、真实请求发送、响应状态/耗时/头部/正文展示和文档下载。布局适配窄屏，
-说明与响应只作为文本显示，不渲染文档内的 HTML。Alpine.js 固定为本地 3.14.9，
-来源、许可证、摘要及 CSP 要求见 [vendor/README.md](ui/vendor/README.md)。
+OpenAPI UI 现在采用服务端渲染：`openapi_ui_renderer` 在启动时编译固定的 Jinja 模板，
+`/docs` 返回完整页面，接口筛选和详情通过 HTMX 请求服务端 fragment。浏览器不再加载
+Alpine.js，也不再从 OpenAPI 文档在客户端重建页面。
+
+固定路由包括：
+
+- `/docs`、`/docs/`：完整 Jinja 页面；
+- `/docs/operations`：接口列表 fragment，支持 `q` 搜索；
+- `/docs/operations/:key`：单个接口详情 fragment；
+- `/docs/style.css`、`/docs/htmx.js`、`/docs/tryit.js`：本地静态资源；
+- `/openapi.json`：原始 OpenAPI JSON。
+
+模板名和静态文件路径均在服务启动时固定，不由请求参数决定；不提供目录浏览、任意模板名、
+任意文件路径或服务端 Try-it 代理。HTMX 固定为本地 vendored v4.0.0，来源与许可证见
+[HTMX.md](ui/vendor/HTMX.md) 和
+[htmx-4.0.0.LICENSE](ui/vendor/htmx-4.0.0.LICENSE)。
 
 在已配置的开发环境中（Windows 使用 VsDevCmd 并保留对应 Salts/vcpkg runtime PATH）：
 
@@ -20,31 +32,32 @@ cmake --build --preset win-release-user --target openapi_ui_server openapi_examp
 ```
 
 打开 `http://127.0.0.1:8087/docs`。端口省略或传入 0 时由系统分配，终端打印实际地址；
-按 Enter 停止服务。示例只监听 loopback，复用 `CHttp::Server` 的固定文件路由：
-`/docs`、`/docs/`、三个页面资源及 `/openapi.json`；不开放目录浏览或任意文件路径。
-启动时检查文件存在、类型及 2 MiB 上限，运行期间文件必须保持不变；更新文档后重启服务。
-配置容量集中在 [ui_server.c](examples/ui_server.c) 的具名常量中，不改变 http_server 的公开 API。
+按 Enter 停止服务。示例只监听 loopback。启动阶段读取并校验六个固定模板和静态资源；
+模板单文件上限 64 KiB，文档/静态文件上限 2 MiB，操作数上限 4096。运行期间资源应保持不变，
+更新文档或模板后重启服务。
 
-此示例只承载文档，不实现 Pets 业务接口。试调真实服务时在“服务地址”输入 API 根地址
-（可带 `/api` 前缀）；也可在现有服务中注册相同文档路由。同源默认使用当前 origin，
-文档存在 `servers[0].url` 时用于初始化地址，用户仍须点击发送才产生业务请求。
+Try it 由本地 [tryit.js](ui/tryit.js) 在浏览器中执行，不经过 CHTTP 服务端代理。
+默认使用文档的 `servers[0].url`，也允许用户修改服务地址；只有点击发送后才发出请求。
+当前支持默认序列化的标量 path/query/header 参数和文本/JSON 请求体；复杂参数、Cookie 参数、
+TRACE/CONNECT、GET/HEAD 请求体、requestBody `$ref` 等不支持路径会 fail closed。
+请求不携带浏览器凭据（`credentials: omit`），不跟随重定向，跨域请求遵循浏览器 CORS。
+请求体上限 64 KiB，展示响应上限 1 MiB，请求超时 15 秒；限制集中在
+[tryit.js](ui/tryit.js) 的 `LIMITS`。
 
-当前边界：加载 OpenAPI 3.1 **JSON**（不加载 YAML），显示内联 schema 和原始引用文本；
-不解析 `$ref`、服务器变量或 security schemes。Try it 支持默认序列化的标量
-path/query/header 参数和文本/JSON 请求体；复杂参数、Cookie 参数、TRACE 和 GET/HEAD 请求体明确报错。
-不自动执行 JSON Schema 验证，不代替服务器验证。请求不携带浏览器凭据、不跟随重定向，
-跨域请求遵循浏览器 CORS；参数配置未显式设置 Authorization 时不自动生成认证信息。
-文档上限 2 MiB/4096 个操作，请求体 64 KiB，展示响应 1 MiB，请求超时 15 秒；
-限制集中在 [app.js](ui/app.js) 的 `LIMITS`，超限报错而非展示截断结果。
+页面内容依赖 Jinja autoescape；title、summary、description、schema/request/response JSON
+均按文本输出。当前模板不包含 Alpine `x-*` 指令、inline `<script>` 或 HTMX `hx-on*`
+表达式。示例服务器当前不发送 Content-Security-Policy header，因此这里不声明已经完成
+strict-CSP 认证；部署方如启用 CSP，应按实际策略验证 vendored HTMX 和外部 `tryit.js`。
 
 ```powershell
 cmake --build --preset win-release-user --target openapi_ui_server test_generator chttp_file_transfer_test
 ctest --preset win-release-user -R "^(generator(_conformance)?|openapi_ui_.*|chttp_file_transfer_test)$" --output-on-failure
 ```
 
-UI 测试覆盖请求编码、必填项、拒绝不支持的序列化、响应大小、实际文件路由、缺失资源和关闭。
-并发文件读取回归覆盖共享 CFlow runtime 的 lease ID 唯一性：读取请求统一分配身份，
-保持原有 buffer 所有权和完成回调生命周期，ID 耗尽返回错误而不回绕复用。
+UI 回归覆盖完整页/fragment、搜索与非法 key、Jinja escaping、请求编码和 Try-it fail-closed
+约束、固定静态路由、缺失/非法/超限模板或资源、顺序 render 状态恢复以及 server restart。
+最终 UI 依赖面保持隔离：`OpenAPI::Generator` 与 `CHttp::Server` 不链接 Jinja 或 HTMX，
+只有 `openapi_ui_renderer` 私有链接 `Salts::JinjaCMeta`，HTMX 仅作为示例 UI 静态资源。
 
 ## 声明与约束
 
