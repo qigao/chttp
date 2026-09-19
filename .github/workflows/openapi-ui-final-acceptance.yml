@@ -183,7 +183,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(generator|openapi_ui_model|openapi_ui_renderer|openapi_ui_fragments|openapi_ui_htmx|openapi_ui_logic|openapi_ui_tryit_logic|openapi_ui_http|openapi_ui_fragment_http|openapi_ui_tryit_http|openapi_ui_security_http)$' \
+            -R '^(generator|openapi_ui_model|openapi_ui_renderer|openapi_ui_fragments|openapi_ui_htmx|openapi_ui_tryit_logic|openapi_ui_final_audit|openapi_ui_http|openapi_ui_fragment_http|openapi_ui_tryit_http|openapi_ui_security_http)$' \
             --output-on-failure
 
       - name: Record same-runner UI measurements
