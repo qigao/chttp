@@ -7,3 +7,5 @@
 - License: Zero-Clause BSD (copied in `htmx-4.0.0.LICENSE`)
 
 The OpenAPI UI serves this file locally as `/docs/htmx.js`; it has no CDN runtime dependency.
+
+The final OpenAPI templates load HTMX only from this local route and do not render `hx-on*` expressions or inline JavaScript. The example server does not itself emit a Content-Security-Policy header; deployments that enforce CSP should validate their chosen policy against this vendored version.

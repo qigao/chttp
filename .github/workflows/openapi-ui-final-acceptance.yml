@@ -1,0 +1,221 @@
+name: OpenAPI UI final acceptance
+
+on:
+  push:
+    branches:
+      - feat/openapi-ui-final-acceptance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chttp-openapi-ui-final-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  SALTS_SHA: c4197712261a563ed7e238152b34cb50a2ef98a9
+  SALTS_UTILS_SHA: 8016a93f9b0f14c053ba87ce5a18d40f77fa8770
+  VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+
+jobs:
+  acceptance-and-measurement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout exact Chttp head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=2 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Checkout exact public dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git init salts
+          git -C salts remote add origin https://github.com/qigao/salts.git
+          git -C salts fetch --depth=1 origin "${SALTS_SHA}"
+          git -C salts checkout --detach FETCH_HEAD
+
+          git init salts-utils
+          git -C salts-utils remote add origin https://github.com/qigao/salts-utils.git
+          git -C salts-utils fetch --depth=1 origin "${SALTS_UTILS_SHA}"
+          git -C salts-utils checkout --detach FETCH_HEAD
+
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          git -C vcpkg checkout --detach "${VCPKG_SHA}"
+
+      - name: Restore vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: openapi-ui-vcpkg-x64-linux-b1b19307-v1
+
+      - name: Set up Go for BoringSSL
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          sudo mkdir -p /opt/salts
+          sudo ln -sfn "${GITHUB_WORKSPACE}/vcpkg" /opt/vcpkg
+          bash salts-utils/cmake/ci/install-re2c.sh
+
+      - name: Record Salts cache toolchain
+        id: salts-toolchain
+        shell: bash
+        run: echo "key=gcc-$(gcc -dumpfullversion -dumpversion)" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore pinned Salts debug package
+        id: salts-package-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-c4197712261a563ed7e238152b34cb50a2ef98a9-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+
+      - name: Build and install exact Salts
+        if: steps.salts-package-cache.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: salts
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target install -j2
+
+      - name: Save pinned Salts debug package
+        if: steps.salts-package-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-c4197712261a563ed7e238152b34cb50a2ef98a9-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+
+      - name: Expose exact Salts profile to SaltsUtils
+        shell: bash
+        run: |
+          set -euxo pipefail
+          package="${RUNNER_TEMP}/salts-project/external/pkgs/salts/debug"
+          test -f "${package}/lib/cmake/Salts/SaltsConfig.cmake"
+          sudo ln -sfn "${package}" /opt/salts/debug
+
+      - name: Build standalone host Lemon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build salts-utils/build/host-lemon --target lemon -j2
+
+      - name: Build and install verified SaltsUtils
+        shell: bash
+        working-directory: salts-utils
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="${GITHUB_WORKSPACE}/salts-utils/build/host-lemon/lemon"
+          cmake --build build/linux-gcc-debug --target install -j2
+          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
+
+      - name: Expose exact SaltsUtils profile to Chttp preset
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
+          ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
+          test -f "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+
+      - name: Configure exact Chttp head
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DBUILD_OPENAPI=ON \
+            -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=ON
+
+      - name: Build final OpenAPI UI targets
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target \
+            test_ui_htmx test_ui_fragments test_ui_renderer test_ui_model test_generator \
+            openapi_ui_server openapi_examples -j2
+
+      - name: Run final functional and security acceptance
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(generator|openapi_ui_model|openapi_ui_renderer|openapi_ui_fragments|openapi_ui_htmx|openapi_ui_tryit_logic|openapi_ui_final_audit|openapi_ui_http|openapi_ui_fragment_http|openapi_ui_tryit_http|openapi_ui_security_http)$' \
+            --output-on-failure
+
+      - name: Record same-runner UI measurements
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          python3 openapi/tests/ui_benchmark.py \
+            build/linux-gcc-debug/bin/openapi_ui_server openapi/ui \
+            --counts 44,4096 --startup-samples 3 --warmup 3 --samples 10 \
+            | tee openapi-ui-benchmark.jsonl
+          {
+            echo '### OpenAPI UI measurements'
+            echo
+            echo '```json'
+            cat openapi-ui-benchmark.jsonl
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload measurement evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-ui-benchmark-${{ github.sha }}
+          path: openapi-ui-benchmark.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain --untracked-files=no)"

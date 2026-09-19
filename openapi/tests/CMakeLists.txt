@@ -38,11 +38,14 @@ add_test(NAME generator_conformance
     --plugin "$<TARGET_FILE:openapi_c>"
     --node "${OPENAPI_NODE_EXECUTABLE}")
 add_dependencies(test_generator openapi-gen)
-add_test(NAME openapi_ui_logic
-  COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/ui_test.cjs")
 add_test(NAME openapi_ui_tryit_logic
   COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/tryit_test.cjs")
+add_test(NAME openapi_ui_final_audit
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_final_audit.py")
 if(BUILD_EXAMPLES)
+  add_test(NAME openapi_ui_security_http
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_security_http_test.py"
+      "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui")
   add_test(NAME openapi_ui_http
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_http_test.py"
       "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"

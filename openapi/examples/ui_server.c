@@ -413,17 +413,15 @@ int main(int argc, char **argv) {
     config.poll_slice_ms = 1u;
 
     const char *routes[] = {
-        "/docs/style.css", "/docs/app.js", "/docs/alpine.js",
-        "/docs/htmx.js", "/docs/tryit.js", "/openapi.json"
+        "/docs/style.css", "/docs/htmx.js",
+        "/docs/tryit.js", "/openapi.json"
     };
     const char *files[] = {
-        "style.css", "app.js", "vendor/alpine-3.14.9.min.js",
-        "vendor/htmx-4.0.0.min.js", "tryit.js", NULL
+        "style.css", "vendor/htmx-4.0.0.min.js",
+        "tryit.js", NULL
     };
     const char *types[] = {
         "text/css; charset=utf-8",
-        "text/javascript; charset=utf-8",
-        "text/javascript; charset=utf-8",
         "text/javascript; charset=utf-8",
         "text/javascript; charset=utf-8",
         "application/json"

@@ -84,6 +84,23 @@ try:
     except urllib.error.HTTPError as error:
         assert error.code == 404
 
+    for bad_key in ("%ZZ", "%2Fetc", "%00"):
+        try:
+            urllib.request.urlopen(
+                origin + "/docs/operations/" + bad_key, timeout=5
+            )
+            raise AssertionError("Malformed operation key unexpectedly succeeded")
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+
+    filtered_again = fetch(origin, "/docs/operations?q=create")
+    assert b"createPet" in filtered_again
+    assert b"list_pets" not in filtered_again
+    list_detail_again = fetch(origin, "/docs/operations/list_pets")
+    assert b"List pets" in list_detail_again
+    restored_again = fetch(origin, "/docs/operations?q=")
+    assert b"createPet" in restored_again and b"list_pets" in restored_again
+
     with urllib.request.urlopen(origin + "/openapi.json", timeout=5) as response:
         assert response.status == 200
         assert response.headers.get_content_type() == "application/json"
@@ -97,4 +114,32 @@ finally:
         raise
     assert process.returncode == 0, err
 
-print("OpenAPI Jinja full-page and fragment HTTP routes passed")
+restart = subprocess.Popen(
+    [server, document, assets],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+try:
+    line = restart.stdout.readline()
+    match = re.search(r"http://127\.0\.0\.1:\d+", line)
+    assert match, f"Restarted server did not start: {line}"
+    restarted_origin = match.group()
+    restarted_docs = fetch(restarted_origin, "/docs")
+    assert b"Pets API" in restarted_docs
+    restarted_detail = fetch(
+        restarted_origin, "/docs/operations/createPet"
+    )
+    assert b"Create a pet" in restarted_detail
+    assert b"List pets" not in restarted_detail
+finally:
+    try:
+        _, restart_err = restart.communicate("\n", timeout=10)
+    except subprocess.TimeoutExpired:
+        restart.kill()
+        restart.communicate()
+        raise
+    assert restart.returncode == 0, restart_err
+
+print("OpenAPI Jinja full-page, fragment, state restoration, and restart passed")
