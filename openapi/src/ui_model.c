@@ -500,18 +500,24 @@ static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
     return 1;
 }
 
-oa_ui_model *oa_ui_model_create_json(const json_value_t *root, oa_error *error) {
+oa_ui_model *oa_ui_model_create_json_with_allocator(
+    const json_value_t *root, const oa_ui_allocator *allocator, oa_error *error) {
     oa_ui_model *model;
     if (!root)
         return oa_fail(error, "JSON document is required"), (oa_ui_model *)NULL;
     if (json_type(root) != JSON_OBJECT)
         return oa_fail(error, "JSON document root must be an object"),
                (oa_ui_model *)NULL;
-    model = calloc(1u, sizeof(*model));
+    if (!allocator || !allocator->calloc_fn || !allocator->free_fn)
+        return oa_fail(error, "OpenAPI UI allocator is invalid"),
+               (oa_ui_model *)NULL;
+
+    model = allocator->calloc_fn(allocator->userdata, 1u, sizeof(*model));
     if (!model) {
         oa_fail(error, "out of memory constructing OpenAPI UI model");
         return NULL;
     }
+    model->allocator = *allocator;
     model->snapshot = json_clone(root);
     if (!model->snapshot) {
         oa_fail(error, "out of memory cloning OpenAPI UI document");
@@ -523,6 +529,10 @@ oa_ui_model *oa_ui_model_create_json(const json_value_t *root, oa_error *error) 
         return NULL;
     }
     return model;
+}
+
+oa_ui_model *oa_ui_model_create_json(const json_value_t *root, oa_error *error) {
+    return oa_ui_model_create_json_with_allocator(root, &OA_UI_SYSTEM_ALLOCATOR, error);
 }
 
 oa_ui_model *oa_ui_model_create(const oa_document *document, oa_error *error) {
