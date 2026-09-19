@@ -24,7 +24,7 @@ try:
             content = response.read()
             assert content
             if path in ("/docs", "/docs/"):
-                assert b"server-rendered OpenAPI: Pets API" in content
+                assert b'<meta name="openapi-rendered-title" content="Pets API">' in content
                 assert b"{{ title }}" not in content
             if path == "/openapi.json":
                 assert json.loads(content)["openapi"] == "3.1.0"
