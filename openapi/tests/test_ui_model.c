@@ -12,6 +12,7 @@
 static const char DIRECT_JSON[] =
     "{\"openapi\":\"3.1.0\","
     "\"info\":{\"title\":\"Direct\",\"version\":\"1\"},"
+    "\"servers\":[{\"url\":\"https://api.example.test/v1\"}],"
     "\"paths\":{\"/ping\":{"
       "\"parameters\":["
         "{\"name\":\"tenant\",\"in\":\"header\",\"required\":true,"
@@ -81,7 +82,9 @@ static int check_parsed_json_entry(oa_error *error) {
     if (!model) return 0;
 
     const oa_ui_document *view = oa_ui_model_view(model);
-    if (!view || !view_is(view->title, "Direct") || view->operations.count != 1u) {
+    if (!view || !view_is(view->title, "Direct") ||
+        !view_is(view->server_url, "https://api.example.test/v1") ||
+        view->operations.count != 1u) {
         snprintf(error->message, sizeof(error->message), "direct JSON root projection mismatch");
         oa_ui_model_free(model);
         return 0;

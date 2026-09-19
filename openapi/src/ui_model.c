@@ -159,6 +159,7 @@ static const cmeta_field_desc OA_UI_DOCUMENT_LAYOUT_FIELDS[] = {
     OA_LAYOUT_FIELD(oa_ui_document, title, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_document, version, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_document, openapi_version, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, server_url, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_document, operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE)
 };
 static const cmeta_struct_desc OA_UI_DOCUMENT_LAYOUT = {
@@ -169,6 +170,7 @@ static const cmeta_data_field_desc OA_UI_DOCUMENT_FIELDS[] = {
     {"openapi.ui.document.title", "title", offsetof(oa_ui_document, title), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.version", "version", offsetof(oa_ui_document, version), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.openapi_version", "openapi_version", offsetof(oa_ui_document, openapi_version), &OA_UI_VSTR_DATA},
+    {"openapi.ui.document.server_url", "server_url", offsetof(oa_ui_document, server_url), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.operations", "operations", offsetof(oa_ui_document, operations), &cmeta_data_sequence}
 };
 static const cmeta_data_struct_shape OA_UI_DOCUMENT_SHAPE = {
@@ -445,6 +447,22 @@ static int oa_ui_project_operation(oa_ui_model *model, oa_ui_operation *out,
     return 1;
 }
 
+static int oa_ui_project_server_url(
+    vstr *out, const json_value_t *root, oa_error *error) {
+    const json_value_t *servers = json_object_get(root, "servers");
+    *out = oa_ui_empty();
+    if (!servers) return 1;
+    if (json_type(servers) != JSON_ARRAY)
+        return oa_fail(error, "OpenAPI UI servers must be an array");
+    if (json_array_size(servers) == 0u) return 1;
+
+    const json_value_t *server = json_array_get(servers, 0u);
+    if (!server || json_type(server) != JSON_OBJECT)
+        return oa_fail(error, "OpenAPI UI server must be an object");
+    return oa_ui_borrow_string(
+        out, json_object_get(server, "url"), "server URL", 1, error);
+}
+
 static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
     const json_value_t *root = model->snapshot;
     const json_value_t *info = json_object_get(root, "info");
@@ -462,7 +480,8 @@ static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
                              "version", 1, error) ||
         !oa_ui_borrow_string(&model->document.openapi_version,
                              json_object_get(root, "openapi"),
-                             "OpenAPI version", 1, error))
+                             "OpenAPI version", 1, error) ||
+        !oa_ui_project_server_url(&model->document.server_url, root, error))
         return 0;
 
     size_t operation_count = oa_ui_count_operations(paths);

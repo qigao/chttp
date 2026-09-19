@@ -40,6 +40,8 @@ add_test(NAME generator_conformance
 add_dependencies(test_generator openapi-gen)
 add_test(NAME openapi_ui_logic
   COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/ui_test.cjs")
+add_test(NAME openapi_ui_tryit_logic
+  COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/tryit_test.cjs")
 if(BUILD_EXAMPLES)
   add_test(NAME openapi_ui_http
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_http_test.py"
@@ -47,6 +49,10 @@ if(BUILD_EXAMPLES)
       "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
   add_test(NAME openapi_ui_fragment_http
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_fragment_http_test.py"
+      "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
+  add_test(NAME openapi_ui_tryit_http
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_tryit_http_test.py"
       "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
       "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
 endif()
