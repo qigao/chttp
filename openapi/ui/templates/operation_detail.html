@@ -1,0 +1,33 @@
+{% from "parameter.html" import render_parameter %}
+{% from "response.html" import render_responses %}
+{% for op in selected_operations %}
+<article class="operation-detail">
+  <p class="eyebrow">
+  {% for tag in op.tags %}<span>{{ tag }}</span>{% endfor %}
+  </p>
+  <div class="endpoint">
+    <span class="method" data-method="{{ op.method }}">{{ op.method|upper }}</span>
+    <h2>{{ op.path }}</h2>
+  </div>
+  <h3>{{ op.summary }}</h3>
+  <p class="description">{{ op.description }}</p>
+  {% if op.operation_id %}<p class="muted">operationId: {{ op.operation_id }}</p>{% endif %}
+  {% if op.deprecated %}<p class="deprecated">此接口已弃用</p>{% endif %}
+
+  <section>
+    <h3>参数</h3>
+    {% for p in op.parameters %}{{ render_parameter(p) }}{% endfor %}
+  </section>
+
+  {% if op.request_body_json %}
+  <section>
+    <h3>请求体</h3>
+    <pre>{{ op.request_body_json }}</pre>
+  </section>
+  {% endif %}
+
+  <section>
+    {{ render_responses(op) }}
+  </section>
+</article>
+{% endfor %}

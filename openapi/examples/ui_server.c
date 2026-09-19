@@ -18,11 +18,25 @@ enum {
     UI_HEADER_BYTES = 8192,
     UI_CHUNK_BYTES = 65536,
     UI_FILE_BYTES = 2 * 1024 * 1024,
-    /* Buffered replies must fit one bounded CHTTP transport send. Keep the
-     * current shell below that bound; #6 owns any larger SSR transport design. */
-    UI_RENDER_BYTES = 48 * 1024,
+    UI_TEMPLATE_FILE_BYTES = 64 * 1024,
+    UI_SEND_BYTES = UI_FILE_BYTES + UI_HEADER_BYTES + 16 * 1024,
+    UI_COMMAND_BUFFER_BYTES = 4 * 1024 * 1024,
+    UI_BUFFER_CAPACITY_BYTES = 32 * 1024 * 1024,
     UI_PATH_BYTES = 4096,
     UI_PORT_MAX = 65535
+};
+
+static const char *const UI_TEMPLATE_NAMES[] = {
+    "layout.html",
+    "docs.html",
+    "operation_list.html",
+    "operation_detail.html",
+    "parameter.html",
+    "response.html"
+};
+enum {
+    UI_TEMPLATE_COUNT =
+        sizeof(UI_TEMPLATE_NAMES) / sizeof(UI_TEMPLATE_NAMES[0])
 };
 
 static char *load_file_bounded(const char *path, size_t limit, size_t *out_size) {
@@ -55,7 +69,8 @@ static char *load_file_bounded(const char *path, size_t limit, size_t *out_size)
         return NULL;
     }
 
-    if ((size != 0u && fread(bytes, 1u, size, file) != size) || fgetc(file) != EOF) {
+    if ((size != 0u && fread(bytes, 1u, size, file) != size) ||
+        fgetc(file) != EOF) {
         fprintf(stderr, "Asset changed or could not be read completely: %s\n", path);
         free(bytes);
         fclose(file);
@@ -74,37 +89,111 @@ static char *load_file_bounded(const char *path, size_t limit, size_t *out_size)
     return bytes;
 }
 
+static int response_nosniff(chttp_server_response *response) {
+    return chttp_server_response_set_header(
+        response, "X-Content-Type-Options", "nosniff");
+}
+
 static int serve_file(void *user, const chttp_server_request_view *request,
                       chttp_server_response *response) {
-    int status = chttp_server_response_set_header(
-        response, "X-Content-Type-Options", "nosniff");
+    int status = response_nosniff(response);
     if (status != SALTS_OK) return status;
     return chttp_server_serve_file(
         response, request, (const chttp_server_file_options *)user);
+}
+
+static int reply_render_failure(
+    chttp_server_response *response,
+    oa_ui_renderer_status rendered,
+    const oa_ui_renderer_error *error) {
+    static const char body[] = "OpenAPI UI render failed\n";
+    fprintf(stderr, "OpenAPI UI render failed: status=%d message=%s\n",
+            (int)rendered, error ? error->message : "");
+    return chttp_server_reply(
+        response, 500u, "text/plain; charset=utf-8",
+        body, sizeof(body) - 1u);
+}
+
+static int reply_named(
+    oa_ui_renderer *renderer,
+    const char *template_name,
+    size_t selected_operation,
+    chttp_server_response *response) {
+    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
+    char *html = NULL;
+    size_t html_size = 0u;
+    int status = response_nosniff(response);
+    if (status != SALTS_OK) return status;
+
+    oa_ui_renderer_status rendered = oa_ui_renderer_render_named(
+        renderer, vstr_from_cstr(template_name), selected_operation,
+        &html, &html_size, &error);
+    if (rendered != OA_UI_RENDERER_OK)
+        return reply_render_failure(response, rendered, &error);
+
+    status = chttp_server_reply(
+        response, 200u, "text/html; charset=utf-8", html, html_size);
+    oa_ui_renderer_output_free(html);
+    return status;
 }
 
 static int serve_docs(void *user, const chttp_server_request_view *request,
                       chttp_server_response *response) {
     (void)request;
     oa_ui_renderer *renderer = (oa_ui_renderer *)user;
+    const size_t selected =
+        oa_ui_renderer_operation_count(renderer) != 0u
+            ? 0u : OA_UI_RENDERER_NO_SELECTION;
+    return reply_named(renderer, "docs.html", selected, response);
+}
+
+static int serve_operation_list(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+    (void)request;
+    return reply_named(
+        (oa_ui_renderer *)user, "operation_list.html",
+        OA_UI_RENDERER_NO_SELECTION, response);
+}
+
+static int serve_operation_detail(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+    static const char not_found[] = "OpenAPI operation not found\n";
+    oa_ui_renderer *renderer = (oa_ui_renderer *)user;
+    const char *key = chttp_server_request_param(request, "key");
+    size_t selected = OA_UI_RENDERER_NO_SELECTION;
+
+    int status = response_nosniff(response);
+    if (status != SALTS_OK) return status;
+    if (!key)
+        return chttp_server_reply(
+            response, 404u, "text/plain; charset=utf-8",
+            not_found, sizeof(not_found) - 1u);
+
+    const oa_ui_renderer_status found = oa_ui_renderer_find_operation(
+        renderer, vstr_from_cstr(key), &selected);
+    if (found == OA_UI_RENDERER_NOT_FOUND)
+        return chttp_server_reply(
+            response, 404u, "text/plain; charset=utf-8",
+            not_found, sizeof(not_found) - 1u);
+    if (found != OA_UI_RENDERER_OK) {
+        static const char failed[] = "OpenAPI UI lookup failed\n";
+        fprintf(stderr, "OpenAPI UI operation lookup failed: status=%d\n",
+                (int)found);
+        return chttp_server_reply(
+            response, 500u, "text/plain; charset=utf-8",
+            failed, sizeof(failed) - 1u);
+    }
+
     oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
     char *html = NULL;
     size_t html_size = 0u;
-
-    int status = chttp_server_response_set_header(
-        response, "X-Content-Type-Options", "nosniff");
-    if (status != SALTS_OK) return status;
-
-    oa_ui_renderer_status rendered =
-        oa_ui_renderer_render(renderer, &html, &html_size, &error);
-    if (rendered != OA_UI_RENDERER_OK) {
-        static const char body[] = "OpenAPI UI render failed\n";
-        fprintf(stderr, "OpenAPI UI render failed: status=%d message=%s\n",
-                (int)rendered, error.message);
-        return chttp_server_reply(
-            response, 500u, "text/plain; charset=utf-8",
-            body, sizeof(body) - 1u);
-    }
+    const oa_ui_renderer_status rendered = oa_ui_renderer_render_named(
+        renderer, vstr_from_cstr("operation_detail.html"), selected,
+        &html, &html_size, &error);
+    if (rendered != OA_UI_RENDERER_OK)
+        return reply_render_failure(response, rendered, &error);
 
     status = chttp_server_reply(
         response, 200u, "text/html; charset=utf-8", html, html_size);
@@ -118,9 +207,9 @@ int main(int argc, char **argv) {
     oa_ui_model *model = NULL;
     json_value_t *root = NULL;
     char *document_bytes = NULL;
-    char *template_bytes = NULL;
     size_t document_size = 0u;
-    size_t template_size = 0u;
+    char *template_storage[UI_TEMPLATE_COUNT] = {0};
+    oa_ui_renderer_template templates[UI_TEMPLATE_COUNT] = {0};
     int status = SALTS_OK;
 
     if (argc < 3 || argc > 4) {
@@ -138,19 +227,9 @@ int main(int argc, char **argv) {
         if (*end || port > UI_PORT_MAX) return EXIT_FAILURE;
     }
 
-    char index_path[UI_PATH_BYTES];
-    int index_length = snprintf(
-        index_path, sizeof(index_path), "%s/index.html", argv[2]);
-    if (index_length < 0 || (size_t)index_length >= sizeof(index_path)) {
-        fputs("Asset path too long\n", stderr);
-        return EXIT_FAILURE;
-    }
-
-    document_bytes =
-        load_file_bounded(argv[1], UI_FILE_BYTES, &document_size);
-    template_bytes =
-        load_file_bounded(index_path, UI_FILE_BYTES, &template_size);
-    if (!document_bytes || !template_bytes) {
+    document_bytes = load_file_bounded(
+        argv[1], UI_FILE_BYTES, &document_size);
+    if (!document_bytes) {
         status = SALTS_EINVAL;
         goto cleanup;
     }
@@ -166,34 +245,56 @@ int main(int argc, char **argv) {
     model = oa_ui_model_create_json(root, &model_error);
     json_free(root);
     root = NULL;
+    free(document_bytes);
+    document_bytes = NULL;
     if (!model) {
         fprintf(stderr, "OpenAPI UI model failed: %s\n", model_error.message);
         status = SALTS_EINVAL;
         goto cleanup;
     }
 
+    char template_paths[UI_TEMPLATE_COUNT][UI_PATH_BYTES];
+    for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i) {
+        const int path_size = snprintf(
+            template_paths[i], sizeof(template_paths[i]),
+            "%s/templates/%s", argv[2], UI_TEMPLATE_NAMES[i]);
+        if (path_size < 0 || (size_t)path_size >= sizeof(template_paths[i])) {
+            fputs("Asset path too long\n", stderr);
+            status = SALTS_EINVAL;
+            goto cleanup;
+        }
+
+        size_t source_size = 0u;
+        template_storage[i] = load_file_bounded(
+            template_paths[i], UI_TEMPLATE_FILE_BYTES, &source_size);
+        if (!template_storage[i]) {
+            status = SALTS_EINVAL;
+            goto cleanup;
+        }
+        templates[i] = (oa_ui_renderer_template){
+            vstr_from_cstr(UI_TEMPLATE_NAMES[i]),
+            vstr_from_buf(template_storage[i], source_size)
+        };
+    }
+
     oa_ui_renderer_config renderer_config =
         (oa_ui_renderer_config)OA_UI_RENDERER_CONFIG_INIT;
-    renderer_config.max_output_bytes = UI_RENDER_BYTES;
+    renderer_config.max_output_bytes = UI_FILE_BYTES;
     oa_ui_renderer_error renderer_error = OA_UI_RENDERER_ERROR_INIT;
-    oa_ui_renderer_status renderer_status = oa_ui_renderer_init(
+    const oa_ui_renderer_status renderer_status = oa_ui_renderer_init_bundle(
         &renderer, oa_ui_model_view(model),
-        vstr_from_cstr("docs/index.html"),
-        vstr_from_buf(template_bytes, template_size),
-        &renderer_config, &renderer_error);
-    free(template_bytes);
-    template_bytes = NULL;
+        templates, UI_TEMPLATE_COUNT, &renderer_config, &renderer_error);
+    for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i) {
+        free(template_storage[i]);
+        template_storage[i] = NULL;
+    }
     if (renderer_status != OA_UI_RENDERER_OK) {
-        fprintf(stderr, "OpenAPI UI renderer startup failed: status=%d message=%s\n",
+        fprintf(stderr,
+                "OpenAPI UI renderer startup failed: status=%d message=%s\n",
                 (int)renderer_status, renderer_error.message);
         status = SALTS_EINVAL;
         goto cleanup;
     }
-
-    /* Renderer compilation copied the template source; the model owns its
-     * immutable JSON snapshot. Neither input file buffer is retained. */
-    free(document_bytes);
-    document_bytes = NULL;
 
     chttp_server_config config = {0};
     config.host = "127.0.0.1";
@@ -211,7 +312,8 @@ int main(int argc, char **argv) {
     config.network.request_capacity = UI_COMMANDS;
     config.network.completion_batch_capacity = UI_CONNECTIONS;
     config.network.event_capacity = UI_COMMANDS;
-    config.network.max_send_bytes = UI_CHUNK_BYTES;
+    config.network.max_send_bytes = UI_SEND_BYTES;
+    config.network.command_buffer_bytes = UI_COMMAND_BUFFER_BYTES;
     config.network.receive_buffer_bytes = UI_HEADER_BYTES;
     config.network.connect_timeout_ms = UI_TIMEOUT_MS;
     config.network.read_timeout_ms = UI_TIMEOUT_MS;
@@ -228,8 +330,8 @@ int main(int argc, char **argv) {
     config.max_response_header_count = UI_HEADERS;
     config.max_response_header_bytes = UI_HEADER_BYTES;
     config.max_response_body_bytes = UI_FILE_BYTES;
-    /* Zero lets CHTTP derive the largest body that still fits max_send_bytes. */
-    config.max_buffered_response_body_bytes = 0u;
+    config.max_buffered_response_body_bytes = UI_FILE_BYTES;
+    config.buffer_capacity_bytes = UI_BUFFER_CAPACITY_BYTES;
     config.poll_slice_ms = 1u;
 
     const char *routes[] = {
@@ -251,10 +353,10 @@ int main(int argc, char **argv) {
     /* Fixed route-to-file mappings stay alive until successful shutdown. No
      * request-derived filesystem paths; assets must remain immutable while serving. */
     for (size_t i = 0u; i < UI_STATIC_ROUTES; ++i) {
-        int size = i < UI_STATIC_ROUTES - 1u
+        const int path_size = i < UI_STATIC_ROUTES - 1u
             ? snprintf(paths[i], sizeof(paths[i]), "%s/%s", argv[2], files[i])
             : snprintf(paths[i], sizeof(paths[i]), "%s", argv[1]);
-        if (size < 0 || (size_t)size >= sizeof(paths[i])) {
+        if (path_size < 0 || (size_t)path_size >= sizeof(paths[i])) {
             fputs("Asset path too long\n", stderr);
             status = SALTS_EINVAL;
             goto cleanup;
@@ -278,6 +380,12 @@ int main(int argc, char **argv) {
         status = chttp_server_get(&server, "/docs", serve_docs, &renderer);
     if (status == SALTS_OK)
         status = chttp_server_get(&server, "/docs/", serve_docs, &renderer);
+    if (status == SALTS_OK)
+        status = chttp_server_get(
+            &server, "/docs/operations", serve_operation_list, &renderer);
+    if (status == SALTS_OK)
+        status = chttp_server_get(
+            &server, "/docs/operations/:key", serve_operation_detail, &renderer);
     for (size_t i = 0u; status == SALTS_OK && i < UI_STATIC_ROUTES; ++i)
         status = chttp_server_get(&server, routes[i], serve_file, &options[i]);
 
@@ -293,10 +401,10 @@ int main(int argc, char **argv) {
 
 cleanup:
     if (server.impl) {
-        int stopped = chttp_server_stop(&server, UI_TIMEOUT_MS);
+        const int stopped = chttp_server_stop(&server, UI_TIMEOUT_MS);
         if (status == SALTS_OK) status = stopped;
         if (stopped == SALTS_OK) {
-            int destroyed = chttp_server_destroy(&server);
+            const int destroyed = chttp_server_destroy(&server);
             if (status == SALTS_OK) status = destroyed;
         }
     }
@@ -305,7 +413,8 @@ cleanup:
     oa_ui_model_free(model);
     json_free(root);
     free(document_bytes);
-    free(template_bytes);
+    for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i)
+        free(template_storage[i]);
 
     if (status != SALTS_OK)
         fprintf(stderr, "OpenAPI UI server failed: %d\n", status);

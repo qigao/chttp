@@ -1,0 +1,10 @@
+<nav id="operation-list" aria-label="接口列表">
+{% for op in operations %}
+  <button class="nav-item" type="button"
+          data-operation-key="{{ operation_keys[loop.index0] }}">
+    <span class="method" data-method="{{ op.method }}">{{ op.method|upper }}</span>
+    <span>{{ op.path }}</span>
+    <span class="muted">{{ op.summary }}</span>
+  </button>
+{% endfor %}
+</nav>
