@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { requestFor, boundedText, resolveServerUrl, operationFromForm, LIMITS } = require('../ui/tryit.js');
+const { requestFor, boundedText, resolveServerUrl, operationFromForm, setOperationSearchError, LIMITS } = require('../ui/tryit.js');
 
 test('resolve relative OpenAPI server URLs against the docs page', () => {
   assert.equal(resolveServerUrl('/v1', 'https://docs.example.test/docs'),
@@ -52,6 +52,24 @@ test('preserve rendered request-body metadata through DOM form conversion', () =
   const referenced = operationFromForm(form);
   assert.throws(() => requestFor(
     referenced, 'https://example.test', {}, '{}', 'application/json'), /引用请求体/);
+});
+
+test('handle HTMX search request state without inline expressions', () => {
+  const box = { hidden: false };
+  const root = {
+    getElementById(id) {
+      assert.equal(id, 'operation-search-error');
+      return box;
+    }
+  };
+  setOperationSearchError(root, { target: { id: 'operation-search' } }, true);
+  assert.equal(box.hidden, true);
+  setOperationSearchError(root, { target: { id: 'operation-search' } }, false);
+  assert.equal(box.hidden, false);
+
+  box.hidden = true;
+  setOperationSearchError(root, { target: { id: 'other' } }, false);
+  assert.equal(box.hidden, true);
 });
 
 test('unsupported or unsafe input fails before fetch', () => {
