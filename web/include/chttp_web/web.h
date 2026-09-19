@@ -4,6 +4,7 @@
 #include <cmeta/data.h>
 #include <http_server/http.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -54,6 +55,77 @@ typedef struct chttp_web_error {
 #define CHTTP_WEB_ERROR_INIT {CHTTP_WEB_OK, 0, 0u, {0}, {0}}
 
 /**
+ * Borrowed immutable bytes used by the typed request context. The pointed
+ * bytes are never owned by CHttp::Web and must outlive the render using them.
+ */
+typedef struct chttp_web_string_view {
+  const char *data;
+  size_t size;
+} chttp_web_string_view;
+
+/** One named borrowed request value exposed to templates. */
+typedef struct chttp_web_named_value {
+  chttp_web_string_view name;
+  chttp_web_string_view value;
+  bool present;
+} chttp_web_named_value;
+
+/**
+ * Public CHttp::Web sequence layout. The element descriptor and pointed
+ * storage are borrowed. Applications should treat this as read-only after
+ * chttp_web_request_context_init() until rendering completes.
+ */
+typedef struct chttp_web_sequence_view {
+  const void *data;
+  size_t count;
+  size_t stride;
+  const cmeta_data_desc *element;
+} chttp_web_sequence_view;
+
+/**
+ * Handler-scoped typed request context.
+ *
+ * Every string ultimately borrows either the active CHTTP request/session or
+ * application-owned selector strings. Nothing in this object may be retained
+ * past the route handler unless the application copies the underlying bytes.
+ */
+typedef struct chttp_web_request_context {
+  chttp_web_string_view method;
+  chttp_web_string_view target;
+  chttp_web_string_view path;
+  bool htmx;
+  bool session_available;
+  chttp_web_sequence_view params;
+  chttp_web_sequence_view headers;
+  chttp_web_sequence_view session;
+} chttp_web_request_context;
+
+/**
+ * Bounded caller-owned scratch storage and explicit exposure policy.
+ *
+ * Params are all route params already bounded by CHTTP configuration. Headers
+ * and session values are exposed only for the explicitly selected names/keys.
+ * Missing selected values still occupy one row with present=false.
+ */
+typedef struct chttp_web_request_context_options {
+  size_t size;
+  const char *const *header_names;
+  size_t header_name_count;
+  const char *const *session_keys;
+  size_t session_key_count;
+  chttp_web_named_value *param_storage;
+  size_t param_capacity;
+  chttp_web_named_value *header_storage;
+  size_t header_capacity;
+  chttp_web_named_value *session_storage;
+  size_t session_capacity;
+} chttp_web_request_context_options;
+
+#define CHTTP_WEB_REQUEST_CONTEXT_OPTIONS_INIT \
+  {sizeof(chttp_web_request_context_options), NULL, 0u, NULL, 0u, \
+   NULL, 0u, NULL, 0u, NULL, 0u}
+
+/**
  * Builds one synchronous, non-reentrant renderer from an application-owned
  * fixed template bundle. Names and sources are copied before return.
  *
@@ -100,6 +172,56 @@ chttp_web_status chttp_web_render_response(
     const void *model,
     unsigned int status_code,
     const char *content_type,
+    chttp_web_error *error);
+
+/** True only for an HX-Request header whose value is exactly "true". */
+bool chttp_web_request_is_htmx(const chttp_server_request_view *request);
+
+/**
+ * Snapshots handler-borrowed request/session pointers into a bounded typed
+ * context. The function performs no allocation and never retains request.
+ */
+chttp_web_status chttp_web_request_context_init(
+    chttp_web_request_context *context,
+    const chttp_server_request_view *request,
+    const chttp_web_request_context_options *options,
+    chttp_web_error *error);
+
+/** CMeta descriptor for embedding chttp_web_request_context in application models. */
+const cmeta_data_desc *chttp_web_request_context_data(void);
+
+/**
+ * Sends an empty ordinary HTTP redirect. Only 301/302/303/307/308 are
+ * accepted. Location is copied by CHTTP before return.
+ */
+chttp_web_status chttp_web_redirect(
+    chttp_server_response *response,
+    unsigned int status_code,
+    const char *location,
+    chttp_web_error *error);
+
+/** Non-terminal HTMX response-header helpers; values are copied by CHTTP. */
+chttp_web_status chttp_web_hx_redirect(
+    chttp_server_response *response,
+    const char *location,
+    chttp_web_error *error);
+chttp_web_status chttp_web_hx_trigger(
+    chttp_server_response *response,
+    const char *trigger,
+    chttp_web_error *error);
+chttp_web_status chttp_web_hx_retarget(
+    chttp_server_response *response,
+    const char *selector,
+    chttp_web_error *error);
+
+/** Renders one HTML error page; status_code must be in the 400..599 range. */
+chttp_web_status chttp_web_render_error(
+    chttp_web_renderer *renderer,
+    chttp_server_response *response,
+    unsigned int status_code,
+    const char *template_name,
+    const cmeta_data_desc *model_desc,
+    const void *model,
     chttp_web_error *error);
 
 void chttp_web_output_free(char *html);
