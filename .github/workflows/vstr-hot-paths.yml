@@ -1,9 +1,9 @@
-name: VStr hot path verification
+name: HTTP response arena verification
 
 on:
   push:
     branches:
-      - perf/vstr-hot-paths
+      - perf/http1-response-vstr-arena
   workflow_dispatch:
 
 permissions:
@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SALTS_SHA: c4197712261a563ed7e238152b34cb50a2ef98a9
-  SALTS_UTILS_SHA: c6662ccd382a4311ff648ff80570d8d8f98028a8
+  SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
+  SALTS_UTILS_SHA: 8016a93f9b0f14c053ba87ce5a18d40f77fa8770
   VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
 jobs:
@@ -89,7 +89,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-c4197712261a563ed7e238152b34cb50a2ef98a9-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
       - name: Build and install exact Salts
         if: steps.salts-package-cache.outputs.cache-hit != 'true'
@@ -110,7 +110,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-c4197712261a563ed7e238152b34cb50a2ef98a9-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
       - name: Expose exact Salts profile to SaltsUtils
         shell: bash
@@ -142,6 +142,20 @@ jobs:
           cmake --build build/linux-gcc-debug --target install -j2
           test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
 
+      - name: Expose exact SaltsUtils profile to Chttp preset
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
+          ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
+          test -f "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+
+      - name: Install OpenAPI conformance test requirements
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m pip install -r openapi/tests/requirements-conformance.txt
+
       - name: Configure exact Chttp head
         shell: bash
         env:
@@ -165,7 +179,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
-            chttp_request_test chttp_websocket_handshake_test -j2
+            chttp_request_test chttp_response_test chttp_file_sink_test chttp_requests_test -j2
 
       - name: Run focused tests
         shell: bash
@@ -174,7 +188,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_request_test|chttp_websocket_handshake_test)$' \
+            -R '^(chttp_request_test|chttp_response_test|chttp_file_sink_test|chttp_requests_test)$' \
             --output-on-failure
 
       - name: Build full Chttp graph
@@ -198,6 +212,23 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+
+      - name: Verify response parser lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target chttp_response_test -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^chttp_response_test$' --output-on-failure
 
       - name: Verify exact head and clean tracked source
         if: always()

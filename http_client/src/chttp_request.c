@@ -34,22 +34,6 @@ static int chttp_bounded_length(const char *text, size_t limit, size_t *out_leng
   return SALTS_EMSGSIZE;
 }
 
-static unsigned char chttp_ascii_lower(unsigned char value) {
-  return value >= 'A' && value <= 'Z' ? (unsigned char)(value + ('a' - 'A')) : value;
-}
-
-static bool chttp_ascii_equal(const char *left, const char *right) {
-  size_t index = 0u;
-  if (left == NULL || right == NULL) return false;
-  while (left[index] != '\0' && right[index] != '\0') {
-    if (chttp_ascii_lower((unsigned char)left[index]) !=
-        chttp_ascii_lower((unsigned char)right[index]))
-      return false;
-    ++index;
-  }
-  return left[index] == '\0' && right[index] == '\0';
-}
-
 static bool chttp_header_name_byte(unsigned char value) {
   if ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
       (value >= '0' && value <= '9'))
@@ -298,10 +282,13 @@ int chttp_request_build(const chttp_request_options *options, const chttp_limits
 }
 
 const char *chttp_response_view_header(const chttp_response_view *response, const char *name) {
+  const vstr wanted = name != NULL ? vstr_from_cstr(name) : (vstr){0};
   size_t index;
   if (response == NULL || name == NULL) return NULL;
-  for (index = 0u; index < response->header_count; ++index)
-    if (chttp_ascii_equal(response->headers[index].name, name))
+  for (index = 0u; index < response->header_count; ++index) {
+    const char *header_name = response->headers[index].name;
+    if (header_name != NULL && vstr_ieq(vstr_from_cstr(header_name), wanted))
       return response->headers[index].value;
+  }
   return NULL;
 }

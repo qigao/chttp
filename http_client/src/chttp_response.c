@@ -8,6 +8,18 @@
 
 enum { CHTTP_RESPONSE_LINE_OVERHEAD_BYTES = 15 };
 
+static bool chttp_response_size_add(size_t left, size_t right, size_t *out) {
+  if (out == NULL || left > SIZE_MAX - right) return false;
+  *out = left + right;
+  return true;
+}
+
+static bool chttp_response_size_mul(size_t left, size_t right, size_t *out) {
+  if (out == NULL || (left != 0u && right > SIZE_MAX / left)) return false;
+  *out = left * right;
+  return true;
+}
+
 static chttp_response_parser *chttp_parser_context(llhttp_t *parser) {
   return parser != NULL ? (chttp_response_parser *)parser->data : NULL;
 }
@@ -60,6 +72,9 @@ static void chttp_response_reset_message(chttp_response_parser *parser) {
   parser->field_offset = 0u;
   parser->value_offset = 0u;
   parser->reason_size = 0u;
+  parser->current_field = (vstr){0};
+  parser->current_value = (vstr){0};
+  parser->reason_view = (vstr){0};
   parser->field_open = false;
   parser->value_open = false;
   parser->reason_terminated = false;
@@ -88,7 +103,9 @@ static int chttp_response_on_status(llhttp_t *llparser, const char *at, size_t l
 static int chttp_response_on_status_complete(llhttp_t *llparser) {
   chttp_response_parser *parser = chttp_parser_context(llparser);
   if (parser == NULL || parser->reason_size > parser->max_reason_bytes) return -1;
+  parser->reason_view = vstr_from_buf(parser->reason_storage, parser->reason_size);
   parser->reason_storage[parser->reason_size] = '\0';
+  parser->response.reason = parser->reason_view.data;
   parser->reason_terminated = true;
   return 0;
 }
@@ -112,13 +129,20 @@ static int chttp_response_on_header_field(llhttp_t *llparser, const char *at, si
 
 static int chttp_response_on_header_field_complete(llhttp_t *llparser) {
   chttp_response_parser *parser = chttp_parser_context(llparser);
+  size_t field_size;
   if (parser == NULL || !parser->field_open ||
       parser->response.header_count >= parser->max_header_count)
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response header count exceeds configured bound");
+  if (parser->header_storage_used < parser->field_offset)
+    return chttp_response_fail_callback(parser, SALTS_EPROTO, "headers",
+                                        "HTTP response header field offsets are invalid");
+  field_size = parser->header_storage_used - parser->field_offset;
   if (!chttp_response_storage_append(parser, "\0", 1u))
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response header storage exhausted");
+  parser->current_field =
+      vstr_from_buf(parser->header_storage + parser->field_offset, field_size);
   parser->field_open = false;
   parser->value_offset = parser->header_storage_used;
   parser->value_open = true;
@@ -141,16 +165,25 @@ static int chttp_response_on_header_value(llhttp_t *llparser, const char *at, si
 static int chttp_response_on_header_value_complete(llhttp_t *llparser) {
   chttp_response_parser *parser = chttp_parser_context(llparser);
   chttp_header *header;
+  size_t value_size;
   if (parser == NULL || !parser->value_open ||
       parser->response.header_count >= parser->max_header_count)
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response header count exceeds configured bound");
+  if (parser->header_storage_used < parser->value_offset)
+    return chttp_response_fail_callback(parser, SALTS_EPROTO, "headers",
+                                        "HTTP response header value offsets are invalid");
+  value_size = parser->header_storage_used - parser->value_offset;
   if (!chttp_response_wire_add(parser, 4u) || !chttp_response_storage_append(parser, "\0", 1u))
     return chttp_response_fail_callback(parser, SALTS_EMSGSIZE, "headers",
                                         "HTTP response headers exceed configured byte bound");
+  parser->current_value =
+      vstr_from_buf(parser->header_storage + parser->value_offset, value_size);
   header = &parser->headers[parser->response.header_count++];
-  header->name = parser->header_storage + parser->field_offset;
-  header->value = parser->header_storage + parser->value_offset;
+  header->name = parser->current_field.data;
+  header->value = parser->current_value.data;
+  parser->current_field = (vstr){0};
+  parser->current_value = (vstr){0};
   parser->value_open = false;
   return 0;
 }
@@ -165,7 +198,9 @@ static int chttp_response_on_headers_complete(llhttp_t *llparser) {
     return chttp_response_fail_callback(parser, SALTS_EPROTO, "headers",
                                         "HTTP response ended with an incomplete header");
   if (!parser->reason_terminated) {
+    parser->reason_view = vstr_from_buf(parser->reason_storage, parser->reason_size);
     parser->reason_storage[parser->reason_size] = '\0';
+    parser->response.reason = parser->reason_view.data;
     parser->reason_terminated = true;
   }
   parser->response.http_major = major;
@@ -222,45 +257,76 @@ static int chttp_response_on_message_complete(llhttp_t *llparser) {
 
 int chttp_response_parser_init(chttp_response_parser *parser, chttp_method method,
                                const chttp_limits *limits) {
-  return chttp_response_parser_init_with_sink(parser, method, limits, NULL);
+  return chttp_response_parser_init_with_sinks(parser, method, limits, NULL, NULL);
 }
 
 int chttp_response_parser_init_with_sink(chttp_response_parser *parser, chttp_method method,
                                          const chttp_limits *limits, const chttp_body_sink *sink) {
-  size_t storage_capacity;
+  return chttp_response_parser_init_with_sinks(parser, method, limits, sink, NULL);
+}
+
+int chttp_response_parser_init_with_sinks(chttp_response_parser *parser, chttp_method method,
+                                          const chttp_limits *limits,
+                                          const chttp_body_sink *sink,
+                                          chttp_file_sink_transfer *file_sink_transfer) {
+  size_t headers_bytes;
+  size_t terminator_bytes;
+  size_t header_storage_capacity;
+  size_t max_reason_bytes;
+  size_t reason_capacity;
+  size_t body_capacity;
+  size_t total_capacity;
+  unsigned char *cursor;
+
   if (parser == NULL || limits == NULL ||
       limits->max_start_line_bytes <= CHTTP_RESPONSE_LINE_OVERHEAD_BYTES ||
       limits->max_header_count == 0u || limits->max_header_bytes == 0u ||
       limits->max_response_body_bytes == 0u || limits->max_informational_responses == 0u ||
-      (sink != NULL && sink->write == NULL))
+      (sink != NULL && sink->write == NULL) || (sink != NULL && file_sink_transfer != NULL))
     return SALTS_EINVAL;
-  if (limits->max_header_bytes == SIZE_MAX || limits->max_start_line_bytes == SIZE_MAX ||
-      limits->max_header_count > (SIZE_MAX - limits->max_header_bytes - 1u) / 2u)
-    return SALTS_ERANGE;
-  storage_capacity = limits->max_header_bytes + limits->max_header_count * 2u + 1u;
+
   memset(parser, 0, sizeof(*parser));
-  parser->headers = (chttp_header *)calloc(limits->max_header_count, sizeof(*parser->headers));
-  parser->header_storage = (char *)malloc(storage_capacity);
-  parser->reason_storage =
-      (char *)malloc(limits->max_start_line_bytes - CHTTP_RESPONSE_LINE_OVERHEAD_BYTES + 1u);
-  parser->body_storage =
-      sink == NULL ? (unsigned char *)malloc(limits->max_response_body_bytes) : NULL;
-  if (parser->headers == NULL || parser->header_storage == NULL || parser->reason_storage == NULL ||
-      (sink == NULL && parser->body_storage == NULL)) {
-    chttp_response_parser_destroy(parser);
-    return SALTS_ENOMEM;
-  }
-  parser->header_storage_capacity = storage_capacity;
+  max_reason_bytes = limits->max_start_line_bytes - CHTTP_RESPONSE_LINE_OVERHEAD_BYTES;
+  if (!chttp_response_size_mul(limits->max_header_count, sizeof(chttp_header), &headers_bytes) ||
+      !chttp_response_size_mul(limits->max_header_count, 2u, &terminator_bytes) ||
+      !chttp_response_size_add(limits->max_header_bytes, terminator_bytes,
+                               &header_storage_capacity) ||
+      !chttp_response_size_add(header_storage_capacity, 1u, &header_storage_capacity) ||
+      !chttp_response_size_add(max_reason_bytes, 1u, &reason_capacity))
+    return SALTS_ERANGE;
+
+  body_capacity = sink == NULL && file_sink_transfer == NULL ? limits->max_response_body_bytes : 0u;
+  if (!chttp_response_size_add(headers_bytes, header_storage_capacity, &total_capacity) ||
+      !chttp_response_size_add(total_capacity, reason_capacity, &total_capacity) ||
+      !chttp_response_size_add(total_capacity, body_capacity, &total_capacity))
+    return SALTS_ERANGE;
+
+  parser->arena = (unsigned char *)calloc(1u, total_capacity);
+  if (parser->arena == NULL) return SALTS_ENOMEM;
+  parser->arena_capacity = total_capacity;
+
+  cursor = parser->arena;
+  parser->headers = (chttp_header *)cursor;
+  cursor += headers_bytes;
+  parser->header_storage = (char *)cursor;
+  cursor += header_storage_capacity;
+  parser->reason_storage = (char *)cursor;
+  cursor += reason_capacity;
+  parser->body_storage = body_capacity != 0u ? cursor : NULL;
+
+  parser->header_storage_capacity = header_storage_capacity;
   parser->max_header_count = limits->max_header_count;
   parser->max_header_bytes = limits->max_header_bytes;
   parser->max_response_body_bytes = limits->max_response_body_bytes;
-  parser->max_reason_bytes = limits->max_start_line_bytes - CHTTP_RESPONSE_LINE_OVERHEAD_BYTES;
+  parser->max_reason_bytes = max_reason_bytes;
   parser->max_informational_responses = limits->max_informational_responses;
   parser->request_method = method;
+  parser->file_sink_transfer = file_sink_transfer;
   if (sink != NULL) {
     parser->body_sink = *sink;
     parser->body_sink_enabled = true;
   }
+
   llhttp_settings_init(&parser->settings);
   parser->settings.on_message_begin = chttp_response_on_message_begin;
   parser->settings.on_status = chttp_response_on_status;
@@ -280,10 +346,7 @@ int chttp_response_parser_init_with_sink(chttp_response_parser *parser, chttp_me
 
 void chttp_response_parser_destroy(chttp_response_parser *parser) {
   if (parser == NULL) return;
-  free(parser->body_storage);
-  free(parser->reason_storage);
-  free(parser->header_storage);
-  free(parser->headers);
+  free(parser->arena);
   memset(parser, 0, sizeof(*parser));
 }
 
