@@ -1,5 +1,6 @@
 #include <openapi/ui_model.h>
 #include "internal.h"
+#include "ui_model_internal.h"
 
 #include <salts_cmeta_data.h>
 
@@ -8,6 +9,7 @@
 #define OA_ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
 struct oa_ui_model {
+    oa_ui_allocator allocator;
     json_value_t *snapshot;
     oa_ui_document document;
     oa_ui_operation *operations;
@@ -16,6 +18,32 @@ struct oa_ui_model {
 static const char *const OA_UI_METHODS[] = {
     "get", "post", "put", "patch", "delete", "head", "options", "trace"
 };
+
+static void *oa_ui_system_calloc(void *userdata, size_t count, size_t size) {
+    (void)userdata;
+    return calloc(count, size);
+}
+
+static void oa_ui_system_free(void *userdata, void *memory) {
+    (void)userdata;
+    free(memory);
+}
+
+static const oa_ui_allocator OA_UI_SYSTEM_ALLOCATOR = {
+    oa_ui_system_calloc, oa_ui_system_free, NULL
+};
+
+static void *oa_ui_calloc(oa_ui_model *model, size_t count, size_t size) {
+    if (!model || !model->allocator.calloc_fn || !count || !size ||
+        count > SIZE_MAX / size)
+        return NULL;
+    return model->allocator.calloc_fn(model->allocator.userdata, count, size);
+}
+
+static void oa_ui_free(oa_ui_model *model, void *memory) {
+    if (model && memory && model->allocator.free_fn)
+        model->allocator.free_fn(model->allocator.userdata, memory);
+}
 
 static const cmeta_data_buffer_shape OA_UI_VSTR_SHAPE = {
     .ownership = CMETA_DATA_BUFFER_BORROWED
