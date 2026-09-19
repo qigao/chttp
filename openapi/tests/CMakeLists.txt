@@ -43,6 +43,9 @@ add_test(NAME openapi_ui_logic
 add_test(NAME openapi_ui_tryit_logic
   COMMAND "${OPENAPI_NODE_EXECUTABLE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/tryit_test.cjs")
 if(BUILD_EXAMPLES)
+  add_test(NAME openapi_ui_security_http
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_security_http_test.py"
+      "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui")
   add_test(NAME openapi_ui_http
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_http_test.py"
       "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
