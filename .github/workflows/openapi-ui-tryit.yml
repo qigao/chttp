@@ -177,7 +177,17 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(openapi_ui_htmx|openapi_ui_fragments|openapi_ui_renderer|openapi_ui_model|openapi_ui_logic|openapi_ui_http|openapi_ui_fragment_http|generator)$' \
+            -R '^(openapi_ui_htmx|openapi_ui_fragments|openapi_ui_renderer|openapi_ui_model|openapi_ui_logic|openapi_ui_tryit_logic|openapi_ui_http|openapi_ui_fragment_http|openapi_ui_tryit_http|generator) \
+            --output-on-failure
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
             --output-on-failure
 
       - name: Verify exact head and clean tracked source
