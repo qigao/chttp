@@ -183,7 +183,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(openapi_ui_fragments|openapi_ui_renderer|openapi_ui_model|openapi_ui_http|generator)$' \
+            -R '^(openapi_ui_fragments|openapi_ui_renderer|openapi_ui_model|openapi_ui_http|openapi_ui_fragment_http|generator)$' \
             --output-on-failure
 
       - name: Verify exact head and clean tracked source

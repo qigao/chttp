@@ -40,4 +40,8 @@ if(BUILD_EXAMPLES)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_http_test.py"
       "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
       "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
+  add_test(NAME openapi_ui_fragment_http
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ui_fragment_http_test.py"
+      "$<TARGET_FILE:openapi_ui_server>" "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../examples/openapi.json")
 endif()
