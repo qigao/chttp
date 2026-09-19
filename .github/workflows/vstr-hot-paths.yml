@@ -1,16 +1,16 @@
-name: HTTP response arena verification
+name: CHttp Web renderer core verification
 
 on:
   push:
     branches:
-      - perf/http1-response-vstr-arena
+      - feat/chttp-web-renderer-core
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: chttp-vstr-${{ github.ref_name }}
+  group: chttp-web-core-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -179,7 +179,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
-            chttp_request_test chttp_response_test chttp_file_sink_test chttp_requests_test -j2
+            chttp_web_renderer_test chttp_web_example -j2
 
       - name: Run focused tests
         shell: bash
@@ -188,7 +188,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_request_test|chttp_response_test|chttp_file_sink_test|chttp_requests_test)$' \
+            -R '^chttp_web_(renderer_test|http_test)$' \
             --output-on-failure
 
       - name: Build full Chttp graph
@@ -213,7 +213,7 @@ jobs:
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
 
-      - name: Verify response parser lifecycle with AddressSanitizer
+      - name: Verify web renderer lifecycle with AddressSanitizer
         shell: bash
         env:
           PROJECT_ROOT: ${{ runner.temp }}/salts-project
@@ -226,9 +226,9 @@ jobs:
           cmake --preset linux-dev-user \
             -DENABLE_SANITIZER_ADDRESS=ON \
             -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target chttp_response_test -j2
+          cmake --build build/linux-gcc-debug --target chttp_web_renderer_test -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_response_test$' --output-on-failure
+            -R '^chttp_web_renderer_test$' --output-on-failure
 
       - name: Verify exact head and clean tracked source
         if: always()
