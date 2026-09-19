@@ -359,10 +359,10 @@ static int chttp_slot_prepare_streaming(chttp_slot *slot, const chttp_request_op
                                         chttp_file_sink_transfer *file_sink_transfer) {
   int status;
   if (slot == NULL || options == NULL) return SALTS_EINVAL;
-  status = chttp_response_parser_init_with_sink(&slot->response_parser, options->method,
-                                                &slot->client->limits, options->body_sink);
+  status = chttp_response_parser_init_with_sinks(
+      &slot->response_parser, options->method, &slot->client->limits,
+      options->body_sink, file_sink_transfer);
   if (status != SALTS_OK) return status;
-  slot->response_parser.file_sink_transfer = file_sink_transfer;
   slot->source_complete = options->body_source == NULL;
   if (options->body_source == NULL) return SALTS_OK;
   if (slot->client->limits.stream_chunk_bytes == 0u ||
