@@ -156,6 +156,73 @@ spec("CHTTP strict incremental response parser") {
     chttp_response_parser_destroy(&parser);
   }
 
+  it("accepts exact response bounds and rejects one-byte-over inputs") {
+    static const char one_header[] = "HTTP/1.1 204 OK\r\nX: y\r\n\r\n";
+    static const char body[] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    static const char reason[] = "HTTP/1.1 204 OK\r\n\r\n";
+    chttp_limits limits = chttp_response_test_limits();
+    chttp_response_parser parser;
+
+    limits.max_header_count = 1u;
+    limits.max_header_bytes = 6u;
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, one_header, sizeof(one_header) - 1u),
+                SALTS_OK);
+    check_equal(parser.response.header_count, (size_t)1u);
+    chttp_response_parser_destroy(&parser);
+
+    limits.max_header_bytes = 5u;
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, one_header, sizeof(one_header) - 1u),
+                SALTS_EMSGSIZE);
+    chttp_response_parser_destroy(&parser);
+
+    limits = chttp_response_test_limits();
+    limits.max_response_body_bytes = 5u;
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, body, sizeof(body) - 1u), SALTS_OK);
+    check_equal(parser.response.body, "hello", 5u);
+    chttp_response_parser_destroy(&parser);
+
+    limits.max_response_body_bytes = 4u;
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, body, sizeof(body) - 1u), SALTS_EMSGSIZE);
+    chttp_response_parser_destroy(&parser);
+
+    limits = chttp_response_test_limits();
+    limits.max_start_line_bytes = 17u;
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, reason, sizeof(reason) - 1u), SALTS_OK);
+    chttp_response_parser_destroy(&parser);
+
+    limits.max_start_line_bytes = 16u;
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, reason, sizeof(reason) - 1u), SALTS_EMSGSIZE);
+    chttp_response_parser_destroy(&parser);
+  }
+
+  it("reuses the arena without leaking informational response state") {
+    static const char input[] = "HTTP/1.1 100 Continue\r\n"
+                                "X-Old: stale\r\n\r\n"
+                                "HTTP/1.1 200 OK\r\n"
+                                "X-New: final\r\n"
+                                "Content-Length: 0\r\n\r\n";
+    chttp_limits limits = chttp_response_test_limits();
+    chttp_response_parser parser;
+
+    check_equal(chttp_response_parser_init(&parser, CHTTP_METHOD_GET, &limits), SALTS_OK);
+    check_equal(chttp_response_parser_execute(&parser, input, sizeof(input) - 1u), SALTS_OK);
+    check_true(parser.complete);
+    check_equal(parser.informational_responses, (size_t)1u);
+    check_null(chttp_response_view_header(&parser.response, "x-old"));
+    check_equal(chttp_response_view_header(&parser.response, "x-new"), "final");
+    check_equal(parser.response.reason, "OK");
+    check_equal(parser.reason_view.len, (size_t)2u);
+    check_true(vstr_empty(parser.current_field));
+    check_true(vstr_empty(parser.current_value));
+    chttp_response_parser_destroy(&parser);
+  }
+
   it("rejects ambiguous framing truncation and bytes after the final response") {
     static const char conflicting[] = "HTTP/1.1 200 OK\r\n"
                                       "Content-Length: 5\r\n"
