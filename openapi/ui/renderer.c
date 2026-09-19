@@ -191,10 +191,14 @@ static void oa_ui_renderer_init_descriptors(oa_ui_renderer_impl *impl) {
         &OA_OPERATION_LAYOUT, impl->operation_fields,
         OA_ARRAY_COUNT(impl->operation_fields)};
     impl->operation_data = (cmeta_data_desc){
-        sizeof(cmeta_data_desc), CMETA_DATA_DESC_ABI_VERSION,
-        "openapi.ui.jinja.operation.data", "OpenAPI UI Jinja operation",
-        CMETA_DATA_STRUCT, &OA_OPERATION_TYPE, &impl->operation_shape,
-        NULL, NULL, NULL};
+        .struct_size = sizeof(cmeta_data_desc),
+        .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+        .stable_id = "openapi.ui.jinja.operation.data",
+        .display_name = "OpenAPI UI Jinja operation",
+        .kind = CMETA_DATA_STRUCT,
+        .storage_type = &OA_OPERATION_TYPE,
+        .shape = &impl->operation_shape
+    };
 
     impl->document_fields[0] = (cmeta_data_field_desc){
         "openapi.ui.jinja.document.title", "title",
@@ -212,10 +216,14 @@ static void oa_ui_renderer_init_descriptors(oa_ui_renderer_impl *impl) {
         &OA_DOCUMENT_LAYOUT, impl->document_fields,
         OA_ARRAY_COUNT(impl->document_fields)};
     impl->document_data = (cmeta_data_desc){
-        sizeof(cmeta_data_desc), CMETA_DATA_DESC_ABI_VERSION,
-        "openapi.ui.jinja.document.data", "OpenAPI UI Jinja document",
-        CMETA_DATA_STRUCT, &OA_DOCUMENT_TYPE, &impl->document_shape,
-        NULL, NULL, NULL};
+        .struct_size = sizeof(cmeta_data_desc),
+        .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+        .stable_id = "openapi.ui.jinja.document.data",
+        .display_name = "OpenAPI UI Jinja document",
+        .kind = CMETA_DATA_STRUCT,
+        .storage_type = &OA_DOCUMENT_TYPE,
+        .shape = &impl->document_shape
+    };
 }
 
 static int oa_ui_renderer_adapt_document(oa_ui_renderer_impl *impl) {
@@ -272,8 +280,7 @@ oa_ui_renderer_status oa_ui_renderer_init(
     impl->source = document;
     oa_ui_renderer_init_descriptors(impl);
 
-    if (!cmeta_data_desc_valid(&impl->parameter_data) ||
-        !cmeta_data_desc_valid(&impl->operation_data) ||
+    if (!cmeta_data_desc_valid(&impl->operation_data) ||
         !cmeta_data_desc_valid(&impl->document_data)) {
         oa_ui_renderer_impl_destroy(impl);
         return oa_ui_renderer_fail(error, OA_UI_RENDERER_RENDER,
