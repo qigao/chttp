@@ -60,6 +60,15 @@ int main(void) {
     REQUIRE(html);
     static const char EXPECTED[] =
         "&lt;Pets &amp; Co&gt;|get /pets[read](q)";
+    if (html_size != sizeof(EXPECTED) - 1u ||
+        memcmp(html, EXPECTED,
+               html_size < sizeof(EXPECTED) - 1u ? html_size : sizeof(EXPECTED) - 1u) != 0) {
+        fprintf(stderr, "renderer output size=%zu expected=%zu bytes=", html_size,
+                sizeof(EXPECTED) - 1u);
+        for (size_t i = 0u; i < html_size; ++i)
+            fprintf(stderr, "%02x", (unsigned)(unsigned char)html[i]);
+        fputc('\n', stderr);
+    }
     REQUIRE(html_size == sizeof(EXPECTED) - 1u);
     REQUIRE(memcmp(html, EXPECTED, html_size) == 0);
     oa_ui_renderer_output_free(html);
