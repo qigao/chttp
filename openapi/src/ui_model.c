@@ -241,15 +241,15 @@ static void oa_ui_parameter_free(oa_ui_parameter *parameter) {
     oa_ui_serialized_free(&parameter->schema_json);
 }
 
-static void oa_ui_operation_free(oa_ui_operation *operation) {
-    if (!operation) return;
+static void oa_ui_operation_free(oa_ui_model *model, oa_ui_operation *operation) {
+    if (!model || !operation) return;
     if (operation->parameters.data) {
         oa_ui_parameter *parameters = (oa_ui_parameter *)operation->parameters.data;
         for (size_t i = 0u; i < operation->parameters.count; ++i)
             oa_ui_parameter_free(&parameters[i]);
-        free(parameters);
+        oa_ui_free(model, parameters);
     }
-    free((void *)operation->tags.data);
+    oa_ui_free(model, (void *)operation->tags.data);
     oa_ui_serialized_free(&operation->request_body_json);
     oa_ui_serialized_free(&operation->responses_json);
     operation->tags = oa_ui_sequence_empty(sizeof(vstr), &OA_UI_VSTR_DATA);
@@ -259,13 +259,15 @@ static void oa_ui_operation_free(oa_ui_operation *operation) {
 
 void oa_ui_model_free(oa_ui_model *model) {
     if (!model) return;
+    oa_ui_allocator allocator = model->allocator;
     if (model->operations) {
         for (size_t i = 0u; i < model->document.operations.count; ++i)
-            oa_ui_operation_free(&model->operations[i]);
-        free(model->operations);
+            oa_ui_operation_free(model, &model->operations[i]);
+        oa_ui_free(model, model->operations);
     }
     json_free(model->snapshot);
-    free(model);
+    if (allocator.free_fn)
+        allocator.free_fn(allocator.userdata, model);
 }
 
 static size_t oa_ui_count_operations(const json_value_t *paths) {
