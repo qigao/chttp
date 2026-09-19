@@ -944,18 +944,123 @@ oa_ui_renderer_status oa_ui_renderer_find_operation(
 }
 
 
+enum { OA_UI_RENDERER_MAX_SEARCH_BYTES = 256 };
+
+static unsigned char oa_ui_renderer_ascii_fold(unsigned char value) {
+    return value >= (unsigned char)'A' && value <= (unsigned char)'Z'
+        ? (unsigned char)(value + ((unsigned char)'a' - (unsigned char)'A'))
+        : value;
+}
+
+static int oa_ui_renderer_contains(vstr value, vstr query) {
+    if (query.len == 0u) return 1;
+    if (!vstr_is_valid(value) || query.len > value.len) return 0;
+    for (size_t offset = 0u; offset <= value.len - query.len; ++offset) {
+        size_t index = 0u;
+        while (index < query.len &&
+               oa_ui_renderer_ascii_fold((unsigned char)value.data[offset + index]) ==
+                   oa_ui_renderer_ascii_fold((unsigned char)query.data[index]))
+            ++index;
+        if (index == query.len) return 1;
+    }
+    return 0;
+}
+
+static int oa_ui_renderer_operation_matches(
+    const oa_ui_operation *operation, vstr query) {
+    if (!operation) return 0;
+    if (oa_ui_renderer_contains(operation->method, query) ||
+        oa_ui_renderer_contains(operation->path, query) ||
+        oa_ui_renderer_contains(operation->summary, query))
+        return 1;
+
+    if (operation->tags.count != 0u &&
+        (operation->tags.data == NULL || operation->tags.stride != sizeof(vstr)))
+        return 0;
+    const vstr *tags = (const vstr *)operation->tags.data;
+    for (size_t i = 0u; i < operation->tags.count; ++i)
+        if (oa_ui_renderer_contains(tags[i], query)) return 1;
+    return 0;
+}
+
 oa_ui_renderer_status oa_ui_renderer_render_operation_list(
     oa_ui_renderer *renderer,
     vstr query,
     char **out_html,
     size_t *out_size,
     oa_ui_renderer_error *error) {
-    (void)query;
+    oa_ui_renderer_impl *impl;
+    oa_ui_renderer_template_entry *entry;
+    const oa_ui_operation *source;
+    oa_ui_operation *operations = NULL;
+    vstr *keys = NULL;
+    size_t matches = 0u;
+    oa_ui_renderer_status result;
+
     if (out_html) *out_html = NULL;
     if (out_size) *out_size = 0u;
-    if (!renderer || !renderer->impl || !out_html || !out_size)
+    if (!renderer || !renderer->impl || !out_html || !out_size ||
+        !vstr_is_valid(query))
         return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
                                    "operation-list render arguments are invalid");
-    return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
-                               "operation-list filtering is not implemented");
+    if (query.len > OA_UI_RENDERER_MAX_SEARCH_BYTES)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_CAPACITY,
+                                   "operation search query exceeds renderer limit");
+    if (vstr_utf8_invalid_offset(query) != VSTR_NPOS)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_INVALID_ARGUMENT,
+                                   "operation search query is not valid UTF-8");
+
+    impl = (oa_ui_renderer_impl *)renderer->impl;
+    if (!impl->templates)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_UNSUPPORTED,
+                                   "renderer has no template bundle");
+    entry = oa_ui_renderer_template_find(
+        impl, vstr_from_cstr("operation_list.html"));
+    if (!entry)
+        return oa_ui_renderer_fail(error, OA_UI_RENDERER_NOT_FOUND,
+                                   "operation-list template was not found");
+
+    if (query.len == 0u)
+        return oa_ui_renderer_render_compiled(
+            impl, entry->templ, OA_UI_RENDERER_NO_SELECTION,
+            out_html, out_size, error);
+
+    source = (const oa_ui_operation *)impl->source->operations.data;
+    for (size_t i = 0u; i < impl->source->operations.count; ++i)
+        if (oa_ui_renderer_operation_matches(&source[i], query)) ++matches;
+
+    if (matches != 0u) {
+        operations = (oa_ui_operation *)calloc(matches, sizeof(*operations));
+        keys = (vstr *)calloc(matches, sizeof(*keys));
+        if (!operations || !keys) {
+            free(operations);
+            free(keys);
+            return oa_ui_renderer_fail(error, OA_UI_RENDERER_OUT_OF_MEMORY,
+                                       "unable to allocate filtered operation view");
+        }
+
+        size_t output = 0u;
+        for (size_t i = 0u; i < impl->source->operations.count; ++i) {
+            if (!oa_ui_renderer_operation_matches(&source[i], query)) continue;
+            operations[output] = source[i];
+            keys[output] = impl->operation_keys[i];
+            ++output;
+        }
+    }
+
+    const oa_ui_jinja_document saved = impl->root;
+    impl->root.operations = (JINJA_CMETA_SEQUENCE_VIEW){
+        operations, matches, sizeof(oa_ui_operation), &impl->operation_data};
+    impl->root.operation_keys = (JINJA_CMETA_SEQUENCE_VIEW){
+        keys, matches, sizeof(vstr), jinja_cmeta_vstr_data()};
+    impl->root.selected_operations = (JINJA_CMETA_SEQUENCE_VIEW){
+        NULL, 0u, sizeof(oa_ui_operation), &impl->operation_data};
+
+    result = oa_ui_renderer_render_compiled(
+        impl, entry->templ, OA_UI_RENDERER_NO_SELECTION,
+        out_html, out_size, error);
+    impl->root = saved;
+    free(operations);
+    free(keys);
+    return result;
 }
