@@ -18,6 +18,9 @@ enum {
     UI_HEADER_BYTES = 8192,
     UI_CHUNK_BYTES = 65536,
     UI_FILE_BYTES = 2 * 1024 * 1024,
+    /* Buffered replies must fit one bounded CHTTP transport send. Keep the
+     * current shell below that bound; #6 owns any larger SSR transport design. */
+    UI_RENDER_BYTES = 48 * 1024,
     UI_PATH_BYTES = 4096,
     UI_PORT_MAX = 65535
 };
@@ -171,6 +174,7 @@ int main(int argc, char **argv) {
 
     oa_ui_renderer_config renderer_config =
         (oa_ui_renderer_config)OA_UI_RENDERER_CONFIG_INIT;
+    renderer_config.max_output_bytes = UI_RENDER_BYTES;
     oa_ui_renderer_error renderer_error = OA_UI_RENDERER_ERROR_INIT;
     oa_ui_renderer_status renderer_status = oa_ui_renderer_init(
         &renderer, oa_ui_model_view(model),
@@ -224,7 +228,8 @@ int main(int argc, char **argv) {
     config.max_response_header_count = UI_HEADERS;
     config.max_response_header_bytes = UI_HEADER_BYTES;
     config.max_response_body_bytes = UI_FILE_BYTES;
-    config.max_buffered_response_body_bytes = UI_FILE_BYTES;
+    /* Zero lets CHTTP derive the largest body that still fits max_send_bytes. */
+    config.max_buffered_response_body_bytes = 0u;
     config.poll_slice_ms = 1u;
 
     const char *routes[] = {
