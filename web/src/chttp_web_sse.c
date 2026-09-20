@@ -313,7 +313,7 @@ chttp_web_status chttp_web_sse_response(
       .content_length = 0u,
       .content_length_known = 0};
   status = chttp_server_response_source_with_cleanup(
-      response, 200u, "text/event-stream; charset=utf-8",
+      response, 200u, "text/event-stream",
       &source, chttp_web_sse_source_cleanup, stream);
   if (status != SALTS_OK) {
     stream->active = false;
