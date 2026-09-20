@@ -30,7 +30,8 @@ static chttp_web_status chttp_web_sse_fail(
 }
 
 static int chttp_web_sse_view_valid(chttp_web_string_view value) {
-  if (value.size != 0u && value.data == NULL) return 0;
+  if (value.size == 0u) return 1;
+  if (value.data == NULL) return 0;
   return vstr_utf8_invalid_offset(
              vstr_from_buf(value.data, value.size)) == VSTR_NPOS;
 }
