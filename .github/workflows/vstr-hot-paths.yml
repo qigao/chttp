@@ -1,16 +1,16 @@
-name: CHttp Web security middleware verification
+name: OpenAPI CHttp Web migration verification
 
 on:
   push:
     branches:
-      - feat/chttp-web-security
+      - feat/openapi-ui-chttp-web
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: chttp-web-security-${{ github.ref_name }}
+  group: openapi-chttp-web-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -225,6 +225,20 @@ jobs:
           )
           PY
 
+      - name: Audit OpenAPI generic web boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e openapi/ui/renderer.c
+          test ! -e openapi/ui/renderer.h
+          if grep -R -n -E 'jinja_cmeta|Salts::JinjaCMeta' openapi \
+              --include='*.c' --include='*.h' --include='CMakeLists.txt'; then
+            echo "OpenAPI production code still owns Jinja directly" >&2
+            exit 1
+          fi
+          grep -q 'CHttp::Web' openapi/examples/CMakeLists.txt
+          echo "OpenAPI Jinja ownership audit passed: rendering is owned by CHttp::Web"
+
       - name: Build focused targets
         shell: bash
         env:
@@ -235,9 +249,8 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test chttp_web_form_test \
-            chttp_web_example chttp_web_context_example chttp_web_session_example \
-            chttp_web_security_example -j2
+            chttp_web_renderer_test test_ui_model test_ui_renderer \
+            test_ui_fragments test_ui_htmx openapi_ui_server -j2
 
       - name: Run focused tests
         shell: bash
@@ -246,7 +259,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_web_(renderer_test|context_test|form_test|http_test|context_http_test|session_http_test|security_http_test)$' \
+            -R '^(chttp_web_renderer_test|openapi_ui_(model|renderer|fragments|htmx|security_http|http|fragment_http|tryit_http))$' \
             --output-on-failure
 
       - name: Build full Chttp graph
@@ -271,7 +284,7 @@ jobs:
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
 
-      - name: Verify web security lifecycle with AddressSanitizer
+      - name: Verify OpenAPI Web lifecycle with AddressSanitizer
         shell: bash
         env:
           PROJECT_ROOT: ${{ runner.temp }}/salts-project
@@ -285,10 +298,11 @@ jobs:
             -DENABLE_SANITIZER_ADDRESS=ON \
             -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test chttp_web_form_test \
-            chttp_web_session_example chttp_web_security_example -j2
+            chttp_web_renderer_test test_ui_model test_ui_renderer \
+            test_ui_fragments test_ui_htmx openapi_ui_server -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_web_(renderer_test|context_test|form_test|session_http_test|security_http_test)$' --output-on-failure
+            -R '^(chttp_web_renderer_test|openapi_ui_(model|renderer|fragments|htmx|security_http|http|fragment_http|tryit_http))$' \
+            --output-on-failure
 
       - name: Verify exact head and clean tracked source
         if: always()
