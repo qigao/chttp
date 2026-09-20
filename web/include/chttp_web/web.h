@@ -115,6 +115,8 @@ typedef void (*chttp_web_sse_close_fn)(void *user, int status);
 
 /**
  * Caller-owned SSE source state. No heap is allocated by the SSE layer.
+ * Initialize it with CHTTP_WEB_SSE_STREAM_INIT (or all-zero storage) before
+ * first use. An active stream cannot be reinitialized.
  *
  * scratch is the hard per-event formatted-byte bound. The complete stream is
  * additionally bounded by chttp_server_config.max_response_body_bytes.
