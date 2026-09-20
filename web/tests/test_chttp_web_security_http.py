@@ -43,9 +43,15 @@ def assert_security_headers(response, referrer="no-referrer"):
 
 try:
     line = proc.stdout.readline().strip()
-    assert line.startswith(
+    if not line.startswith(
         "CHttp::Web security example: http://127.0.0.1:"
-    ), line
+    ):
+        rc = proc.poll()
+        stderr = proc.stderr.read() if rc is not None and proc.stderr else ""
+        raise AssertionError(
+            f"security example did not publish its URL: line={line!r} "
+            f"rc={rc!r} stderr={stderr!r}"
+        )
     base = line.split("CHttp::Web security example: ", 1)[1]
     if not base.endswith("/"):
         base += "/"
