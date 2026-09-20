@@ -1,6 +1,5 @@
-#include "renderer.h"
+#include <chttp_web/web.h>
 
-#include <http_server/http.h>
 #include <json_parser.h>
 #include <openapi/ui_model.h>
 #include <salts_fs.h>
@@ -39,6 +38,13 @@ enum {
     UI_TEMPLATE_COUNT =
         sizeof(UI_TEMPLATE_NAMES) / sizeof(UI_TEMPLATE_NAMES[0])
 };
+
+typedef struct ui_app {
+    chttp_web_renderer renderer;
+    const oa_ui_document *document;
+    oa_ui_operation *filter_storage;
+    size_t filter_capacity;
+} ui_app;
 
 static char *load_file_bounded(const char *path, size_t limit, size_t *out_size) {
     salts_fs_stat_t metadata = {0};
@@ -90,62 +96,63 @@ static char *load_file_bounded(const char *path, size_t limit, size_t *out_size)
     return bytes;
 }
 
-static int response_nosniff(chttp_server_response *response) {
-    return chttp_server_response_set_header(
-        response, "X-Content-Type-Options", "nosniff");
-}
-
 static int serve_file(void *user, const chttp_server_request_view *request,
                       chttp_server_response *response) {
-    int status = response_nosniff(response);
-    if (status != SALTS_OK) return status;
     return chttp_server_serve_file(
         response, request, (const chttp_server_file_options *)user);
 }
 
+static oa_ui_sequence_view selected_view(const oa_ui_operation *operation) {
+    return (oa_ui_sequence_view){
+        operation,
+        operation ? 1u : 0u,
+        sizeof(oa_ui_operation),
+        oa_ui_operation_cmeta_data()
+    };
+}
+
 static int reply_render_failure(
     chttp_server_response *response,
-    oa_ui_renderer_status rendered,
-    const oa_ui_renderer_error *error) {
+    chttp_web_status rendered,
+    const chttp_web_error *error) {
     static const char body[] = "OpenAPI UI render failed\n";
-    fprintf(stderr, "OpenAPI UI render failed: status=%d message=%s\n",
-            (int)rendered, error ? error->message : "");
+    fprintf(stderr,
+            "OpenAPI UI render failed: status=%d native=%d template=%s message=%s\n",
+            (int)rendered,
+            error ? error->native_status : 0,
+            error ? error->template_name : "",
+            error ? error->message : "");
     return chttp_server_reply(
         response, 500u, "text/plain; charset=utf-8",
         body, sizeof(body) - 1u);
 }
 
-static int reply_named(
-    oa_ui_renderer *renderer,
+static int reply_page(
+    ui_app *app,
     const char *template_name,
-    size_t selected_operation,
+    const oa_ui_document *page,
     chttp_server_response *response) {
-    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
-    char *html = NULL;
-    size_t html_size = 0u;
-    int status = response_nosniff(response);
-    if (status != SALTS_OK) return status;
-
-    oa_ui_renderer_status rendered = oa_ui_renderer_render_named(
-        renderer, vstr_from_cstr(template_name), selected_operation,
-        &html, &html_size, &error);
-    if (rendered != OA_UI_RENDERER_OK)
-        return reply_render_failure(response, rendered, &error);
-
-    status = chttp_server_reply(
-        response, 200u, "text/html; charset=utf-8", html, html_size);
-    oa_ui_renderer_output_free(html);
-    return status;
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+    const chttp_web_status rendered = chttp_web_render_response(
+        &app->renderer, response, template_name,
+        oa_ui_document_cmeta_data(), page,
+        200u, NULL, &error);
+    if (rendered == CHTTP_WEB_OK) return SALTS_OK;
+    if (rendered == CHTTP_WEB_SERVER) return error.native_status;
+    return reply_render_failure(response, rendered, &error);
 }
 
 static int serve_docs(void *user, const chttp_server_request_view *request,
                       chttp_server_response *response) {
     (void)request;
-    oa_ui_renderer *renderer = (oa_ui_renderer *)user;
-    const size_t selected =
-        oa_ui_renderer_operation_count(renderer) != 0u
-            ? 0u : OA_UI_RENDERER_NO_SELECTION;
-    return reply_named(renderer, "docs.html", selected, response);
+    ui_app *app = (ui_app *)user;
+    oa_ui_document page = *app->document;
+    if (page.operations.count != 0u) {
+        const oa_ui_operation *operations =
+            (const oa_ui_operation *)page.operations.data;
+        page.selected_operations = selected_view(&operations[0]);
+    }
+    return reply_page(app, "docs.html", &page, response);
 }
 
 static int search_hex_value(char value) {
@@ -207,87 +214,89 @@ static int serve_operation_list(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
     static const char bad_query[] = "Invalid OpenAPI operation search query\n";
-    oa_ui_renderer *renderer = (oa_ui_renderer *)user;
+    static const char filter_failed[] = "OpenAPI UI filter failed\n";
+    ui_app *app = (ui_app *)user;
     char query[UI_SEARCH_BYTES + 1u];
     size_t query_size = 0u;
+    oa_ui_sequence_view filtered = {0};
+    oa_error filter_error = {{0}};
 
-    int status = response_nosniff(response);
-    if (status != SALTS_OK) return status;
     if (parse_search_query(request, query, &query_size) != SALTS_OK)
         return chttp_server_reply(
             response, 400u, "text/plain; charset=utf-8",
             bad_query, sizeof(bad_query) - 1u);
 
-    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
-    char *html = NULL;
-    size_t html_size = 0u;
-    const oa_ui_renderer_status rendered =
-        oa_ui_renderer_render_operation_list(
-            renderer, vstr_from_buf(query, query_size),
-            &html, &html_size, &error);
-    if (rendered != OA_UI_RENDERER_OK)
-        return reply_render_failure(response, rendered, &error);
+    if (!oa_ui_document_filter_operations(
+            app->document, vstr_from_buf(query, query_size),
+            app->filter_storage, app->filter_capacity,
+            &filtered, &filter_error)) {
+        fprintf(stderr, "OpenAPI UI filter failed: %s\n", filter_error.message);
+        return chttp_server_reply(
+            response, 500u, "text/plain; charset=utf-8",
+            filter_failed, sizeof(filter_failed) - 1u);
+    }
 
-    status = chttp_server_reply(
-        response, 200u, "text/html; charset=utf-8", html, html_size);
-    oa_ui_renderer_output_free(html);
-    return status;
+    oa_ui_document page = *app->document;
+    page.operations = filtered;
+    page.selected_operations = selected_view(NULL);
+    return reply_page(app, "operation_list.html", &page, response);
 }
 
 static int serve_operation_detail(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
     static const char not_found[] = "OpenAPI operation not found\n";
-    oa_ui_renderer *renderer = (oa_ui_renderer *)user;
+    ui_app *app = (ui_app *)user;
     const char *key = chttp_server_request_param(request, "key");
-    size_t selected = OA_UI_RENDERER_NO_SELECTION;
-
-    int status = response_nosniff(response);
-    if (status != SALTS_OK) return status;
-    if (!key)
+    const oa_ui_operation *operation =
+        key ? oa_ui_document_find_operation(
+                  app->document, vstr_from_cstr(key))
+            : NULL;
+    if (!operation)
         return chttp_server_reply(
             response, 404u, "text/plain; charset=utf-8",
             not_found, sizeof(not_found) - 1u);
 
-    const oa_ui_renderer_status found = oa_ui_renderer_find_operation(
-        renderer, vstr_from_cstr(key), &selected);
-    if (found == OA_UI_RENDERER_NOT_FOUND)
-        return chttp_server_reply(
-            response, 404u, "text/plain; charset=utf-8",
-            not_found, sizeof(not_found) - 1u);
-    if (found != OA_UI_RENDERER_OK) {
-        static const char failed[] = "OpenAPI UI lookup failed\n";
-        fprintf(stderr, "OpenAPI UI operation lookup failed: status=%d\n",
-                (int)found);
-        return chttp_server_reply(
-            response, 500u, "text/plain; charset=utf-8",
-            failed, sizeof(failed) - 1u);
+    oa_ui_document page = *app->document;
+    page.selected_operations = selected_view(operation);
+    return reply_page(app, "operation_detail.html", &page, response);
+}
+
+static int validate_render_bundle(ui_app *app) {
+    oa_ui_document page = *app->document;
+    if (page.operations.count != 0u) {
+        const oa_ui_operation *operations =
+            (const oa_ui_operation *)page.operations.data;
+        page.selected_operations = selected_view(&operations[0]);
     }
 
-    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
-    char *html = NULL;
-    size_t html_size = 0u;
-    const oa_ui_renderer_status rendered = oa_ui_renderer_render_named(
-        renderer, vstr_from_cstr("operation_detail.html"), selected,
-        &html, &html_size, &error);
-    if (rendered != OA_UI_RENDERER_OK)
-        return reply_render_failure(response, rendered, &error);
-
-    status = chttp_server_reply(
-        response, 200u, "text/html; charset=utf-8", html, html_size);
-    oa_ui_renderer_output_free(html);
-    return status;
+    for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i) {
+        chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+        char *html = NULL;
+        size_t html_size = 0u;
+        const chttp_web_status rendered = chttp_web_render(
+            &app->renderer, UI_TEMPLATE_NAMES[i],
+            oa_ui_document_cmeta_data(), &page,
+            &html, &html_size, &error);
+        chttp_web_output_free(html);
+        if (rendered == CHTTP_WEB_OK) continue;
+        fprintf(stderr,
+                "OpenAPI UI renderer startup failed: status=%d template=%s message=%s\n",
+                (int)rendered, error.template_name, error.message);
+        return 0;
+    }
+    return 1;
 }
 
 int main(int argc, char **argv) {
     chttp_server server = {0};
-    oa_ui_renderer renderer = {0};
+    ui_app app = {0};
     oa_ui_model *model = NULL;
     json_value_t *root = NULL;
     char *document_bytes = NULL;
     size_t document_size = 0u;
     char *template_storage[UI_TEMPLATE_COUNT] = {0};
-    oa_ui_renderer_template templates[UI_TEMPLATE_COUNT] = {0};
+    chttp_web_template templates[UI_TEMPLATE_COUNT] = {0};
     int status = SALTS_OK;
 
     if (argc < 3 || argc > 4) {
@@ -330,6 +339,17 @@ int main(int argc, char **argv) {
         status = SALTS_EINVAL;
         goto cleanup;
     }
+    app.document = oa_ui_model_view(model);
+    app.filter_capacity = app.document->operations.count;
+    if (app.filter_capacity != 0u) {
+        app.filter_storage = (oa_ui_operation *)calloc(
+            app.filter_capacity, sizeof(*app.filter_storage));
+        if (!app.filter_storage) {
+            fputs("Out of memory allocating OpenAPI UI filter storage\n", stderr);
+            status = SALTS_ENOMEM;
+            goto cleanup;
+        }
+    }
 
     char template_paths[UI_TEMPLATE_COUNT][UI_PATH_BYTES];
     for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i) {
@@ -349,27 +369,32 @@ int main(int argc, char **argv) {
             status = SALTS_EINVAL;
             goto cleanup;
         }
-        templates[i] = (oa_ui_renderer_template){
-            vstr_from_cstr(UI_TEMPLATE_NAMES[i]),
-            vstr_from_buf(template_storage[i], source_size)
+        templates[i] = (chttp_web_template){
+            UI_TEMPLATE_NAMES[i], template_storage[i], source_size
         };
     }
 
-    oa_ui_renderer_config renderer_config =
-        (oa_ui_renderer_config)OA_UI_RENDERER_CONFIG_INIT;
+    chttp_web_renderer_config renderer_config =
+        (chttp_web_renderer_config)CHTTP_WEB_RENDERER_CONFIG_INIT;
     renderer_config.max_output_bytes = UI_FILE_BYTES;
-    oa_ui_renderer_error renderer_error = OA_UI_RENDERER_ERROR_INIT;
-    const oa_ui_renderer_status renderer_status = oa_ui_renderer_init_bundle(
-        &renderer, oa_ui_model_view(model),
-        templates, UI_TEMPLATE_COUNT, &renderer_config, &renderer_error);
+    chttp_web_error renderer_error = CHTTP_WEB_ERROR_INIT;
+    const chttp_web_status renderer_status = chttp_web_renderer_init(
+        &app.renderer, templates, UI_TEMPLATE_COUNT,
+        &renderer_config, &renderer_error);
     for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i) {
         free(template_storage[i]);
         template_storage[i] = NULL;
     }
-    if (renderer_status != OA_UI_RENDERER_OK) {
+    if (renderer_status != CHTTP_WEB_OK) {
         fprintf(stderr,
-                "OpenAPI UI renderer startup failed: status=%d message=%s\n",
-                (int)renderer_status, renderer_error.message);
+                "OpenAPI UI renderer startup failed: status=%d template=%s message=%s\n",
+                (int)renderer_status,
+                renderer_error.template_name,
+                renderer_error.message);
+        status = SALTS_EINVAL;
+        goto cleanup;
+    }
+    if (!validate_render_bundle(&app)) {
         status = SALTS_EINVAL;
         goto cleanup;
     }
@@ -455,17 +480,23 @@ int main(int argc, char **argv) {
         }
     }
 
+    chttp_web_security_policy security =
+        (chttp_web_security_policy)CHTTP_WEB_SECURITY_POLICY_INIT;
+    security.nosniff = true;
+
     status = chttp_server_init(&server, &config);
     if (status == SALTS_OK)
-        status = chttp_server_get(&server, "/docs", serve_docs, &renderer);
+        status = chttp_web_security_use(&server, &security);
     if (status == SALTS_OK)
-        status = chttp_server_get(&server, "/docs/", serve_docs, &renderer);
+        status = chttp_server_get(&server, "/docs", serve_docs, &app);
+    if (status == SALTS_OK)
+        status = chttp_server_get(&server, "/docs/", serve_docs, &app);
     if (status == SALTS_OK)
         status = chttp_server_get(
-            &server, "/docs/operations", serve_operation_list, &renderer);
+            &server, "/docs/operations", serve_operation_list, &app);
     if (status == SALTS_OK)
         status = chttp_server_get(
-            &server, "/docs/operations/:key", serve_operation_detail, &renderer);
+            &server, "/docs/operations/:key", serve_operation_detail, &app);
     for (size_t i = 0u; status == SALTS_OK && i < UI_STATIC_ROUTES; ++i)
         status = chttp_server_get(&server, routes[i], serve_file, &options[i]);
 
@@ -489,7 +520,8 @@ cleanup:
         }
     }
 
-    oa_ui_renderer_destroy(&renderer);
+    chttp_web_renderer_destroy(&app.renderer);
+    free(app.filter_storage);
     oa_ui_model_free(model);
     json_free(root);
     free(document_bytes);
