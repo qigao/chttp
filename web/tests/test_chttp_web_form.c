@@ -4,6 +4,7 @@
 
 #include <data_bind.h>
 #include <tbe_typed.h>
+#include <salts_cmeta_fixed_width.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -39,6 +40,55 @@ static const TbeTypedType WEB_FORM_TYPE = {
     .size = sizeof(web_form_model),
     .fields = WEB_FORM_FIELDS,
     .field_count = sizeof(WEB_FORM_FIELDS) / sizeof(WEB_FORM_FIELDS[0])};
+
+
+typedef struct web_form_descriptor_model {
+  uint32_t count;
+} web_form_descriptor_model;
+
+TBE_TYPED_DEFINE_STRUCT(
+    WEB_FORM_DESCRIPTOR_OVERLAY, web_form_descriptor_model, "ScalarForm",
+    TBE_TYPED_FIELD(web_form_descriptor_model, count, "count",
+                    TBE_TYPED_U32, TBE_TYPED_REQUIRED));
+
+static const cmeta_type_identity WEB_FORM_DESCRIPTOR_ID =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.web.form.ScalarForm");
+static const cmeta_type_desc WEB_FORM_DESCRIPTOR_TYPE = {
+    "web_form_descriptor_model",
+    sizeof(web_form_descriptor_model),
+    _Alignof(web_form_descriptor_model),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &WEB_FORM_DESCRIPTOR_ID};
+static const cmeta_field_desc WEB_FORM_DESCRIPTOR_LAYOUT_FIELDS[] = {{
+    "count", "uint32_t", offsetof(web_form_descriptor_model, count),
+    sizeof(uint32_t), _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL}};
+static const cmeta_struct_desc WEB_FORM_DESCRIPTOR_LAYOUT = {
+    "web_form_descriptor_model",
+    sizeof(web_form_descriptor_model),
+    _Alignof(web_form_descriptor_model),
+    WEB_FORM_DESCRIPTOR_LAYOUT_FIELDS,
+    1u};
+static const cmeta_data_field_desc WEB_FORM_DESCRIPTOR_FIELDS[] = {{
+    "chttp.web.form.ScalarForm.count", "count",
+    offsetof(web_form_descriptor_model, count), &salts_uint32_cmeta_data}};
+static const cmeta_data_struct_shape WEB_FORM_DESCRIPTOR_SHAPE = {
+    &WEB_FORM_DESCRIPTOR_LAYOUT, WEB_FORM_DESCRIPTOR_FIELDS, 1u};
+static const cmeta_data_desc WEB_FORM_DESCRIPTOR_DATA = {
+    sizeof(cmeta_data_desc),
+    CMETA_DATA_DESC_ABI_VERSION,
+    "chttp.web.form.ScalarForm.data",
+    "ScalarForm",
+    CMETA_DATA_STRUCT,
+    &WEB_FORM_DESCRIPTOR_TYPE,
+    &WEB_FORM_DESCRIPTOR_SHAPE,
+    NULL,
+    NULL,
+    NULL};
+static const TbeTypedDescriptor WEB_FORM_DESCRIPTOR =
+    TBE_TYPED_DESCRIPTOR_INIT(
+        &WEB_FORM_DESCRIPTOR_OVERLAY, &WEB_FORM_DESCRIPTOR_DATA);
 
 static chttp_web_status parse_form(
     const char *body, size_t max_input, size_t max_pairs,
@@ -196,6 +246,62 @@ spec("CHttp::Web bounded form parsing and DataBind binding") {
     check_equal(*web_form_u32_vec_at(&model.tags, 1u), before1);
 
     tbe_typed_clear(&WEB_FORM_TYPE, &model);
+    data_bind_free(codec);
+  }
+
+  it("binds through the canonical CMeta/DataBind descriptor transactionally") {
+    static const char schema[] = "message ScalarForm { uint32 count; }";
+    chttp_web_form_pair pairs[1];
+    char bytes[32];
+    char json[64];
+    chttp_web_form form = {0};
+    chttp_web_form_bind_options bind_options =
+        (chttp_web_form_bind_options)CHTTP_WEB_FORM_BIND_OPTIONS_INIT;
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBind *codec = NULL;
+    web_form_descriptor_model model;
+
+    bind_options.json_storage = json;
+    bind_options.json_capacity = sizeof(json);
+
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &codec, &bind_error),
+        DATA_BIND_OK);
+    check_not_null(codec);
+    check_equal(
+        tbe_typed_descriptor_init(
+            &WEB_FORM_DESCRIPTOR, &model, &bind_error),
+        DATA_BIND_OK);
+
+    check_equal(
+        parse_form("count=11", 8u, 1u, sizeof(bytes),
+                   pairs, 1u, bytes, sizeof(bytes), &form, &error),
+        CHTTP_WEB_OK);
+    check_equal(
+        chttp_web_form_bind_descriptor(
+            &form, codec, "ScalarForm", &WEB_FORM_DESCRIPTOR, &model,
+            &bind_options, &error),
+        CHTTP_WEB_OK);
+    check_equal(model.count, 11u);
+
+    error = (chttp_web_error)CHTTP_WEB_ERROR_INIT;
+    check_equal(
+        parse_form("count=oops", 10u, 1u, sizeof(bytes),
+                   pairs, 1u, bytes, sizeof(bytes), &form, &error),
+        CHTTP_WEB_OK);
+    check_equal(
+        chttp_web_form_bind_descriptor(
+            &form, codec, "ScalarForm", &WEB_FORM_DESCRIPTOR, &model,
+            &bind_options, &error),
+        CHTTP_WEB_BIND);
+    check_equal(model.count, 11u);
+
+    check_equal(
+        tbe_typed_descriptor_clear(
+            &WEB_FORM_DESCRIPTOR, &model, &bind_error),
+        DATA_BIND_OK);
     data_bind_free(codec);
   }
 
