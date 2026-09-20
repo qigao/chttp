@@ -1,6 +1,6 @@
-#include "renderer.h"
-
+#include <chttp_web/web.h>
 #include <json_parser.h>
+#include <openapi/ui_model.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,8 +8,7 @@
 
 #define REQUIRE(x) do { \
     if (!(x)) { \
-        fprintf(stderr, "line %d: %s (status=%d message=%s)\n", \
-                __LINE__, #x, (int)error.status, error.message); \
+        fprintf(stderr, "line %d: %s\n", __LINE__, #x); \
         return 1; \
     } \
 } while (0)
@@ -26,78 +25,99 @@ static const char DOCUMENT[] =
         "\"responses\":{\"201\":{\"description\":\"Created\"}}}"
     "}}}";
 
+static int render_filter(
+    chttp_web_renderer *renderer,
+    const oa_ui_document *document,
+    vstr query,
+    oa_ui_operation *storage,
+    size_t capacity,
+    char **html,
+    size_t *size) {
+    oa_ui_sequence_view filtered = {0};
+    oa_error filter_error = {{0}};
+    if (!oa_ui_document_filter_operations(
+            document, query, storage, capacity, &filtered, &filter_error)) {
+        fprintf(stderr, "filter failed: %s\n", filter_error.message);
+        return 0;
+    }
+    oa_ui_document page = *document;
+    page.operations = filtered;
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+    return chttp_web_render(
+        renderer, "operation_list.html", oa_ui_document_cmeta_data(), &page,
+        html, size, &error) == CHTTP_WEB_OK;
+}
+
 int main(void) {
-    oa_ui_renderer_error error = OA_UI_RENDERER_ERROR_INIT;
     json_value_t *root = json_parse(DOCUMENT, strlen(DOCUMENT));
     REQUIRE(root);
-
     oa_error model_error = {{0}};
     oa_ui_model *model = oa_ui_model_create_json(root, &model_error);
     json_free(root);
     REQUIRE(model);
+    const oa_ui_document *document = oa_ui_model_view(model);
+    REQUIRE(document);
 
-    const oa_ui_renderer_template templates[] = {
-        {vstr_from_cstr("operation_list.html"),
-         vstr_from_cstr(
-             "{% for op in operations %}{{ operation_keys[loop.index0] }}="
-             "{{ op.method }} {{ op.path }} {{ op.summary }};"
-             "{% endfor %}")}
+    static const char LIST[] =
+        "{% for op in operations %}{{ op.route_key }}="
+        "{{ op.method }} {{ op.path }} {{ op.summary }};"
+        "{% endfor %}";
+    const chttp_web_template templates[] = {
+        {"operation_list.html", LIST, sizeof(LIST) - 1u}
     };
-    oa_ui_renderer renderer = {0};
-    oa_ui_renderer_config config =
-        (oa_ui_renderer_config)OA_UI_RENDERER_CONFIG_INIT;
-    REQUIRE(oa_ui_renderer_init_bundle(
-        &renderer, oa_ui_model_view(model),
-        templates, sizeof(templates) / sizeof(templates[0]),
-        &config, &error) == OA_UI_RENDERER_OK);
+    chttp_web_renderer renderer = {0};
+    chttp_web_renderer_config config =
+        (chttp_web_renderer_config)CHTTP_WEB_RENDERER_CONFIG_INIT;
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+    REQUIRE(chttp_web_renderer_init(
+        &renderer, templates, 1u, &config, &error) == CHTTP_WEB_OK);
 
+    oa_ui_operation storage[2] = {0};
     char *html = NULL;
     size_t size = 0u;
-    REQUIRE(oa_ui_renderer_render_operation_list(
-        &renderer, vstr_from_cstr("CREATE"),
-        &html, &size, &error) == OA_UI_RENDERER_OK);
+
+    REQUIRE(render_filter(
+        &renderer, document, vstr_from_cstr("CREATE"),
+        storage, 2u, &html, &size));
     REQUIRE(strstr(html, "createPet=post /pets Create pet;") != NULL);
     REQUIRE(strstr(html, "listPets=") == NULL);
-    oa_ui_renderer_output_free(html);
+    chttp_web_output_free(html);
     html = NULL;
 
-    REQUIRE(oa_ui_renderer_render_operation_list(
-        &renderer, vstr_from_cstr("read"),
-        &html, &size, &error) == OA_UI_RENDERER_OK);
+    REQUIRE(render_filter(
+        &renderer, document, vstr_from_cstr("read"),
+        storage, 2u, &html, &size));
     REQUIRE(strstr(html, "listPets=get /pets List pets;") != NULL);
     REQUIRE(strstr(html, "createPet=") == NULL);
-    oa_ui_renderer_output_free(html);
+    chttp_web_output_free(html);
     html = NULL;
 
-    REQUIRE(oa_ui_renderer_render_operation_list(
-        &renderer, vstr_from_cstr(""),
-        &html, &size, &error) == OA_UI_RENDERER_OK);
+    REQUIRE(render_filter(
+        &renderer, document, vstr_from_cstr(""),
+        storage, 2u, &html, &size));
     REQUIRE(strstr(html, "listPets=") != NULL);
     REQUIRE(strstr(html, "createPet=") != NULL);
-    oa_ui_renderer_output_free(html);
+    chttp_web_output_free(html);
     html = NULL;
 
     char oversized[257];
     memset(oversized, 'x', sizeof(oversized));
-    size = 99u;
-    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
-    REQUIRE(oa_ui_renderer_render_operation_list(
-        &renderer, vstr_from_buf(oversized, sizeof(oversized)),
-        &html, &size, &error) == OA_UI_RENDERER_CAPACITY);
-    REQUIRE(html == NULL);
-    REQUIRE(size == 0u);
+    oa_ui_sequence_view filtered = {0};
+    oa_error filter_error = {{0}};
+    REQUIRE(!oa_ui_document_filter_operations(
+        document, vstr_from_buf(oversized, sizeof(oversized)),
+        storage, 2u, &filtered, &filter_error));
+    REQUIRE(filtered.count == 0u);
 
     const char invalid_utf8[] = {(char)0xff};
-    size = 99u;
-    error = (oa_ui_renderer_error)OA_UI_RENDERER_ERROR_INIT;
-    REQUIRE(oa_ui_renderer_render_operation_list(
-        &renderer, vstr_from_buf(invalid_utf8, sizeof(invalid_utf8)),
-        &html, &size, &error) == OA_UI_RENDERER_INVALID_ARGUMENT);
-    REQUIRE(html == NULL);
-    REQUIRE(size == 0u);
+    filter_error = (oa_error){{0}};
+    REQUIRE(!oa_ui_document_filter_operations(
+        document, vstr_from_buf(invalid_utf8, sizeof(invalid_utf8)),
+        storage, 2u, &filtered, &filter_error));
+    REQUIRE(filtered.count == 0u);
 
-    oa_ui_renderer_destroy(&renderer);
+    chttp_web_renderer_destroy(&renderer);
     oa_ui_model_free(model);
-    puts("openapi HTMX filtering contract passed");
+    puts("openapi HTMX filter qualification through CHttp::Web passed");
     return 0;
 }
