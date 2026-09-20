@@ -237,6 +237,14 @@ static const cmeta_field_desc CHTTP_WEB_REQUEST_CONTEXT_LAYOUT_FIELDS[] = {
      offsetof(chttp_web_request_context, session_available),
      sizeof(((chttp_web_request_context *)0)->session_available),
      _Alignof(bool), NULL, NULL},
+    {"csrf_token", "chttp_web_string_view",
+     offsetof(chttp_web_request_context, csrf_token),
+     sizeof(((chttp_web_request_context *)0)->csrf_token),
+     _Alignof(chttp_web_string_view), NULL, NULL},
+    {"csrf_available", "bool",
+     offsetof(chttp_web_request_context, csrf_available),
+     sizeof(((chttp_web_request_context *)0)->csrf_available),
+     _Alignof(bool), NULL, NULL},
     {"params", "chttp_web_sequence_view",
      offsetof(chttp_web_request_context, params),
      sizeof(((chttp_web_request_context *)0)->params),
@@ -255,7 +263,7 @@ static const cmeta_struct_desc CHTTP_WEB_REQUEST_CONTEXT_LAYOUT = {
     sizeof(chttp_web_request_context),
     _Alignof(chttp_web_request_context),
     CHTTP_WEB_REQUEST_CONTEXT_LAYOUT_FIELDS,
-    8u};
+    10u};
 
 static const cmeta_data_field_desc CHTTP_WEB_REQUEST_CONTEXT_FIELDS[] = {
     {"chttp.web.RequestContext.method", "method",
@@ -268,6 +276,10 @@ static const cmeta_data_field_desc CHTTP_WEB_REQUEST_CONTEXT_FIELDS[] = {
      offsetof(chttp_web_request_context, htmx), &cmeta_data_bool},
     {"chttp.web.RequestContext.session_available", "session_available",
      offsetof(chttp_web_request_context, session_available), &cmeta_data_bool},
+    {"chttp.web.RequestContext.csrf_token", "csrf_token",
+     offsetof(chttp_web_request_context, csrf_token), &CHTTP_WEB_STRING_DATA},
+    {"chttp.web.RequestContext.csrf_available", "csrf_available",
+     offsetof(chttp_web_request_context, csrf_available), &cmeta_data_bool},
     {"chttp.web.RequestContext.params", "params",
      offsetof(chttp_web_request_context, params), &CHTTP_WEB_SEQUENCE_DATA},
     {"chttp.web.RequestContext.headers", "headers",
@@ -278,7 +290,7 @@ static const cmeta_data_field_desc CHTTP_WEB_REQUEST_CONTEXT_FIELDS[] = {
 static const cmeta_data_struct_shape CHTTP_WEB_REQUEST_CONTEXT_SHAPE = {
     &CHTTP_WEB_REQUEST_CONTEXT_LAYOUT,
     CHTTP_WEB_REQUEST_CONTEXT_FIELDS,
-    8u};
+    10u};
 
 static const cmeta_data_desc CHTTP_WEB_REQUEST_CONTEXT_DATA = {
     .struct_size = sizeof(cmeta_data_desc),
@@ -402,6 +414,11 @@ chttp_web_status chttp_web_request_context_init(
   context->path = chttp_web_string_from_cstr(request->path);
   context->htmx = chttp_web_request_is_htmx(request);
   context->session_available = request->session != NULL;
+  {
+    const char *csrf = chttp_web_csrf_token(request->session);
+    context->csrf_token = chttp_web_string_from_cstr(csrf);
+    context->csrf_available = csrf != NULL;
+  }
   context->params = (chttp_web_sequence_view){
       options->param_storage, request->param_count,
       sizeof(chttp_web_named_value), &CHTTP_WEB_NAMED_VALUE_DATA};

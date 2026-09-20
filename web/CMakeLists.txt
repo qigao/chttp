@@ -1,7 +1,8 @@
 add_library(chttp_web SHARED
   src/chttp_web.c
   src/chttp_web_context.c
-  src/chttp_web_form.c)
+  src/chttp_web_form.c
+  src/chttp_web_session.c)
 add_library(CHttp::Web ALIAS chttp_web)
 set_target_properties(chttp_web PROPERTIES
   EXPORT_NAME Web FOLDER "web"
@@ -13,7 +14,7 @@ target_include_directories(chttp_web
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(chttp_web
   PUBLIC CHttp::Server Salts::CMeta
-  PRIVATE Salts::JinjaCMeta Salts::DataBind)
+  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core OpenSSL::Crypto)
 
 get_target_property(_chttp_server_links chttp_server LINK_LIBRARIES)
 if("${_chttp_server_links}" MATCHES "Jinja|jinja")
