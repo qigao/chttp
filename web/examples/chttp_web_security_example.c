@@ -92,7 +92,8 @@ int main(void) {
       .key = WEB_SECURITY_JWT_KEY,
       .key_size = sizeof(WEB_SECURITY_JWT_KEY)};
   chttp_jwt_claims claims = {
-      .subject = "security-test"};
+      .subject = "security-test",
+      .expires_at = INT64_C(3000000000)};
   web_security_app app = {0};
   chttp_server server = {0};
   chttp_server_config config = {0};
