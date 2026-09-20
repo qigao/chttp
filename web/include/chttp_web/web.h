@@ -63,6 +63,14 @@ typedef struct chttp_web_error {
 #define CHTTP_WEB_ERROR_INIT {CHTTP_WEB_OK, 0, 0u, {0}, {0}}
 
 /**
+ * Renderer-compatible CMeta descriptors for borrowed vstr and contiguous
+ * sequence views. These keep Jinja-specific descriptor details inside
+ * CHttp::Web so application/presentation code does not depend on Jinja CMeta.
+ */
+const cmeta_data_desc *chttp_web_vstr_cmeta_data(void);
+const cmeta_data_desc *chttp_web_sequence_cmeta_data(void);
+
+/**
  * Borrowed immutable bytes used by the typed request context. The pointed
  * bytes are never owned by CHttp::Web and must outlive the render using them.
  */
