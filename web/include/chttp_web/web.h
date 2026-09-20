@@ -377,7 +377,11 @@ chttp_web_security_policy chttp_web_security_authenticated_policy(void);
  * calling next, so later middleware or the terminal handler may explicitly
  * replace a header using chttp_server_response_set_header(). Register this
  * middleware before CORS when security headers are also required on CORS
- * preflight responses.
+ * preflight responses. Responses rejected by JWT/global admission before the
+ * middleware chain do not receive these headers.
+ *
+ * Jinja HTML autoescape and this HTTP security policy are independent
+ * guarantees: neither replaces the other.
  */
 int chttp_web_security_use(
     chttp_server *server,
