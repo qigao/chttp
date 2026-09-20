@@ -245,7 +245,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_web_(renderer_test|context_test|form_test|http_test|context_http_test)
+            -R '^chttp_web_(renderer_test|context_test|form_test|http_test|context_http_test)$' \
             --output-on-failure
 
       - name: Build full Chttp graph
@@ -286,116 +286,7 @@ jobs:
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test chttp_web_form_test -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_web_(renderer_test|context_test|form_test)
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify web context lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_web_(renderer_test|context_test)$' --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify web context lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_web_(renderer_test|context_test)$' --output-on-failure
+            -R '^chttp_web_(renderer_test|context_test|form_test)$' --output-on-failure
 
       - name: Verify exact head and clean tracked source
         if: always()
