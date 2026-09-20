@@ -42,8 +42,6 @@ enum {
 typedef struct ui_app {
     chttp_web_renderer renderer;
     const oa_ui_document *document;
-    oa_ui_operation *filter_storage;
-    size_t filter_capacity;
 } ui_app;
 
 static char *load_file_bounded(const char *path, size_t limit, size_t *out_size) {
@@ -220,17 +218,29 @@ static int serve_operation_list(
     size_t query_size = 0u;
     oa_ui_sequence_view filtered = {0};
     oa_error filter_error = {{0}};
+    oa_ui_operation *filter_storage = NULL;
+    int result;
 
     if (parse_search_query(request, query, &query_size) != SALTS_OK)
         return chttp_server_reply(
             response, 400u, "text/plain; charset=utf-8",
             bad_query, sizeof(bad_query) - 1u);
 
+    if (query_size != 0u && app->document->operations.count != 0u) {
+        filter_storage = (oa_ui_operation *)calloc(
+            app->document->operations.count, sizeof(*filter_storage));
+        if (!filter_storage)
+            return chttp_server_reply(
+                response, 500u, "text/plain; charset=utf-8",
+                filter_failed, sizeof(filter_failed) - 1u);
+    }
+
     if (!oa_ui_document_filter_operations(
             app->document, vstr_from_buf(query, query_size),
-            app->filter_storage, app->filter_capacity,
+            filter_storage, app->document->operations.count,
             &filtered, &filter_error)) {
         fprintf(stderr, "OpenAPI UI filter failed: %s\n", filter_error.message);
+        free(filter_storage);
         return chttp_server_reply(
             response, 500u, "text/plain; charset=utf-8",
             filter_failed, sizeof(filter_failed) - 1u);
@@ -239,7 +249,9 @@ static int serve_operation_list(
     oa_ui_document page = *app->document;
     page.operations = filtered;
     page.selected_operations = selected_view(NULL);
-    return reply_page(app, "operation_list.html", &page, response);
+    result = reply_page(app, "operation_list.html", &page, response);
+    free(filter_storage);
+    return result;
 }
 
 static int serve_operation_detail(
@@ -340,16 +352,6 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
     app.document = oa_ui_model_view(model);
-    app.filter_capacity = app.document->operations.count;
-    if (app.filter_capacity != 0u) {
-        app.filter_storage = (oa_ui_operation *)calloc(
-            app.filter_capacity, sizeof(*app.filter_storage));
-        if (!app.filter_storage) {
-            fputs("Out of memory allocating OpenAPI UI filter storage\n", stderr);
-            status = SALTS_ENOMEM;
-            goto cleanup;
-        }
-    }
 
     char template_paths[UI_TEMPLATE_COUNT][UI_PATH_BYTES];
     for (size_t i = 0u; i < UI_TEMPLATE_COUNT; ++i) {
@@ -521,7 +523,6 @@ cleanup:
     }
 
     chttp_web_renderer_destroy(&app.renderer);
-    free(app.filter_storage);
     oa_ui_model_free(model);
     json_free(root);
     free(document_bytes);
