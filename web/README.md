@@ -83,7 +83,7 @@ owner thread
   -> chttp_web_deferred_render_reply()
 ```
 
-See `web/tests/test_chttp_web_deferred.c` for the executable qualification example.
+See `web/examples/chttp_web_deferred_example.c` for the executable reference app and `web/tests/test_chttp_web_deferred.c` for lifecycle qualification.
 
 Important constraints:
 
