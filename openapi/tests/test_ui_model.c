@@ -1,4 +1,5 @@
 #include <openapi/ui_model.h>
+#include <chttp_web/web.h>
 #include "ui_model_internal.h"
 
 #include <json_parser.h>
@@ -282,14 +283,14 @@ int main(void) {
     REQUIRE(cmeta_data_desc_valid(operation_data));
     REQUIRE(cmeta_data_desc_valid(document_data));
     REQUIRE(data_field(operation_data, "parameters"));
-    REQUIRE(data_field(operation_data, "parameters")->value->kind == CMETA_DATA_SEQUENCE);
+    REQUIRE(data_field(operation_data, "parameters")->value == chttp_web_sequence_cmeta_data());
     REQUIRE(data_field(operation_data, "tags"));
-    REQUIRE(data_field(operation_data, "tags")->value->kind == CMETA_DATA_SEQUENCE);
+    REQUIRE(data_field(operation_data, "tags")->value == chttp_web_sequence_cmeta_data());
     REQUIRE(data_field(operation_data, "route_key"));
     REQUIRE(data_field(document_data, "operations"));
-    REQUIRE(data_field(document_data, "operations")->value->kind == CMETA_DATA_SEQUENCE);
+    REQUIRE(data_field(document_data, "operations")->value == chttp_web_sequence_cmeta_data());
     REQUIRE(data_field(document_data, "selected_operations"));
-    REQUIRE(data_field(document_data, "selected_operations")->value->kind == CMETA_DATA_SEQUENCE);
+    REQUIRE(data_field(document_data, "selected_operations")->value == chttp_web_sequence_cmeta_data());
 
     oa_document_free(document);
     document = NULL;
