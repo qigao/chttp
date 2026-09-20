@@ -1,4 +1,5 @@
 #include <openapi/ui_model.h>
+#include <chttp_web/web.h>
 #include "internal.h"
 #include "ui_model_internal.h"
 
@@ -91,7 +92,7 @@ static const cmeta_struct_desc OA_UI_PARAMETER_LAYOUT = {
     "oa_ui_parameter", sizeof(oa_ui_parameter), _Alignof(oa_ui_parameter),
     OA_UI_PARAMETER_LAYOUT_FIELDS, OA_ARRAY_COUNT(OA_UI_PARAMETER_LAYOUT_FIELDS)
 };
-static const cmeta_data_field_desc OA_UI_PARAMETER_FIELDS[] = {
+static cmeta_data_field_desc OA_UI_PARAMETER_FIELDS[] = {
     {"openapi.ui.parameter.name", "name", offsetof(oa_ui_parameter, name), &OA_UI_VSTR_DATA},
     {"openapi.ui.parameter.location", "location", offsetof(oa_ui_parameter, location), &OA_UI_VSTR_DATA},
     {"openapi.ui.parameter.description", "description", offsetof(oa_ui_parameter, description), &OA_UI_VSTR_DATA},
@@ -134,7 +135,7 @@ static const cmeta_struct_desc OA_UI_OPERATION_LAYOUT = {
     "oa_ui_operation", sizeof(oa_ui_operation), _Alignof(oa_ui_operation),
     OA_UI_OPERATION_LAYOUT_FIELDS, OA_ARRAY_COUNT(OA_UI_OPERATION_LAYOUT_FIELDS)
 };
-static const cmeta_data_field_desc OA_UI_OPERATION_FIELDS[] = {
+static cmeta_data_field_desc OA_UI_OPERATION_FIELDS[] = {
     {"openapi.ui.operation.method", "method", offsetof(oa_ui_operation, method), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.path", "path", offsetof(oa_ui_operation, path), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.operation_id", "operation_id", offsetof(oa_ui_operation, operation_id), &OA_UI_VSTR_DATA},
@@ -178,7 +179,7 @@ static const cmeta_struct_desc OA_UI_DOCUMENT_LAYOUT = {
     "oa_ui_document", sizeof(oa_ui_document), _Alignof(oa_ui_document),
     OA_UI_DOCUMENT_LAYOUT_FIELDS, OA_ARRAY_COUNT(OA_UI_DOCUMENT_LAYOUT_FIELDS)
 };
-static const cmeta_data_field_desc OA_UI_DOCUMENT_FIELDS[] = {
+static cmeta_data_field_desc OA_UI_DOCUMENT_FIELDS[] = {
     {"openapi.ui.document.title", "title", offsetof(oa_ui_document, title), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.version", "version", offsetof(oa_ui_document, version), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.openapi_version", "openapi_version", offsetof(oa_ui_document, openapi_version), &OA_UI_VSTR_DATA},
@@ -206,6 +207,34 @@ static const cmeta_data_desc OA_UI_DOCUMENT_DATA = {
 };
 
 #undef OA_LAYOUT_FIELD
+
+static void oa_ui_bind_web_descriptors(void) {
+    const cmeta_data_desc *text = chttp_web_vstr_cmeta_data();
+    const cmeta_data_desc *sequence = chttp_web_sequence_cmeta_data();
+
+    OA_UI_PARAMETER_FIELDS[0].value = text;
+    OA_UI_PARAMETER_FIELDS[1].value = text;
+    OA_UI_PARAMETER_FIELDS[2].value = text;
+    OA_UI_PARAMETER_FIELDS[3].value = text;
+
+    OA_UI_OPERATION_FIELDS[0].value = text;
+    OA_UI_OPERATION_FIELDS[1].value = text;
+    OA_UI_OPERATION_FIELDS[2].value = text;
+    OA_UI_OPERATION_FIELDS[3].value = text;
+    OA_UI_OPERATION_FIELDS[4].value = text;
+    OA_UI_OPERATION_FIELDS[5].value = text;
+    OA_UI_OPERATION_FIELDS[6].value = sequence;
+    OA_UI_OPERATION_FIELDS[7].value = sequence;
+    OA_UI_OPERATION_FIELDS[8].value = text;
+    OA_UI_OPERATION_FIELDS[9].value = text;
+
+    OA_UI_DOCUMENT_FIELDS[0].value = text;
+    OA_UI_DOCUMENT_FIELDS[1].value = text;
+    OA_UI_DOCUMENT_FIELDS[2].value = text;
+    OA_UI_DOCUMENT_FIELDS[3].value = text;
+    OA_UI_DOCUMENT_FIELDS[4].value = sequence;
+    OA_UI_DOCUMENT_FIELDS[5].value = sequence;
+}
 
 static vstr oa_ui_empty(void) {
     return (vstr){NULL, 0u};
@@ -529,6 +558,7 @@ static int oa_ui_build_route_keys(oa_ui_model *model, oa_error *error) {
 }
 
 static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
+    oa_ui_bind_web_descriptors();
     const json_value_t *root = model->snapshot;
     const json_value_t *info = json_object_get(root, "info");
     const json_value_t *paths = json_object_get(root, "paths");
@@ -729,11 +759,14 @@ int oa_ui_document_filter_operations(
 }
 
 const cmeta_data_desc *oa_ui_parameter_cmeta_data(void) {
+    oa_ui_bind_web_descriptors();
     return &OA_UI_PARAMETER_DATA;
 }
 const cmeta_data_desc *oa_ui_operation_cmeta_data(void) {
+    oa_ui_bind_web_descriptors();
     return &OA_UI_OPERATION_DATA;
 }
 const cmeta_data_desc *oa_ui_document_cmeta_data(void) {
+    oa_ui_bind_web_descriptors();
     return &OA_UI_DOCUMENT_DATA;
 }
