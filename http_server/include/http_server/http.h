@@ -548,12 +548,27 @@ int chttp_server_deferred_cancel(chttp_server_deferred *deferred);
 int chttp_server_reply(chttp_server_response *response, unsigned int status_code,
                        const char *content_type, const void *body, size_t body_size);
 
+typedef void (*chttp_server_response_source_cleanup_fn)(void *user, int status);
+
 /**
  * Streams a response after the handler returns. The source descriptor is copied, but its user
  * state must remain valid until EOF or connection/stream cancellation.
  */
 int chttp_server_response_source(chttp_server_response *response, unsigned int status_code,
                                  const char *content_type, const chttp_body_source *source);
+
+/**
+ * Source-response variant with one exactly-once terminal callback.
+ *
+ * cleanup runs on the server owner thread with SALTS_OK after normal EOF/HEAD
+ * completion, or the transport/source cancellation/error status otherwise.
+ * source->user and cleanup_user must remain valid until cleanup returns.
+ * The callback must not block or re-enter the server.
+ */
+int chttp_server_response_source_with_cleanup(
+    chttp_server_response *response, unsigned int status_code,
+    const char *content_type, const chttp_body_source *source,
+    chttp_server_response_source_cleanup_fn cleanup, void *cleanup_user);
 
 /** Streams a regular file through the server's shared asynchronous file runtime. */
 int chttp_server_response_file(chttp_server_response *response, unsigned int status_code,

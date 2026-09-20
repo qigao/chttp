@@ -3,7 +3,8 @@ add_library(chttp_web SHARED
   src/chttp_web_context.c
   src/chttp_web_form.c
   src/chttp_web_session.c
-  src/chttp_web_security.c)
+  src/chttp_web_security.c
+  src/chttp_web_sse.c)
 add_library(CHttp::Web ALIAS chttp_web)
 set_target_properties(chttp_web PROPERTIES
   EXPORT_NAME Web FOLDER "web"

@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -78,6 +79,66 @@ typedef struct chttp_web_string_view {
   const char *data;
   size_t size;
 } chttp_web_string_view;
+
+/**
+ * One Server-Sent Event. Presence flags distinguish an omitted field from an
+ * explicitly empty field. Text is borrowed and must be valid UTF-8.
+ */
+typedef struct chttp_web_sse_event {
+  size_t size;
+  chttp_web_string_view event;
+  chttp_web_string_view data;
+  chttp_web_string_view id;
+  uint64_t retry_ms;
+  bool has_event;
+  bool has_data;
+  bool has_id;
+  bool has_retry;
+} chttp_web_sse_event;
+
+#define CHTTP_WEB_SSE_EVENT_INIT \
+  {sizeof(chttp_web_sse_event), {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, \
+   0u, false, false, false, false}
+
+/**
+ * Produces the next event synchronously on the CHTTP owner thread.
+ *
+ * Return SALTS_OK with out_event populated, SALTS_ENOENT for normal EOF, or a
+ * negative Salts status to fail the response. Returned views must remain valid
+ * until the next producer call or stream cleanup.
+ */
+typedef int (*chttp_web_sse_next_fn)(
+    void *user, chttp_web_sse_event *out_event);
+
+/** Exactly-once stream terminal callback; status follows CHTTP source cleanup. */
+typedef void (*chttp_web_sse_close_fn)(void *user, int status);
+
+/**
+ * Caller-owned SSE source state. No heap is allocated by the SSE layer.
+ * Initialize it with CHTTP_WEB_SSE_STREAM_INIT (or all-zero storage) before
+ * first use. An active stream cannot be reinitialized.
+ *
+ * scratch is the hard per-event formatted-byte bound. The complete stream is
+ * additionally bounded by chttp_server_config.max_response_body_bytes.
+ * Treat fields after scratch_capacity as implementation state.
+ */
+typedef struct chttp_web_sse_stream {
+  size_t size;
+  chttp_web_sse_next_fn next;
+  chttp_web_sse_close_fn close;
+  void *user;
+  char *scratch;
+  size_t scratch_capacity;
+  size_t buffered_offset;
+  size_t buffered_size;
+  int terminal_status;
+  bool active;
+  bool eof;
+} chttp_web_sse_stream;
+
+#define CHTTP_WEB_SSE_STREAM_INIT \
+  {sizeof(chttp_web_sse_stream), NULL, NULL, NULL, NULL, 0u, 0u, 0u, \
+   0, false, false}
 
 /** One named borrowed request value exposed to templates. */
 typedef struct chttp_web_named_value {
@@ -251,6 +312,44 @@ typedef struct chttp_web_security_policy {
   {sizeof(chttp_web_security_policy), NULL, NULL, NULL, NULL, NULL, false}
 
 
+
+/**
+ * Formats one event canonically into caller-owned storage.
+ *
+ * event/id values reject CR/LF (and NUL) to prevent field injection. Data may
+ * contain CR, LF, or CRLF; they are normalized into one "data:" field per
+ * logical line while preserving leading/trailing empty lines. The event always
+ * ends with one blank line.
+ */
+chttp_web_status chttp_web_sse_format_event(
+    const chttp_web_sse_event *event,
+    char *buffer,
+    size_t buffer_capacity,
+    size_t *out_size,
+    chttp_web_error *error);
+
+/**
+ * Initializes a no-allocation SSE stream over a synchronous producer.
+ * Reinitializing an active stream is invalid application behavior.
+ */
+chttp_web_status chttp_web_sse_stream_init(
+    chttp_web_sse_stream *stream,
+    chttp_web_sse_next_fn next,
+    chttp_web_sse_close_fn close,
+    void *user,
+    char *scratch,
+    size_t scratch_capacity,
+    chttp_web_error *error);
+
+/**
+ * Commits a 200 text/event-stream response over CHTTP's existing response
+ * source engine. Adds Cache-Control: no-cache. HTTP framing remains fully
+ * owned by CHTTP for both HTTP/1.1 and HTTP/2.
+ */
+chttp_web_status chttp_web_sse_response(
+    chttp_server_response *response,
+    chttp_web_sse_stream *stream,
+    chttp_web_error *error);
 
 /**
  * Builds one synchronous, non-reentrant renderer from an application-owned

@@ -314,6 +314,7 @@ static void chttp_h2_server_stream_destroy(chttp_h2_server_stream *stream) {
   }
   free(stream->authority);
   free(stream->target_storage);
+  free(stream->headers);
   free(stream->header_storage);
   free(stream->response_headers);
   *stream = (chttp_h2_server_stream){0};
