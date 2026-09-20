@@ -361,8 +361,8 @@ spec("CHttp::Web SSE") {
         web_sse_wait_closed(&app, WEB_SSE_TIMEOUT_MS), SALTS_OK);
     check_equal(
         atomic_load_explicit(&app.close_count, memory_order_acquire), 1);
-    check_not_equal(
-        atomic_load_explicit(&app.close_status, memory_order_acquire),
+    check_true(
+        atomic_load_explicit(&app.close_status, memory_order_acquire) !=
         SALTS_OK);
 
     check_equal(
