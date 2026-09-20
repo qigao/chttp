@@ -272,6 +272,23 @@ spec("CHttp::Web SSE") {
         chttp_web_sse_format_event(
             &event, output, sizeof(output), &size, &error),
         CHTTP_WEB_INVALID_ARGUMENT);
+
+    {
+      chttp_web_sse_stream stream =
+          (chttp_web_sse_stream)CHTTP_WEB_SSE_STREAM_INIT;
+      char scratch[64];
+      check_equal(
+          chttp_web_sse_stream_init(
+              &stream, web_sse_next, NULL, NULL,
+              scratch, sizeof(scratch), &error),
+          CHTTP_WEB_OK);
+      stream.active = true;
+      check_equal(
+          chttp_web_sse_stream_init(
+              &stream, web_sse_next, NULL, NULL,
+              scratch, sizeof(scratch), &error),
+          CHTTP_WEB_INVALID_ARGUMENT);
+    }
   }
 
   it("streams the same finite event sequence over HTTP/1.1 and HTTP/2") {
