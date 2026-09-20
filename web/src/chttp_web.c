@@ -439,6 +439,41 @@ chttp_web_status chttp_web_render_response(
   return chttp_web_fail(error, CHTTP_WEB_OK, 0, NULL);
 }
 
+chttp_web_status chttp_web_deferred_render_reply(
+    chttp_web_renderer *renderer, chttp_server_deferred *deferred,
+    const char *template_name, const cmeta_data_desc *model_desc,
+    const void *model, unsigned int status_code, const char *content_type,
+    chttp_web_error *error) {
+  static const char default_content_type[] = "text/html; charset=utf-8";
+  chttp_server_deferred_response deferred_response = {
+      .size = sizeof(chttp_server_deferred_response)};
+  char *html = NULL;
+  size_t html_size = 0u;
+  chttp_web_status status;
+  int server_status;
+
+  if (!deferred || !deferred->impl)
+    return chttp_web_fail(error, CHTTP_WEB_INVALID_ARGUMENT, 0,
+                          "deferred response is required");
+
+  status = chttp_web_render(
+      renderer, template_name, model_desc, model, &html, &html_size, error);
+  if (status != CHTTP_WEB_OK) return status;
+
+  deferred_response.status_code = status_code == 0u ? 200u : status_code;
+  deferred_response.content_type =
+      content_type ? content_type : default_content_type;
+  deferred_response.body = html;
+  deferred_response.body_size = html_size;
+  server_status =
+      chttp_server_deferred_reply(deferred, &deferred_response);
+  free(html);
+  if (server_status != SALTS_OK)
+    return chttp_web_fail(error, CHTTP_WEB_SERVER, server_status,
+                          "CHTTP rejected the deferred rendered response");
+  return chttp_web_fail(error, CHTTP_WEB_OK, 0, NULL);
+}
+
 const cmeta_data_desc *chttp_web_vstr_cmeta_data(void) {
   return jinja_cmeta_vstr_data();
 }
