@@ -7,8 +7,8 @@
 
 ## HTML / Jinja + HTMX 接口页面
 
-OpenAPI UI 现在采用服务端渲染：`CHttp::Web` 在启动时冻结并编译固定的 Jinja 模板，
-OpenAPI 层只提供 renderer-neutral CMeta presentation model；`/docs` 返回完整页面，接口筛选和详情通过 HTMX 请求服务端 fragment。浏览器不再加载
+OpenAPI UI 现在采用服务端渲染：`CHttp::Web` 在启动时冻结并编译固定的 Jinja 模板。
+`OpenAPI::Generator` 保持与 Web/Jinja 无关；可选的 `OpenAPI::UIModel` 把 OpenAPI 文档投影为 Web-facing CMeta presentation model，并通过 `CHttp::Web` 的 descriptor bridge 获得可渲染的字符串/序列语义。`/docs` 返回完整页面，接口筛选和详情通过 HTMX 请求服务端 fragment。浏览器不再加载
 Alpine.js，也不再从 OpenAPI 文档在客户端重建页面。
 
 固定路由包括：
@@ -57,9 +57,9 @@ ctest --preset win-release-user -R "^(generator(_conformance)?|openapi_ui_.*|cht
 
 UI 回归覆盖完整页/fragment、搜索与非法 key、Jinja escaping、请求编码和 Try-it fail-closed
 约束、固定静态路由、缺失/非法/超限模板或资源、顺序 render 状态恢复以及 server restart。
-最终 UI 依赖面保持隔离：`OpenAPI::Generator` 与 `CHttp::Server` 不链接 Jinja 或 HTMX，
-OpenAPI production 源码不再直接拥有 Jinja runtime；`openapi_ui_server` 只通过可选的 `CHttp::Web`
-进入 `Salts::JinjaCMeta`，HTMX 仍仅作为示例 UI 的本地静态资源。
+最终 UI 依赖面保持隔离：`OpenAPI::Generator` 与 `CHttp::Server` 都不能到达 `CHttp::Web`/Jinja；
+`OpenAPI::UIModel` 是显式的 presentation-layer bridge，并只通过 `CHttp::Web` 间接进入 `Salts::JinjaCMeta`。
+OpenAPI production 源码不直接 include 或链接 Jinja runtime，HTMX 仍仅作为示例 UI 的本地静态资源。
 
 ## 声明与约束
 
