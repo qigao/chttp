@@ -156,6 +156,7 @@ jobs:
         shell: bash
         env:
           SALTS_ROOT: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
         run: |
           set -euxo pipefail
           src="$RUNNER_TEMP/chttp-web-consumer"
