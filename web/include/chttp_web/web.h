@@ -20,8 +20,14 @@ typedef enum chttp_web_status {
   CHTTP_WEB_METADATA = -5,
   CHTTP_WEB_RENDER = -6,
   CHTTP_WEB_NOT_FOUND = -7,
-  CHTTP_WEB_SERVER = -8
+  CHTTP_WEB_SERVER = -8,
+  CHTTP_WEB_FORM = -9,
+  CHTTP_WEB_BIND = -10
 } chttp_web_status;
+
+typedef struct DataBind DataBind;
+typedef struct TbeTypedType TbeTypedType;
+typedef struct TbeTypedDescriptor TbeTypedDescriptor;
 
 typedef struct chttp_web_renderer {
   void *impl;
@@ -125,6 +131,56 @@ typedef struct chttp_web_request_context_options {
   {sizeof(chttp_web_request_context_options), NULL, 0u, NULL, 0u, \
    NULL, 0u, NULL, 0u, NULL, 0u}
 
+/** One decoded application/x-www-form-urlencoded key/value pair. */
+typedef struct chttp_web_form_pair {
+  chttp_web_string_view name;
+  chttp_web_string_view value;
+} chttp_web_form_pair;
+
+/**
+ * Borrowed parsed form view. Pair names/values point into caller-owned byte
+ * storage supplied to chttp_web_form_parse().
+ */
+typedef struct chttp_web_form {
+  const chttp_web_form_pair *pairs;
+  size_t pair_count;
+  size_t decoded_bytes;
+} chttp_web_form;
+
+/**
+ * Hard parser limits plus caller-owned storage. Parsing never allocates.
+ * max_decoded_bytes counts decoded name+value bytes, excluding separators.
+ */
+typedef struct chttp_web_form_parse_options {
+  size_t size;
+  size_t max_input_bytes;
+  size_t max_pairs;
+  size_t max_decoded_bytes;
+  chttp_web_form_pair *pair_storage;
+  size_t pair_capacity;
+  char *byte_storage;
+  size_t byte_capacity;
+} chttp_web_form_parse_options;
+
+#define CHTTP_WEB_FORM_PARSE_OPTIONS_INIT \
+  {sizeof(chttp_web_form_parse_options), 64u * 1024u, 128u, 64u * 1024u, \
+   NULL, 0u, NULL, 0u}
+
+/**
+ * Caller-owned JSON bridge storage used before DataBind performs transactional
+ * native conversion. No destination mutation occurs until the complete bridge
+ * document has been produced.
+ */
+typedef struct chttp_web_form_bind_options {
+  size_t size;
+  char *json_storage;
+  size_t json_capacity;
+} chttp_web_form_bind_options;
+
+#define CHTTP_WEB_FORM_BIND_OPTIONS_INIT \
+  {sizeof(chttp_web_form_bind_options), NULL, 0u}
+
+
 /**
  * Builds one synchronous, non-reentrant renderer from an application-owned
  * fixed template bundle. Names and sources are copied before return.
@@ -189,6 +245,63 @@ chttp_web_status chttp_web_request_context_init(
 
 /** CMeta descriptor for embedding chttp_web_request_context in application models. */
 const cmeta_data_desc *chttp_web_request_context_data(void);
+
+/**
+ * Parses application/x-www-form-urlencoded bytes into bounded caller-owned
+ * storage. '+' decodes to space; percent escapes require exactly two hex
+ * digits. Empty field names, empty '&' segments, malformed escapes, and all
+ * configured limit overflows fail closed. On failure out_form is zeroed.
+ */
+chttp_web_status chttp_web_form_parse(
+    const void *data,
+    size_t data_size,
+    const chttp_web_form_parse_options *options,
+    chttp_web_form *out_form,
+    chttp_web_error *error);
+
+/** Returns the number of exact case-sensitive occurrences of name. */
+size_t chttp_web_form_count(
+    const chttp_web_form *form,
+    const char *name);
+
+/** Returns the zero-based exact occurrence of name, or NULL. */
+const chttp_web_form_pair *chttp_web_form_get(
+    const chttp_web_form *form,
+    const char *name,
+    size_t occurrence);
+
+/**
+ * Transactionally binds a parsed form into an initialized DataBind typed
+ * object. Scalar fields require exactly one occurrence. LIST/SET/FIXED_ARRAY
+ * fields consume repeated form keys as array elements. Flat form binding
+ * intentionally rejects OBJECT/MAP and object-valued collections.
+ *
+ * The JSON bridge is fully materialized inside options->json_storage before
+ * DataBind is invoked. DataBind's typed parse contract keeps the previous
+ * destination object unchanged on every failure.
+ */
+chttp_web_status chttp_web_form_bind_typed(
+    const chttp_web_form *form,
+    DataBind *codec,
+    const char *type_name,
+    const TbeTypedType *type,
+    void *destination,
+    const chttp_web_form_bind_options *options,
+    chttp_web_error *error);
+
+/**
+ * Canonical CMeta/DataBind descriptor variant of chttp_web_form_bind_typed().
+ * Only descriptor shapes already supported by DataBind are accepted.
+ */
+chttp_web_status chttp_web_form_bind_descriptor(
+    const chttp_web_form *form,
+    DataBind *codec,
+    const char *type_name,
+    const TbeTypedDescriptor *descriptor,
+    void *destination,
+    const chttp_web_form_bind_options *options,
+    chttp_web_error *error);
+
 
 /**
  * Sends an empty ordinary HTTP redirect. Only 301/302/303/307/308 are
