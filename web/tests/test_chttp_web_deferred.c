@@ -392,7 +392,7 @@ spec("CHttp::Web deferred worker rendering") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
-  it("keeps stop pending until a gated worker completes its deferred reply") {
+  it("keeps stop pending until a gated worker completes its deferred terminal") {
     chttp_server server = {0};
     web_deferred_app app;
     web_deferred_client_call call = {0};
@@ -427,9 +427,12 @@ spec("CHttp::Web deferred worker rendering") {
     salts_thread_destroy(&client_thread);
     check_equal(app.job.web_status, CHTTP_WEB_OK);
     check_equal(app.job.native_status, SALTS_OK);
-    check_equal(call.status, SALTS_OK);
-    check_equal(call.status_code, 200u);
-    check_equal(call.body, "<p>stop</p>");
+    /* HTTP/1.1 shutdown closes the active transport before the deferred
+     * terminal is consumed. The server must still wait for that terminal,
+     * but the client must not observe a successful partial response. */
+    check_equal(call.status, SALTS_EPROTO);
+    check_equal(call.status_code, 0u);
+    check_equal(call.body_size, 0u);
 
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
