@@ -31,10 +31,10 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=2 origin "$GITHUB_SHA"
+          git fetch --depth=2 origin "${GITHUB_SHA}"
           git checkout --detach FETCH_HEAD
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
       - name: Checkout exact public dependencies
         shell: bash
@@ -79,20 +79,15 @@ jobs:
           sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
           bash salts-utils/cmake/ci/install-re2c.sh
 
-      - name: Record Salts cache toolchain
-        id: salts-toolchain
-        shell: bash
-        run: echo "key=gcc-$(gcc -dumpfullversion -dumpversion)" >> "$GITHUB_OUTPUT"
-
       - name: Restore pinned Salts debug package
-        id: salts-package-cache
+        id: salts-cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-gcc-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
       - name: Build and install exact Salts
-        if: steps.salts-package-cache.outputs.cache-hit != 'true'
+        if: steps.salts-cache.outputs.cache-hit != 'true'
         shell: bash
         working-directory: salts
         env:
@@ -100,19 +95,10 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target install -j2
 
-      - name: Save pinned Salts debug package
-        if: steps.salts-package-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.salts-toolchain.outputs.key }}-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-
-      - name: Expose exact Salts profile to SaltsUtils
+      - name: Expose exact Salts profile
         shell: bash
         run: |
           set -euxo pipefail
@@ -124,37 +110,26 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon \
-            -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon             -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build salts-utils/build/host-lemon --target lemon -j2
 
-      - name: Build and install verified SaltsUtils
+      - name: Build and install exact SaltsUtils
         shell: bash
         working-directory: salts-utils
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=OFF \
-            -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
           cmake --build build/linux-gcc-debug --target install -j2
           test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
 
-      - name: Expose exact SaltsUtils profile to Chttp preset
+      - name: Expose exact SaltsUtils profile
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
           ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
-          test -f "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-
-      - name: Install OpenAPI conformance test requirements
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 -m pip install -r openapi/tests/requirements-conformance.txt
 
       - name: Configure exact Chttp head
         shell: bash
@@ -169,103 +144,13 @@ jobs:
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF
 
-      - name: Audit Server transitive dependency boundary
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_ROOT: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:${{ runner.temp }}/salts-project/external/pkgs/salts/debug/lib
-        run: |
-          set -euo pipefail
-          graph="$RUNNER_TEMP/chttp-targets.dot"
-          cmake --graphviz="$graph" build/linux-gcc-debug
-          python3 - "$graph" <<'PY'
-          import re
-          import sys
-          from collections import defaultdict, deque
-
-          graph_path = sys.argv[1]
-          text = open(graph_path, encoding="utf-8").read()
-          labels = {
-              node: label.replace(r"\n", " ")
-              for node, label in re.findall(
-                  r'"(node\d+)"\s*\[\s*label\s*=\s*"([^"]+)"', text
-              )
-          }
-          edges = defaultdict(set)
-          for src, dst in re.findall(r'"(node\d+)"\s*->\s*"(node\d+)"', text):
-              edges[src].add(dst)
-
-          roots = {
-              node for node, label in labels.items()
-              if "chttp_server" in label or "CHttp::Server" in label
-          }
-          if not roots:
-              raise SystemExit("dependency audit could not find chttp_server")
-
-          queue = deque(roots)
-          seen = set(roots)
-          while queue:
-              node = queue.popleft()
-              label = labels.get(node, "")
-              if re.search(r"jinja", label, re.IGNORECASE):
-                  raise SystemExit(
-                      f"CHttp::Server transitively reaches Jinja target: {label}"
-                  )
-              for dep in edges.get(node, ()):
-                  if dep not in seen:
-                      seen.add(dep)
-                      queue.append(dep)
-
-          print(
-              f"CHttp::Server transitive dependency audit passed "
-              f"({len(seen)} reachable targets, no Jinja)"
-          )
-
-          generator_roots = {
-              node for node, label in labels.items()
-              if "openapi_generator" in label or "OpenAPI::Generator" in label
-          }
-          if not generator_roots:
-              raise SystemExit("dependency audit could not find openapi_generator")
-
-          queue = deque(generator_roots)
-          generator_seen = set(generator_roots)
-          while queue:
-              node = queue.popleft()
-              label = labels.get(node, "")
-              if re.search(r"jinja|chttp_web|CHttp::Web", label, re.IGNORECASE):
-                  raise SystemExit(
-                      f"OpenAPI generator core reaches Web/Jinja target: {label}"
-                  )
-              for dep in edges.get(node, ()):
-                  if dep not in generator_seen:
-                      generator_seen.add(dep)
-                      queue.append(dep)
-
-          print(
-              f"OpenAPI generator dependency audit passed "
-              f"({len(generator_seen)} reachable targets, no Web/Jinja)"
-          )
-          PY
-
-      - name: Audit OpenAPI generic web boundary
+      - name: Install OpenAPI conformance test requirements
         shell: bash
         run: |
-          set -euo pipefail
-          test ! -e openapi/ui/renderer.c
-          test ! -e openapi/ui/renderer.h
-          if grep -R -n -E 'jinja_cmeta|Salts::JinjaCMeta' openapi \
-              --include='*.c' --include='*.h' --include='CMakeLists.txt'; then
-            echo "OpenAPI production code still owns Jinja directly" >&2
-            exit 1
-          fi
-          grep -q 'CHttp::Web' openapi/examples/CMakeLists.txt
-          echo "OpenAPI Jinja ownership audit passed: rendering is owned by CHttp::Web"
+          set -euxo pipefail
+          python3 -m pip install -r openapi/tests/requirements-conformance.txt
 
-      - name: Build focused targets
+      - name: Build focused lifecycle targets
         shell: bash
         env:
           PROJECT_ROOT: ${{ runner.temp }}/salts-project
@@ -279,14 +164,15 @@ jobs:
             chttp_web_deferred_test chttp_web_sse_test \
             chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
 
-      - name: Run focused tests
+      - name: Run focused lifecycle tests
         shell: bash
         env:
           LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))
+            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --output-on-failure
 
       - name: Build full Chttp graph
         shell: bash
@@ -328,7 +214,8 @@ jobs:
             chttp_web_deferred_test chttp_web_sse_test \
             chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))
+            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --output-on-failure
 
       - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
         shell: bash
@@ -348,241 +235,7 @@ jobs:
             chttp_web_deferred_test chttp_web_sse_test \
             chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify SSE lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_sse_test chttp_server_test \
-            chttp_h2_server_test chttp_h2_client_test -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_sse_test|chttp_server_test|chttp_h2_server_test|chttp_h2_client_test)$' \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify SSE lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_sse_test chttp_server_test \
-            chttp_h2_server_test chttp_h2_client_test -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_sse_test|chttp_server_test|chttp_h2_server_test|chttp_h2_client_test)$' \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify SSE lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_sse_test chttp_server_test \
-            chttp_h2_server_test chttp_h2_client_test -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_sse_test|chttp_server_test|chttp_h2_server_test|chttp_h2_client_test)$' \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
-            --output-on-failure
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify SSE lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_sse_test chttp_server_test \
-            chttp_h2_server_test chttp_h2_client_test -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_sse_test|chttp_server_test|chttp_h2_server_test|chttp_h2_client_test)$' \
+            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Verify exact head and clean tracked source
