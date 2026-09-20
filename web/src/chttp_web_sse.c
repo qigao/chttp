@@ -202,7 +202,9 @@ chttp_web_status chttp_web_sse_stream_init(
     size_t scratch_capacity,
     chttp_web_error *error) {
   if (stream == NULL || next == NULL || scratch == NULL ||
-      scratch_capacity == 0u)
+      scratch_capacity == 0u ||
+      (stream->size != 0u && stream->size != sizeof(*stream)) ||
+      (stream->size == sizeof(*stream) && stream->active))
     return chttp_web_sse_fail(
         error, CHTTP_WEB_INVALID_ARGUMENT, SALTS_EINVAL,
         "invalid SSE stream configuration");
