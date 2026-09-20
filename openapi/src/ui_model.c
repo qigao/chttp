@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 
 #define OA_ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
@@ -18,6 +19,8 @@ struct oa_ui_model {
     oa_ui_operation *operations;
     char *route_key_bytes;
 };
+
+static atomic_int OA_UI_DESCRIPTOR_BIND_STATE = ATOMIC_VAR_INIT(0);
 
 static const char *const OA_UI_METHODS[] = {
     "get", "post", "put", "patch", "delete", "head", "options", "trace"
@@ -209,31 +212,46 @@ static const cmeta_data_desc OA_UI_DOCUMENT_DATA = {
 #undef OA_LAYOUT_FIELD
 
 static void oa_ui_bind_web_descriptors(void) {
-    const cmeta_data_desc *text = chttp_web_vstr_cmeta_data();
-    const cmeta_data_desc *sequence = chttp_web_sequence_cmeta_data();
+    int state = atomic_load_explicit(
+        &OA_UI_DESCRIPTOR_BIND_STATE, memory_order_acquire);
+    int expected = 0;
+    if (state == 2) return;
+    if (atomic_compare_exchange_strong_explicit(
+            &OA_UI_DESCRIPTOR_BIND_STATE, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire)) {
+        const cmeta_data_desc *text = chttp_web_vstr_cmeta_data();
+        const cmeta_data_desc *sequence = chttp_web_sequence_cmeta_data();
 
-    OA_UI_PARAMETER_FIELDS[0].value = text;
-    OA_UI_PARAMETER_FIELDS[1].value = text;
-    OA_UI_PARAMETER_FIELDS[2].value = text;
-    OA_UI_PARAMETER_FIELDS[3].value = text;
+        OA_UI_PARAMETER_FIELDS[0].value = text;
+        OA_UI_PARAMETER_FIELDS[1].value = text;
+        OA_UI_PARAMETER_FIELDS[2].value = text;
+        OA_UI_PARAMETER_FIELDS[3].value = text;
 
-    OA_UI_OPERATION_FIELDS[0].value = text;
-    OA_UI_OPERATION_FIELDS[1].value = text;
-    OA_UI_OPERATION_FIELDS[2].value = text;
-    OA_UI_OPERATION_FIELDS[3].value = text;
-    OA_UI_OPERATION_FIELDS[4].value = text;
-    OA_UI_OPERATION_FIELDS[5].value = text;
-    OA_UI_OPERATION_FIELDS[6].value = sequence;
-    OA_UI_OPERATION_FIELDS[7].value = sequence;
-    OA_UI_OPERATION_FIELDS[8].value = text;
-    OA_UI_OPERATION_FIELDS[9].value = text;
+        OA_UI_OPERATION_FIELDS[0].value = text;
+        OA_UI_OPERATION_FIELDS[1].value = text;
+        OA_UI_OPERATION_FIELDS[2].value = text;
+        OA_UI_OPERATION_FIELDS[3].value = text;
+        OA_UI_OPERATION_FIELDS[4].value = text;
+        OA_UI_OPERATION_FIELDS[5].value = text;
+        OA_UI_OPERATION_FIELDS[6].value = sequence;
+        OA_UI_OPERATION_FIELDS[7].value = sequence;
+        OA_UI_OPERATION_FIELDS[8].value = text;
+        OA_UI_OPERATION_FIELDS[9].value = text;
 
-    OA_UI_DOCUMENT_FIELDS[0].value = text;
-    OA_UI_DOCUMENT_FIELDS[1].value = text;
-    OA_UI_DOCUMENT_FIELDS[2].value = text;
-    OA_UI_DOCUMENT_FIELDS[3].value = text;
-    OA_UI_DOCUMENT_FIELDS[4].value = sequence;
-    OA_UI_DOCUMENT_FIELDS[5].value = sequence;
+        OA_UI_DOCUMENT_FIELDS[0].value = text;
+        OA_UI_DOCUMENT_FIELDS[1].value = text;
+        OA_UI_DOCUMENT_FIELDS[2].value = text;
+        OA_UI_DOCUMENT_FIELDS[3].value = text;
+        OA_UI_DOCUMENT_FIELDS[4].value = sequence;
+        OA_UI_DOCUMENT_FIELDS[5].value = sequence;
+
+        atomic_store_explicit(
+            &OA_UI_DESCRIPTOR_BIND_STATE, 2, memory_order_release);
+        return;
+    }
+    while (atomic_load_explicit(
+               &OA_UI_DESCRIPTOR_BIND_STATE, memory_order_acquire) != 2) {
+    }
 }
 
 static vstr oa_ui_empty(void) {
