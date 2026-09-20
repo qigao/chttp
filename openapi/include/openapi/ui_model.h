@@ -40,6 +40,8 @@ typedef struct oa_ui_operation {
     vstr method;
     vstr path;
     vstr operation_id;
+    /* Stable URL-safe key used by the docs route and HTMX fragments. */
+    vstr route_key;
     vstr summary;
     vstr description;
     oa_ui_sequence_view tags;
@@ -56,6 +58,8 @@ typedef struct oa_ui_document {
     /* Optional first OpenAPI servers[0].url, snapshot-backed. */
     vstr server_url;
     oa_ui_sequence_view operations;
+    /* Request-scoped shallow view; the immutable model initializes it empty. */
+    oa_ui_sequence_view selected_operations;
 } oa_ui_document;
 
 typedef struct oa_ui_model oa_ui_model;
@@ -74,6 +78,24 @@ void oa_ui_model_free(oa_ui_model *model);
 const cmeta_data_desc *oa_ui_parameter_cmeta_data(void);
 const cmeta_data_desc *oa_ui_operation_cmeta_data(void);
 const cmeta_data_desc *oa_ui_document_cmeta_data(void);
+
+/* Exact lookup by the stable renderer-neutral route_key. */
+const oa_ui_operation *oa_ui_document_find_operation(
+    const oa_ui_document *document, vstr route_key);
+
+/*
+ * Build a renderer-neutral operation sequence filtered by method/path/summary/tag.
+ * Matching is ASCII case-insensitive while the query itself must be valid UTF-8
+ * and at most 256 bytes. Empty query borrows document->operations directly.
+ * Non-empty results are shallow copies written into caller-owned storage.
+ */
+int oa_ui_document_filter_operations(
+    const oa_ui_document *document,
+    vstr query,
+    oa_ui_operation *storage,
+    size_t capacity,
+    oa_ui_sequence_view *out,
+    oa_error *error);
 
 #ifdef __cplusplus
 }

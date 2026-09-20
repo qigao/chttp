@@ -171,7 +171,7 @@ def main():
         "cpu_count": os.cpu_count(),
         "note": (
             "startup includes process launch, OpenAPI parse/model projection, "
-            "Jinja template-bundle load/compile/probe, and server start"
+            "CHttp::Web/Jinja template-bundle load/compile/probe, and server start"
         ),
     }
     print(json.dumps(metadata, sort_keys=True), flush=True)

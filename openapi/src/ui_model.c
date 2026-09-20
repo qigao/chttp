@@ -1,4 +1,5 @@
 #include <openapi/ui_model.h>
+#include <chttp_web/web.h>
 #include "internal.h"
 #include "ui_model_internal.h"
 
@@ -6,6 +7,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <stdio.h>
 
 #define OA_ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -14,10 +17,20 @@ struct oa_ui_model {
     json_value_t *snapshot;
     oa_ui_document document;
     oa_ui_operation *operations;
+    char *route_key_bytes;
 };
+
+static atomic_int OA_UI_DESCRIPTOR_BIND_STATE = ATOMIC_VAR_INIT(0);
 
 static const char *const OA_UI_METHODS[] = {
     "get", "post", "put", "patch", "delete", "head", "options", "trace"
+};
+
+enum {
+    OA_UI_MAX_OPERATIONS = 4096,
+    OA_UI_ROUTE_KEY_MAX_BYTES = 128,
+    OA_UI_ROUTE_KEY_FALLBACK_BYTES = 32,
+    OA_UI_SEARCH_MAX_BYTES = 256
 };
 
 static void *oa_ui_system_calloc(void *userdata, size_t count, size_t size) {
@@ -82,7 +95,7 @@ static const cmeta_struct_desc OA_UI_PARAMETER_LAYOUT = {
     "oa_ui_parameter", sizeof(oa_ui_parameter), _Alignof(oa_ui_parameter),
     OA_UI_PARAMETER_LAYOUT_FIELDS, OA_ARRAY_COUNT(OA_UI_PARAMETER_LAYOUT_FIELDS)
 };
-static const cmeta_data_field_desc OA_UI_PARAMETER_FIELDS[] = {
+static cmeta_data_field_desc OA_UI_PARAMETER_FIELDS[] = {
     {"openapi.ui.parameter.name", "name", offsetof(oa_ui_parameter, name), &OA_UI_VSTR_DATA},
     {"openapi.ui.parameter.location", "location", offsetof(oa_ui_parameter, location), &OA_UI_VSTR_DATA},
     {"openapi.ui.parameter.description", "description", offsetof(oa_ui_parameter, description), &OA_UI_VSTR_DATA},
@@ -112,6 +125,7 @@ static const cmeta_field_desc OA_UI_OPERATION_LAYOUT_FIELDS[] = {
     OA_LAYOUT_FIELD(oa_ui_operation, method, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, path, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, operation_id, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, route_key, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, summary, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, description, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, tags, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
@@ -124,10 +138,11 @@ static const cmeta_struct_desc OA_UI_OPERATION_LAYOUT = {
     "oa_ui_operation", sizeof(oa_ui_operation), _Alignof(oa_ui_operation),
     OA_UI_OPERATION_LAYOUT_FIELDS, OA_ARRAY_COUNT(OA_UI_OPERATION_LAYOUT_FIELDS)
 };
-static const cmeta_data_field_desc OA_UI_OPERATION_FIELDS[] = {
+static cmeta_data_field_desc OA_UI_OPERATION_FIELDS[] = {
     {"openapi.ui.operation.method", "method", offsetof(oa_ui_operation, method), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.path", "path", offsetof(oa_ui_operation, path), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.operation_id", "operation_id", offsetof(oa_ui_operation, operation_id), &OA_UI_VSTR_DATA},
+    {"openapi.ui.operation.route_key", "route_key", offsetof(oa_ui_operation, route_key), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.summary", "summary", offsetof(oa_ui_operation, summary), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.description", "description", offsetof(oa_ui_operation, description), &OA_UI_VSTR_DATA},
     {"openapi.ui.operation.tags", "tags", offsetof(oa_ui_operation, tags), &cmeta_data_sequence},
@@ -160,18 +175,20 @@ static const cmeta_field_desc OA_UI_DOCUMENT_LAYOUT_FIELDS[] = {
     OA_LAYOUT_FIELD(oa_ui_document, version, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_document, openapi_version, vstr, "vstr", &salts_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_document, server_url, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE)
+    OA_LAYOUT_FIELD(oa_ui_document, operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
+    OA_LAYOUT_FIELD(oa_ui_document, selected_operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE)
 };
 static const cmeta_struct_desc OA_UI_DOCUMENT_LAYOUT = {
     "oa_ui_document", sizeof(oa_ui_document), _Alignof(oa_ui_document),
     OA_UI_DOCUMENT_LAYOUT_FIELDS, OA_ARRAY_COUNT(OA_UI_DOCUMENT_LAYOUT_FIELDS)
 };
-static const cmeta_data_field_desc OA_UI_DOCUMENT_FIELDS[] = {
+static cmeta_data_field_desc OA_UI_DOCUMENT_FIELDS[] = {
     {"openapi.ui.document.title", "title", offsetof(oa_ui_document, title), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.version", "version", offsetof(oa_ui_document, version), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.openapi_version", "openapi_version", offsetof(oa_ui_document, openapi_version), &OA_UI_VSTR_DATA},
     {"openapi.ui.document.server_url", "server_url", offsetof(oa_ui_document, server_url), &OA_UI_VSTR_DATA},
-    {"openapi.ui.document.operations", "operations", offsetof(oa_ui_document, operations), &cmeta_data_sequence}
+    {"openapi.ui.document.operations", "operations", offsetof(oa_ui_document, operations), &cmeta_data_sequence},
+    {"openapi.ui.document.selected_operations", "selected_operations", offsetof(oa_ui_document, selected_operations), &cmeta_data_sequence}
 };
 static const cmeta_data_struct_shape OA_UI_DOCUMENT_SHAPE = {
     &OA_UI_DOCUMENT_LAYOUT, OA_UI_DOCUMENT_FIELDS, OA_ARRAY_COUNT(OA_UI_DOCUMENT_FIELDS)
@@ -193,6 +210,49 @@ static const cmeta_data_desc OA_UI_DOCUMENT_DATA = {
 };
 
 #undef OA_LAYOUT_FIELD
+
+static void oa_ui_bind_web_descriptors(void) {
+    int state = atomic_load_explicit(
+        &OA_UI_DESCRIPTOR_BIND_STATE, memory_order_acquire);
+    int expected = 0;
+    if (state == 2) return;
+    if (atomic_compare_exchange_strong_explicit(
+            &OA_UI_DESCRIPTOR_BIND_STATE, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire)) {
+        const cmeta_data_desc *text = chttp_web_vstr_cmeta_data();
+        const cmeta_data_desc *sequence = chttp_web_sequence_cmeta_data();
+
+        OA_UI_PARAMETER_FIELDS[0].value = text;
+        OA_UI_PARAMETER_FIELDS[1].value = text;
+        OA_UI_PARAMETER_FIELDS[2].value = text;
+        OA_UI_PARAMETER_FIELDS[3].value = text;
+
+        OA_UI_OPERATION_FIELDS[0].value = text;
+        OA_UI_OPERATION_FIELDS[1].value = text;
+        OA_UI_OPERATION_FIELDS[2].value = text;
+        OA_UI_OPERATION_FIELDS[3].value = text;
+        OA_UI_OPERATION_FIELDS[4].value = text;
+        OA_UI_OPERATION_FIELDS[5].value = text;
+        OA_UI_OPERATION_FIELDS[6].value = sequence;
+        OA_UI_OPERATION_FIELDS[7].value = sequence;
+        OA_UI_OPERATION_FIELDS[8].value = text;
+        OA_UI_OPERATION_FIELDS[9].value = text;
+
+        OA_UI_DOCUMENT_FIELDS[0].value = text;
+        OA_UI_DOCUMENT_FIELDS[1].value = text;
+        OA_UI_DOCUMENT_FIELDS[2].value = text;
+        OA_UI_DOCUMENT_FIELDS[3].value = text;
+        OA_UI_DOCUMENT_FIELDS[4].value = sequence;
+        OA_UI_DOCUMENT_FIELDS[5].value = sequence;
+
+        atomic_store_explicit(
+            &OA_UI_DESCRIPTOR_BIND_STATE, 2, memory_order_release);
+        return;
+    }
+    while (atomic_load_explicit(
+               &OA_UI_DESCRIPTOR_BIND_STATE, memory_order_acquire) != 2) {
+    }
+}
 
 static vstr oa_ui_empty(void) {
     return (vstr){NULL, 0u};
@@ -268,6 +328,7 @@ void oa_ui_model_free(oa_ui_model *model) {
             oa_ui_operation_free(model, &model->operations[i]);
         oa_ui_free(model, model->operations);
     }
+    oa_ui_free(model, model->route_key_bytes);
     json_free(model->snapshot);
     if (allocator.free_fn)
         allocator.free_fn(allocator.userdata, model);
@@ -463,7 +524,59 @@ static int oa_ui_project_server_url(
         out, json_object_get(server, "url"), "server URL", 1, error);
 }
 
+
+static int oa_ui_route_key_safe(vstr key) {
+    if (!vstr_is_valid(key) || key.len == 0u ||
+        key.len > OA_UI_ROUTE_KEY_MAX_BYTES)
+        return 0;
+    for (size_t i = 0u; i < key.len; ++i) {
+        const unsigned char ch = (unsigned char)key.data[i];
+        if ((ch >= (unsigned char)'A' && ch <= (unsigned char)'Z') ||
+            (ch >= (unsigned char)'a' && ch <= (unsigned char)'z') ||
+            (ch >= (unsigned char)'0' && ch <= (unsigned char)'9') ||
+            ch == (unsigned char)'-' || ch == (unsigned char)'.' ||
+            ch == (unsigned char)'_' || ch == (unsigned char)'~')
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int oa_ui_build_route_keys(oa_ui_model *model, oa_error *error) {
+    const size_t count = model->document.operations.count;
+    if (count > OA_UI_MAX_OPERATIONS)
+        return oa_fail(error, "OpenAPI UI operation count exceeds capacity");
+    if (count == 0u) return 1;
+
+    model->route_key_bytes = oa_ui_calloc(
+        model, count, OA_UI_ROUTE_KEY_FALLBACK_BYTES);
+    if (!model->route_key_bytes)
+        return oa_fail(error, "out of memory constructing OpenAPI UI route keys");
+
+    for (size_t i = 0u; i < count; ++i) {
+        oa_ui_operation *operation = &model->operations[i];
+        if (oa_ui_route_key_safe(operation->operation_id)) {
+            operation->route_key = operation->operation_id;
+        } else {
+            char *slot =
+                model->route_key_bytes + i * OA_UI_ROUTE_KEY_FALLBACK_BYTES;
+            const int written = snprintf(
+                slot, OA_UI_ROUTE_KEY_FALLBACK_BYTES, "op-%zu", i);
+            if (written < 0 ||
+                (size_t)written >= OA_UI_ROUTE_KEY_FALLBACK_BYTES)
+                return oa_fail(error, "OpenAPI UI route key exceeds capacity");
+            operation->route_key = vstr_from_buf(slot, (size_t)written);
+        }
+        for (size_t j = 0u; j < i; ++j) {
+            if (vstr_eq(model->operations[j].route_key, operation->route_key))
+                return oa_fail(error, "OpenAPI UI route keys must be unique");
+        }
+    }
+    return 1;
+}
+
 static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
+    oa_ui_bind_web_descriptors();
     const json_value_t *root = model->snapshot;
     const json_value_t *info = json_object_get(root, "info");
     const json_value_t *paths = json_object_get(root, "paths");
@@ -485,7 +598,11 @@ static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
         return 0;
 
     size_t operation_count = oa_ui_count_operations(paths);
+    if (operation_count > OA_UI_MAX_OPERATIONS)
+        return oa_fail(error, "OpenAPI UI operation count exceeds capacity");
     model->document.operations =
+        oa_ui_sequence_empty(sizeof(oa_ui_operation), &OA_UI_OPERATION_DATA);
+    model->document.selected_operations =
         oa_ui_sequence_empty(sizeof(oa_ui_operation), &OA_UI_OPERATION_DATA);
     if (operation_count) {
         model->operations =
@@ -517,7 +634,7 @@ static int oa_ui_project_snapshot(oa_ui_model *model, oa_error *error) {
     }
     if (operation_index != operation_count)
         return oa_fail(error, "OpenAPI UI operation projection count changed");
-    return 1;
+    return oa_ui_build_route_keys(model, error);
 }
 
 oa_ui_model *oa_ui_model_create_json_with_allocator(
@@ -565,12 +682,109 @@ const oa_ui_document *oa_ui_model_view(const oa_ui_model *model) {
     return model ? &model->document : NULL;
 }
 
+
+static unsigned char oa_ui_ascii_fold(unsigned char value) {
+    return value >= (unsigned char)'A' && value <= (unsigned char)'Z'
+        ? (unsigned char)(value + ((unsigned char)'a' - (unsigned char)'A'))
+        : value;
+}
+
+static int oa_ui_contains(vstr value, vstr query) {
+    if (query.len == 0u) return 1;
+    if (!vstr_is_valid(value) || query.len > value.len) return 0;
+    for (size_t offset = 0u; offset <= value.len - query.len; ++offset) {
+        size_t index = 0u;
+        while (index < query.len &&
+               oa_ui_ascii_fold((unsigned char)value.data[offset + index]) ==
+                   oa_ui_ascii_fold((unsigned char)query.data[index]))
+            ++index;
+        if (index == query.len) return 1;
+    }
+    return 0;
+}
+
+static int oa_ui_operation_matches(
+    const oa_ui_operation *operation, vstr query) {
+    if (!operation) return 0;
+    if (oa_ui_contains(operation->method, query) ||
+        oa_ui_contains(operation->path, query) ||
+        oa_ui_contains(operation->summary, query))
+        return 1;
+    if (operation->tags.count != 0u &&
+        (operation->tags.data == NULL ||
+         operation->tags.stride != sizeof(vstr)))
+        return 0;
+    const vstr *tags = (const vstr *)operation->tags.data;
+    for (size_t i = 0u; i < operation->tags.count; ++i)
+        if (oa_ui_contains(tags[i], query)) return 1;
+    return 0;
+}
+
+const oa_ui_operation *oa_ui_document_find_operation(
+    const oa_ui_document *document, vstr route_key) {
+    if (!document || !vstr_is_valid(route_key) || route_key.len == 0u ||
+        (document->operations.count != 0u &&
+         (document->operations.data == NULL ||
+          document->operations.stride != sizeof(oa_ui_operation))))
+        return NULL;
+    const oa_ui_operation *operations =
+        (const oa_ui_operation *)document->operations.data;
+    for (size_t i = 0u; i < document->operations.count; ++i)
+        if (vstr_eq(operations[i].route_key, route_key)) return &operations[i];
+    return NULL;
+}
+
+int oa_ui_document_filter_operations(
+    const oa_ui_document *document,
+    vstr query,
+    oa_ui_operation *storage,
+    size_t capacity,
+    oa_ui_sequence_view *out,
+    oa_error *error) {
+    if (out)
+        *out = oa_ui_sequence_empty(
+            sizeof(oa_ui_operation), &OA_UI_OPERATION_DATA);
+    if (!document || !out || !vstr_is_valid(query) ||
+        (document->operations.count != 0u &&
+         (document->operations.data == NULL ||
+          document->operations.stride != sizeof(oa_ui_operation))))
+        return oa_fail(error, "invalid OpenAPI UI filter arguments");
+    if (query.len > OA_UI_SEARCH_MAX_BYTES)
+        return oa_fail(error, "OpenAPI UI search query exceeds capacity");
+    if (vstr_utf8_invalid_offset(query) != VSTR_NPOS)
+        return oa_fail(error, "OpenAPI UI search query is not valid UTF-8");
+    if (query.len == 0u) {
+        *out = document->operations;
+        return 1;
+    }
+
+    const oa_ui_operation *operations =
+        (const oa_ui_operation *)document->operations.data;
+    size_t count = 0u;
+    for (size_t i = 0u; i < document->operations.count; ++i)
+        if (oa_ui_operation_matches(&operations[i], query)) ++count;
+    if (count > capacity || (count != 0u && !storage))
+        return oa_fail(error, "OpenAPI UI filtered operation storage is too small");
+
+    size_t output = 0u;
+    for (size_t i = 0u; i < document->operations.count; ++i) {
+        if (!oa_ui_operation_matches(&operations[i], query)) continue;
+        storage[output++] = operations[i];
+    }
+    *out = (oa_ui_sequence_view){
+        storage, count, sizeof(oa_ui_operation), &OA_UI_OPERATION_DATA};
+    return 1;
+}
+
 const cmeta_data_desc *oa_ui_parameter_cmeta_data(void) {
+    oa_ui_bind_web_descriptors();
     return &OA_UI_PARAMETER_DATA;
 }
 const cmeta_data_desc *oa_ui_operation_cmeta_data(void) {
+    oa_ui_bind_web_descriptors();
     return &OA_UI_OPERATION_DATA;
 }
 const cmeta_data_desc *oa_ui_document_cmeta_data(void) {
+    oa_ui_bind_web_descriptors();
     return &OA_UI_DOCUMENT_DATA;
 }

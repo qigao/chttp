@@ -1,4 +1,4 @@
-"""Machine-check final OpenAPI UI cleanup and dependency boundaries."""
+"""Machine-check final OpenAPI UI cleanup and generic Web dependency boundaries."""
 from pathlib import Path
 import re
 
@@ -23,6 +23,8 @@ removed = [
     "openapi/ui/vendor/alpine-3.14.9.min.js",
     "openapi/ui/vendor/LICENSE.alpine.md",
     "openapi/ui/vendor/README.md",
+    "openapi/ui/renderer.c",
+    "openapi/ui/renderer.h",
 ]
 for path in removed:
     assert not (ROOT / path).exists(), f"obsolete migration file remains: {path}"
@@ -48,20 +50,38 @@ for removed_route in ("/docs/app.js", "/docs/alpine.js", "/docs/tryit/proxy"):
     assert removed_route not in server, f"obsolete/proxy route remains: {removed_route}"
 for route in ("/docs/style.css", "/docs/htmx.js", "/docs/tryit.js", "/openapi.json"):
     assert route in server, f"final static route missing: {route}"
+for generic_api in (
+    "chttp_web_renderer_init",
+    "chttp_web_render",
+    "chttp_web_render_response",
+    "chttp_web_security_use",
+):
+    assert generic_api in server, f"OpenAPI UI does not use generic Web API: {generic_api}"
 
 openapi_cmake = read("openapi/CMakeLists.txt")
 generator_links = link_block(openapi_cmake, "openapi_generator")
-renderer_links = link_block(openapi_cmake, "openapi_ui_renderer")
 assert "Jinja" not in generator_links and "HTMX" not in generator_links
-assert "Salts::JinjaCMeta" in renderer_links
-assert openapi_cmake.count("Salts::JinjaCMeta") == 1
+assert "openapi_ui_renderer" not in openapi_cmake
+assert "Salts::JinjaCMeta" not in openapi_cmake
+
+for path in list((OPENAPI / "src").rglob("*.c")) + \
+            list((OPENAPI / "include").rglob("*.h")) + \
+            list((OPENAPI / "examples").rglob("*.c")):
+    source = path.read_text(encoding="utf-8")
+    assert "jinja_cmeta" not in source, f"direct Jinja ownership remains: {path}"
 
 server_cmake = read("http_server/CMakeLists.txt")
 server_links = link_block(server_cmake, "chttp_server")
 assert "Jinja" not in server_links and "HTMX" not in server_links
 
 examples_cmake = read("openapi/examples/CMakeLists.txt")
-assert "openapi_ui_renderer" in examples_cmake
-assert "Salts::JinjaCMeta" not in examples_cmake
+ui_server_links = link_block(examples_cmake, "openapi_ui_server")
+assert "CHttp::Web" in ui_server_links
+assert "openapi_ui_renderer" not in ui_server_links
+assert "Salts::JinjaCMeta" not in ui_server_links
 
-print("OpenAPI final cleanup and dependency audit passed")
+web_cmake = read("web/CMakeLists.txt")
+web_links = link_block(web_cmake, "chttp_web")
+assert "Salts::JinjaCMeta" in web_links
+
+print("OpenAPI final cleanup and CHttp::Web dependency audit passed")

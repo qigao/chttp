@@ -439,6 +439,14 @@ chttp_web_status chttp_web_render_response(
   return chttp_web_fail(error, CHTTP_WEB_OK, 0, NULL);
 }
 
+const cmeta_data_desc *chttp_web_vstr_cmeta_data(void) {
+  return jinja_cmeta_vstr_data();
+}
+
+const cmeta_data_desc *chttp_web_sequence_cmeta_data(void) {
+  return jinja_cmeta_sequence_data();
+}
+
 void chttp_web_output_free(char *html) {
   free(html);
 }

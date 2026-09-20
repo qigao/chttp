@@ -1,9 +1,9 @@
 <nav id="operation-list" aria-label="接口列表">
 {% for op in operations %}
   <button class="nav-item" type="button"
-          data-operation-key="{{ operation_keys[loop.index0] }}"
+          data-operation-key="{{ op.route_key }}"
           aria-controls="operation-detail"
-          hx-get="/docs/operations/{{ operation_keys[loop.index0] }}"
+          hx-get="/docs/operations/{{ op.route_key }}"
           hx-target="#operation-detail"
           hx-swap="innerHTML"
           hx-sync="#operation-detail:replace">
