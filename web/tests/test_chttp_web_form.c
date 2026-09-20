@@ -46,10 +46,16 @@ typedef struct web_form_descriptor_model {
   uint32_t count;
 } web_form_descriptor_model;
 
-TBE_TYPED_DEFINE_STRUCT(
+TBE_TYPED_DEFINE_STRUCT_EX(
     WEB_FORM_DESCRIPTOR_OVERLAY, web_form_descriptor_model, "ScalarForm",
-    TBE_TYPED_FIELD(web_form_descriptor_model, count, "count",
-                    TBE_TYPED_U32, TBE_TYPED_REQUIRED));
+    4u, 0u, 0u, 0,
+    TBE_TYPED_FIELD_EX(
+        web_form_descriptor_model, count, "count",
+        TBE_TYPED_U32, TBE_TYPED_U32,
+        TBE_TYPED_BOOL, TBE_TYPED_BOOL,
+        0u, 0u, NULL, 0u, 0u, 0u,
+        TBE_TYPED_BOOL, TBE_TYPED_BOOL, NULL,
+        0u, 4u, 0u, TBE_TYPED_FIELD_WIRE_OFFSET));
 
 static const cmeta_type_identity WEB_FORM_DESCRIPTOR_ID =
     CMETA_TYPE_ID_ATOM_INIT("chttp.web.form.ScalarForm");
@@ -83,6 +89,8 @@ static const cmeta_data_desc WEB_FORM_DESCRIPTOR_DATA = {
     CMETA_DATA_STRUCT,
     &WEB_FORM_DESCRIPTOR_TYPE,
     &WEB_FORM_DESCRIPTOR_SHAPE,
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL};
