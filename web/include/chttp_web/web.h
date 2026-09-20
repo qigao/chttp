@@ -259,8 +259,10 @@ typedef struct chttp_web_security_policy {
  * Every named template is HTML-autoescaped. There is no filesystem loader and
  * render calls may select only names frozen into this bundle.
  *
- * One renderer belongs to one execution context and must not be used
- * concurrently. A later worker-oriented ownership model is tracked separately.
+ * A renderer is synchronous and non-reentrant. It may be used on an
+ * application worker thread, but the application must ensure that render,
+ * init, and destroy never overlap for the same renderer. Parallel workers
+ * should own independent renderers (or externally serialize one renderer).
  */
 chttp_web_status chttp_web_renderer_init(
     chttp_web_renderer *renderer,
@@ -275,7 +277,12 @@ chttp_web_status chttp_web_renderer_init(
  * On success, *out_html is malloc-owned, NUL-terminated, and may contain
  * embedded NUL bytes before its terminator; *out_size is authoritative.
  * On failure, *out_html is NULL and *out_size is zero. No partial output is
- * published.
+ * published. The owned buffer is suitable for cross-thread deferred reply:
+ * chttp_server_deferred_reply() copies it before returning.
+ *
+ * model_desc/model are borrowed only for this call. Handler-scoped request,
+ * route-param, header, session, and JWT views must be copied before leaving
+ * the owner-thread callback and may not be retained by a worker.
  */
 chttp_web_status chttp_web_render(
     chttp_web_renderer *renderer,
@@ -294,6 +301,28 @@ chttp_web_status chttp_web_render(
 chttp_web_status chttp_web_render_response(
     chttp_web_renderer *renderer,
     chttp_server_response *response,
+    const char *template_name,
+    const cmeta_data_desc *model_desc,
+    const void *model,
+    unsigned int status_code,
+    const char *content_type,
+    chttp_web_error *error);
+
+/**
+ * Worker-oriented terminal helper for a previously deferred response.
+ *
+ * Renders completely into CHttp::Web-owned temporary output, then calls the
+ * thread-safe generation-checked chttp_server_deferred_reply(). The server
+ * copies the body before this function frees the render buffer. A zero status
+ * selects 200; NULL content_type selects "text/html; charset=utf-8".
+ *
+ * Success consumes the deferred handle. Server-side stale/cancelled/bounds
+ * failures return CHTTP_WEB_SERVER with error->native_status preserving the
+ * Salts status; the helper never retries or cancels implicitly.
+ */
+chttp_web_status chttp_web_deferred_render_reply(
+    chttp_web_renderer *renderer,
+    chttp_server_deferred *deferred,
     const char *template_name,
     const cmeta_data_desc *model_desc,
     const void *model,
