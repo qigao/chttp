@@ -7,8 +7,8 @@
 
 ## HTML / Jinja + HTMX 接口页面
 
-OpenAPI UI 现在采用服务端渲染：`openapi_ui_renderer` 在启动时编译固定的 Jinja 模板，
-`/docs` 返回完整页面，接口筛选和详情通过 HTMX 请求服务端 fragment。浏览器不再加载
+OpenAPI UI 现在采用服务端渲染：`CHttp::Web` 在启动时冻结并编译固定的 Jinja 模板，
+OpenAPI 层只提供 renderer-neutral CMeta presentation model；`/docs` 返回完整页面，接口筛选和详情通过 HTMX 请求服务端 fragment。浏览器不再加载
 Alpine.js，也不再从 OpenAPI 文档在客户端重建页面。
 
 固定路由包括：
@@ -44,10 +44,11 @@ TRACE/CONNECT、GET/HEAD 请求体、requestBody `$ref` 等不支持路径会 fa
 请求体上限 64 KiB，展示响应上限 1 MiB，请求超时 15 秒；限制集中在
 [tryit.js](ui/tryit.js) 的 `LIMITS`。
 
-页面内容依赖 Jinja autoescape；title、summary、description、schema/request/response JSON
+页面内容依赖 `CHttp::Web` 提供的 Jinja autoescape；title、summary、description、schema/request/response JSON
 均按文本输出。当前模板不包含 Alpine `x-*` 指令、inline `<script>` 或 HTMX `hx-on*`
-表达式。示例服务器当前不发送 Content-Security-Policy header，因此这里不声明已经完成
-strict-CSP 认证；部署方如启用 CSP，应按实际策略验证 vendored HTMX 和外部 `tryit.js`。
+表达式。示例服务器通过 `CHttp::Web` security middleware 统一发送 `X-Content-Type-Options: nosniff`，
+但不默认发送 Content-Security-Policy：strict same-origin reference CSP 的 `connect-src 'self'` 会改变
+当前允许用户输入跨域服务地址的 browser-only Try-it 边界。部署方如启用 CSP，应按实际服务地址显式配置并验证。
 
 ```powershell
 cmake --build --preset win-release-user --target openapi_ui_server test_generator chttp_file_transfer_test
@@ -57,7 +58,8 @@ ctest --preset win-release-user -R "^(generator(_conformance)?|openapi_ui_.*|cht
 UI 回归覆盖完整页/fragment、搜索与非法 key、Jinja escaping、请求编码和 Try-it fail-closed
 约束、固定静态路由、缺失/非法/超限模板或资源、顺序 render 状态恢复以及 server restart。
 最终 UI 依赖面保持隔离：`OpenAPI::Generator` 与 `CHttp::Server` 不链接 Jinja 或 HTMX，
-只有 `openapi_ui_renderer` 私有链接 `Salts::JinjaCMeta`，HTMX 仅作为示例 UI 静态资源。
+OpenAPI production 源码不再直接拥有 Jinja runtime；`openapi_ui_server` 只通过可选的 `CHttp::Web`
+进入 `Salts::JinjaCMeta`，HTMX 仍仅作为示例 UI 的本地静态资源。
 
 ## 声明与约束
 
