@@ -13,10 +13,14 @@ set_target_properties(chttp_web PROPERTIES
 
 target_compile_features(chttp_web PUBLIC c_std_11)
 target_include_directories(chttp_web
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:include>)
 target_link_libraries(chttp_web
   PUBLIC CHttp::Server Salts::CMeta
   PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core OpenSSL::Crypto)
+
+install(TARGETS chttp_web EXPORT ChttpTargets)
+install(DIRECTORY include/chttp_web DESTINATION include)
 
 get_target_property(_chttp_server_links chttp_server LINK_LIBRARIES)
 if("${_chttp_server_links}" MATCHES "Jinja|jinja")
