@@ -15,6 +15,7 @@ enum {
   WEB_SECURITY_HEADER_BYTES = 8192,
   WEB_SECURITY_BODY_BYTES = 4096,
   WEB_SECURITY_SEND_BYTES = 64 * 1024,
+  WEB_SECURITY_COMMAND_BUFFER_BYTES = 512 * 1024,
   WEB_SECURITY_BUFFER_CAPACITY_BYTES = 512 * 1024
 };
 
@@ -134,7 +135,7 @@ int main(void) {
   config.network.completion_batch_capacity = WEB_SECURITY_CONNECTIONS;
   config.network.event_capacity = WEB_SECURITY_COMMANDS;
   config.network.max_send_bytes = WEB_SECURITY_SEND_BYTES;
-  config.network.command_buffer_bytes = WEB_SECURITY_HEADER_BYTES;
+  config.network.command_buffer_bytes = WEB_SECURITY_COMMAND_BUFFER_BYTES;
   config.network.receive_buffer_bytes = WEB_SECURITY_HEADER_BYTES;
   config.network.connect_timeout_ms = WEB_SECURITY_TIMEOUT_MS;
   config.network.read_timeout_ms = WEB_SECURITY_TIMEOUT_MS;
