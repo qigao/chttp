@@ -22,7 +22,9 @@ typedef enum chttp_web_status {
   CHTTP_WEB_NOT_FOUND = -7,
   CHTTP_WEB_SERVER = -8,
   CHTTP_WEB_FORM = -9,
-  CHTTP_WEB_BIND = -10
+  CHTTP_WEB_BIND = -10,
+  CHTTP_WEB_CSRF = -11,
+  CHTTP_WEB_FLASH = -12
 } chttp_web_status;
 
 typedef struct DataBind DataBind;
@@ -101,6 +103,8 @@ typedef struct chttp_web_request_context {
   chttp_web_string_view path;
   bool htmx;
   bool session_available;
+  chttp_web_string_view csrf_token;
+  bool csrf_available;
   chttp_web_sequence_view params;
   chttp_web_sequence_view headers;
   chttp_web_sequence_view session;
@@ -180,6 +184,44 @@ typedef struct chttp_web_form_bind_options {
 #define CHTTP_WEB_FORM_BIND_OPTIONS_INIT \
   {sizeof(chttp_web_form_bind_options), NULL, 0u}
 
+enum {
+  CHTTP_WEB_CSRF_RANDOM_BYTES = 32,
+  CHTTP_WEB_CSRF_TOKEN_BYTES = 64,
+  CHTTP_WEB_FLASH_HARD_MAX_MESSAGES = 16,
+  CHTTP_WEB_FLASH_HARD_MAX_SERIALIZED_BYTES = 1024
+};
+
+#define CHTTP_WEB_CSRF_FORM_FIELD "_csrf"
+#define CHTTP_WEB_CSRF_HEADER "X-CSRF-Token"
+
+typedef struct chttp_web_flash_message {
+  chttp_web_string_view level;
+  chttp_web_string_view text;
+} chttp_web_flash_message;
+
+typedef struct chttp_web_flash_config {
+  size_t size;
+  size_t max_messages;
+  size_t max_level_bytes;
+  size_t max_text_bytes;
+  size_t max_serialized_bytes;
+} chttp_web_flash_config;
+
+#define CHTTP_WEB_FLASH_CONFIG_INIT \
+  {sizeof(chttp_web_flash_config), 4u, 32u, 256u, 1024u}
+
+typedef struct chttp_web_flash_buffer {
+  size_t size;
+  chttp_web_flash_message *message_storage;
+  size_t message_capacity;
+  char *byte_storage;
+  size_t byte_capacity;
+} chttp_web_flash_buffer;
+
+#define CHTTP_WEB_FLASH_BUFFER_INIT \
+  {sizeof(chttp_web_flash_buffer), NULL, 0u, NULL, 0u}
+
+
 
 /**
  * Builds one synchronous, non-reentrant renderer from an application-owned
@@ -245,6 +287,52 @@ chttp_web_status chttp_web_request_context_init(
 
 /** CMeta descriptor for embedding chttp_web_request_context in application models. */
 const cmeta_data_desc *chttp_web_request_context_data(void);
+
+const char *chttp_web_csrf_token(const chttp_session *session);
+
+chttp_web_status chttp_web_csrf_ensure(
+    chttp_session *session,
+    const char **out_token,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_csrf_rotate(
+    chttp_session *session,
+    const char **out_token,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_csrf_clear(
+    chttp_session *session,
+    chttp_web_error *error);
+
+/**
+ * Validates POST/PUT/PATCH/DELETE. GET/HEAD/OPTIONS pass without a token.
+ * Ordinary requests use one _csrf form field. Exact HTMX requests may use
+ * X-CSRF-Token; when that header is present it is authoritative. This helper
+ * is opt-in, so JWT-only API routes remain outside CSRF scope by not invoking it.
+ */
+chttp_web_status chttp_web_csrf_validate(
+    const chttp_server_request_view *request,
+    const chttp_web_form *form,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_flash_push(
+    chttp_session *session,
+    const chttp_web_flash_config *config,
+    const char *level,
+    const char *text,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_flash_consume(
+    chttp_session *session,
+    const chttp_web_flash_config *config,
+    const chttp_web_flash_buffer *buffer,
+    size_t *out_count,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_flash_clear(
+    chttp_session *session,
+    chttp_web_error *error);
+
 
 /**
  * Parses application/x-www-form-urlencoded bytes into bounded caller-owned

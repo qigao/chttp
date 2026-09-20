@@ -28,3 +28,7 @@ add_test(NAME chttp_web_http_test
 add_test(NAME chttp_web_context_http_test
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_chttp_web_context_http.py"
           "$<TARGET_FILE:chttp_web_context_example>")
+
+add_test(NAME chttp_web_session_http_test
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_chttp_web_session_http.py"
+          "$<TARGET_FILE:chttp_web_session_example>")
