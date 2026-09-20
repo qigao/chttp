@@ -306,7 +306,7 @@ spec("CHttp::Web SSE") {
       check_equal(response.status_code, 200u);
       check_equal(
           chttp_response_header(&response, "Content-Type"),
-          "text/event-stream; charset=utf-8");
+          "text/event-stream");
       check_equal(
           chttp_response_header(&response, "Cache-Control"), "no-cache");
       check_equal(response.body_size, sizeof(expected) - 1u);
