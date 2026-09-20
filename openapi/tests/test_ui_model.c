@@ -219,6 +219,9 @@ int main(void) {
     REQUIRE(view_is(view->openapi_version, "3.1.0"));
     REQUIRE(view->operations.count == 3u);
     REQUIRE(view->operations.stride == sizeof(oa_ui_operation));
+    REQUIRE(view->selected_operations.count == 0u);
+    REQUIRE(view->selected_operations.stride == sizeof(oa_ui_operation));
+    REQUIRE(view->selected_operations.element == oa_ui_operation_cmeta_data());
     REQUIRE(view->operations.element == oa_ui_operation_cmeta_data());
 
     const oa_ui_operation *operations =
@@ -226,6 +229,7 @@ int main(void) {
     REQUIRE(view_is(operations[0].method, "get"));
     REQUIRE(view_is(operations[0].path, "/pets/{id}"));
     REQUIRE(view_is(operations[0].operation_id, "getPet"));
+    REQUIRE(view_is(operations[0].route_key, "getPet"));
     REQUIRE(view_is(operations[0].summary, "Read pet"));
     REQUIRE(view_is(operations[0].description,
                     "\xE8\xBF\x94\xE5\x9B\x9E\xE5\xAE\xA0\xE7\x89\xA9"));
@@ -257,11 +261,13 @@ int main(void) {
     REQUIRE(view_is(operations[1].method, "post"));
     REQUIRE(view_is(operations[1].path, "/pets/{id}"));
     REQUIRE(view_is(operations[1].operation_id, "update_pet"));
+    REQUIRE(view_is(operations[1].route_key, "update_pet"));
     REQUIRE(operations[1].request_body_json.len != 0u);
     REQUIRE(operations[1].responses_json.len != 0u);
 
     REQUIRE(view_is(operations[2].method, "get"));
     REQUIRE(view_is(operations[2].path, "/health"));
+    REQUIRE(view_is(operations[2].route_key, "op-2"));
     REQUIRE(view_is(operations[2].summary, ""));
     REQUIRE(view_is(operations[2].description, ""));
     REQUIRE(operations[2].parameters.count == 0u);
@@ -278,8 +284,11 @@ int main(void) {
     REQUIRE(data_field(operation_data, "parameters")->value->kind == CMETA_DATA_SEQUENCE);
     REQUIRE(data_field(operation_data, "tags"));
     REQUIRE(data_field(operation_data, "tags")->value->kind == CMETA_DATA_SEQUENCE);
+    REQUIRE(data_field(operation_data, "route_key"));
     REQUIRE(data_field(document_data, "operations"));
     REQUIRE(data_field(document_data, "operations")->value->kind == CMETA_DATA_SEQUENCE);
+    REQUIRE(data_field(document_data, "selected_operations"));
+    REQUIRE(data_field(document_data, "selected_operations")->value->kind == CMETA_DATA_SEQUENCE);
 
     oa_document_free(document);
     document = NULL;
