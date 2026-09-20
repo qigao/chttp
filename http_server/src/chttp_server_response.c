@@ -462,10 +462,18 @@ int chttp_server_response_source_owned(chttp_server_response *response, unsigned
   return SALTS_OK;
 }
 
+int chttp_server_response_source_with_cleanup(
+    chttp_server_response *response, unsigned int status_code,
+    const char *content_type, const chttp_body_source *source,
+    chttp_server_response_source_cleanup_fn cleanup, void *cleanup_user) {
+  return chttp_server_response_source_owned(
+      response, status_code, content_type, source, cleanup, cleanup_user);
+}
+
 int chttp_server_response_source(chttp_server_response *response, unsigned int status_code,
                                  const char *content_type, const chttp_body_source *source) {
-  return chttp_server_response_source_owned(response, status_code, content_type, source, NULL,
-                                            NULL);
+  return chttp_server_response_source_with_cleanup(
+      response, status_code, content_type, source, NULL, NULL);
 }
 
 static const char *chttp_server_reason(unsigned int status_code) {
