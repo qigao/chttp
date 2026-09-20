@@ -267,7 +267,8 @@ int main(void) {
 
     REQUIRE(view_is(operations[2].method, "get"));
     REQUIRE(view_is(operations[2].path, "/health"));
-    REQUIRE(view_is(operations[2].operation_id, "health"));\n    REQUIRE(view_is(operations[2].route_key, "health"));
+    REQUIRE(view_is(operations[2].operation_id, "health"));
+    REQUIRE(view_is(operations[2].route_key, "health"));
     REQUIRE(view_is(operations[2].summary, ""));
     REQUIRE(view_is(operations[2].description, ""));
     REQUIRE(operations[2].parameters.count == 0u);
