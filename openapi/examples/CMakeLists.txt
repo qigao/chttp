@@ -16,5 +16,5 @@ set_target_properties(openapi_examples PROPERTIES FOLDER "examples")
 
 add_executable(openapi_ui_server ui_server.c)
 target_link_libraries(openapi_ui_server PRIVATE
-  CHttp::Web CHttp::Server Salts::Core Salts::JsonParser openapi_generator)
+  CHttp::Web CHttp::Server Salts::Core Salts::JsonParser OpenAPI::UIModel)
 set_target_properties(openapi_ui_server PROPERTIES FOLDER "examples")
