@@ -6,7 +6,7 @@ add_library(OpenAPI::Generator ALIAS openapi_generator)
 target_include_directories(openapi_generator PUBLIC include PRIVATE src)
 target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sitter
   Salts::CMeta Salts::CFlow Salts::JsonParser Salts::CYamlJsonAdapter
-  PRIVATE ${CMAKE_DL_LIBS})
+  PRIVATE CHttp::Web ${CMAKE_DL_LIBS})
 add_executable(openapi-gen src/main.c)
 target_link_libraries(openapi-gen PRIVATE openapi_generator)
 
