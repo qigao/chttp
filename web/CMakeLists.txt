@@ -1,4 +1,6 @@
-add_library(chttp_web SHARED src/chttp_web.c)
+add_library(chttp_web SHARED
+  src/chttp_web.c
+  src/chttp_web_context.c)
 add_library(CHttp::Web ALIAS chttp_web)
 set_target_properties(chttp_web PROPERTIES
   EXPORT_NAME Web FOLDER "web"
