@@ -223,6 +223,32 @@ jobs:
               f"CHttp::Server transitive dependency audit passed "
               f"({len(seen)} reachable targets, no Jinja)"
           )
+
+          generator_roots = {
+              node for node, label in labels.items()
+              if "openapi_generator" in label or "OpenAPI::Generator" in label
+          }
+          if not generator_roots:
+              raise SystemExit("dependency audit could not find openapi_generator")
+
+          queue = deque(generator_roots)
+          generator_seen = set(generator_roots)
+          while queue:
+              node = queue.popleft()
+              label = labels.get(node, "")
+              if re.search(r"jinja|chttp_web|CHttp::Web", label, re.IGNORECASE):
+                  raise SystemExit(
+                      f"OpenAPI generator core reaches Web/Jinja target: {label}"
+                  )
+              for dep in edges.get(node, ()):
+                  if dep not in generator_seen:
+                      generator_seen.add(dep)
+                      queue.append(dep)
+
+          print(
+              f"OpenAPI generator dependency audit passed "
+              f"({len(generator_seen)} reachable targets, no Web/Jinja)"
+          )
           PY
 
       - name: Audit OpenAPI generic web boundary
