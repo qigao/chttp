@@ -221,6 +221,27 @@ typedef struct chttp_web_flash_buffer {
 #define CHTTP_WEB_FLASH_BUFFER_INIT \
   {sizeof(chttp_web_flash_buffer), NULL, 0u, NULL, 0u}
 
+/**
+ * Borrowed browser security policy. Non-NULL header values must remain valid
+ * until the server is destroyed. NULL omits that header.
+ *
+ * strict_transport_security is deliberately NULL in the reference profiles.
+ * Applications must enable HSTS explicitly only for deployments that are
+ * actually HTTPS at the browser boundary.
+ */
+typedef struct chttp_web_security_policy {
+  size_t size;
+  const char *content_security_policy;
+  const char *referrer_policy;
+  const char *frame_options;
+  const char *strict_transport_security;
+  const char *cache_control;
+  bool nosniff;
+} chttp_web_security_policy;
+
+#define CHTTP_WEB_SECURITY_POLICY_INIT \
+  {sizeof(chttp_web_security_policy), NULL, NULL, NULL, NULL, NULL, false}
+
 
 
 /**
@@ -332,6 +353,35 @@ chttp_web_status chttp_web_flash_consume(
 chttp_web_status chttp_web_flash_clear(
     chttp_session *session,
     chttp_web_error *error);
+
+/**
+ * Strict same-origin browser profile:
+ * - no inline-script/style allowance;
+ * - no object embedding;
+ * - no framing;
+ * - same-origin forms, scripts, styles, images and connections.
+ *
+ * Cross-origin OpenAPI Try-it requires an explicit application CSP override
+ * for connect-src; the reference profile does not silently widen it.
+ */
+chttp_web_security_policy chttp_web_security_reference_policy(void);
+
+/** Reference browser profile plus Cache-Control: private, no-store. */
+chttp_web_security_policy chttp_web_security_authenticated_policy(void);
+
+/**
+ * Appends security middleware to the existing CHTTP middleware chain.
+ *
+ * The policy is validated before middleware capacity is consumed and is then
+ * borrowed until server destruction. Security headers are installed before
+ * calling next, so later middleware or the terminal handler may explicitly
+ * replace a header using chttp_server_response_set_header(). Register this
+ * middleware before CORS when security headers are also required on CORS
+ * preflight responses.
+ */
+int chttp_web_security_use(
+    chttp_server *server,
+    const chttp_web_security_policy *policy);
 
 
 /**
