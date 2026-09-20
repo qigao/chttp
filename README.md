@@ -42,6 +42,7 @@ CHTTP is domain infrastructure: higher-level projects can depend on it for HTTP-
 | HTTP / RPC client | `CHttp::Client` | `<http_client/http.h>`, `<http_client/rpc.h>` |
 | HTTP / RPC server | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
 | S3 client | `CHttp::S3` | `<s3/s3.h>` |
+| Server-driven Web UI | `CHttp::Web` | `<chttp_web/web.h>` |
 
 Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
 
@@ -53,6 +54,7 @@ http_server/  include/http_server/  src/  rpc/  tests/  examples/
 http_common/  include/http_common/  http/  rpc/  tests/
 s3/           include/s3/  src/  tests/
 openapi/      OpenAPI generation support
+web/          optional server-driven Web presentation layer
 vendor/       local third-party integration
 ```
 
@@ -67,6 +69,7 @@ See:
 - [HTTP server](http_server/README.md)
 - [HTTP client](http_client/README.md)
 - [S3 client](s3/README.md)
+- [CHttp::Web](web/README.md)
 
 ## OpenAPI
 
@@ -113,7 +116,7 @@ find_package(Chttp CONFIG REQUIRED
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```
 
-Use `CHttp::Server` for server applications and `CHttp::S3` for S3 consumers.
+Use `CHttp::Server` for server applications, `CHttp::S3` for S3 consumers, and `CHttp::Web` for the optional server-driven presentation layer.
 
 The package resolves Salts and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
 
