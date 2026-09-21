@@ -456,6 +456,53 @@ static int chttp_server_test_logout(void *user, const chttp_server_request_view 
   return status == SALTS_OK ? chttp_server_reply(response, 204u, NULL, NULL, 0u) : status;
 }
 
+static int chttp_server_test_regenerate(void *user, const chttp_server_request_view *request,
+                                        chttp_server_response *response) {
+  const char *before;
+  const char *after;
+  int status;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  before = chttp_session_get(request->session, "visits");
+  status = chttp_session_regenerate(request->session);
+  if (status != SALTS_OK) return status;
+  after = chttp_session_get(request->session, "visits");
+  if ((before == NULL) != (after == NULL) ||
+      (before != NULL && strcmp(before, after) != 0))
+    return SALTS_EPROTO;
+  status = chttp_session_set(request->session, "privileged", "yes");
+  return status == SALTS_OK
+             ? chttp_server_reply(response, 204u, NULL, NULL, 0u)
+             : status;
+}
+
+static int chttp_server_test_regenerate_empty(void *user,
+                                              const chttp_server_request_view *request,
+                                              chttp_server_response *response) {
+  int status;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  if (chttp_session_get(request->session, "fresh") != NULL) return SALTS_EPROTO;
+  status = chttp_session_regenerate(request->session);
+  if (status == SALTS_OK)
+    status = chttp_session_set(request->session, "fresh", "yes");
+  return status == SALTS_OK
+             ? chttp_server_reply(response, 204u, NULL, NULL, 0u)
+             : status;
+}
+
+static int chttp_server_test_session_state(void *user,
+                                           const chttp_server_request_view *request,
+                                           chttp_server_response *response) {
+  const char *value;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  value = chttp_session_get(request->session, "privileged");
+  if (value == NULL) value = chttp_session_get(request->session, "fresh");
+  if (value == NULL) value = "anonymous";
+  return chttp_server_reply(response, 200u, "text/plain", value, strlen(value));
+}
+
 static int chttp_server_test_echo_body(void *user, const chttp_server_request_view *request,
                                        chttp_server_response *response) {
   (void)user;
@@ -2016,6 +2063,118 @@ spec("CHTTP background HTTP/1.1 server") {
     chttp_response_destroy(&post_response);
     chttp_response_destroy(&head_response);
     chttp_response_destroy(&get_response);
+    check_equal(chttp_client_destroy(&client, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("regenerates Session IDs without losing state and rejects stale cookies") {
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_server_test_probe probe = {0};
+    chttp_server_config server_config = chttp_server_test_config();
+    chttp_client_config client_config = chttp_server_test_client_config();
+    chttp_response first = {0};
+    chttp_response rotated = {0};
+    chttp_response stale = {0};
+    chttp_response current = {0};
+    chttp_response retained = {0};
+    chttp_response rotated_again = {0};
+    chttp_response old_again = {0};
+    chttp_response empty = {0};
+    chttp_response fresh = {0};
+    chttp_header cookie_header;
+    char cookie1[128];
+    char cookie2[128];
+    char cookie3[128];
+    char cookie4[128];
+    char uri[64];
+    uint16_t port = 0u;
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/users/:name", chttp_server_test_user, &probe),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/regenerate", chttp_server_test_regenerate, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/regenerate-empty",
+                                 chttp_server_test_regenerate_empty, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/session-state",
+                                 chttp_server_test_session_state, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port) > 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(chttp_server_test_call(&client, uri, "/users/alice", NULL, 0u, &first),
+                SALTS_OK);
+    check_equal(first.status_code, 200u);
+    check_equal(first.body, "alice:1", 7u);
+    check_equal(chttp_server_test_cookie_header(&first, cookie1, sizeof(cookie1)), SALTS_OK);
+
+    cookie_header = (chttp_header){"Cookie", cookie1};
+    check_equal(chttp_server_test_call(&client, uri, "/regenerate",
+                                       &cookie_header, 1u, &rotated),
+                SALTS_OK);
+    check_equal(rotated.status_code, 204u);
+    check_equal(chttp_server_test_cookie_header(&rotated, cookie2, sizeof(cookie2)), SALTS_OK);
+    check_true(strcmp(cookie1, cookie2) != 0);
+
+    cookie_header.value = cookie1;
+    check_equal(chttp_server_test_call(&client, uri, "/session-state",
+                                       &cookie_header, 1u, &stale),
+                SALTS_OK);
+    check_equal(stale.status_code, 200u);
+    check_equal(stale.body, "anonymous", 9u);
+    check_null(chttp_response_header(&stale, "Set-Cookie"));
+
+    cookie_header.value = cookie2;
+    check_equal(chttp_server_test_call(&client, uri, "/session-state",
+                                       &cookie_header, 1u, &current),
+                SALTS_OK);
+    check_equal(current.body, "yes", 3u);
+
+    check_equal(chttp_server_test_call(&client, uri, "/users/alice",
+                                       &cookie_header, 1u, &retained),
+                SALTS_OK);
+    check_equal(retained.body, "alice:2", 7u);
+
+    check_equal(chttp_server_test_call(&client, uri, "/regenerate",
+                                       &cookie_header, 1u, &rotated_again),
+                SALTS_OK);
+    check_equal(chttp_server_test_cookie_header(
+                    &rotated_again, cookie3, sizeof(cookie3)),
+                SALTS_OK);
+    check_true(strcmp(cookie2, cookie3) != 0);
+
+    cookie_header.value = cookie2;
+    check_equal(chttp_server_test_call(&client, uri, "/session-state",
+                                       &cookie_header, 1u, &old_again),
+                SALTS_OK);
+    check_equal(old_again.body, "anonymous", 9u);
+
+    check_equal(chttp_server_test_call(&client, uri, "/regenerate-empty",
+                                       NULL, 0u, &empty),
+                SALTS_OK);
+    check_equal(empty.status_code, 204u);
+    check_equal(chttp_server_test_cookie_header(&empty, cookie4, sizeof(cookie4)), SALTS_OK);
+
+    cookie_header.value = cookie4;
+    check_equal(chttp_server_test_call(&client, uri, "/session-state",
+                                       &cookie_header, 1u, &fresh),
+                SALTS_OK);
+    check_equal(fresh.body, "yes", 3u);
+
+    chttp_response_destroy(&fresh);
+    chttp_response_destroy(&empty);
+    chttp_response_destroy(&old_again);
+    chttp_response_destroy(&rotated_again);
+    chttp_response_destroy(&retained);
+    chttp_response_destroy(&current);
+    chttp_response_destroy(&stale);
+    chttp_response_destroy(&rotated);
+    chttp_response_destroy(&first);
     check_equal(chttp_client_destroy(&client, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
