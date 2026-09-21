@@ -1,6 +1,6 @@
 # CHTTP
 
-**C11/C++17 HTTP, JSON-RPC, S3, WebSocket, and OpenAPI infrastructure built on Salts.**
+**C11/C++17 HTTP, server-driven Web, JSON-RPC, S3, WebSocket, and OpenAPI infrastructure built on Salts.**
 
 CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses Salts transport, lifecycle, bounded execution, and typed semantics instead of embedding a separate networking runtime.
 
@@ -113,7 +113,7 @@ find_package(Chttp CONFIG REQUIRED
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```
 
-Use `CHttp::Server` for server applications and `CHttp::S3` for S3 consumers.
+Use `CHttp::Server` for protocol/server applications, `CHttp::Web` for server-driven HTML applications, and `CHttp::S3` for S3 consumers.
 
 The package resolves Salts and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
 
