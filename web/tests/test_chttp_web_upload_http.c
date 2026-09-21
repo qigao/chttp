@@ -3,12 +3,30 @@
 
 #include "tinytest.h"
 
+#include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts/thread.h>
 
-#include <stddef.h>
+#include <limits.h>\n#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#if defined(_WIN32)
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+typedef SOCKET upload_http_socket;
+  #define UPLOAD_HTTP_INVALID_SOCKET INVALID_SOCKET
+  #define upload_http_socket_close closesocket
+#else
+  #include <arpa/inet.h>
+  #include <netinet/in.h>
+  #include <sys/socket.h>
+  #include <unistd.h>
+typedef int upload_http_socket;
+  #define UPLOAD_HTTP_INVALID_SOCKET (-1)
+  #define upload_http_socket_close close
+#endif
 
 enum {
   UPLOAD_HTTP_TIMEOUT_MS = 5000,
@@ -340,6 +358,82 @@ static int upload_http_get_csrf(
   return status;
 }
 
+static int upload_http_raw_connect(
+    uint16_t port, upload_http_socket *out_socket) {
+  struct sockaddr_in address;
+  upload_http_socket socket_value;
+  if (out_socket == NULL || port == 0u) return SALTS_EINVAL;
+  *out_socket = UPLOAD_HTTP_INVALID_SOCKET;
+  socket_value = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (socket_value == UPLOAD_HTTP_INVALID_SOCKET)
+    return SALTS_EIO;
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(port);
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (connect(
+          socket_value,
+          (const struct sockaddr *)&address,
+          sizeof(address)) != 0) {
+    upload_http_socket_close(socket_value);
+    return SALTS_EIO;
+  }
+  *out_socket = socket_value;
+  return SALTS_OK;
+}
+
+static int upload_http_raw_send(
+    upload_http_socket socket_value,
+    const void *data,
+    size_t size) {
+  const unsigned char *cursor = (const unsigned char *)data;
+  size_t sent = 0u;
+  if (socket_value == UPLOAD_HTTP_INVALID_SOCKET ||
+      data == NULL || size == 0u)
+    return SALTS_EINVAL;
+  while (sent < size) {
+    const size_t remaining = size - sent;
+    const int chunk =
+        remaining > (size_t)INT_MAX ? INT_MAX : (int)remaining;
+    const int result = send(
+        socket_value,
+        (const char *)cursor + sent,
+        chunk,
+        0);
+    if (result <= 0) return SALTS_EIO;
+    sent += (size_t)result;
+  }
+  return SALTS_OK;
+}
+
+static int upload_http_wait_count(
+    const size_t *value, size_t expected) {
+  const uint64_t deadline =
+      salts_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+  if (value == NULL) return SALTS_EINVAL;
+  while (*value < expected && salts_monotonic_ms() < deadline)
+    salts_thread_yield();
+  return *value == expected ? SALTS_OK : SALTS_ETIMEDOUT;
+}
+
+static int upload_http_send_partial_request(
+    upload_http_socket socket_value) {
+  static const char request[] =
+      "POST /upload HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: 512\r\n"
+      "Connection: keep-alive\r\n"
+      "\r\n"
+      "--AaB03x\r\n"
+      "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\n"
+      "Content-Type: text/plain\r\n"
+      "\r\n"
+      "partial";
+  return upload_http_raw_send(
+      socket_value, request, sizeof(request) - 1u);
+}
+
 static int upload_http_post(
     chttp_client *client,
     const char *uri,
@@ -496,6 +590,77 @@ spec("CHttp::Web upload route integration") {
     check_equal(
         chttp_server_stop(&server, UPLOAD_HTTP_TIMEOUT_MS),
         SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("aborts incomplete H1 uploads exactly once on disconnect and server stop") {
+    chttp_server server = {0};
+    chttp_server_config server_config = upload_http_server_config();
+    upload_http_app app = {0};
+    chttp_server_route_options upload_route = {
+        .method = CHTTP_METHOD_POST,
+        .path = "/upload",
+        .handler = upload_http_handler,
+        .user = &app,
+        .body_open = upload_http_open,
+        .body_close = upload_http_close};
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+    upload_http_socket socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+    uint16_t port = 0u;
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(
+        chttp_server_route_with(&server, &upload_route),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+
+    check_equal(
+        upload_http_raw_connect(port, &socket_value),
+        SALTS_OK);
+    check_equal(
+        upload_http_send_partial_request(socket_value),
+        SALTS_OK);
+    check_equal(
+        upload_http_wait_count(&app.begin_calls, 1u),
+        SALTS_OK);
+    upload_http_socket_close(socket_value);
+    socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+
+    check_equal(
+        upload_http_wait_count(&app.abort_calls, 1u),
+        SALTS_OK);
+    check_equal(app.commit_calls, (size_t)0u);
+    check_equal(app.abort_status, CHTTP_WEB_SERVER);
+    check_equal(app.abort_native_status, SALTS_ECANCELED);
+    check_equal(
+        chttp_web_upload_reset(&app.upload, &error),
+        CHTTP_WEB_OK);
+
+    check_equal(
+        upload_http_raw_connect(port, &socket_value),
+        SALTS_OK);
+    check_equal(
+        upload_http_send_partial_request(socket_value),
+        SALTS_OK);
+    check_equal(
+        upload_http_wait_count(&app.begin_calls, 2u),
+        SALTS_OK);
+
+    check_equal(
+        chttp_server_stop(&server, UPLOAD_HTTP_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        upload_http_wait_count(&app.abort_calls, 2u),
+        SALTS_OK);
+    check_equal(app.commit_calls, (size_t)0u);
+    check_equal(app.abort_status, CHTTP_WEB_SERVER);
+    check_equal(app.abort_native_status, SALTS_ECANCELED);
+    check_equal(
+        chttp_web_upload_reset(&app.upload, &error),
+        CHTTP_WEB_OK);
+
+    upload_http_socket_close(socket_value);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 }
