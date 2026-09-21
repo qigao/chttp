@@ -28,6 +28,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        chttp_commit="$(git rev-parse HEAD)"
         salts_commit="$(git -C salts rev-parse HEAD)"
         utils_commit="$(git -C salts-utils rev-parse HEAD)"
         vcpkg_commit="$(git -C vcpkg rev-parse HEAD)"
@@ -44,7 +45,8 @@ runs:
         } >> "$GITHUB_ENV"
         {
           echo '## Dependency provenance'
-          echo "CHttp: $GITHUB_SHA"
+          echo "CHttp checked-out head: $chttp_commit"
+          echo "Workflow event SHA: $GITHUB_SHA"
           echo "Salts master: $salts_commit"
           echo "SaltsUtils master: $utils_commit"
           echo "vcpkg: $vcpkg_commit"

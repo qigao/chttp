@@ -2,18 +2,20 @@ name: CHttp Web package qualification
 
 on:
   push:
-    branches:
-      - qualify/chttp-web-package
-      - fix/chttp-web-databind-discovery
-      - qualify/chttp-web-ii
-      - fix/chttp-saltsutils-master
+    branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
+
+# PR qualification checks the proposed head, not GitHub's synthetic merge.
+env:
+  CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: chttp-web-package-${{ github.ref_name }}
+  group: chttp-web-package-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -24,7 +26,7 @@ jobs:
       - name: Checkout exact Chttp head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CHTTP_HEAD_SHA }}
           fetch-depth: 2
           persist-credentials: false
       - name: Set up current master SDKs
@@ -93,5 +95,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
