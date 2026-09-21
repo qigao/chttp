@@ -77,12 +77,19 @@ deferred responses and streaming with typed CMeta models and Jinja CMeta
 server-side rendering.
 
 It supports full-page SSR, HTMX-style fragment responses, bounded form
-handling, session-backed CSRF and flash messages, browser security policy,
-deferred worker rendering, and SSE. It is intentionally not a client-side
-framework or a Wt-style server widget toolkit.
+handling, Session-backed CSRF and flash messages, browser security policy,
+Session-regenerated browser principals, protected-route authorization, safe
+local login return targets, static asset/application-shell mounts, deferred
+worker rendering, and SSE. Credential verification, password hashing, MFA,
+identity-provider protocols, and account persistence remain application or
+integration concerns.
 
-Reference applications live in `web/examples/`; OpenAPI UI is a qualification
-application on the same generic Web layer.
+Reference applications live in `web/examples/`. The authenticated application
+example demonstrates login, Session fixation defense, explicit authorization,
+asset serving, ordinary/HTMX rendering, and logout end to end. OpenAPI UI is a
+qualification application on the same generic Web layer. CHttp::Web remains
+intentionally server-driven rather than a client-side framework or Wt-style
+widget toolkit.
 
 ## OpenAPI
 
