@@ -2137,9 +2137,9 @@ spec("CHTTP background HTTP/1.1 server") {
     check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port) > 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
-    check_equal(chttp_server_test_call(&client, uri, "/seed-session", NULL, 0u, &first),
+    check_equal(chttp_server_test_call(&client, uri, "/users/alice", NULL, 0u, &first),
                 SALTS_OK);
-    check_equal(first.status_code, 204u);
+    check_equal(first.status_code, 200u);
     check_equal(first.body, "alice:1", 7u);
     check_equal(chttp_server_test_cookie_header(&first, cookie1, sizeof(cookie1)), SALTS_OK);
 
@@ -2240,9 +2240,9 @@ spec("CHTTP background HTTP/1.1 server") {
     check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port) > 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
-    check_equal(chttp_server_test_call(&client, uri, "/users/alice", NULL, 0u, &first),
+    check_equal(chttp_server_test_call(&client, uri, "/seed-session", NULL, 0u, &first),
                 SALTS_OK);
-    check_equal(first.status_code, 200u);
+    check_equal(first.status_code, 204u);
     check_equal(chttp_server_test_cookie_header(&first, cookie, sizeof(cookie)), SALTS_OK);
     cookie_header = (chttp_header){"Cookie", cookie};
 
