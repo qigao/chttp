@@ -230,6 +230,52 @@ spec("CHttp::Web multipart/form-data parser") {
     check_equal(probe.parts[2].data_size, (size_t)0u);
   }
 
+  it("accepts unquoted boundaries and enforces the 70-byte hard maximum") {
+    static const char body[] =
+        "--AaB03x\r\n"
+        "Content-Disposition: form-data; name=\"x\"\r\n\r\n"
+        "ok\r\n"
+        "--AaB03x--\r\n";
+    static const char boundary70_type[] =
+        "multipart/form-data; boundary=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    static const char boundary71_type[] =
+        "multipart/form-data; boundary=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    chttp_web_multipart_parser parser = CHTTP_WEB_MULTIPART_PARSER_INIT;
+    chttp_web_multipart_limits limits = mp_test_limits();
+    chttp_web_multipart_callbacks callbacks = mp_test_callbacks();
+    mp_test_probe probe = {0};
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+
+    check_equal(
+        chttp_web_multipart_init(
+            &parser, "multipart/form-data; boundary=AaB03x",
+            &limits, &callbacks, &probe, &error),
+        CHTTP_WEB_OK);
+    check_equal(
+        mp_test_feed_chunks(
+            &parser, body, sizeof(body) - 1u, 1u, &error),
+        CHTTP_WEB_OK);
+    check_equal(chttp_web_multipart_finish(&parser, &error), CHTTP_WEB_OK);
+    check_equal(probe.begin_count, (size_t)1u);
+    check_equal(probe.end_count, (size_t)1u);
+
+    memset(&probe, 0, sizeof(probe));
+    check_equal(
+        chttp_web_multipart_init(
+            &parser, boundary70_type,
+            &limits, &callbacks, &probe, &error),
+        CHTTP_WEB_OK);
+    check_equal(
+        parser.boundary_size,
+        (size_t)CHTTP_WEB_MULTIPART_BOUNDARY_HARD_MAX);
+
+    check_equal(
+        chttp_web_multipart_init(
+            &parser, boundary71_type,
+            &limits, &callbacks, &probe, &error),
+        CHTTP_WEB_INVALID_ARGUMENT);
+  }
+
   it("preserves false boundary prefixes as part data") {
     static const char body[] =
         "--AaB03x\r\n"
@@ -503,6 +549,7 @@ spec("CHttp::Web multipart/form-data parser") {
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
 
     limits.max_parts = 2u;
+    limits.max_field_bytes = 1u;
     limits.max_total_bytes = sizeof(two_parts) - 1u;
     check_equal(
         mp_test_run(
@@ -524,6 +571,7 @@ spec("CHttp::Web multipart/form-data parser") {
     check_equal(probe.end_count, (size_t)1u);
 
     limits = mp_test_limits();
+    limits.max_field_bytes = 1u;
     limits.max_total_bytes = sizeof(two_parts) - 2u;
     memset(&probe, 0, sizeof(probe));
     {
