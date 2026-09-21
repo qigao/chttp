@@ -17,10 +17,6 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      PROJECT_ROOT: ${{ runner.temp }}/salts-project
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:${{ runner.temp }}/salts-project/external/pkgs/salts/debug/lib
     steps:
       - name: Checkout exact Chttp head
         uses: actions/checkout@v4

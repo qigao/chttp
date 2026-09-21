@@ -38,6 +38,9 @@ runs:
           echo "SALTS_CACHE_COMPILER=gcc-$(gcc -dumpfullversion -dumpversion)"
           echo "SALTS_ROOT=$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
           echo "SALTS_UTILS_ROOT=/opt/salts-utils/debug"
+          echo "PROJECT_ROOT=$RUNNER_TEMP/salts-project"
+          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg"
+          echo "LD_LIBRARY_PATH=/opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:$RUNNER_TEMP/salts-project/external/pkgs/salts/debug/lib"
         } >> "$GITHUB_ENV"
         {
           echo '## Dependency provenance'
