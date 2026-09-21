@@ -1,6 +1,6 @@
 # CHTTP
 
-**C11/C++17 HTTP, JSON-RPC, S3, WebSocket, and OpenAPI infrastructure built on Salts.**
+**C11/C++17 HTTP, server-driven Web, JSON-RPC, S3, WebSocket, and OpenAPI infrastructure built on Salts.**
 
 CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses Salts transport, lifecycle, bounded execution, and typed semantics instead of embedding a separate networking runtime.
 
@@ -18,7 +18,7 @@ That gives the library a shared foundation:
 - **SaltsUtils crypto helpers** where explicitly required by protocol features.
 - **BoringSSL/OpenSSL-compatible package dependencies** for the low-level cryptographic provider selected by the build.
 
-CHTTP owns HTTP, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
+CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
 
 ## Ecosystem role
 
@@ -41,6 +41,7 @@ CHTTP is domain infrastructure: higher-level projects can depend on it for HTTP-
 | --- | --- | --- |
 | HTTP / RPC client | `CHttp::Client` | `<http_client/http.h>`, `<http_client/rpc.h>` |
 | HTTP / RPC server | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
+| Server-driven Web | `CHttp::Web` | `<chttp_web/web.h>` |
 | S3 client | `CHttp::S3` | `<s3/s3.h>` |
 
 Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
@@ -51,6 +52,7 @@ Client and Server each contain their own RPC-side implementation and link indepe
 http_client/  include/http_client/  src/  rpc/  tests/
 http_server/  include/http_server/  src/  rpc/  tests/  examples/
 http_common/  include/http_common/  http/  rpc/  tests/
+web/          include/chttp_web/  src/  tests/  examples/
 s3/           include/s3/  src/  tests/
 openapi/      OpenAPI generation support
 vendor/       local third-party integration
@@ -67,6 +69,21 @@ See:
 - [HTTP server](http_server/README.md)
 - [HTTP client](http_client/README.md)
 - [S3 client](s3/README.md)
+
+## CHttp::Web
+
+[CHttp::Web](web/README.md) is the optional native-C server-driven web
+application layer. It combines CHTTP routing, middleware, sessions, security,
+deferred responses and streaming with typed CMeta models and Jinja CMeta
+server-side rendering.
+
+It supports full-page SSR, HTMX-style fragment responses, bounded form
+handling, session-backed CSRF and flash messages, browser security policy,
+deferred worker rendering, and SSE. It is intentionally not a client-side
+framework or a Wt-style server widget toolkit.
+
+Reference applications live in `web/examples/`; OpenAPI UI is a qualification
+application on the same generic Web layer.
 
 ## OpenAPI
 
@@ -113,7 +130,7 @@ find_package(Chttp CONFIG REQUIRED
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```
 
-Use `CHttp::Server` for server applications and `CHttp::S3` for S3 consumers.
+Use `CHttp::Server` for protocol/server applications, `CHttp::Web` for server-driven HTML applications, and `CHttp::S3` for S3 consumers.
 
 The package resolves Salts and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
 
@@ -140,6 +157,7 @@ Additional technical references:
 
 - [HTTP runtime notes](docs/HTTP.md)
 - [RPC runtime notes](docs/RPC.md)
+- [CHttp::Web product guide](web/README.md)
 - [module layout decision](docs/plans/2026-09-09-server-client-layout.md)
 
 ---
