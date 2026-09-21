@@ -139,7 +139,8 @@ static int chttp_server_stream_handler(void *user, const chttp_server_request_vi
                                        chttp_server_response *response) {
   chttp_server_stream_probe *probe = (chttp_server_stream_probe *)user;
   if (probe == NULL || request == NULL || !request->body_streamed || request->body != NULL ||
-      request->body_size != probe->size || probe->closes != 1u || probe->close_status != SALTS_OK)
+      request->body_sink_user != probe || request->body_size != probe->size ||
+      probe->closes != 1u || probe->close_status != SALTS_OK)
     return SALTS_EPROTO;
   probe->handler_called = 1;
   return chttp_server_reply(response, 200u, "text/plain", "ok", 2u);
@@ -458,6 +459,8 @@ static int chttp_server_test_logout(void *user, const chttp_server_request_view 
 static int chttp_server_test_echo_body(void *user, const chttp_server_request_view *request,
                                        chttp_server_response *response) {
   (void)user;
+  if (request == NULL || request->body_sink_user != NULL)
+    return SALTS_EPROTO;
   return chttp_server_reply(response, 200u, "application/octet-stream", request->body,
                             request->body_size);
 }
@@ -831,6 +834,74 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(body.handler_called, 0);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
+  it("does not leak streamed body context across an HTTP/1.1 keep-alive connection") {
+    static const char streamed[] = "streamed";
+    static const char buffered[] = "buffered";
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_server_config server_config = chttp_server_test_config();
+    chttp_client_config client_config = chttp_server_test_client_config();
+    chttp_server_stream_probe probe = {0};
+    chttp_response response = {0};
+    chttp_error error = {0};
+    chttp_options options;
+    chttp_server_stats stats = {0};
+    char uri[64];
+    uint16_t port = 0u;
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    {
+      const chttp_server_route_options route = {
+          .method = CHTTP_METHOD_POST,
+          .path = "/stream-upload",
+          .handler = chttp_server_stream_handler,
+          .user = &probe,
+          .body_open = chttp_server_stream_open,
+          .body_close = chttp_server_stream_close};
+      check_equal(chttp_server_route_with(&server, &route), SALTS_OK);
+    }
+    check_equal(
+        chttp_server_post(&server, "/echo", chttp_server_test_echo_body, NULL),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port) > 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    options = (chttp_options){
+        .connection_uri = uri,
+        .authority = "127.0.0.1",
+        .target = "/stream-upload",
+        .body = streamed,
+        .body_size = sizeof(streamed) - 1u,
+        .timeout_ms = CHTTP_SERVER_TEST_TIMEOUT_MS};
+    check_equal(chttp_post(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, "ok", 2u);
+    chttp_response_destroy(&response);
+
+    options.target = "/echo";
+    options.body = buffered;
+    options.body_size = sizeof(buffered) - 1u;
+    response = (chttp_response){0};
+    error = (chttp_error){0};
+    check_equal(chttp_post(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, buffered, sizeof(buffered) - 1u);
+    chttp_response_destroy(&response);
+
+    check_equal(probe.handler_called, 1);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)1u);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("serves conditional and ranged files with reusable HTTP/1.1 connections") {
     static const char payload[] = "0123456789";
     static const struct {

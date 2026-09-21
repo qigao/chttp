@@ -120,6 +120,15 @@ typedef struct chttp_server_request_view {
   chttp_session *session;
   /** NULL unless JWT Bearer admission authenticated this callback. */
   const chttp_jwt_claims_view *jwt_claims;
+  /**
+   * Borrowed application context from the successful route body sink.
+   * NULL for buffered requests. CHTTP never owns or interprets this pointer.
+   * Applications that use it in the terminal handler must keep the context
+   * valid through that handler return, including after body_close.
+   *
+   * Kept at the end of the public view so existing field offsets stay stable.
+   */
+  void *body_sink_user;
 } chttp_server_request_view;
 
 /** Handler-scoped response builder. Memory replies are copied; source descriptors are retained. */

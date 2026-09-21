@@ -130,6 +130,7 @@ struct chttp_server_request_state {
   uint64_t deadline_ms;
   chttp_server_route_record *body_route;
   chttp_body_sink body_sink;
+  void *body_sink_user;
   bool body_sink_open;
   bool body_was_streamed;
 };

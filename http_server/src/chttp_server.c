@@ -536,6 +536,7 @@ int chttp_server_request_admit(chttp_server_request_state *state,
   admitted.session = NULL;
   admitted.body = NULL;
   admitted.body_size = 0;
+  admitted.body_sink_user = NULL;
   chttp_server_impl *previous = chttp_active_callback_server;
   chttp_active_callback_server = state->server;
   status = state->server->admission(state->server->admission_user, &admitted, &state->admission_result);
@@ -562,6 +563,7 @@ void chttp_server_request_state_reset(chttp_server_request_state *state) {
   state->session_context = (chttp_session_context){0};
   state->body_route = NULL;
   state->body_sink = (chttp_body_sink){0};
+  state->body_sink_user = NULL;
   state->body_was_streamed = false;
 }
 
@@ -1397,6 +1399,7 @@ int chttp_server_request_body_open(chttp_server_request_state *state,
 
   state->body_route = NULL;
   state->body_sink = (chttp_body_sink){0};
+  state->body_sink_user = NULL;
   state->body_was_streamed = false;
   route = state->admitted_route;
   if (route == NULL || route->body_open == NULL) return SALTS_OK;
@@ -1406,6 +1409,7 @@ int chttp_server_request_body_open(chttp_server_request_state *state,
   routed_request.param_count = state->param_count;
   routed_request.session = NULL;
   routed_request.jwt_claims = state->jwt_owner != NULL ? &state->jwt_claims : NULL;
+  routed_request.body_sink_user = NULL;
   previous_callback_server = chttp_active_callback_server;
   chttp_active_callback_server = state->server;
   status = route->body_open(route->user, &routed_request, out_sink);
@@ -1418,6 +1422,7 @@ int chttp_server_request_body_open(chttp_server_request_state *state,
 
   state->body_route = route;
   state->body_sink = *out_sink;
+  state->body_sink_user = out_sink->user;
   state->body_sink_open = true;
   state->body_was_streamed = true;
   return SALTS_OK;
@@ -1488,6 +1493,8 @@ int chttp_server_dispatch_request(chttp_server_request_state *state,
   routed_request.param_count = state->param_count;
   routed_request.session = server->config.session_capacity == 0u ? NULL : &state->session;
   routed_request.jwt_claims = state->jwt_owner != NULL ? &state->jwt_claims : NULL;
+  routed_request.body_sink_user =
+      state->body_was_streamed ? state->body_sink_user : NULL;
   chttp_server_response_builder_reset(&state->response_builder);
   chttp_session_request_begin(state, &routed_request);
   chain = (chttp_server_chain){.server = server,
