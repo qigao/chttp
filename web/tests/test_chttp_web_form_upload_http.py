@@ -108,7 +108,7 @@ try:
     token = tokens[0].decode("ascii")
     assert tokens[0] == tokens[1]
 
-    hostile_note = '<script>alert("note")</script>'
+    hostile_note = "<script>alert(note)</script>"
     invalid_data = urllib.parse.urlencode(
         {"_csrf": token, "name": "x", "note": hostile_note}
     ).encode("utf-8")
