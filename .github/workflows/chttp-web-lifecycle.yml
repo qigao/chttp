@@ -10,6 +10,7 @@ on:
       - feature/chttp-body-sink-context
       - feature/chttp-web-upload
       - feature/chttp-web-form-upload-example
+      - qualify/chttp-web-ii
   workflow_dispatch:
 
 permissions:
