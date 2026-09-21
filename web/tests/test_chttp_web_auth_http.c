@@ -567,6 +567,11 @@ spec("CHttp::Web browser principal lifecycle") {
         chttp_web_local_target_validate(
             "/", sizeof("/") - 1u, 128u, &error),
         CHTTP_WEB_OK);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/search?q=a%2Fb", sizeof("/search?q=a%2Fb") - 1u,
+            128u, &error),
+        CHTTP_WEB_OK);
 
     check_equal(
         chttp_web_local_target_validate(
@@ -603,8 +608,44 @@ spec("CHttp::Web browser principal lifecycle") {
         CHTTP_WEB_AUTH);
     check_equal(
         chttp_web_local_target_validate(
+            "/%0devil", sizeof("/%0devil") - 1u, 128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
             "/too-long", sizeof("/too-long") - 1u, 4u, &error),
         CHTTP_WEB_CAPACITY);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/", sizeof("/") - 1u,
+            (size_t)CHTTP_WEB_LOCAL_TARGET_HARD_MAX + 1u, &error),
+        CHTTP_WEB_INVALID_ARGUMENT);
+  }
+
+  it("preserves explicit route middleware capacity failure") {
+    chttp_server server = {0};
+    chttp_server_config server_config = auth_http_server_config();
+    auth_http_gate_probe probe = {0};
+    chttp_web_auth_policy policy =
+        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+    chttp_server_middleware middleware[2];
+    chttp_server_route_options route = {0};
+
+    server_config.max_route_middleware_count = 1u;
+    policy.login_path = "/login-page";
+    middleware[0] = (chttp_server_middleware){
+        chttp_web_auth_middleware, &policy};
+    middleware[1] = middleware[0];
+    route = (chttp_server_route_options){
+        .method = CHTTP_METHOD_GET,
+        .path = "/capacity",
+        .middleware = middleware,
+        .middleware_count = 2u,
+        .handler = auth_http_protected,
+        .user = &probe};
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_route_with(&server, &route), SALTS_ENOBUFS);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
   it("protects ordinary and HTMX routes with explicit authn and authz semantics") {

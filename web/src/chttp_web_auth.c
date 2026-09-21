@@ -131,10 +131,11 @@ chttp_web_status chttp_web_local_target_validate(
     chttp_web_error *error) {
   size_t i;
 
-  if (target == NULL || max_target_bytes == 0u)
+  if (target == NULL || max_target_bytes == 0u ||
+      max_target_bytes > CHTTP_WEB_LOCAL_TARGET_HARD_MAX)
     return chttp_web_auth_target_fail(
         error, CHTTP_WEB_INVALID_ARGUMENT, SALTS_EINVAL, 0u,
-        "local target arguments are invalid");
+        "local target arguments or configured bound are invalid");
   if (target_size == 0u || target[0] != '/')
     return chttp_web_auth_target_fail(
         error, CHTTP_WEB_AUTH, SALTS_EPERM, 0u,
