@@ -25,7 +25,8 @@ typedef enum chttp_web_status {
   CHTTP_WEB_FORM = -9,
   CHTTP_WEB_BIND = -10,
   CHTTP_WEB_CSRF = -11,
-  CHTTP_WEB_FLASH = -12
+  CHTTP_WEB_FLASH = -12,
+  CHTTP_WEB_MULTIPART = -13
 } chttp_web_status;
 
 typedef struct DataBind DataBind;
@@ -306,6 +307,145 @@ typedef struct chttp_web_form_parse_options {
 #define CHTTP_WEB_FORM_PARSE_OPTIONS_INIT \
   {sizeof(chttp_web_form_parse_options), 64u * 1024u, 128u, 64u * 1024u, \
    NULL, 0u, NULL, 0u}
+
+enum {
+  CHTTP_WEB_MULTIPART_BOUNDARY_HARD_MAX = 70,
+  CHTTP_WEB_MULTIPART_HEADER_COUNT_HARD_MAX = 64,
+  CHTTP_WEB_MULTIPART_HEADER_BYTES_HARD_MAX = 8192,
+  CHTTP_WEB_MULTIPART_NAME_HARD_MAX = 256,
+  CHTTP_WEB_MULTIPART_FILENAME_HARD_MAX = 1024,
+  CHTTP_WEB_MULTIPART_CONTENT_TYPE_HARD_MAX = 256
+};
+
+typedef struct chttp_web_multipart_part {
+  size_t size;
+  chttp_web_string_view name;
+  chttp_web_string_view filename;
+  chttp_web_string_view content_type;
+  bool has_filename;
+  bool has_content_type;
+} chttp_web_multipart_part;
+
+#define CHTTP_WEB_MULTIPART_PART_INIT \
+  {sizeof(chttp_web_multipart_part), {NULL, 0u}, {NULL, 0u}, \
+   {NULL, 0u}, false, false}
+
+typedef int (*chttp_web_multipart_part_begin_fn)(
+    void *user, const chttp_web_multipart_part *part);
+typedef int (*chttp_web_multipart_part_data_fn)(
+    void *user, const void *data, size_t size);
+typedef int (*chttp_web_multipart_part_end_fn)(void *user);
+
+typedef struct chttp_web_multipart_callbacks {
+  size_t size;
+  chttp_web_multipart_part_begin_fn part_begin;
+  chttp_web_multipart_part_data_fn part_data;
+  chttp_web_multipart_part_end_fn part_end;
+} chttp_web_multipart_callbacks;
+
+#define CHTTP_WEB_MULTIPART_CALLBACKS_INIT \
+  {sizeof(chttp_web_multipart_callbacks), NULL, NULL, NULL}
+
+typedef struct chttp_web_multipart_limits {
+  size_t size;
+  size_t max_parts;
+  size_t max_header_count;
+  size_t max_header_bytes;
+  size_t max_name_bytes;
+  size_t max_filename_bytes;
+  size_t max_content_type_bytes;
+  size_t max_field_bytes;
+  size_t max_total_bytes;
+} chttp_web_multipart_limits;
+
+#define CHTTP_WEB_MULTIPART_LIMITS_INIT \
+  {sizeof(chttp_web_multipart_limits), 128u, 16u, 4096u, 128u, 512u, \
+   256u, 64u * 1024u, 16u * 1024u * 1024u}
+
+/**
+ * Caller-owned incremental multipart/form-data parser.
+ *
+ * The parser never allocates and never owns persistence. Header/metadata
+ * storage and the boundary-prefix holdback are embedded in this caller-owned
+ * object and are bounded by the hard maxima above. Part metadata views passed
+ * to part_begin are borrowed until the matching part_end callback returns.
+ * Part-data bytes are borrowed only for the duration of part_data.
+ *
+ * Fields after user are implementation state and must not be modified.
+ */
+typedef struct chttp_web_multipart_parser {
+  size_t size;
+  chttp_web_multipart_limits limits;
+  chttp_web_multipart_callbacks callbacks;
+  void *user;
+
+  char boundary[CHTTP_WEB_MULTIPART_BOUNDARY_HARD_MAX + 1u];
+  size_t boundary_size;
+  char header_bytes[CHTTP_WEB_MULTIPART_HEADER_BYTES_HARD_MAX];
+  size_t header_size;
+  char part_name[CHTTP_WEB_MULTIPART_NAME_HARD_MAX + 1u];
+  size_t part_name_size;
+  char part_filename[CHTTP_WEB_MULTIPART_FILENAME_HARD_MAX + 1u];
+  size_t part_filename_size;
+  char part_content_type[CHTTP_WEB_MULTIPART_CONTENT_TYPE_HARD_MAX + 1u];
+  size_t part_content_type_size;
+  char pending[CHTTP_WEB_MULTIPART_BOUNDARY_HARD_MAX + 4u];
+  size_t pending_size;
+  size_t total_bytes;
+  size_t part_count;
+  size_t field_bytes;
+  size_t initial_index;
+  unsigned int state;
+  unsigned int suffix_state;
+  bool active;
+  bool failed;
+  bool current_file;
+  bool has_filename;
+  bool has_content_type;
+} chttp_web_multipart_parser;
+
+#define CHTTP_WEB_MULTIPART_PARSER_INIT \
+  {sizeof(chttp_web_multipart_parser), CHTTP_WEB_MULTIPART_LIMITS_INIT, \
+   CHTTP_WEB_MULTIPART_CALLBACKS_INIT, NULL, {0}, 0u, {0}, 0u, {0}, 0u, \
+   {0}, 0u, {0}, 0u, {0}, 0u, 0u, 0u, 0u, 0u, 0u, 0u, false, false, \
+   false, false, false}
+
+/**
+ * Initializes a strict RFC 7578 browser multipart parser from the outer
+ * Content-Type. A quoted boundary is accepted. The boundary is limited to the
+ * MIME 70-byte maximum and must use valid boundary characters.
+ */
+chttp_web_status chttp_web_multipart_init(
+    chttp_web_multipart_parser *parser,
+    const char *content_type,
+    const chttp_web_multipart_limits *limits,
+    const chttp_web_multipart_callbacks *callbacks,
+    void *user,
+    chttp_web_error *error);
+
+/**
+ * Incrementally consumes arbitrary body chunks. Boundary delimiters may split
+ * at any byte. Callback failures terminate the parser and are preserved in
+ * error->native_status.
+ */
+chttp_web_status chttp_web_multipart_feed(
+    chttp_web_multipart_parser *parser,
+    const void *data,
+    size_t data_size,
+    chttp_web_error *error);
+
+/**
+ * Completes the message. Success requires a fully received closing delimiter;
+ * truncated or malformed input fails closed.
+ */
+chttp_web_status chttp_web_multipart_finish(
+    chttp_web_multipart_parser *parser,
+    chttp_web_error *error);
+
+/** Resets a parser for another body using the same boundary/config/callbacks. */
+chttp_web_status chttp_web_multipart_reset(
+    chttp_web_multipart_parser *parser,
+    chttp_web_error *error);
 
 /**
  * Caller-owned JSON bridge storage used before DataBind performs transactional
