@@ -364,13 +364,28 @@ static int auth_app_render(
 
   status = chttp_web_csrf_ensure(
       request->session, &csrf, &error);
-  if (status != CHTTP_WEB_OK || csrf == NULL) return SALTS_EIO;
+  if (status != CHTTP_WEB_OK || csrf == NULL) {
+    fprintf(stderr,
+            "authenticated app csrf prepare failed: web=%d native=%d message=%s\n",
+            (int)status, error.native_status, error.message);
+    return error.native_status != 0 ? error.native_status : SALTS_EIO;
+  }
   status = chttp_web_request_context_init(
       &model.request, request, &options, &error);
-  if (status != CHTTP_WEB_OK) return SALTS_EIO;
+  if (status != CHTTP_WEB_OK) {
+    fprintf(stderr,
+            "authenticated app request context failed: web=%d native=%d message=%s\n",
+            (int)status, error.native_status, error.message);
+    return error.native_status != 0 ? error.native_status : SALTS_EIO;
+  }
   status = chttp_web_principal_get(
       request, &model.principal, &error);
-  if (status != CHTTP_WEB_OK) return SALTS_EIO;
+  if (status != CHTTP_WEB_OK) {
+    fprintf(stderr,
+            "authenticated app principal prepare failed: web=%d native=%d message=%s\n",
+            (int)status, error.native_status, error.message);
+    return error.native_status != 0 ? error.native_status : SALTS_EIO;
+  }
 
   model.return_to = vstr_from_cstr(return_to != NULL ? return_to : "");
   model.message = vstr_from_cstr(message != NULL ? message : "");
@@ -893,7 +908,7 @@ static int auth_app_self_test(auth_app *app) {
   char csrf1[CHTTP_WEB_CSRF_TOKEN_BYTES + 1u];
   char csrf2[CHTTP_WEB_CSRF_TOKEN_BYTES + 1u];
   char body[768];
-  int status;
+  int status = SALTS_OK;
   int result = SALTS_EPROTO;
 
 #define AUTH_APP_CHECK(expr)                                      \
