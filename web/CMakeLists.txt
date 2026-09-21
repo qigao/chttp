@@ -2,6 +2,7 @@ add_library(chttp_web SHARED
   src/chttp_web.c
   src/chttp_web_context.c
   src/chttp_web_form.c
+  src/chttp_web_multipart.c
   src/chttp_web_validation.c
   src/chttp_web_session.c
   src/chttp_web_security.c
