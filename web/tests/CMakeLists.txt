@@ -85,6 +85,14 @@ set_target_properties(chttp_web_auth_http_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME chttp_web_auth_http_test COMMAND chttp_web_auth_http_test)
 
+add_executable(chttp_web_assets_http_test test_chttp_web_assets_http.c)
+target_link_libraries(chttp_web_assets_http_test PRIVATE
+  CHttp::Web CHttp::Client Salts::Core Salts::TinyTest)
+set_target_properties(chttp_web_assets_http_test PROPERTIES
+  FOLDER "web/tests"
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_web_assets_http_test COMMAND chttp_web_assets_http_test)
+
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME chttp_web_http_test
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_chttp_web_http.py"
