@@ -99,6 +99,7 @@ of the normal example build and must remain independently compilable.
 | --- | --- |
 | `chttp_web_example.c` | Minimal SSR, typed CMeta model, template inheritance, HTML autoescape, normal CHTTP route lifecycle |
 | `chttp_web_context_example.c` | Typed request context, route params, selected headers/session values, full-page vs HTMX fragment rendering, HX response helpers |
+| `chttp_web_crud_example.c` | Bounded in-memory CRUD, typed user sequence, ordinary form fallback, HTMX-compatible fragment mutation, session CSRF, conservative Web security policy |
 | `chttp_web_session_example.c` | Bounded form parsing, session-backed CSRF token lifecycle, mutation validation, flash messages |
 | `chttp_web_security_example.c` | Web security middleware composed with rate limiting, CORS, JWT bearer routes, explicit header override |
 | `chttp_web_deferred_example.c` | Owner-thread request-state copy, response defer, bounded Salts worker queue, worker-side render and generation-checked deferred reply |
@@ -109,6 +110,7 @@ Configure with examples enabled and build the desired target:
 cmake --preset linux-dev-user -DBUILD_EXAMPLES=ON
 cmake --build build/linux-gcc-debug --target chttp_web_example
 cmake --build build/linux-gcc-debug --target chttp_web_context_example
+cmake --build build/linux-gcc-debug --target chttp_web_crud_example
 cmake --build build/linux-gcc-debug --target chttp_web_session_example
 cmake --build build/linux-gcc-debug --target chttp_web_security_example
 cmake --build build/linux-gcc-debug --target chttp_web_deferred_example
@@ -141,6 +143,12 @@ pattern:
 
 ## HTMX CRUD reference flow
 
+The executable `chttp_web_crud_example.c` is the compact reference application.
+It stores a bounded user set in memory so the example can focus on the Web
+contract rather than a database layer. The rendered forms work as ordinary
+HTML and also carry `hx-post`, `hx-target`, and `hx-swap` attributes for
+progressive enhancement.
+
 A server-driven CRUD application can stay on ordinary CHTTP routes:
 
 | Route | Server behavior |
@@ -156,9 +164,9 @@ Validation and database/domain writes belong to the application. The Web layer
 owns the HTTP-facing parsing, typed presentation context, browser security
 helpers, and rendering bridge.
 
-For route/context/HX mechanics, start with
-`chttp_web_context_example.c`. For mutation/session mechanics, compose it with
-`chttp_web_session_example.c`.
+`chttp_web_crud_example.c` composes these mechanics end to end. The smaller
+`chttp_web_context_example.c` and `chttp_web_session_example.c` remain useful
+when studying request/fragment and session/form concerns independently.
 
 ## Forms, sessions, CSRF, and flash messages
 
