@@ -93,3 +93,8 @@ add_test(NAME chttp_web_security_http_test
   COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_chttp_web_security_http.py"
           "$<TARGET_FILE:chttp_web_security_example>"
           "${PROJECT_SOURCE_DIR}/openapi/ui/templates/layout.html")
+
+add_test(NAME chttp_web_form_upload_http_test
+  COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/test_chttp_web_form_upload_http.py"
+          "$<TARGET_FILE:chttp_web_form_upload_example>")
