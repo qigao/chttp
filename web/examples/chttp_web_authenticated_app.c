@@ -384,6 +384,10 @@ static int auth_app_render(
       NULL,
       &error);
   if (status == CHTTP_WEB_OK) return SALTS_OK;
+  fprintf(
+      stderr,
+      "authenticated app render failed: template=%s web=%d native=%d message=%s\n",
+      template_name, (int)status, error.native_status, error.message);
   return error.native_status != 0 ? error.native_status : SALTS_EIO;
 }
 
@@ -895,7 +899,9 @@ static int auth_app_self_test(auth_app *app) {
 #define AUTH_APP_CHECK(expr)                                      \
   do {                                                            \
     if (!(expr)) {                                                \
-      fprintf(stderr, "authenticated app self-test failed: %s\n", #expr); \
+      fprintf(stderr,                                                \
+              "authenticated app self-test failed: %s status=%d http=%u\n", \
+              #expr, status, response.status_code);                  \
       goto cleanup;                                               \
     }                                                             \
   } while (0)
