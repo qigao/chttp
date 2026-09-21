@@ -308,6 +308,67 @@ static const cmeta_data_desc CHTTP_WEB_NAMED_VALUE_DATA = {
     .storage_type = &CHTTP_WEB_NAMED_VALUE_TYPE,
     .shape = &CHTTP_WEB_NAMED_VALUE_SHAPE};
 
+static const cmeta_type_identity CHTTP_WEB_PRINCIPAL_ID =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.web.Principal.v1");
+
+static const cmeta_type_desc CHTTP_WEB_PRINCIPAL_TYPE = {
+    "chttp_web_principal",
+    sizeof(chttp_web_principal),
+    _Alignof(chttp_web_principal),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_WEB_PRINCIPAL_ID};
+
+static const cmeta_field_desc CHTTP_WEB_PRINCIPAL_LAYOUT_FIELDS[] = {
+    {"authenticated", "bool",
+     offsetof(chttp_web_principal, authenticated),
+     sizeof(((chttp_web_principal *)0)->authenticated),
+     _Alignof(bool), NULL, NULL},
+    {"subject", "chttp_web_string_view",
+     offsetof(chttp_web_principal, subject),
+     sizeof(((chttp_web_principal *)0)->subject),
+     _Alignof(chttp_web_string_view), NULL, NULL},
+    {"role", "chttp_web_string_view",
+     offsetof(chttp_web_principal, role),
+     sizeof(((chttp_web_principal *)0)->role),
+     _Alignof(chttp_web_string_view), NULL, NULL},
+    {"display_name", "chttp_web_string_view",
+     offsetof(chttp_web_principal, display_name),
+     sizeof(((chttp_web_principal *)0)->display_name),
+     _Alignof(chttp_web_string_view), NULL, NULL}};
+
+static const cmeta_struct_desc CHTTP_WEB_PRINCIPAL_LAYOUT = {
+    "chttp_web_principal",
+    sizeof(chttp_web_principal),
+    _Alignof(chttp_web_principal),
+    CHTTP_WEB_PRINCIPAL_LAYOUT_FIELDS,
+    4u};
+
+static const cmeta_data_field_desc CHTTP_WEB_PRINCIPAL_FIELDS[] = {
+    {"chttp.web.Principal.authenticated", "authenticated",
+     offsetof(chttp_web_principal, authenticated), &cmeta_data_bool},
+    {"chttp.web.Principal.subject", "subject",
+     offsetof(chttp_web_principal, subject), &CHTTP_WEB_STRING_DATA},
+    {"chttp.web.Principal.role", "role",
+     offsetof(chttp_web_principal, role), &CHTTP_WEB_STRING_DATA},
+    {"chttp.web.Principal.display_name", "display_name",
+     offsetof(chttp_web_principal, display_name), &CHTTP_WEB_STRING_DATA}};
+
+static const cmeta_data_struct_shape CHTTP_WEB_PRINCIPAL_SHAPE = {
+    &CHTTP_WEB_PRINCIPAL_LAYOUT,
+    CHTTP_WEB_PRINCIPAL_FIELDS,
+    4u};
+
+static const cmeta_data_desc CHTTP_WEB_PRINCIPAL_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "chttp.web.Principal.data.v1",
+    .display_name = "CHttp Web browser principal",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &CHTTP_WEB_PRINCIPAL_TYPE,
+    .shape = &CHTTP_WEB_PRINCIPAL_SHAPE};
+
 static const cmeta_type_identity CHTTP_WEB_REQUEST_CONTEXT_ID =
     CMETA_TYPE_ID_ATOM_INIT("chttp.web.RequestContext.v1");
 
@@ -534,6 +595,10 @@ chttp_web_status chttp_web_request_context_init(
       sizeof(chttp_web_named_value), &CHTTP_WEB_NAMED_VALUE_DATA};
 
   return chttp_web_context_fail(error, CHTTP_WEB_OK, 0, NULL);
+}
+
+const cmeta_data_desc *chttp_web_principal_data(void) {
+  return &CHTTP_WEB_PRINCIPAL_DATA;
 }
 
 const cmeta_data_desc *chttp_web_validation_error_data(void) {
