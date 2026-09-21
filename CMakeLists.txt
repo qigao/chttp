@@ -24,6 +24,7 @@ include(Sanitizers)
 
 find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT}")
 find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT}")
+find_package(DataBind CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT}")
 find_package(llhttp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
