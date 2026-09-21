@@ -90,6 +90,161 @@ A Web application normally composes these pieces:
 Templates are frozen into the renderer. Request-controlled filesystem template
 loading is not part of the default product surface.
 
+## Browser authentication and application shell
+
+Web III adds browser-authenticated application composition without turning
+CHttp::Web into an identity provider.
+
+The intended flow is:
+
+```text
+anonymous browser
+    |
+    +-- GET /login
+    |      -> Session + CSRF token
+    |
+    +-- POST /login
+    |      -> bounded form parse
+    |      -> application verifies credentials
+    |      -> Session ID regeneration
+    |      -> principal publication
+    |      -> CSRF rotation
+    |      -> safe local redirect / HX-Redirect
+    |
+    +-- protected route
+    |      -> chttp_web_auth_middleware
+    |      -> Session principal
+    |      -> optional application authorization callback
+    |      -> page / fragment
+    |
+    '-- POST /logout
+           -> CSRF validation
+           -> Session invalidation
+           -> expired cookie
+```
+
+Credential storage, password hashing, account policy, MFA, user databases, and
+OIDC/SAML/OAuth provider logic remain application or integration concerns.
+CHttp::Web never verifies passwords by itself. The application supplies a
+verified identity to `chttp_web_principal_sign_in()`.
+
+### Session fixation and CSRF
+
+A successful privilege transition must not reuse the anonymous Session
+identifier.
+
+`chttp_web_principal_sign_in()` validates CSRF, regenerates the CHTTP Session
+identifier, publishes the principal only under the regenerated Session, then
+rotates CSRF. If principal publication or CSRF rotation fails after
+regeneration, the Session is invalidated rather than leaving partially
+authenticated state.
+
+The old Session identifier stops authenticating immediately after successful
+regeneration. Logout validates CSRF and invalidates the complete Session, so a
+stale authenticated cookie does not keep principal state alive.
+
+Do not copy authentication state into application cookies as a workaround for
+Session lifecycle. Keep the CHTTP Session as the browser principal carrier and
+treat principal views as request-scoped borrowed data.
+
+### Protected routes and authorization
+
+`chttp_web_auth_middleware()` requires an authenticated Session principal and
+may invoke an application-owned authorization callback.
+
+Callback semantics are explicit:
+
+- `SALTS_OK` — authorize and continue to the protected handler;
+- `SALTS_EPERM` — explicit authorization denial;
+- every other error — fail closed and propagate as a server error.
+
+The default authorization-denied response is HTTP 403. Applications may supply
+a forbidden handler for rendered UX. Templates never make authorization
+decisions.
+
+JWT bearer admission remains a `CHttp::Server` capability. Browser Session
+authorization and JWT bearer authorization are separate composition choices;
+CHttp::Web does not translate one into the other.
+
+### Redirect safety
+
+Post-login return targets are optional and always local.
+
+`chttp_web_local_target_validate()` accepts only bounded origin-form targets
+that begin with exactly one `/`. It rejects absolute URLs, scheme-relative
+targets, controls, fragments, backslashes, malformed percent escapes, and
+encoded bytes that can change authority/path interpretation.
+
+When `include_return_target` is enabled, auth middleware percent-encodes the
+validated request target into the configured login URL. It never constructs a
+redirect from the request `Host` or `Origin` header.
+
+Ordinary unauthenticated browser requests receive a 303 redirect. Exact HTMX
+requests receive the same local destination through `HX-Redirect` on a
+non-3xx response.
+
+Applications should validate a submitted `return_to` again in the login
+handler before the privilege transition. The authenticated reference
+application does so before calling `chttp_web_principal_sign_in()`.
+
+### Static assets and application shell
+
+`chttp_web_assets_use()` is a thin URL-to-file mapping layer over
+`chttp_server_serve_file()`; CHTTP remains the file streaming, conditional
+request, range, metadata, and async-I/O owner.
+
+A mount:
+
+- owns one explicit URL prefix and one application-owned filesystem root;
+- admits GET and HEAD only;
+- percent-decodes into bounded storage and validates UTF-8;
+- rejects traversal, encoded separators, controls, backslashes, drive-like
+  separators, symlink components, and Windows reparse points;
+- returns deterministic 404 for malformed, escaping, missing, or rejected
+  paths;
+- may apply conservative or immutable Cache-Control policy;
+- may supply an application-selected strong ETag, otherwise inheriting CHTTP
+  metadata validators.
+
+SPA fallback is opt-in under a separate configured namespace. An asset miss or
+an unrelated API miss is never silently converted into the application shell.
+
+The current path-based CHTTP file API requires the selected file to remain
+immutable through asynchronous completion. Therefore the asset root and its
+topology must remain immutable from server start until stop. This is not a
+mutable virtual filesystem API.
+
+### Authenticated reference application
+
+`web/examples/chttp_web_authenticated_app.c` is the Web III reference
+application. It uses only bounded in-memory demo identity records so the
+example demonstrates browser composition rather than database or password
+infrastructure.
+
+It covers anonymous login, bounded form + CSRF, application credential
+verification, Session regeneration and CSRF rotation, protected and denied
+routes, ordinary and HTMX transitions, local return-target validation, static
+CSS through the asset mount, Jinja CMeta full-page/fragment rendering, hostile
+principal autoescape, and CSRF-protected logout.
+
+Build and run it interactively:
+
+```text
+cmake --build build/linux-gcc-debug --target chttp_web_authenticated_app_example
+build/linux-gcc-debug/bin/chttp_web_authenticated_app_example
+```
+
+The same executable has a deterministic qualification mode:
+
+```text
+build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+```
+
+That mode drives a real CHTTP client through H1 and H2 and verifies stale
+pre-login/post-logout cookies, redirect safety, protected-handler
+non-execution, authorization denial, asset serving, autoescape, and HTMX
+progressive fragments.
+
 ## Reference applications
 
 The repository keeps reference programs under `web/examples/`. They are part
@@ -104,6 +259,7 @@ of the normal example build and must remain independently compilable.
 | `chttp_web_security_example.c` | Web security middleware composed with rate limiting, CORS, JWT bearer routes, explicit header override |
 | `chttp_web_deferred_example.c` | Owner-thread request-state copy, response defer, bounded Salts worker queue, worker-side render and generation-checked deferred reply |
 | `chttp_web_form_upload_example.c` | Structured validation, ordinary + HTMX error UX, multipart upload staging, Session CSRF, flash/redirect success, hostile metadata escaping |
+| `chttp_web_authenticated_app.c` | Complete browser-authenticated flow: login, Session regeneration, principal/authz middleware, safe return targets, asset mount, Jinja full-page/fragment rendering, logout, stale-cookie and autoescape qualification |
 
 Configure with examples enabled and build the desired target:
 
@@ -116,6 +272,7 @@ cmake --build build/linux-gcc-debug --target chttp_web_session_example
 cmake --build build/linux-gcc-debug --target chttp_web_security_example
 cmake --build build/linux-gcc-debug --target chttp_web_deferred_example
 cmake --build build/linux-gcc-debug --target chttp_web_form_upload_example
+cmake --build build/linux-gcc-debug --target chttp_web_authenticated_app_example
 ```
 
 The repository presets require the same configured Salts, SaltsUtils, vcpkg,
@@ -330,6 +487,16 @@ Use both where appropriate.
 
 For browser-facing applications:
 
+- keep credential verification, password hashing, MFA and identity-provider
+  integration in the application/integration layer;
+- regenerate the Session identifier before publishing authenticated principal
+  state;
+- validate login return targets as bounded local origin-form targets and never
+  reflect Host/Origin into redirects;
+- keep authorization in explicit callbacks and treat callback errors as
+  fail-closed;
+- keep static asset roots/topology immutable while serving them, reject
+  symlink/reparse escape, and scope SPA fallback to an explicit namespace;
 - install `chttp_web_security_reference_policy()` as a conservative
   same-origin baseline;
 - use `chttp_web_security_authenticated_policy()` for authenticated pages
@@ -405,6 +572,38 @@ The product-readiness gates are tracked by issue #28:
 
 Benchmark evidence records observations without introducing unsupported
 performance thresholds.
+
+### Web III browser-authentication evidence
+
+The browser-authenticated application-shell expansion is tracked by #68:
+
+- #69 / PR #75 — Session ID regeneration for privilege transitions;
+- #70 / PR #76 — bounded browser principal plus login/logout helpers;
+- PR #77 — SaltsUtils component/package ownership and current-master CI
+  prerequisite;
+- #71 / PR #78 — protected-route authentication/authorization middleware and
+  bounded safe return-target semantics;
+- #72 / PR #79 — static asset mount with traversal, UTF-8,
+  symlink/reparse-root escape, range/conditional, H1/H2, and cache-policy
+  qualification;
+- #73 / PR #80 — independently runnable authenticated reference application
+  with real-client self-test.
+
+The final #74 gate reruns the complete focused Web suite, authenticated
+reference smoke, full CTest, ASan, UBSan, exact-head clean-source check, and
+the installed-package out-of-tree consumer against current Salts and
+SaltsUtils `master` heads.
+
+The installed consumer uses only:
+
+```cmake
+find_package(Chttp CONFIG REQUIRED)
+target_link_libraries(app PRIVATE CHttp::Web)
+```
+
+and links representative principal, auth middleware, local-target, and asset
+mount public APIs without creating a second DataBind package or source-tree
+fallback.
 
 ### Web II forms/upload evidence
 
