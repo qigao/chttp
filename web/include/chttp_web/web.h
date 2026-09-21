@@ -28,7 +28,8 @@ typedef enum chttp_web_status {
   CHTTP_WEB_FLASH = -12,
   CHTTP_WEB_MULTIPART = -13,
   CHTTP_WEB_VALIDATION = -14,
-  CHTTP_WEB_UPLOAD = -15
+  CHTTP_WEB_UPLOAD = -15,
+  CHTTP_WEB_AUTH = -16
 } chttp_web_status;
 
 typedef struct DataBind DataBind;
@@ -82,6 +83,37 @@ typedef struct chttp_web_string_view {
   const char *data;
   size_t size;
 } chttp_web_string_view;
+
+/**
+ * Borrowed browser principal derived from reserved CHttp::Web Session state.
+ * Values remain valid only for the active request/handler scope.
+ */
+typedef struct chttp_web_principal {
+  size_t size;
+  bool authenticated;
+  chttp_web_string_view subject;
+  chttp_web_string_view role;
+  chttp_web_string_view display_name;
+} chttp_web_principal;
+
+#define CHTTP_WEB_PRINCIPAL_INIT \
+  {sizeof(chttp_web_principal), false, {NULL, 0u}, {NULL, 0u}, {NULL, 0u}}
+
+/**
+ * Application-verified identity input used after credential verification.
+ * subject is required and non-empty. role/display_name are optional.
+ */
+typedef struct chttp_web_principal_input {
+  size_t size;
+  const char *subject;
+  const char *role;
+  const char *display_name;
+} chttp_web_principal_input;
+
+#define CHTTP_WEB_PRINCIPAL_INPUT_INIT \
+  {sizeof(chttp_web_principal_input), NULL, NULL, NULL}
+
+const cmeta_data_desc *chttp_web_principal_data(void);
 
 /**
  * One Server-Sent Event. Presence flags distinguish an omitted field from an
@@ -783,6 +815,39 @@ chttp_web_status chttp_web_csrf_validate_token(
     chttp_web_error *error);
 
 chttp_web_status chttp_web_csrf_validate(
+    const chttp_server_request_view *request,
+    const chttp_web_form *form,
+    chttp_web_error *error);
+
+/**
+ * Reads the authenticated browser principal from reserved Session state.
+ * Missing or malformed subject state is treated as unauthenticated.
+ */
+chttp_web_status chttp_web_principal_get(
+    const chttp_server_request_view *request,
+    chttp_web_principal *out_principal,
+    chttp_web_error *error);
+
+/**
+ * Performs the security transition after the application has verified
+ * credentials. POST + CSRF are required. On success the Session ID is
+ * regenerated, principal state is written, and CSRF is rotated.
+ *
+ * Any failure after regeneration invalidates the entire Session so partially
+ * authenticated state is never published.
+ */
+chttp_web_status chttp_web_principal_sign_in(
+    const chttp_server_request_view *request,
+    const chttp_web_form *form,
+    const chttp_web_principal_input *principal,
+    const char **out_csrf_token,
+    chttp_web_error *error);
+
+/**
+ * POST-only browser logout. Validates CSRF then invalidates the entire Session,
+ * causing the existing CHTTP Session cookie path to expire the cookie.
+ */
+chttp_web_status chttp_web_principal_sign_out(
     const chttp_server_request_view *request,
     const chttp_web_form *form,
     chttp_web_error *error);

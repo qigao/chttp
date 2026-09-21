@@ -216,4 +216,47 @@ spec("CHttp::Web typed Jinja rendering core") {
     check_equal(html_size, 0u);
     chttp_web_renderer_destroy(&renderer);
   }
+
+  it("renders hostile browser principal fields through the standalone descriptor") {
+    static const char page[] =
+        "<p>{{ subject }}</p><p>{{ display_name }}</p>";
+    static const char expected[] =
+        "<p>alice</p><p>&lt;Admin &amp; Alice&gt;</p>";
+    static const chttp_web_template templates[] = {
+        {"principal.html", page, sizeof(page) - 1u}};
+    static const char subject[] = "alice";
+    static const char display_name[] = "<Admin & Alice>";
+
+    chttp_web_renderer renderer = {0};
+    chttp_web_renderer_config config =
+        (chttp_web_renderer_config)CHTTP_WEB_RENDERER_CONFIG_INIT;
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+    chttp_web_principal principal = CHTTP_WEB_PRINCIPAL_INIT;
+    char *html = NULL;
+    size_t html_size = 0u;
+
+    principal.authenticated = true;
+    principal.subject =
+        (chttp_web_string_view){subject, sizeof(subject) - 1u};
+    principal.role =
+        (chttp_web_string_view){"admin", sizeof("admin") - 1u};
+    principal.display_name =
+        (chttp_web_string_view){
+            display_name, sizeof(display_name) - 1u};
+
+    check(cmeta_data_desc_valid(chttp_web_principal_data()));
+    check_equal(chttp_web_renderer_init(
+                    &renderer, templates, 1u, &config, &error),
+                CHTTP_WEB_OK);
+    check_equal(chttp_web_render(
+                    &renderer, "principal.html",
+                    chttp_web_principal_data(), &principal,
+                    &html, &html_size, &error),
+                CHTTP_WEB_OK);
+    check_equal(html_size, sizeof(expected) - 1u);
+    check_equal(html, expected, sizeof(expected) - 1u);
+    chttp_web_output_free(html);
+    chttp_web_renderer_destroy(&renderer);
+  }
+
 }
