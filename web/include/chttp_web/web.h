@@ -26,7 +26,9 @@ typedef enum chttp_web_status {
   CHTTP_WEB_BIND = -10,
   CHTTP_WEB_CSRF = -11,
   CHTTP_WEB_FLASH = -12,
-  CHTTP_WEB_MULTIPART = -13
+  CHTTP_WEB_MULTIPART = -13,
+  CHTTP_WEB_VALIDATION = -14,
+  CHTTP_WEB_UPLOAD = -15
 } chttp_web_status;
 
 typedef struct DataBind DataBind;
@@ -309,6 +311,14 @@ typedef struct chttp_web_form_parse_options {
    NULL, 0u, NULL, 0u}
 
 enum {
+  CHTTP_WEB_CSRF_RANDOM_BYTES = 32,
+  CHTTP_WEB_CSRF_TOKEN_BYTES = 64
+};
+
+#define CHTTP_WEB_CSRF_FORM_FIELD "_csrf"
+#define CHTTP_WEB_CSRF_HEADER "X-CSRF-Token"
+
+enum {
   CHTTP_WEB_MULTIPART_BOUNDARY_HARD_MAX = 70,
   CHTTP_WEB_MULTIPART_HEADER_COUNT_HARD_MAX = 64,
   CHTTP_WEB_MULTIPART_HEADER_BYTES_HARD_MAX = 8192,
@@ -444,6 +454,102 @@ chttp_web_status chttp_web_multipart_reset(
     chttp_web_error *error);
 
 /**
+ * Per-request streaming upload transaction.
+ *
+ * The application owns the request object and its backing staging state.
+ * CHttp::Web owns multipart/CSRF ordering only; it never allocates a request
+ * map, chooses a persistence destination, or performs blocking persistence.
+ */
+typedef int (*chttp_web_upload_begin_fn)(
+    void *user, const chttp_server_request_view *request);
+typedef int (*chttp_web_upload_commit_fn)(void *user);
+typedef void (*chttp_web_upload_abort_fn)(
+    void *user, chttp_web_status status, int native_status);
+
+typedef struct chttp_web_upload_callbacks {
+  size_t size;
+  chttp_web_upload_begin_fn begin;
+  chttp_web_multipart_part_begin_fn part_begin;
+  chttp_web_multipart_part_data_fn part_data;
+  chttp_web_multipart_part_end_fn part_end;
+  chttp_web_upload_commit_fn commit;
+  chttp_web_upload_abort_fn abort;
+} chttp_web_upload_callbacks;
+
+#define CHTTP_WEB_UPLOAD_CALLBACKS_INIT \
+  {sizeof(chttp_web_upload_callbacks), NULL, NULL, NULL, NULL, NULL, NULL}
+
+/**
+ * Caller-owned upload state. The multipart parser and captured CSRF bytes are
+ * bounded in this object. Fields after user are implementation state.
+ */
+typedef struct chttp_web_upload_request {
+  size_t size;
+  chttp_web_multipart_parser multipart;
+  chttp_web_upload_callbacks callbacks;
+  void *user;
+  char csrf_token[CHTTP_WEB_CSRF_TOKEN_BYTES + 1u];
+  size_t csrf_size;
+  size_t csrf_count;
+  chttp_web_status terminal_status;
+  int terminal_native_status;
+  unsigned int state;
+  bool csrf_part;
+  bool begun;
+} chttp_web_upload_request;
+
+#define CHTTP_WEB_UPLOAD_REQUEST_INIT {0}
+
+/**
+ * Initializes one upload request from the active multipart request and
+ * publishes an owner-thread body sink whose user pointer is this upload.
+ * All callbacks are synchronous and must not perform unbounded blocking.
+ */
+chttp_web_status chttp_web_upload_open(
+    chttp_web_upload_request *upload,
+    const chttp_server_request_view *request,
+    const chttp_web_multipart_limits *limits,
+    const chttp_web_upload_callbacks *callbacks,
+    void *user,
+    chttp_body_sink *out_sink,
+    chttp_web_error *error);
+
+/**
+ * Completes body streaming. Non-OK transport/sink status or multipart finish
+ * failure aborts the application staging transaction exactly once.
+ */
+void chttp_web_upload_close(
+    chttp_web_upload_request *upload,
+    int status);
+
+/**
+ * Terminal-handler gate. Success requires the same request's body_sink_user,
+ * complete multipart parsing, valid CSRF, and (when provided) a valid
+ * structured validation result before application commit runs.
+ */
+chttp_web_status chttp_web_upload_finalize(
+    chttp_web_upload_request *upload,
+    const chttp_server_request_view *request,
+    const chttp_web_validation *validation,
+    chttp_web_error *error);
+
+/** Explicitly aborts an unfinished transaction exactly once. */
+chttp_web_status chttp_web_upload_abort(
+    chttp_web_upload_request *upload,
+    chttp_web_status status,
+    int native_status,
+    chttp_web_error *error);
+
+/** Reuses caller storage only after commit or abort. */
+chttp_web_status chttp_web_upload_reset(
+    chttp_web_upload_request *upload,
+    chttp_web_error *error);
+
+/** Returns the application staging user for a valid upload object. */
+void *chttp_web_upload_user(
+    const chttp_web_upload_request *upload);
+
+/**
  * Caller-owned JSON bridge storage used before DataBind performs transactional
  * native conversion. No destination mutation occurs until the complete bridge
  * document has been produced.
@@ -458,14 +564,9 @@ typedef struct chttp_web_form_bind_options {
   {sizeof(chttp_web_form_bind_options), NULL, 0u}
 
 enum {
-  CHTTP_WEB_CSRF_RANDOM_BYTES = 32,
-  CHTTP_WEB_CSRF_TOKEN_BYTES = 64,
   CHTTP_WEB_FLASH_HARD_MAX_MESSAGES = 16,
   CHTTP_WEB_FLASH_HARD_MAX_SERIALIZED_BYTES = 1024
 };
-
-#define CHTTP_WEB_CSRF_FORM_FIELD "_csrf"
-#define CHTTP_WEB_CSRF_HEADER "X-CSRF-Token"
 
 typedef struct chttp_web_flash_message {
   chttp_web_string_view level;
@@ -671,6 +772,16 @@ chttp_web_status chttp_web_csrf_clear(
  * X-CSRF-Token; when that header is present it is authoritative. This helper
  * is opt-in, so JWT-only API routes remain outside CSRF scope by not invoking it.
  */
+/**
+ * Compares one explicit token candidate against the current session token in
+ * constant time. Safe HTTP methods succeed without requiring a token.
+ */
+chttp_web_status chttp_web_csrf_validate_token(
+    const chttp_server_request_view *request,
+    const void *token,
+    size_t token_size,
+    chttp_web_error *error);
+
 chttp_web_status chttp_web_csrf_validate(
     const chttp_server_request_view *request,
     const chttp_web_form *form,

@@ -145,18 +145,16 @@ static int chttp_web_csrf_method_unsafe(chttp_method method) {
          method == CHTTP_METHOD_PATCH || method == CHTTP_METHOD_DELETE;
 }
 
-chttp_web_status chttp_web_csrf_validate(
-    const chttp_server_request_view *request, const chttp_web_form *form,
+chttp_web_status chttp_web_csrf_validate_token(
+    const chttp_server_request_view *request,
+    const void *token,
+    size_t token_size,
     chttp_web_error *error) {
   const char *expected;
-  const char *header = NULL;
-  const unsigned char *candidate = NULL;
-  size_t candidate_size = 0u;
-
-  if (request == NULL)
+  if (request == NULL || (token_size != 0u && token == NULL))
     return chttp_web_session_fail(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0, 0u,
-        "CSRF request is required");
+        "CSRF request/token arguments are invalid");
   if (!chttp_web_csrf_method_unsafe(request->method))
     return chttp_web_session_fail(error, CHTTP_WEB_OK, 0, 0u, NULL);
 
@@ -165,37 +163,53 @@ chttp_web_status chttp_web_csrf_validate(
     return chttp_web_session_fail(
         error, CHTTP_WEB_CSRF, 0, 0u,
         "CSRF session token is missing");
+  if (token == NULL || token_size != CHTTP_WEB_CSRF_TOKEN_BYTES)
+    return chttp_web_session_fail(
+        error, CHTTP_WEB_CSRF, 0, 0u,
+        "CSRF token is missing or malformed");
+  if (CRYPTO_memcmp(expected, token, CHTTP_WEB_CSRF_TOKEN_BYTES) != 0)
+    return chttp_web_session_fail(
+        error, CHTTP_WEB_CSRF, 0, 0u,
+        "CSRF token does not match the current session");
+  return chttp_web_session_fail(error, CHTTP_WEB_OK, 0, 0u, NULL);
+}
+
+chttp_web_status chttp_web_csrf_validate(
+    const chttp_server_request_view *request, const chttp_web_form *form,
+    chttp_web_error *error) {
+  const char *header = NULL;
+  const void *candidate = NULL;
+  size_t candidate_size = 0u;
+
+  if (request == NULL)
+    return chttp_web_session_fail(
+        error, CHTTP_WEB_INVALID_ARGUMENT, 0, 0u,
+        "CSRF request is required");
 
   if (chttp_web_request_is_htmx(request))
     header = chttp_server_request_header(request, CHTTP_WEB_CSRF_HEADER);
   if (header != NULL) {
-    candidate = (const unsigned char *)header;
+    candidate = header;
     candidate_size = strlen(header);
   } else if (form != NULL) {
     const size_t count =
         chttp_web_form_count(form, CHTTP_WEB_CSRF_FORM_FIELD);
     const chttp_web_form_pair *pair;
-    if (count != 1u)
+    if (count != 1u && chttp_web_csrf_method_unsafe(request->method))
       return chttp_web_session_fail(
           error, CHTTP_WEB_CSRF, 0, 0u,
           "CSRF form token is missing or repeated");
-    pair = chttp_web_form_get(form, CHTTP_WEB_CSRF_FORM_FIELD, 0u);
+    pair = count == 1u
+        ? chttp_web_form_get(form, CHTTP_WEB_CSRF_FORM_FIELD, 0u)
+        : NULL;
     if (pair != NULL) {
-      candidate = (const unsigned char *)pair->value.data;
+      candidate = pair->value.data;
       candidate_size = pair->value.size;
     }
   }
 
-  if (candidate == NULL || candidate_size != CHTTP_WEB_CSRF_TOKEN_BYTES)
-    return chttp_web_session_fail(
-        error, CHTTP_WEB_CSRF, 0, 0u,
-        "CSRF token is missing or malformed");
-  if (CRYPTO_memcmp(
-          expected, candidate, CHTTP_WEB_CSRF_TOKEN_BYTES) != 0)
-    return chttp_web_session_fail(
-        error, CHTTP_WEB_CSRF, 0, 0u,
-        "CSRF token does not match the current session");
-  return chttp_web_session_fail(error, CHTTP_WEB_OK, 0, 0u, NULL);
+  return chttp_web_csrf_validate_token(
+      request, candidate, candidate_size, error);
 }
 
 static int chttp_web_flash_config_valid(const chttp_web_flash_config *config) {
