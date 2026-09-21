@@ -164,9 +164,9 @@ jobs:
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test \
-            chttp_web_validation_test chttp_web_deferred_test \
-            chttp_web_sse_test chttp_web_lifecycle_test \
-            test_ui_renderer test_ui_fragments -j2
+            chttp_web_validation_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
 
       - name: Run focused lifecycle tests
         shell: bash
@@ -175,91 +175,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))
-
-      - name: Build full Chttp graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
-
-      - name: Run Web reference example smoke tests
-        shell: bash
-        env:
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
-          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
-
-      - name: Run full Chttp CTest graph
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
-
-      - name: Verify Web lifecycle with AddressSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=ON \
-            -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test \
-            chttp_web_validation_test chttp_web_deferred_test \
-            chttp_web_sse_test chttp_web_lifecycle_test \
-            test_ui_renderer test_ui_fragments -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
-            --output-on-failure
-
-      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=ON
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test \
-            chttp_web_validation_test chttp_web_deferred_test \
-            chttp_web_sse_test chttp_web_lifecycle_test \
-            test_ui_renderer test_ui_fragments -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Build full Chttp graph
@@ -308,42 +224,11 @@ jobs:
             -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test \
-            chttp_web_validation_test chttp_web_deferred_test \
-            chttp_web_sse_test chttp_web_lifecycle_test \
-            test_ui_renderer test_ui_fragments -j2
+            chttp_web_validation_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))
-
-      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
-        shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user \
-            -DENABLE_SANITIZER_ADDRESS=OFF \
-            -DENABLE_SANITIZER_UNDEFINED=ON
-          cmake --build build/linux-gcc-debug --target \
-            chttp_web_renderer_test chttp_web_context_test \
-            chttp_web_validation_test chttp_web_deferred_test \
-            chttp_web_sse_test chttp_web_lifecycle_test \
-            test_ui_renderer test_ui_fragments -j2
-          ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
-            --output-on-failure
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
@@ -361,20 +246,11 @@ jobs:
             -DENABLE_SANITIZER_UNDEFINED=ON
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test \
-            chttp_web_validation_test chttp_web_deferred_test \
-            chttp_web_sse_test chttp_web_lifecycle_test \
-            test_ui_renderer test_ui_fragments -j2
+            chttp_web_validation_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))
-
-      - name: Verify exact head and clean tracked source
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Verify exact head and clean tracked source
