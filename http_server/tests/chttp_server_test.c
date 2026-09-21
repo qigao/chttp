@@ -503,6 +503,23 @@ static int chttp_server_test_session_state(void *user,
   return chttp_server_reply(response, 200u, "text/plain", value, strlen(value));
 }
 
+static int chttp_server_test_regenerate_header_pressure(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  int status;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  status = chttp_session_regenerate(request->session);
+  if (status == SALTS_OK)
+    status = chttp_session_set(request->session, "privileged", "yes");
+  if (status == SALTS_OK)
+    status = chttp_server_response_set_header(response, "X-Fill", "1");
+  return status == SALTS_OK
+             ? chttp_server_reply(response, 204u, NULL, NULL, 0u)
+             : status;
+}
+
 static int chttp_server_test_echo_body(void *user, const chttp_server_request_view *request,
                                        chttp_server_response *response) {
   (void)user;
@@ -2174,6 +2191,62 @@ spec("CHTTP background HTTP/1.1 server") {
     chttp_response_destroy(&current);
     chttp_response_destroy(&stale);
     chttp_response_destroy(&rotated);
+    chttp_response_destroy(&first);
+    check_equal(chttp_client_destroy(&client, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("discards a regenerated Session when its replacement cookie cannot be published") {
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_server_test_probe probe = {0};
+    chttp_server_config server_config = chttp_server_test_config();
+    chttp_client_config client_config = chttp_server_test_client_config();
+    chttp_response first = {0};
+    chttp_response failed = {0};
+    chttp_response stale = {0};
+    chttp_header cookie_header;
+    char cookie[128];
+    char uri[64];
+    uint16_t port = 0u;
+
+    server_config.max_response_header_count = 1u;
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/users/:name", chttp_server_test_user, &probe),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/regenerate-pressure",
+                                 chttp_server_test_regenerate_header_pressure, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/session-state",
+                                 chttp_server_test_session_state, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port) > 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(chttp_server_test_call(&client, uri, "/users/alice", NULL, 0u, &first),
+                SALTS_OK);
+    check_equal(first.status_code, 200u);
+    check_equal(chttp_server_test_cookie_header(&first, cookie, sizeof(cookie)), SALTS_OK);
+    cookie_header = (chttp_header){"Cookie", cookie};
+
+    check_equal(chttp_server_test_call(&client, uri, "/regenerate-pressure",
+                                       &cookie_header, 1u, &failed),
+                SALTS_OK);
+    check_equal(failed.status_code, 500u);
+    check_null(chttp_response_header(&failed, "Set-Cookie"));
+
+    check_equal(chttp_server_test_call(&client, uri, "/session-state",
+                                       &cookie_header, 1u, &stale),
+                SALTS_OK);
+    check_equal(stale.status_code, 200u);
+    check_equal(stale.body, "anonymous", 9u);
+    check_null(chttp_response_header(&stale, "Set-Cookie"));
+
+    chttp_response_destroy(&stale);
+    chttp_response_destroy(&failed);
     chttp_response_destroy(&first);
     check_equal(chttp_client_destroy(&client, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
