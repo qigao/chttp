@@ -2,23 +2,21 @@ name: CHttp Web package qualification
 
 on:
   push:
-    branches:
-      - qualify/chttp-web-package
-      - fix/chttp-web-databind-discovery
-      - qualify/chttp-web-ii
+    branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
+
+# PR qualification checks the proposed head, not GitHub's synthetic merge.
+env:
+  CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: chttp-web-package-${{ github.ref_name }}
+  group: chttp-web-package-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
-env:
-  SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_SHA: 2ceba0f6c46914600960bc410f5b5453911322ec
-  VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
 jobs:
   package:
@@ -26,153 +24,44 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout exact Chttp head
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git init .
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=2 origin "${GITHUB_SHA}"
-          git checkout --detach FETCH_HEAD
-          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-
-      - name: Checkout exact public dependencies
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git init salts
-          git -C salts remote add origin https://github.com/qigao/salts.git
-          git -C salts fetch --depth=1 origin "$SALTS_SHA"
-          git -C salts checkout --detach FETCH_HEAD
-          test "$(git -C salts rev-parse HEAD)" = "$SALTS_SHA"
-
-          git init salts-utils
-          git -C salts-utils remote add origin https://github.com/qigao/salts-utils.git
-          git -C salts-utils fetch --depth=1 origin "$SALTS_UTILS_SHA"
-          git -C salts-utils checkout --detach FETCH_HEAD
-          test "$(git -C salts-utils rev-parse HEAD)" = "$SALTS_UTILS_SHA"
-
-          git clone https://github.com/microsoft/vcpkg.git vcpkg
-          git -C vcpkg checkout --detach "$VCPKG_SHA"
-          test "$(git -C vcpkg rev-parse HEAD)" = "$VCPKG_SHA"
-
-      - name: Restore vcpkg binary archives
-        uses: actions/cache@v4
+        uses: actions/checkout@v4
         with:
-          path: ~/.cache/vcpkg/archives
-          key: tbe-30-vcpkg-x64-linux-b1b19307-v1
-
-      - name: Set up Go for BoringSSL
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-          cache: false
-
-      - name: Prepare toolchain
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Set up current master SDKs
+        uses: ./.github/actions/setup-salts-sdk
+      - name: Verify SaltsUtils component export
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-          sudo mkdir -p /opt/salts
-          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
-          bash salts-utils/cmake/ci/install-re2c.sh
-
-      - name: Restore pinned Salts debug package
-        id: salts-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-gcc-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-
-      - name: Build and install exact Salts
-        if: steps.salts-cache.outputs.cache-hit != 'true'
-        shell: bash
-        working-directory: salts
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target install -j2
-
-      - name: Expose exact Salts profile
-        shell: bash
-        run: |
-          set -euxo pipefail
-          package="$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
-          test -f "$package/lib/cmake/Salts/SaltsConfig.cmake"
-          sudo ln -sfn "$package" /opt/salts/debug
-
-      - name: Build standalone host Lemon
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon             -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build salts-utils/build/host-lemon --target lemon -j2
-
-      - name: Build and install exact SaltsUtils
-        shell: bash
-        working-directory: salts-utils
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"             -DDATABIND_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
-          cmake --build build/linux-gcc-debug --target install -j2
-          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
-          test -f /opt/salts-utils/debug/lib/cmake/DataBind/DataBindConfig.cmake
-
-      - name: Verify independent DataBind package ownership
-        shell: bash
-        env:
-          SALTS_ROOT: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-        run: |
-          set -euxo pipefail
-          src="$RUNNER_TEMP/databind-package-probe"
-          build="$RUNNER_TEMP/databind-package-probe-build"
+          src="$RUNNER_TEMP/salts-utils-component-probe"
+          build="$RUNNER_TEMP/salts-utils-component-probe-build"
           mkdir -p "$src"
           cat > "$src/CMakeLists.txt" <<'CMAKE'
           cmake_minimum_required(VERSION 3.25)
-          project(databind_package_probe LANGUAGES C)
+          project(salts_utils_component_probe LANGUAGES C)
           find_package(SaltsUtils CONFIG REQUIRED
             PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
-          if(TARGET Salts::DataBind)
-            message(FATAL_ERROR
-              "SaltsUtils unexpectedly re-exported Salts::DataBind; this gate no longer proves split-package discovery")
+          if(NOT TARGET Salts::Databind)
+            message(FATAL_ERROR "SaltsUtils did not export Salts::Databind")
           endif()
-          find_package(DataBind CONFIG REQUIRED
-            PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
-          if(NOT TARGET Salts::DataBind)
-            message(FATAL_ERROR
-              "DataBind package did not provide Salts::DataBind")
+          get_target_property(component_type Salts::Databind TYPE)
+          if(NOT component_type STREQUAL "SHARED_LIBRARY")
+            message(FATAL_ERROR "Salts::Databind must be the concrete runtime")
           endif()
           CMAKE
           cmake -S "$src" -B "$build" -G Ninja
-
-      - name: Expose exact SaltsUtils profile
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
-          ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
-
       - name: Build and install exact Chttp package
         shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
           prefix="$RUNNER_TEMP/chttp-install"
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DBUILD_TESTS=OFF             -DBUILD_EXAMPLES=OFF             -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build build/linux-gcc-debug --target install -j2
           test -f "$prefix/include/chttp_web/web.h"
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
@@ -182,222 +71,18 @@ jobs:
             echo "installed Chttp package contains source-tree paths" >&2
             exit 1
           fi
-
       - name: Configure standalone installed consumer
         shell: bash
-        env:
-          SALTS_ROOT: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
         run: |
           set -euxo pipefail
           src="$RUNNER_TEMP/chttp-web-consumer"
           build="$RUNNER_TEMP/chttp-web-consumer-build"
           prefix="$RUNNER_TEMP/chttp-install"
           mkdir -p "$src"
-          cat > "$src/CMakeLists.txt" <<'CMAKE'
-          cmake_minimum_required(VERSION 3.25)
-          project(chttp_web_consumer LANGUAGES C)
-          find_package(Chttp CONFIG REQUIRED)
-          add_executable(chttp_web_consumer main.c)
-          target_link_libraries(chttp_web_consumer PRIVATE CHttp::Web)
-          CMAKE
-          cat > "$src/main.c" <<'C'
-          #include <chttp_web/web.h>
-
-          #include <stddef.h>
-          #include <string.h>
-
-          typedef struct probe {
-            size_t begins;
-            size_t parts;
-            size_t bytes;
-            size_t commits;
-            size_t aborts;
-          } probe;
-
-          static int part_begin(
-              void *user, const chttp_web_multipart_part *part) {
-            probe *value = (probe *)user;
-            if (value == NULL || part == NULL) return -1;
-            ++value->parts;
-            return 0;
-          }
-
-          static int part_data(
-              void *user, const void *data, size_t size) {
-            probe *value = (probe *)user;
-            if (value == NULL || (size != 0u && data == NULL)) return -1;
-            value->bytes += size;
-            return 0;
-          }
-
-          static int part_end(void *user) {
-            return user != NULL ? 0 : -1;
-          }
-
-          static int upload_begin(
-              void *user, const chttp_server_request_view *request) {
-            probe *value = (probe *)user;
-            if (value == NULL || request == NULL) return -1;
-            ++value->begins;
-            return 0;
-          }
-
-          static int upload_commit(void *user) {
-            probe *value = (probe *)user;
-            if (value == NULL) return -1;
-            ++value->commits;
-            return 0;
-          }
-
-          static void upload_abort(
-              void *user, chttp_web_status status, int native_status) {
-            probe *value = (probe *)user;
-            (void)status;
-            (void)native_status;
-            if (value != NULL) ++value->aborts;
-          }
-
-          int main(void) {
-            static const char body[] =
-                "--AaB03x\r\n"
-                "Content-Disposition: form-data; name=\"value\"\r\n\r\n"
-                "ok\r\n"
-                "--AaB03x--\r\n";
-            static const chttp_header headers[] = {
-                {"Content-Type", "multipart/form-data; boundary=AaB03x"}};
-
-            chttp_web_validation validation = CHTTP_WEB_VALIDATION_INIT;
-            chttp_web_validation_error validation_errors[2];
-            char validation_bytes[128];
-            chttp_web_error error = CHTTP_WEB_ERROR_INIT;
-
-            chttp_web_multipart_parser parser =
-                CHTTP_WEB_MULTIPART_PARSER_INIT;
-            chttp_web_multipart_limits limits =
-                (chttp_web_multipart_limits)
-                    CHTTP_WEB_MULTIPART_LIMITS_INIT;
-            chttp_web_multipart_callbacks multipart_callbacks =
-                (chttp_web_multipart_callbacks)
-                    CHTTP_WEB_MULTIPART_CALLBACKS_INIT;
-
-            chttp_web_upload_request upload =
-                CHTTP_WEB_UPLOAD_REQUEST_INIT;
-            chttp_web_upload_callbacks upload_callbacks =
-                (chttp_web_upload_callbacks)
-                    CHTTP_WEB_UPLOAD_CALLBACKS_INIT;
-            chttp_server_request_view request = {
-                .http_major = 1u,
-                .http_minor = 1u,
-                .method = CHTTP_METHOD_GET,
-                .target = "/installed-web-ii",
-                .path = "/installed-web-ii",
-                .headers = headers,
-                .header_count = 1u};
-            chttp_body_sink sink = {0};
-            probe multipart_probe = {0};
-            probe upload_probe = {0};
-
-            if (chttp_web_validation_init(
-                    &validation,
-                    validation_errors,
-                    2u,
-                    validation_bytes,
-                    sizeof(validation_bytes),
-                    &error) != CHTTP_WEB_OK)
-              return 1;
-            if (chttp_web_validation_add_field(
-                    &validation, "name", "required", &error) !=
-                CHTTP_WEB_OK)
-              return 2;
-            if (validation.valid ||
-                chttp_web_validation_field_count(
-                    &validation, "name") != 1u ||
-                chttp_web_validation_field_get(
-                    &validation, "name", 0u) == NULL ||
-                chttp_web_validation_data() == NULL ||
-                chttp_web_validation_error_data() == NULL)
-              return 3;
-            if (chttp_web_validation_reset(
-                    &validation, &error) != CHTTP_WEB_OK ||
-                !validation.valid)
-              return 4;
-
-            multipart_callbacks.part_begin = part_begin;
-            multipart_callbacks.part_data = part_data;
-            multipart_callbacks.part_end = part_end;
-            if (chttp_web_multipart_init(
-                    &parser,
-                    headers[0].value,
-                    &limits,
-                    &multipart_callbacks,
-                    &multipart_probe,
-                    &error) != CHTTP_WEB_OK)
-              return 5;
-            if (chttp_web_multipart_feed(
-                    &parser,
-                    body,
-                    sizeof(body) - 1u,
-                    &error) != CHTTP_WEB_OK)
-              return 6;
-            if (chttp_web_multipart_finish(
-                    &parser, &error) != CHTTP_WEB_OK ||
-                multipart_probe.parts != 1u ||
-                multipart_probe.bytes != 2u)
-              return 7;
-            if (chttp_web_multipart_reset(
-                    &parser, &error) != CHTTP_WEB_OK)
-              return 8;
-
-            upload_callbacks.begin = upload_begin;
-            upload_callbacks.part_begin = part_begin;
-            upload_callbacks.part_data = part_data;
-            upload_callbacks.part_end = part_end;
-            upload_callbacks.commit = upload_commit;
-            upload_callbacks.abort = upload_abort;
-            if (chttp_web_upload_open(
-                    &upload,
-                    &request,
-                    &limits,
-                    &upload_callbacks,
-                    &upload_probe,
-                    &sink,
-                    &error) != CHTTP_WEB_OK)
-              return 9;
-            if (sink.write == NULL ||
-                sink.user != &upload ||
-                sink.write(
-                    sink.user,
-                    body,
-                    sizeof(body) - 1u) != 0)
-              return 10;
-
-            chttp_web_upload_close(&upload, 0);
-            request.body_streamed = 1;
-            request.body_sink_user = &upload;
-            if (chttp_web_upload_finalize(
-                    &upload,
-                    &request,
-                    &validation,
-                    &error) != CHTTP_WEB_OK)
-              return 11;
-            if (upload_probe.begins != 1u ||
-                upload_probe.parts != 1u ||
-                upload_probe.bytes != 2u ||
-                upload_probe.commits != 1u ||
-                upload_probe.aborts != 0u ||
-                chttp_web_upload_user(&upload) != &upload_probe)
-              return 12;
-            if (chttp_web_upload_reset(
-                    &upload, &error) != CHTTP_WEB_OK)
-              return 13;
-
-            return 0;
-          }
-          C
-          cmake -S "$src" -B "$build" -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_PREFIX_PATH="$prefix"
+          cp web/tests/installed/CMakeLists.txt web/tests/installed/main.c "$src/"
+          cmake -S "$src" -B "$build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$prefix"
           cmake --build "$build" -j2
-
       - name: Run standalone installed consumer
         shell: bash
         env:
@@ -405,11 +90,10 @@ jobs:
         run: |
           set -euxo pipefail
           "$RUNNER_TEMP/chttp-web-consumer-build/chttp_web_consumer"
-
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"

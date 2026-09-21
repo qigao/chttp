@@ -21,10 +21,10 @@ target_include_directories(chttp_web
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(chttp_web
   PUBLIC CHttp::Server Salts::CMeta
-  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core OpenSSL::Crypto
+  PRIVATE Salts::JinjaCMeta Salts::Databind Salts::Core OpenSSL::Crypto
   INTERFACE
     $<LINK_ONLY:Salts::JinjaCMeta>
-    $<LINK_ONLY:Salts::DataBind>)
+    $<LINK_ONLY:Salts::Databind>)
 
 install(TARGETS chttp_web EXPORT ChttpTargets)
 install(DIRECTORY include/chttp_web DESTINATION include)

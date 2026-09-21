@@ -15,7 +15,7 @@ add_test(NAME chttp_web_context_test COMMAND chttp_web_context_test)
 
 add_executable(chttp_web_form_test test_chttp_web_form.c)
 target_link_libraries(chttp_web_form_test PRIVATE
-  CHttp::Web Salts::DataBind Salts::TinyTest)
+  CHttp::Web Salts::Databind Salts::TinyTest)
 set_target_properties(chttp_web_form_test PROPERTIES
   FOLDER "web/tests"
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)

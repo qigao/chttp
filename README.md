@@ -14,7 +14,7 @@ That gives the library a shared foundation:
 
 - **CNet / NativeIO** for transport, connection progress, async I/O, TLS/session ownership, and shutdown semantics.
 - **CMeta / CFlow** for typed metadata and execution boundaries where required.
-- **SaltsUtils parsers** for JSON and related higher-level formats.
+- **SaltsUtils parsers and DataBind** for JSON, related higher-level formats, and typed data binding through `Salts::Databind`.
 - **SaltsUtils crypto helpers** where explicitly required by protocol features.
 - **BoringSSL/OpenSSL-compatible package dependencies** for the low-level cryptographic provider selected by the build.
 
@@ -24,9 +24,8 @@ CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behav
 
 ```text
 Salts
-  ├── salts-utils
-  ├── salts-net
-  └── DataBind
+  ├── salts-utils (including DataBind/TBE)
+  └── salts-net
         ↓
       CHTTP
         ↓
@@ -106,6 +105,12 @@ Requirements:
 - matching installed Salts and SaltsUtils SDK profiles
 
 Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, and `VCPKG_ROOT` before configuration.
+DataBind/TBE are components of the SaltsUtils installation. CHTTP consumes the
+concrete `Salts::Databind` target from `find_package(SaltsUtils CONFIG REQUIRED)`.
+
+CI checks out both Salts and SaltsUtils from `master`. Each run records the
+resolved dependency commits for build provenance and cache identity; those
+commits are not dependency version constraints.
 
 Windows Release:
 
