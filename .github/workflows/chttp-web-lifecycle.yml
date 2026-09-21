@@ -186,6 +186,15 @@ jobs:
           set -euxo pipefail
           cmake --build --preset linux-dev-user -j2
 
+      - name: Run Web reference example smoke tests
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+
       - name: Run full Chttp CTest graph
         shell: bash
         env:
