@@ -7,6 +7,7 @@ on:
       - qualify/chttp-web-product
       - feature/chttp-web-validation
       - feature/chttp-web-multipart
+      - feature/chttp-body-sink-context
   workflow_dispatch:
 
 permissions:

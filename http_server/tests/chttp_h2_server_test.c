@@ -117,6 +117,13 @@ typedef struct chttp_h2_server_stream_probe {
   int close_status;
 } chttp_h2_server_stream_probe;
 
+typedef struct chttp_h2_body_context_probe {
+  chttp_h2_server_stream_probe stream;
+  const char *path;
+  size_t contexts_seen;
+  int close_context_ok;
+} chttp_h2_body_context_probe;
+
 typedef struct chttp_h2_websocket_probe {
   atomic_int opens;
   atomic_int messages;
@@ -235,6 +242,46 @@ static int chttp_h2_server_jwt_stream_open(void *user, const chttp_server_reques
   return SALTS_OK;
 }
 
+static int chttp_h2_body_context_open(
+    void *user, const chttp_server_request_view *request,
+    chttp_body_sink *out_sink) {
+  chttp_h2_body_context_probe *probe = (chttp_h2_body_context_probe *)user;
+  if (probe == NULL || request == NULL || out_sink == NULL ||
+      request->http_major != 2u || probe->path == NULL ||
+      strcmp(request->path, probe->path) != 0)
+    return SALTS_EINVAL;
+  ++probe->stream.opens;
+  *out_sink = (chttp_body_sink){
+      .write = chttp_h2_server_stream_write,
+      .user = &probe->stream};
+  return SALTS_OK;
+}
+
+static void chttp_h2_body_context_close(
+    void *user, chttp_body_sink *sink, int status) {
+  chttp_h2_body_context_probe *probe = (chttp_h2_body_context_probe *)user;
+  if (probe == NULL || sink == NULL) return;
+  ++probe->stream.closes;
+  probe->stream.close_status = status;
+  probe->close_context_ok = sink->user == &probe->stream ? 1 : 0;
+}
+
+static int chttp_h2_body_context_handler(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  chttp_h2_body_context_probe *probe = (chttp_h2_body_context_probe *)user;
+  if (probe == NULL || request == NULL || response == NULL ||
+      probe->path == NULL || strcmp(request->path, probe->path) != 0 ||
+      !request->body_streamed || request->body != NULL ||
+      request->body_sink_user != &probe->stream ||
+      probe->stream.closes != 1u ||
+      probe->stream.close_status != SALTS_OK ||
+      !probe->close_context_ok)
+    return SALTS_EPROTO;
+  ++probe->contexts_seen;
+  return chttp_server_reply(response, 200u, "text/plain", "ok", 2u);
+}
+
 static int chttp_h2_server_failing_stream_open(void *user, const chttp_server_request_view *request,
                                                chttp_body_sink *out_sink) {
   chttp_h2_server_stream_probe *probe = (chttp_h2_server_stream_probe *)user;
@@ -277,7 +324,8 @@ static int chttp_h2_server_stream_handler(void *user, const chttp_server_request
   chttp_h2_server_stream_probe *probe = (chttp_h2_server_stream_probe *)user;
   chttp_body_source source;
   if (probe == NULL || request == NULL || !request->body_streamed || request->body != NULL ||
-      request->body_size != probe->size || probe->closes != 1u || probe->close_status != SALTS_OK)
+      request->body_sink_user != probe || request->body_size != probe->size ||
+      probe->closes != 1u || probe->close_status != SALTS_OK)
     return SALTS_EPROTO;
   source = (chttp_body_source){.read = chttp_h2_server_response_read,
                                .user = probe,
@@ -293,7 +341,8 @@ static int chttp_h2_server_jwt_stream_handler(void *user, const chttp_server_req
   ++probe->handler_calls;
   if (request->jwt_claims == NULL || request->jwt_claims->subject == NULL ||
       strcmp(request->jwt_claims->subject, "alice") != 0 || !request->body_streamed ||
-      request->body != NULL || request->body_size != probe->size || probe->closes != 1u ||
+      request->body != NULL || request->body_sink_user != probe ||
+      request->body_size != probe->size || probe->closes != 1u ||
       probe->close_status != SALTS_OK)
     return SALTS_EPROTO;
   return chttp_server_reply(response, 200u, "text/plain", "ok", 2u);
@@ -425,6 +474,8 @@ static int chttp_h2_server_test_value_handler(void *user, const chttp_server_req
 static int chttp_h2_server_test_body_handler(void *user, const chttp_server_request_view *request,
                                              chttp_server_response *response) {
   (void)user;
+  if (request == NULL || request->body_sink_user != NULL)
+    return SALTS_EPROTO;
   return chttp_server_reply(response, 200u, "application/octet-stream", request->body,
                             request->body_size);
 }
@@ -2752,6 +2803,110 @@ spec("CHTTP background HTTP/2 server") {
 
     chttp_h2_server_test_peer_destroy(&peer);
     chttp_h2_server_test_socket_close(socket_value);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("keeps streamed body contexts isolated across concurrent HTTP/2 streams") {
+    static const char first_body[] = "first-body";
+    static const char second_body[] = "second-body";
+    chttp_h2_body_context_probe first_probe = {
+        .path = "/context-first"};
+    chttp_h2_body_context_probe second_probe = {
+        .path = "/context-second"};
+    chttp_server server = {0};
+    chttp_async_client client = {0};
+    chttp_server_config server_config = chttp_h2_server_test_config();
+    chttp_client_config client_config = chttp_h2_server_test_client_config();
+    chttp_h2_server_test_completion first = {0};
+    chttp_h2_server_test_completion second = {0};
+    chttp_request first_request = {0};
+    chttp_request second_request = {0};
+    chttp_request_options options;
+    chttp_server_stats stats = {0};
+    char uri[64];
+    char authority[64];
+    uint16_t port = 0u;
+    size_t completions = 0u;
+    size_t polls = 0u;
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    {
+      const chttp_server_route_options route = {
+          .method = CHTTP_METHOD_POST,
+          .path = first_probe.path,
+          .handler = chttp_h2_body_context_handler,
+          .user = &first_probe,
+          .body_open = chttp_h2_body_context_open,
+          .body_close = chttp_h2_body_context_close};
+      check_equal(chttp_server_route_with(&server, &route), SALTS_OK);
+    }
+    {
+      const chttp_server_route_options route = {
+          .method = CHTTP_METHOD_POST,
+          .path = second_probe.path,
+          .handler = chttp_h2_body_context_handler,
+          .user = &second_probe,
+          .body_open = chttp_h2_body_context_open,
+          .body_close = chttp_h2_body_context_close};
+      check_equal(chttp_server_route_with(&server, &route), SALTS_OK);
+    }
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_equal(
+        chttp_h2_server_test_endpoint(
+            port, uri, sizeof(uri), authority, sizeof(authority)),
+        SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &client_config), SALTS_OK);
+
+    options = (chttp_request_options){
+        .connection_uri = uri,
+        .authority = authority,
+        .target = first_probe.path,
+        .method = CHTTP_METHOD_POST,
+        .body = first_body,
+        .body_size = sizeof(first_body) - 1u,
+        .on_complete = chttp_h2_server_test_complete,
+        .user = &first,
+        .protocol = CHTTP_HTTP_2};
+    check_equal(
+        chttp_async_client_submit(&client, &options, &first_request), SALTS_OK);
+
+    options.target = second_probe.path;
+    options.body = second_body;
+    options.body_size = sizeof(second_body) - 1u;
+    options.user = &second;
+    check_equal(
+        chttp_async_client_submit(&client, &options, &second_request), SALTS_OK);
+
+    while ((first.calls == 0u || second.calls == 0u) && polls++ < 40u)
+      check_equal(
+          chttp_async_client_poll(&client, 250u, &completions), SALTS_OK);
+
+    check_equal(first.calls, 1u);
+    check_equal(first.status, SALTS_OK);
+    check_equal(first.response_status, 200u);
+    check_equal(second.calls, 1u);
+    check_equal(second.status, SALTS_OK);
+    check_equal(second.response_status, 200u);
+
+    check_equal(first_probe.contexts_seen, (size_t)1u);
+    check_equal(second_probe.contexts_seen, (size_t)1u);
+    check_equal(first_probe.stream.size, sizeof(first_body) - 1u);
+    check_equal(
+        first_probe.stream.data, first_body, sizeof(first_body) - 1u);
+    check_equal(second_probe.stream.size, sizeof(second_body) - 1u);
+    check_equal(
+        second_probe.stream.data, second_body, sizeof(second_body) - 1u);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)1u);
+    check_equal(stats.requests, (uint64_t)2u);
+
+    check_equal(
+        chttp_async_client_stop(&client, CHTTP_H2_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
