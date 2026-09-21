@@ -439,7 +439,7 @@ spec("CHttp::Web multipart/form-data parser") {
         mp_test_run(
             &probe, &limits,
             name_over, sizeof(name_over) - 1u, 3u, &error),
-        CHTTP_WEB_MULTIPART);
+        CHTTP_WEB_CAPACITY);
 
     limits = mp_test_limits();
     limits.max_filename_bytes = 3u;
@@ -454,7 +454,7 @@ spec("CHttp::Web multipart/form-data parser") {
         mp_test_run(
             &probe, &limits,
             filename_over, sizeof(filename_over) - 1u, 4u, &error),
-        CHTTP_WEB_MULTIPART);
+        CHTTP_WEB_CAPACITY);
 
     limits = mp_test_limits();
     limits.max_content_type_bytes = 3u;
