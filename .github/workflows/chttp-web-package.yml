@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - qualify/chttp-web-package
+      - fix/chttp-web-databind-discovery
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,7 @@ concurrency:
 
 env:
   SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_SHA: 8016a93f9b0f14c053ba87ce5a18d40f77fa8770
+  SALTS_UTILS_SHA: 2ceba0f6c46914600960bc410f5b5453911322ec
   VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
 jobs:
@@ -120,9 +121,38 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"             -DDATABIND_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
           cmake --build build/linux-gcc-debug --target install -j2
           test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
+          test -f /opt/salts-utils/debug/lib/cmake/DataBind/DataBindConfig.cmake
+
+      - name: Verify independent DataBind package ownership
+        shell: bash
+        env:
+          SALTS_ROOT: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+        run: |
+          set -euxo pipefail
+          src="$RUNNER_TEMP/databind-package-probe"
+          build="$RUNNER_TEMP/databind-package-probe-build"
+          mkdir -p "$src"
+          cat > "$src/CMakeLists.txt" <<'CMAKE'
+          cmake_minimum_required(VERSION 3.25)
+          project(databind_package_probe LANGUAGES C)
+          find_package(SaltsUtils CONFIG REQUIRED
+            PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+          if(TARGET Salts::DataBind)
+            message(FATAL_ERROR
+              "SaltsUtils unexpectedly re-exported Salts::DataBind; this gate no longer proves split-package discovery")
+          endif()
+          find_package(DataBind CONFIG REQUIRED
+            PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+          if(NOT TARGET Salts::DataBind)
+            message(FATAL_ERROR
+              "DataBind package did not provide Salts::DataBind")
+          endif()
+          CMAKE
+          cmake -S "$src" -B "$build" -G Ninja
 
       - name: Expose exact SaltsUtils profile
         shell: bash
