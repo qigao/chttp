@@ -355,6 +355,8 @@ static int auth_app_render(
           CHTTP_WEB_REQUEST_CONTEXT_OPTIONS_INIT;
   auth_app_model model = {0};
   chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+
+  model.principal = (chttp_web_principal)CHTTP_WEB_PRINCIPAL_INIT;
   const char *csrf = NULL;
   chttp_web_status status;
 
