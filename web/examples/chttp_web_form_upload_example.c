@@ -648,8 +648,12 @@ static void web_forms_release_upload_slot(
     web_forms_upload_slot *slot) {
   chttp_web_error error = CHTTP_WEB_ERROR_INIT;
   if (slot == NULL) return;
-  if (slot->upload.size != 0u)
+  if (slot->upload.size != 0u &&
+      chttp_web_upload_reset(&slot->upload, &error) != CHTTP_WEB_OK) {
+    (void)chttp_web_upload_abort(
+        &slot->upload, CHTTP_WEB_UPLOAD, SALTS_ECANCELED, &error);
     (void)chttp_web_upload_reset(&slot->upload, &error);
+  }
   slot->in_use = false;
 }
 
