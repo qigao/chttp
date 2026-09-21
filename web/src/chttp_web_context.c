@@ -149,6 +149,110 @@ static const cmeta_data_desc CHTTP_WEB_SEQUENCE_DATA = {
     .storage_type = &CHTTP_WEB_SEQUENCE_TYPE,
     .shape = &CHTTP_WEB_SEQUENCE_SHAPE};
 
+static const cmeta_type_identity CHTTP_WEB_VALIDATION_ERROR_ID =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.web.ValidationError.v1");
+
+static const cmeta_type_desc CHTTP_WEB_VALIDATION_ERROR_TYPE = {
+    "chttp_web_validation_error",
+    sizeof(chttp_web_validation_error),
+    _Alignof(chttp_web_validation_error),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_WEB_VALIDATION_ERROR_ID};
+
+static const cmeta_field_desc CHTTP_WEB_VALIDATION_ERROR_LAYOUT_FIELDS[] = {
+    {"field", "chttp_web_string_view",
+     offsetof(chttp_web_validation_error, field),
+     sizeof(((chttp_web_validation_error *)0)->field),
+     _Alignof(chttp_web_string_view), NULL, NULL},
+    {"message", "chttp_web_string_view",
+     offsetof(chttp_web_validation_error, message),
+     sizeof(((chttp_web_validation_error *)0)->message),
+     _Alignof(chttp_web_string_view), NULL, NULL},
+    {"global", "bool",
+     offsetof(chttp_web_validation_error, global),
+     sizeof(((chttp_web_validation_error *)0)->global),
+     _Alignof(bool), NULL, NULL}};
+
+static const cmeta_struct_desc CHTTP_WEB_VALIDATION_ERROR_LAYOUT = {
+    "chttp_web_validation_error",
+    sizeof(chttp_web_validation_error),
+    _Alignof(chttp_web_validation_error),
+    CHTTP_WEB_VALIDATION_ERROR_LAYOUT_FIELDS,
+    3u};
+
+static const cmeta_data_field_desc CHTTP_WEB_VALIDATION_ERROR_FIELDS[] = {
+    {"chttp.web.ValidationError.field", "field",
+     offsetof(chttp_web_validation_error, field), &CHTTP_WEB_STRING_DATA},
+    {"chttp.web.ValidationError.message", "message",
+     offsetof(chttp_web_validation_error, message), &CHTTP_WEB_STRING_DATA},
+    {"chttp.web.ValidationError.global", "global",
+     offsetof(chttp_web_validation_error, global), &cmeta_data_bool}};
+
+static const cmeta_data_struct_shape CHTTP_WEB_VALIDATION_ERROR_SHAPE = {
+    &CHTTP_WEB_VALIDATION_ERROR_LAYOUT,
+    CHTTP_WEB_VALIDATION_ERROR_FIELDS,
+    3u};
+
+static const cmeta_data_desc CHTTP_WEB_VALIDATION_ERROR_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "chttp.web.ValidationError.data.v1",
+    .display_name = "CHttp Web validation error",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &CHTTP_WEB_VALIDATION_ERROR_TYPE,
+    .shape = &CHTTP_WEB_VALIDATION_ERROR_SHAPE};
+
+static const cmeta_type_identity CHTTP_WEB_VALIDATION_ID =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.web.Validation.v1");
+
+static const cmeta_type_desc CHTTP_WEB_VALIDATION_TYPE = {
+    "chttp_web_validation",
+    sizeof(chttp_web_validation),
+    _Alignof(chttp_web_validation),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_WEB_VALIDATION_ID};
+
+static const cmeta_field_desc CHTTP_WEB_VALIDATION_LAYOUT_FIELDS[] = {
+    {"valid", "bool",
+     offsetof(chttp_web_validation, valid),
+     sizeof(((chttp_web_validation *)0)->valid),
+     _Alignof(bool), NULL, NULL},
+    {"errors", "chttp_web_sequence_view",
+     offsetof(chttp_web_validation, errors),
+     sizeof(((chttp_web_validation *)0)->errors),
+     _Alignof(chttp_web_sequence_view), NULL, NULL}};
+
+static const cmeta_struct_desc CHTTP_WEB_VALIDATION_LAYOUT = {
+    "chttp_web_validation",
+    sizeof(chttp_web_validation),
+    _Alignof(chttp_web_validation),
+    CHTTP_WEB_VALIDATION_LAYOUT_FIELDS,
+    2u};
+
+static const cmeta_data_field_desc CHTTP_WEB_VALIDATION_FIELDS[] = {
+    {"chttp.web.Validation.valid", "valid",
+     offsetof(chttp_web_validation, valid), &cmeta_data_bool},
+    {"chttp.web.Validation.errors", "errors",
+     offsetof(chttp_web_validation, errors), &CHTTP_WEB_SEQUENCE_DATA}};
+
+static const cmeta_data_struct_shape CHTTP_WEB_VALIDATION_SHAPE = {
+    &CHTTP_WEB_VALIDATION_LAYOUT,
+    CHTTP_WEB_VALIDATION_FIELDS,
+    2u};
+
+static const cmeta_data_desc CHTTP_WEB_VALIDATION_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "chttp.web.Validation.data.v1",
+    .display_name = "CHttp Web validation result",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &CHTTP_WEB_VALIDATION_TYPE,
+    .shape = &CHTTP_WEB_VALIDATION_SHAPE};
+
 static const cmeta_type_identity CHTTP_WEB_NAMED_VALUE_ID =
     CMETA_TYPE_ID_ATOM_INIT("chttp.web.NamedValue.v1");
 
@@ -430,6 +534,14 @@ chttp_web_status chttp_web_request_context_init(
       sizeof(chttp_web_named_value), &CHTTP_WEB_NAMED_VALUE_DATA};
 
   return chttp_web_context_fail(error, CHTTP_WEB_OK, 0, NULL);
+}
+
+const cmeta_data_desc *chttp_web_validation_error_data(void) {
+  return &CHTTP_WEB_VALIDATION_ERROR_DATA;
+}
+
+const cmeta_data_desc *chttp_web_validation_data(void) {
+  return &CHTTP_WEB_VALIDATION_DATA;
 }
 
 const cmeta_data_desc *chttp_web_request_context_data(void) {
