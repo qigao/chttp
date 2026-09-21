@@ -501,6 +501,36 @@ static int chttp_h2_server_test_session_handler(void *user,
   return chttp_server_reply(response, 200u, "text/plain", value, strlen(value));
 }
 
+static int chttp_h2_server_test_session_regenerate_handler(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  const char *value;
+  int status;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  value = chttp_session_get(request->session, "value");
+  if (value == NULL || strcmp(value, "persisted") != 0) return SALTS_EPROTO;
+  status = chttp_session_regenerate(request->session);
+  if (status == SALTS_OK)
+    status = chttp_session_set(request->session, "rotated", "yes");
+  return status == SALTS_OK
+             ? chttp_server_reply(response, 204u, NULL, NULL, 0u)
+             : status;
+}
+
+static int chttp_h2_server_test_session_state_handler(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  const char *value;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  value = chttp_session_get(request->session, "rotated");
+  if (value == NULL) value = "anonymous";
+  return chttp_server_reply(response, 200u, "text/plain", value, strlen(value));
+}
+
 static int chttp_h2_server_test_version_handler(void *user,
                                                 const chttp_server_request_view *request,
                                                 chttp_server_response *response) {
@@ -3199,7 +3229,7 @@ spec("CHTTP background HTTP/2 server") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
-  it("keeps Session data through an HTTP/2 cookie round trip") {
+  it("keeps and regenerates Session state through an HTTP/2 cookie round trip") {
     chttp_server server = {0};
     chttp_client client = {0};
     chttp_server_config server_config = chttp_h2_server_test_config();
@@ -3208,7 +3238,8 @@ spec("CHTTP background HTTP/2 server") {
     chttp_error error = {0};
     chttp_options options;
     chttp_header cookie_header = {"cookie", NULL};
-    char cookie[256];
+    char cookie1[256];
+    char cookie2[256];
     char uri[64];
     char authority[64];
     uint16_t port = 0u;
@@ -3218,6 +3249,12 @@ spec("CHTTP background HTTP/2 server") {
 
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
     check_equal(chttp_server_get(&server, "/session", chttp_h2_server_test_session_handler, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/session-regenerate",
+                                 chttp_h2_server_test_session_regenerate_handler, NULL),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/session-state",
+                                 chttp_h2_server_test_session_state_handler, NULL),
                 SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -3236,15 +3273,47 @@ spec("CHTTP background HTTP/2 server") {
     check_not_null(set_cookie);
     semicolon = strchr(set_cookie, ';');
     cookie_size = semicolon == NULL ? strlen(set_cookie) : (size_t)(semicolon - set_cookie);
-    check_less(cookie_size, sizeof(cookie));
-    memcpy(cookie, set_cookie, cookie_size);
-    cookie[cookie_size] = '\0';
+    check_less(cookie_size, sizeof(cookie1));
+    memcpy(cookie1, set_cookie, cookie_size);
+    cookie1[cookie_size] = '\0';
     chttp_response_destroy(&response);
-    cookie_header.value = cookie;
+
+    cookie_header.value = cookie1;
     options.headers = &cookie_header;
     options.header_count = 1u;
     check_equal(chttp_get(&client, &options, &response, &error), SALTS_OK);
     check_equal(response.body, "persisted", 9u);
+    chttp_response_destroy(&response);
+
+    options.target = "/session-regenerate";
+    check_equal(chttp_get(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.status_code, 204u);
+    set_cookie = chttp_response_header(&response, "set-cookie");
+    check_not_null(set_cookie);
+    semicolon = set_cookie == NULL ? NULL : strchr(set_cookie, ';');
+    cookie_size = semicolon == NULL
+        ? (set_cookie == NULL ? 0u : strlen(set_cookie))
+        : (size_t)(semicolon - set_cookie);
+    check_greater(cookie_size, (size_t)0u);
+    check_less(cookie_size, sizeof(cookie2));
+    if (set_cookie != NULL && cookie_size < sizeof(cookie2)) {
+      memcpy(cookie2, set_cookie, cookie_size);
+      cookie2[cookie_size] = '\0';
+    } else {
+      cookie2[0] = '\0';
+    }
+    check_true(strcmp(cookie1, cookie2) != 0);
+    chttp_response_destroy(&response);
+
+    options.target = "/session-state";
+    cookie_header.value = cookie1;
+    check_equal(chttp_get(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.body, "anonymous", 9u);
+    chttp_response_destroy(&response);
+
+    cookie_header.value = cookie2;
+    check_equal(chttp_get(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.body, "yes", 3u);
     chttp_response_destroy(&response);
 
     check_equal(chttp_client_destroy(&client, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
