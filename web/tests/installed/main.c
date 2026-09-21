@@ -81,6 +81,9 @@ int main(void) {
   probe upload_probe = {0};
   chttp_web_principal principal = CHTTP_WEB_PRINCIPAL_INIT;
   chttp_web_principal_input input = {0};
+  chttp_web_auth_policy auth_policy =
+      (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+  chttp_server_middleware auth_middleware = {0};
 
   if (chttp_web_validation_init(&validation, validation_errors, 2u,
           validation_bytes, sizeof(validation_bytes), &error) != CHTTP_WEB_OK)
@@ -152,5 +155,19 @@ int main(void) {
   if (chttp_web_principal_sign_out(&request, NULL, &error) !=
       CHTTP_WEB_INVALID_ARGUMENT)
     return 16;
+
+  if (chttp_web_local_target_validate(
+          "/installed-web?from=package",
+          sizeof("/installed-web?from=package") - 1u,
+          128u, &error) != CHTTP_WEB_OK)
+    return 17;
+  auth_policy.login_path = "/login";
+  auth_policy.include_return_target = true;
+  auth_policy.max_return_target_bytes = 128u;
+  auth_middleware = (chttp_server_middleware){
+      chttp_web_auth_middleware, &auth_policy};
+  if (auth_middleware.handler == NULL ||
+      auth_middleware.user != &auth_policy)
+    return 18;
   return 0;
 }
