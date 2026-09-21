@@ -354,6 +354,7 @@ chttp_web_status chttp_web_multipart_init(
         "multipart parser configuration or Content-Type is invalid");
 
   *parser = (chttp_web_multipart_parser)CHTTP_WEB_MULTIPART_PARSER_INIT;
+  parser->size = sizeof(chttp_web_multipart_parser);
   parser->limits = *limits;
   parser->callbacks = *callbacks;
   parser->user = user;
@@ -410,9 +411,8 @@ static int chttp_web_multipart_copy_parameter(
     char *output,
     size_t limit,
     size_t *out_size) {
-  const int result = chttp_web_multipart_read_parameter_value(
+  return chttp_web_multipart_read_parameter_value(
       data, size, position, output, limit, out_size);
-  return result == 1;
 }
 
 static int chttp_web_multipart_parse_disposition(
@@ -455,22 +455,25 @@ static int chttp_web_multipart_parse_disposition(
 
     if (chttp_web_multipart_ieq(
             value + name_begin, name_end - name_begin, "name")) {
-      if (have_name ||
-          !chttp_web_multipart_copy_parameter(
-              value, value_size, &position,
-              parser->part_name, parser->limits.max_name_bytes,
-              &parser->part_name_size) ||
-          parser->part_name_size == 0u)
-        return 0;
+      int parameter_status;
+      if (have_name) return 0;
+      parameter_status = chttp_web_multipart_copy_parameter(
+          value, value_size, &position,
+          parser->part_name, parser->limits.max_name_bytes,
+          &parser->part_name_size);
+      if (parameter_status < 0) return -1;
+      if (parameter_status == 0 || parser->part_name_size == 0u) return 0;
       have_name = 1;
     } else if (chttp_web_multipart_ieq(
                    value + name_begin, name_end - name_begin, "filename")) {
-      if (have_filename ||
-          !chttp_web_multipart_copy_parameter(
-              value, value_size, &position,
-              parser->part_filename, parser->limits.max_filename_bytes,
-              &parser->part_filename_size))
-        return 0;
+      int parameter_status;
+      if (have_filename) return 0;
+      parameter_status = chttp_web_multipart_copy_parameter(
+          value, value_size, &position,
+          parser->part_filename, parser->limits.max_filename_bytes,
+          &parser->part_filename_size);
+      if (parameter_status < 0) return -1;
+      if (parameter_status == 0) return 0;
       parser->has_filename = true;
       have_filename = 1;
     } else {
@@ -581,11 +584,20 @@ static chttp_web_status chttp_web_multipart_begin_part(
     if (chttp_web_multipart_ieq(
             parser->header_bytes + position, colon - position,
             "Content-Disposition")) {
-      if (have_disposition ||
-          !chttp_web_multipart_parse_disposition(
-              parser,
-              parser->header_bytes + value_begin,
-              value_end - value_begin))
+      int disposition_status;
+      if (have_disposition)
+        return chttp_web_multipart_fail(
+            parser, error, CHTTP_WEB_MULTIPART, 0, parser->total_bytes,
+            "multipart Content-Disposition is duplicated");
+      disposition_status = chttp_web_multipart_parse_disposition(
+          parser,
+          parser->header_bytes + value_begin,
+          value_end - value_begin);
+      if (disposition_status < 0)
+        return chttp_web_multipart_fail(
+            parser, error, CHTTP_WEB_CAPACITY, 0, parser->total_bytes,
+            "multipart disposition metadata exceeds configured limit");
+      if (disposition_status == 0)
         return chttp_web_multipart_fail(
             parser, error, CHTTP_WEB_MULTIPART, 0, parser->total_bytes,
             "multipart Content-Disposition is invalid");
