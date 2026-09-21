@@ -13,131 +13,25 @@ concurrency:
   group: chttp-web-benchmarks-${{ github.ref_name }}
   cancel-in-progress: true
 
-env:
-  SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_SHA: 8016a93f9b0f14c053ba87ce5a18d40f77fa8770
-  VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-
 jobs:
   benchmark:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      PROJECT_ROOT: ${{ runner.temp }}/salts-project
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:${{ runner.temp }}/salts-project/external/pkgs/salts/debug/lib
     steps:
       - name: Checkout exact Chttp head
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git init .
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=2 origin "${GITHUB_SHA}"
-          git checkout --detach FETCH_HEAD
-          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-
-      - name: Checkout exact public dependencies
-        shell: bash
-        run: |
-          set -euxo pipefail
-          git init salts
-          git -C salts remote add origin https://github.com/qigao/salts.git
-          git -C salts fetch --depth=1 origin "$SALTS_SHA"
-          git -C salts checkout --detach FETCH_HEAD
-          test "$(git -C salts rev-parse HEAD)" = "$SALTS_SHA"
-
-          git init salts-utils
-          git -C salts-utils remote add origin https://github.com/qigao/salts-utils.git
-          git -C salts-utils fetch --depth=1 origin "$SALTS_UTILS_SHA"
-          git -C salts-utils checkout --detach FETCH_HEAD
-          test "$(git -C salts-utils rev-parse HEAD)" = "$SALTS_UTILS_SHA"
-
-          git clone https://github.com/microsoft/vcpkg.git vcpkg
-          git -C vcpkg checkout --detach "$VCPKG_SHA"
-          test "$(git -C vcpkg rev-parse HEAD)" = "$VCPKG_SHA"
-
-      - name: Restore vcpkg binary archives
-        uses: actions/cache@v4
+        uses: actions/checkout@v4
         with:
-          path: ~/.cache/vcpkg/archives
-          key: tbe-30-vcpkg-x64-linux-b1b19307-v1
-
-      - name: Set up Go for BoringSSL
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-          cache: false
-
-      - name: Prepare toolchain
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-          sudo mkdir -p /opt/salts
-          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
-          bash salts-utils/cmake/ci/install-re2c.sh
-
-      - name: Restore pinned Salts debug package
-        id: salts-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-          key: salts-pkg-v1-${{ runner.os }}-${{ runner.arch }}-gcc-debug-801202e58c2d86b35202414d4812e79a2fd25bae-vcpkg-b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-
-      - name: Build and install exact Salts
-        if: steps.salts-cache.outputs.cache-hit != 'true'
-        shell: bash
-        working-directory: salts
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF
-          cmake --build build/linux-gcc-debug --target install -j2
-
-      - name: Expose exact Salts profile
-        shell: bash
-        run: |
-          set -euxo pipefail
-          package="$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
-          test -f "$package/lib/cmake/Salts/SaltsConfig.cmake"
-          sudo ln -sfn "$package" /opt/salts/debug
-
-      - name: Build standalone host Lemon
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon             -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build salts-utils/build/host-lemon --target lemon -j2
-
-      - name: Build and install exact SaltsUtils
-        shell: bash
-        working-directory: salts-utils
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-        run: |
-          set -euxo pipefail
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
-          cmake --build build/linux-gcc-debug --target install -j2
-          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
-
-      - name: Expose exact SaltsUtils profile
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
-          ln -sfn /opt/salts-utils/debug "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
-
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Set up current master SDKs
+        uses: ./.github/actions/setup-salts-sdk
       - name: Configure benchmark build
         shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
           cmake --preset linux-dev-user \
@@ -146,23 +40,14 @@ jobs:
             -DBUILD_TESTS=OFF \
             -DBUILD_EXAMPLES=ON \
             -DBUILD_BENCHMARKS=ON
-
       - name: Build benchmark workloads
         shell: bash
-        env:
-          PROJECT_ROOT: ${{ runner.temp }}/salts-project
-          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-          SALTS_UTILS_ROOT: /opt/salts-utils/debug
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
             chttp_web_benchmark openapi_ui_server -j2
-
       - name: Record renderer and OpenAPI benchmark evidence
         shell: bash
-        env:
-          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin
         run: |
           set -euxo pipefail
           result="$RUNNER_TEMP/chttp-web-benchmarks.jsonl"
@@ -174,12 +59,11 @@ jobs:
             --startup-samples 3 \
             --warmup 3 \
             --samples 10 | tee -a "$result"
-
       - name: Validate benchmark JSONL schema
         shell: bash
         run: |
           set -euxo pipefail
-          python3 - "$RUNNER_TEMP/chttp-web-benchmarks.jsonl" <<'PY'
+          python3 - "$RUNNER_TEMP/chttp-web-benchmarks.jsonl" <<'PYTHON'
           import json
           import pathlib
           import sys
@@ -188,65 +72,37 @@ jobs:
           rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
           environments = [row for row in rows if row.get("kind") == "environment"]
           measurements = [row for row in rows if row.get("kind") == "measurement"]
-
           if len(environments) != 2:
               raise SystemExit(f"expected 2 environment rows, got {len(environments)}")
-          renderer = [
-              row for row in measurements
-              if row.get("benchmark") == "chttp_web_renderer"
-          ]
+          renderer = [row for row in measurements if row.get("benchmark") == "chttp_web_renderer"]
           expected_renderer = {
               ("renderer_startup", 1),
-              ("full_page_render", 1),
-              ("fragment_render", 1),
-              ("full_page_render", 8),
-              ("fragment_render", 8),
-              ("full_page_render", 32),
-              ("fragment_render", 32),
+              ("full_page_render", 1), ("fragment_render", 1),
+              ("full_page_render", 8), ("fragment_render", 8),
+              ("full_page_render", 32), ("fragment_render", 32),
           }
-          observed_renderer = {
-              (row.get("name"), row.get("contexts")) for row in renderer
-          }
+          observed_renderer = {(row.get("name"), row.get("contexts")) for row in renderer}
           if observed_renderer != expected_renderer:
-              raise SystemExit(
-                  f"renderer measurements mismatch: {observed_renderer!r}"
-              )
-          openapi = [
-              row for row in measurements
-              if "operations" in row
-          ]
+              raise SystemExit(f"renderer measurements mismatch: {observed_renderer!r}")
+          openapi = [row for row in measurements if "operations" in row]
           if {row.get("operations") for row in openapi} != {44, 4096}:
-              raise SystemExit(
-                  f"OpenAPI workload sizes mismatch: "
-                  f"{[row.get('operations') for row in openapi]!r}"
-              )
+              raise SystemExit(f"OpenAPI workload sizes mismatch: {[row.get('operations') for row in openapi]!r}")
           for row in measurements:
               if row.get("benchmark") == "chttp_web_renderer":
                   if row["samples"] <= 0 or row["total_ns"] <= 0:
                       raise SystemExit(f"invalid renderer measurement: {row!r}")
               elif "operations" in row:
-                  for key in (
-                      "startup_ms",
-                      "docs_render_http_ms",
-                      "detail_render_http_ms",
-                  ):
+                  for key in ("startup_ms", "docs_render_http_ms", "detail_render_http_ms"):
                       if row[key]["samples"] <= 0 or row[key]["total"] <= 0:
-                          raise SystemExit(
-                              f"invalid OpenAPI measurement {key}: {row!r}"
-                          )
-          print(
-              f"validated {len(rows)} benchmark JSONL rows "
-              f"({len(measurements)} measurements)"
-          )
-          PY
-
+                          raise SystemExit(f"invalid OpenAPI measurement {key}: {row!r}")
+          print(f"validated {len(rows)} benchmark JSONL rows ({len(measurements)} measurements)")
+          PYTHON
       - name: Upload benchmark evidence
         uses: actions/upload-artifact@v4
         with:
           name: chttp-web-benchmarks-${{ github.sha }}
           path: ${{ runner.temp }}/chttp-web-benchmarks.jsonl
           if-no-files-found: error
-
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash

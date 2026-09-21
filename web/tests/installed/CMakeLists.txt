@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.25)
+project(chttp_web_consumer LANGUAGES C)
+find_package(Chttp CONFIG REQUIRED)
+add_executable(chttp_web_consumer main.c)
+target_link_libraries(chttp_web_consumer PRIVATE CHttp::Web)

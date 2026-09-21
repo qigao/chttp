@@ -24,7 +24,9 @@ include(Sanitizers)
 
 find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT}")
 find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT}")
-find_package(DataBind CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT}")
+if(NOT TARGET Salts::Databind)
+  message(FATAL_ERROR "SaltsUtils must provide the Salts::Databind component")
+endif()
 find_package(llhttp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
@@ -59,4 +61,4 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
 install(
   EXPORT ChttpTargets
   NAMESPACE CHttp::
-  DESTINATION lib/cmake/Chttp) 
+  DESTINATION lib/cmake/Chttp)
