@@ -113,6 +113,38 @@ typedef struct chttp_web_principal_input {
 #define CHTTP_WEB_PRINCIPAL_INPUT_INIT \
   {sizeof(chttp_web_principal_input), NULL, NULL, NULL}
 
+enum {
+  CHTTP_WEB_LOGIN_PATH_HARD_MAX = 1024,
+  CHTTP_WEB_LOCAL_TARGET_HARD_MAX = 4096
+};
+
+typedef int (*chttp_web_authorize_fn)(
+    void *user,
+    const chttp_web_principal *principal,
+    const chttp_server_request_view *request);
+
+/**
+ * Immutable application-owned browser authorization policy.
+ *
+ * login_path must be a bounded origin-form local target and remain alive until
+ * the containing server is stopped. max_return_target_bytes is required only
+ * when include_return_target is true and cannot exceed
+ * CHTTP_WEB_LOCAL_TARGET_HARD_MAX.
+ */
+typedef struct chttp_web_auth_policy {
+  size_t size;
+  const char *login_path;
+  bool include_return_target;
+  size_t max_return_target_bytes;
+  chttp_web_authorize_fn authorize;
+  void *authorize_user;
+  chttp_server_handler_fn forbidden;
+  void *forbidden_user;
+} chttp_web_auth_policy;
+
+#define CHTTP_WEB_AUTH_POLICY_INIT \
+  {sizeof(chttp_web_auth_policy), NULL, false, 0u, NULL, NULL, NULL, NULL}
+
 const cmeta_data_desc *chttp_web_principal_data(void);
 
 /**
@@ -827,6 +859,37 @@ chttp_web_status chttp_web_principal_get(
     const chttp_server_request_view *request,
     chttp_web_principal *out_principal,
     chttp_web_error *error);
+
+/**
+ * Validates one browser return target without allocating or materializing a
+ * decoded copy.
+ *
+ * Valid targets are bounded origin-form local targets beginning with exactly
+ * one '/'. Absolute/scheme-relative forms, fragments, controls, backslashes,
+ * malformed percent escapes, and encoded bytes that can change redirect
+ * authority/path semantics are rejected. Content rejection returns
+ * CHTTP_WEB_AUTH; bound overflow returns CHTTP_WEB_CAPACITY.
+ */
+chttp_web_status chttp_web_local_target_validate(
+    const char *target,
+    size_t target_size,
+    size_t max_target_bytes,
+    chttp_web_error *error);
+
+/**
+ * CHTTP-native browser authentication/authorization middleware.
+ *
+ * Anonymous ordinary requests receive a 303 local login redirect. Exact HTMX
+ * requests receive the same destination in HX-Redirect on a 200 response so
+ * HTMX processes the response header. Authenticated requests optionally invoke
+ * the application authorize callback: SALTS_OK continues, SALTS_EPERM denies,
+ * and every other error is propagated fail-closed.
+ */
+int chttp_web_auth_middleware(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response,
+    chttp_server_next *next);
 
 /**
  * Performs the security transition after the application has verified
