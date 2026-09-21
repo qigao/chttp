@@ -5,6 +5,7 @@ on:
     branches:
       - qualify/chttp-web-lifecycle
       - qualify/chttp-web-product
+      - feature/chttp-web-validation
   workflow_dispatch:
 
 permissions:
@@ -16,7 +17,7 @@ concurrency:
 
 env:
   SALTS_SHA: 801202e58c2d86b35202414d4812e79a2fd25bae
-  SALTS_UTILS_SHA: 8016a93f9b0f14c053ba87ce5a18d40f77fa8770
+  SALTS_UTILS_SHA: 2ceba0f6c46914600960bc410f5b5453911322ec
   VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
 
 jobs:
@@ -121,9 +122,10 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"             -DDATABIND_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
           cmake --build build/linux-gcc-debug --target install -j2
           test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
+          test -f /opt/salts-utils/debug/lib/cmake/DataBind/DataBindConfig.cmake
 
       - name: Expose exact SaltsUtils profile
         shell: bash
@@ -162,6 +164,7 @@ jobs:
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test \
             chttp_web_deferred_test chttp_web_sse_test \
             chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
 
@@ -172,7 +175,7 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Build full Chttp graph
@@ -221,10 +224,11 @@ jobs:
             -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test \
             chttp_web_deferred_test chttp_web_sse_test \
             chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
@@ -242,10 +246,11 @@ jobs:
             -DENABLE_SANITIZER_UNDEFINED=ON
           cmake --build build/linux-gcc-debug --target \
             chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test \
             chttp_web_deferred_test chttp_web_sse_test \
             chttp_web_lifecycle_test test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --output-on-failure
 
       - name: Verify exact head and clean tracked source

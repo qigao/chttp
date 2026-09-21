@@ -159,6 +159,74 @@ typedef struct chttp_web_sequence_view {
   const cmeta_data_desc *element;
 } chttp_web_sequence_view;
 
+/** One structured validation error copied into caller-owned storage. */
+typedef struct chttp_web_validation_error {
+  chttp_web_string_view field;
+  chttp_web_string_view message;
+  bool global;
+} chttp_web_validation_error;
+
+/**
+ * Request-local bounded validation result.
+ *
+ * Error entries and their field/message bytes are copied into caller-owned
+ * storage supplied to chttp_web_validation_init(). The public `valid` and
+ * `errors` fields form the template-facing typed view; storage fields are
+ * lifecycle state and are not exposed through the CMeta descriptor.
+ */
+typedef struct chttp_web_validation {
+  size_t size;
+  bool valid;
+  chttp_web_sequence_view errors;
+  chttp_web_validation_error *error_storage;
+  size_t error_capacity;
+  char *byte_storage;
+  size_t byte_capacity;
+  size_t byte_used;
+} chttp_web_validation;
+
+#define CHTTP_WEB_VALIDATION_INIT \
+  {sizeof(chttp_web_validation), true, {NULL, 0u, 0u, NULL}, \
+   NULL, 0u, NULL, 0u, 0u}
+
+const cmeta_data_desc *chttp_web_validation_error_data(void);
+const cmeta_data_desc *chttp_web_validation_data(void);
+
+chttp_web_status chttp_web_validation_init(
+    chttp_web_validation *validation,
+    chttp_web_validation_error *error_storage,
+    size_t error_capacity,
+    char *byte_storage,
+    size_t byte_capacity,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_validation_reset(
+    chttp_web_validation *validation,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_validation_add_field(
+    chttp_web_validation *validation,
+    const char *field,
+    const char *message,
+    chttp_web_error *error);
+
+chttp_web_status chttp_web_validation_add_global(
+    chttp_web_validation *validation,
+    const char *message,
+    chttp_web_error *error);
+
+size_t chttp_web_validation_field_count(
+    const chttp_web_validation *validation,
+    const char *field);
+
+const chttp_web_validation_error *chttp_web_validation_field_get(
+    const chttp_web_validation *validation,
+    const char *field,
+    size_t occurrence);
+
+size_t chttp_web_validation_global_count(
+    const chttp_web_validation *validation);
+
 /**
  * Handler-scoped typed request context.
  *

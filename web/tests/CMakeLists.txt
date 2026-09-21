@@ -21,6 +21,14 @@ set_target_properties(chttp_web_form_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME chttp_web_form_test COMMAND chttp_web_form_test)
 
+add_executable(chttp_web_validation_test test_chttp_web_validation.c)
+target_link_libraries(chttp_web_validation_test PRIVATE
+  CHttp::Web Salts::TinyTest)
+set_target_properties(chttp_web_validation_test PROPERTIES
+  FOLDER "web/tests"
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_web_validation_test COMMAND chttp_web_validation_test)
+
 add_executable(chttp_web_deferred_test test_chttp_web_deferred.c)
 target_link_libraries(chttp_web_deferred_test PRIVATE
   CHttp::Web CHttp::Client Salts::Core Salts::TinyTest)
