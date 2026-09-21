@@ -103,6 +103,7 @@ of the normal example build and must remain independently compilable.
 | `chttp_web_session_example.c` | Bounded form parsing, session-backed CSRF token lifecycle, mutation validation, flash messages |
 | `chttp_web_security_example.c` | Web security middleware composed with rate limiting, CORS, JWT bearer routes, explicit header override |
 | `chttp_web_deferred_example.c` | Owner-thread request-state copy, response defer, bounded Salts worker queue, worker-side render and generation-checked deferred reply |
+| `chttp_web_form_upload_example.c` | Structured validation, ordinary + HTMX error UX, multipart upload staging, Session CSRF, flash/redirect success, hostile metadata escaping |
 
 Configure with examples enabled and build the desired target:
 
@@ -114,6 +115,7 @@ cmake --build build/linux-gcc-debug --target chttp_web_crud_example
 cmake --build build/linux-gcc-debug --target chttp_web_session_example
 cmake --build build/linux-gcc-debug --target chttp_web_security_example
 cmake --build build/linux-gcc-debug --target chttp_web_deferred_example
+cmake --build build/linux-gcc-debug --target chttp_web_form_upload_example
 ```
 
 The repository presets require the same configured Salts, SaltsUtils, vcpkg,
@@ -192,6 +194,78 @@ semantics.
 
 Flash messages are bounded session state and are consumed explicitly. They are
 not a second persistence mechanism.
+
+### Structured validation
+
+`chttp_web_validation` is a request-local, caller-storage-backed result that
+can be rendered directly through its CMeta descriptor. Applications may add
+field errors and global errors after parsing/binding and after domain checks.
+
+The validation object:
+
+- never allocates hidden storage;
+- preserves deterministic insertion order;
+- copies field/message bytes into caller-supplied bounded storage;
+- can be reset/reused between requests;
+- exposes `valid` plus a typed error sequence to templates;
+- does not interpret application/domain rules.
+
+A failed validation result is presentation state, not an HTTP transport error.
+Ordinary browser requests can re-render the complete page while exact HTMX
+requests can render only the affected fragment. The same Jinja HTML autoescape
+policy applies to validation messages and re-populated values.
+
+### Streaming multipart uploads
+
+`multipart/form-data` uses the incremental
+`chttp_web_multipart_parser` and `chttp_web_upload_request` transaction on
+top of CHTTP's existing route body-sink API.
+
+The ownership chain is:
+
+```text
+application-owned bounded upload slot
+    |
+body_open
+    v
+chttp_web_upload_request
+    |
+    +-- incremental multipart parser
+    +-- reserved bounded _csrf capture
+    +-- application staging callbacks
+    |
+body_close
+    v
+terminal handler via request.body_sink_user
+    |
+    +-- CSRF validation
+    +-- structured/application validation
+    +-- commit exactly once
+    '--- or abort exactly once
+```
+
+Important limits and lifecycle rules:
+
+- multipart boundary length is capped by the MIME 70-byte maximum;
+- part count, header count/bytes, field bytes, filename bytes, content-type
+  bytes, and total body bytes are all explicit bounds;
+- request body bytes and part metadata views are callback-scoped;
+- application staging callbacks run synchronously on the CHTTP owner thread and
+  must not perform unbounded blocking;
+- disk/database/remote persistence must use application-owned bounded
+  queueing/worker policy when blocking work is required;
+- `part_end` closes only one staged part and never means final application
+  commit;
+- the final commit happens only after the complete body, CSRF, and application
+  validation succeed;
+- parser, sink, disconnect, server-stop, CSRF, validation, or commit failures
+  abort staging exactly once;
+- caller-owned upload state may be reused only after commit or abort.
+
+The full browser-oriented composition is
+`web/examples/chttp_web_form_upload_example.c`. It uses a fixed application
+slot pool and bounded in-memory staging deliberately; CHttp::Web does not
+provide a hidden upload directory or persistence layer.
 
 ## Deferred worker rendering
 
@@ -272,6 +346,15 @@ For browser-facing applications:
 - preserve configured request/response/template/body limits rather than
   replacing them with unbounded buffers;
 - never select a filesystem template path directly from request input.
+- treat multipart filenames and per-part `Content-Type` values as untrusted
+  metadata; they are presentation hints, not authorization or path decisions;
+- normalize/sanitize any application-selected persistence name independently
+  and never join a client filename directly to a filesystem path;
+- keep upload authorization, quota/accounting, persistence, retention, and
+  rollback policy in the application;
+- antivirus, malware scanning, content disarm/reconstruction, MIME sniffing,
+  and domain-specific content inspection are outside CHttp::Web and must run in
+  the application's staging/commit pipeline where required.
 
 The security reference application is
 `web/examples/chttp_web_security_example.c`.
@@ -322,6 +405,23 @@ The product-readiness gates are tracked by issue #28:
 
 Benchmark evidence records observations without introducing unsupported
 performance thresholds.
+
+### Web II forms/upload evidence
+
+The forms/upload expansion is tracked by #55:
+
+- #56 / PR #61 — structured validation/error bag;
+- #57 / PR #62 — bounded incremental multipart parser;
+- #63 / PR #64 — per-request streamed-body context continuity;
+- #58 / PR #65 — upload staging transaction, CSRF-safe commit, H1/H2 and
+  disconnect/stop cleanup;
+- #59 / PR #66 — complete ordinary + HTMX validation/upload reference
+  application;
+- #60 — final installed-package, sanitizer, regression, documentation, and
+  security qualification.
+
+Web II extends the product surface; it does not reopen or weaken the completed
+base CHttp::Web readiness gate.
 
 ## Product boundary
 
