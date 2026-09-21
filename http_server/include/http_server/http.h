@@ -616,6 +616,18 @@ int chttp_session_remove(chttp_session *session, const char *key);
 
 int chttp_session_clear(chttp_session *session);
 
+/**
+ * Replaces the active Session identifier using fresh CSPRNG material while
+ * preserving bounded Session entries. If no record exists, creates a fresh
+ * empty Session. The old identifier stops resolving immediately on success.
+ *
+ * A successful regeneration is fail-closed for the current request: if the
+ * response cannot publish the replacement cookie or the request aborts, the
+ * regenerated Session is discarded rather than leaving privileged state under
+ * an identifier the client did not receive.
+ */
+int chttp_session_regenerate(chttp_session *session);
+
 int chttp_session_invalidate(chttp_session *session);
 
 /** Obtains a thread-safe stats snapshot without advancing server state. */

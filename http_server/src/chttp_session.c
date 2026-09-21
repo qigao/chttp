@@ -192,14 +192,37 @@ static bool chttp_session_id_exists(const chttp_server_impl *server, const char 
   return false;
 }
 
-static int chttp_session_create(chttp_session_context *context) {
+static int chttp_session_generate_id(
+    const chttp_server_impl *server,
+    char out_id[CHTTP_SESSION_ID_TEXT_BYTES + 1u]) {
   static const char hex[] = "0123456789abcdef";
   unsigned char random[CHTTP_SESSION_ID_RANDOM_BYTES];
-  chttp_session_record *record = NULL;
-  size_t record_index;
   size_t attempt;
   size_t index;
+
+  if (server == NULL || out_id == NULL) return SALTS_EINVAL;
+  out_id[0] = '\0';
+  for (attempt = 0u; attempt < CHTTP_SESSION_ID_ATTEMPTS; ++attempt) {
+    int status = salts_platform_secure_random(random, sizeof(random));
+    if (status != SALTS_OK) return status;
+    for (index = 0u; index < sizeof(random); ++index) {
+      out_id[index * 2u] = hex[random[index] >> 4u];
+      out_id[index * 2u + 1u] = hex[random[index] & 0x0fu];
+    }
+    out_id[CHTTP_SESSION_ID_TEXT_BYTES] = '\0';
+    if (!chttp_session_id_exists(server, out_id)) return SALTS_OK;
+  }
+  out_id[0] = '\0';
+  return SALTS_EALREADY;
+}
+
+static int chttp_session_create(chttp_session_context *context) {
+  chttp_session_record *record = NULL;
+  char id[CHTTP_SESSION_ID_TEXT_BYTES + 1u];
+  size_t record_index;
   uint64_t now_ms = salts_monotonic_ms();
+  int status;
+
   chttp_session_expire(context->server, now_ms);
   for (record_index = 0u; record_index < context->server->config.session_capacity; ++record_index)
     if (!context->server->sessions[record_index].used) {
@@ -207,20 +230,11 @@ static int chttp_session_create(chttp_session_context *context) {
       break;
     }
   if (record == NULL) return SALTS_ENOBUFS;
-  for (attempt = 0u; attempt < CHTTP_SESSION_ID_ATTEMPTS; ++attempt) {
-    int status = salts_platform_secure_random(random, sizeof(random));
-    if (status != SALTS_OK) return status;
-    for (index = 0u; index < sizeof(random); ++index) {
-      record->id[index * 2u] = hex[random[index] >> 4u];
-      record->id[index * 2u + 1u] = hex[random[index] & 0x0fu];
-    }
-    record->id[CHTTP_SESSION_ID_TEXT_BYTES] = '\0';
-    if (!chttp_session_id_exists(context->server, record->id)) break;
-  }
-  if (attempt == CHTTP_SESSION_ID_ATTEMPTS) {
-    record->id[0] = '\0';
-    return SALTS_EALREADY;
-  }
+
+  status = chttp_session_generate_id(context->server, id);
+  if (status != SALTS_OK) return status;
+
+  memcpy(record->id, id, sizeof(id));
   record->expires_at_ms = chttp_session_expiry(context->server, now_ms);
   record->used = true;
   context->record = record;
@@ -308,6 +322,25 @@ int chttp_session_clear(chttp_session *session) {
     context->record->entries[index].key[0] = '\0';
     context->record->entries[index].value[0] = '\0';
   }
+  return SALTS_OK;
+}
+
+int chttp_session_regenerate(chttp_session *session) {
+  chttp_session_context *context = chttp_session_context_get(session);
+  char id[CHTTP_SESSION_ID_TEXT_BYTES + 1u];
+  int status;
+
+  if (context == NULL || context->invalidated) return SALTS_EINVAL;
+  if (context->record == NULL) return chttp_session_create(context);
+
+  status = chttp_session_generate_id(context->server, id);
+  if (status != SALTS_OK) return status;
+
+  memcpy(context->record->id, id, sizeof(id));
+  context->record->expires_at_ms =
+      chttp_session_expiry(context->server, salts_monotonic_ms());
+  context->created = true;
+  context->presented = false;
   return SALTS_OK;
 }
 
