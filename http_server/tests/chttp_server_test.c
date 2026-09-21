@@ -503,6 +503,19 @@ static int chttp_server_test_session_state(void *user,
   return chttp_server_reply(response, 200u, "text/plain", value, strlen(value));
 }
 
+static int chttp_server_test_seed_session(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  int status;
+  (void)user;
+  if (request == NULL || request->session == NULL) return SALTS_EPROTO;
+  status = chttp_session_set(request->session, "visits", "1");
+  return status == SALTS_OK
+             ? chttp_server_reply(response, 204u, NULL, NULL, 0u)
+             : status;
+}
+
 static int chttp_server_test_regenerate_header_pressure(
     void *user,
     const chttp_server_request_view *request,
@@ -2124,9 +2137,9 @@ spec("CHTTP background HTTP/1.1 server") {
     check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port) > 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
-    check_equal(chttp_server_test_call(&client, uri, "/users/alice", NULL, 0u, &first),
+    check_equal(chttp_server_test_call(&client, uri, "/seed-session", NULL, 0u, &first),
                 SALTS_OK);
-    check_equal(first.status_code, 200u);
+    check_equal(first.status_code, 204u);
     check_equal(first.body, "alice:1", 7u);
     check_equal(chttp_server_test_cookie_header(&first, cookie1, sizeof(cookie1)), SALTS_OK);
 
@@ -2213,7 +2226,8 @@ spec("CHTTP background HTTP/1.1 server") {
 
     server_config.max_response_header_count = 1u;
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
-    check_equal(chttp_server_get(&server, "/users/:name", chttp_server_test_user, &probe),
+    check_equal(chttp_server_get(&server, "/seed-session",
+                                 chttp_server_test_seed_session, NULL),
                 SALTS_OK);
     check_equal(chttp_server_get(&server, "/regenerate-pressure",
                                  chttp_server_test_regenerate_header_pressure, NULL),
