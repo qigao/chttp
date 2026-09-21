@@ -404,11 +404,7 @@ typedef struct chttp_web_multipart_parser {
   bool has_content_type;
 } chttp_web_multipart_parser;
 
-#define CHTTP_WEB_MULTIPART_PARSER_INIT \
-  {sizeof(chttp_web_multipart_parser), CHTTP_WEB_MULTIPART_LIMITS_INIT, \
-   CHTTP_WEB_MULTIPART_CALLBACKS_INIT, NULL, {0}, 0u, {0}, 0u, {0}, 0u, \
-   {0}, 0u, {0}, 0u, {0}, 0u, 0u, 0u, 0u, 0u, 0u, 0u, false, false, \
-   false, false, false}
+#define CHTTP_WEB_MULTIPART_PARSER_INIT {0}
 
 /**
  * Initializes a strict RFC 7578 browser multipart parser from the outer
