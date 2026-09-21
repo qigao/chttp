@@ -301,6 +301,76 @@ static int auth_http_post(
   return chttp_post(client, &options, response, &error);
 }
 
+
+typedef struct auth_http_gate_probe {
+  size_t authorize_calls;
+  size_t handler_calls;
+  size_t forbidden_calls;
+} auth_http_gate_probe;
+
+static int auth_http_authorize_admin(
+    void *user,
+    const chttp_web_principal *principal,
+    const chttp_server_request_view *request) {
+  auth_http_gate_probe *probe = (auth_http_gate_probe *)user;
+  (void)request;
+  if (probe == NULL || principal == NULL) return SALTS_EINVAL;
+  ++probe->authorize_calls;
+  return principal->role.data != NULL &&
+                 principal->role.size == sizeof("admin") - 1u &&
+                 memcmp(principal->role.data, "admin", sizeof("admin") - 1u) == 0
+             ? SALTS_OK
+             : SALTS_EPERM;
+}
+
+static int auth_http_authorize_deny(
+    void *user,
+    const chttp_web_principal *principal,
+    const chttp_server_request_view *request) {
+  auth_http_gate_probe *probe = (auth_http_gate_probe *)user;
+  (void)principal;
+  (void)request;
+  if (probe == NULL) return SALTS_EINVAL;
+  ++probe->authorize_calls;
+  return SALTS_EPERM;
+}
+
+static int auth_http_authorize_error(
+    void *user,
+    const chttp_web_principal *principal,
+    const chttp_server_request_view *request) {
+  auth_http_gate_probe *probe = (auth_http_gate_probe *)user;
+  (void)principal;
+  (void)request;
+  if (probe == NULL) return SALTS_EINVAL;
+  ++probe->authorize_calls;
+  return SALTS_EIO;
+}
+
+static int auth_http_protected(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  auth_http_gate_probe *probe = (auth_http_gate_probe *)user;
+  (void)request;
+  if (probe == NULL) return SALTS_EINVAL;
+  ++probe->handler_calls;
+  return chttp_server_reply(
+      response, 200u, "text/plain", "protected", sizeof("protected") - 1u);
+}
+
+static int auth_http_forbidden(
+    void *user,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  auth_http_gate_probe *probe = (auth_http_gate_probe *)user;
+  (void)request;
+  if (probe == NULL) return SALTS_EINVAL;
+  ++probe->forbidden_calls;
+  return chttp_server_reply(
+      response, 403u, "text/plain", "forbidden", sizeof("forbidden") - 1u);
+}
+
 spec("CHttp::Web browser principal lifecycle") {
   it("rotates Session and CSRF on login then invalidates authenticated state on logout") {
     chttp_server server = {0};
@@ -483,5 +553,237 @@ spec("CHttp::Web browser principal lifecycle") {
         chttp_server_stop(&server, AUTH_HTTP_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
+
+
+  it("validates only bounded origin-form local return targets") {
+    chttp_web_error error = CHTTP_WEB_ERROR_INIT;
+
+    check_equal(
+        chttp_web_local_target_validate(
+            "/dashboard?tab=security", sizeof("/dashboard?tab=security") - 1u,
+            128u, &error),
+        CHTTP_WEB_OK);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/", sizeof("/") - 1u, 128u, &error),
+        CHTTP_WEB_OK);
+
+    check_equal(
+        chttp_web_local_target_validate(
+            "//evil.example/path", sizeof("//evil.example/path") - 1u,
+            128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "https://evil.example/", sizeof("https://evil.example/") - 1u,
+            128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/safe\\evil", sizeof("/safe\\evil") - 1u,
+            128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/safe#fragment", sizeof("/safe#fragment") - 1u,
+            128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/bad%2", sizeof("/bad%2") - 1u, 128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/%2Fevil.example", sizeof("/%2Fevil.example") - 1u,
+            128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/%5cevil", sizeof("/%5cevil") - 1u, 128u, &error),
+        CHTTP_WEB_AUTH);
+    check_equal(
+        chttp_web_local_target_validate(
+            "/too-long", sizeof("/too-long") - 1u, 4u, &error),
+        CHTTP_WEB_CAPACITY);
+  }
+
+  it("protects ordinary and HTMX routes with explicit authn and authz semantics") {
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_server_config server_config = auth_http_server_config();
+    chttp_client_config client_config = auth_http_client_config();
+    auth_http_gate_probe allow_probe = {0};
+    auth_http_gate_probe deny_probe = {0};
+    auth_http_gate_probe error_probe = {0};
+    chttp_web_auth_policy allow_policy =
+        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+    chttp_web_auth_policy deny_policy =
+        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+    chttp_web_auth_policy error_policy =
+        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+    chttp_server_middleware allow_middleware = {0};
+    chttp_server_middleware deny_middleware = {0};
+    chttp_server_middleware error_middleware = {0};
+    chttp_server_route_options protected_route = {0};
+    chttp_server_route_options denied_route = {0};
+    chttp_server_route_options broken_route = {0};
+    chttp_response ordinary = {0};
+    chttp_response htmx = {0};
+    chttp_response csrf = {0};
+    chttp_response login = {0};
+    chttp_response allowed = {0};
+    chttp_response denied = {0};
+    chttp_response broken = {0};
+    char uri[64];
+    char prelogin_cookie[256];
+    char authenticated_cookie[256];
+    char token[CHTTP_WEB_CSRF_TOKEN_BYTES + 1u];
+    char login_body[512];
+    uint16_t port = 0u;
+
+    allow_policy.login_path = "/login-page";
+    allow_policy.include_return_target = true;
+    allow_policy.max_return_target_bytes = 128u;
+    allow_policy.authorize = auth_http_authorize_admin;
+    allow_policy.authorize_user = &allow_probe;
+    allow_middleware = (chttp_server_middleware){
+        chttp_web_auth_middleware, &allow_policy};
+
+    deny_policy.login_path = "/login-page";
+    deny_policy.authorize = auth_http_authorize_deny;
+    deny_policy.authorize_user = &deny_probe;
+    deny_policy.forbidden = auth_http_forbidden;
+    deny_policy.forbidden_user = &deny_probe;
+    deny_middleware = (chttp_server_middleware){
+        chttp_web_auth_middleware, &deny_policy};
+
+    error_policy.login_path = "/login-page";
+    error_policy.authorize = auth_http_authorize_error;
+    error_policy.authorize_user = &error_probe;
+    error_middleware = (chttp_server_middleware){
+        chttp_web_auth_middleware, &error_policy};
+
+    protected_route = (chttp_server_route_options){
+        .method = CHTTP_METHOD_GET,
+        .path = "/protected",
+        .middleware = &allow_middleware,
+        .middleware_count = 1u,
+        .handler = auth_http_protected,
+        .user = &allow_probe};
+    denied_route = (chttp_server_route_options){
+        .method = CHTTP_METHOD_GET,
+        .path = "/denied",
+        .middleware = &deny_middleware,
+        .middleware_count = 1u,
+        .handler = auth_http_protected,
+        .user = &deny_probe};
+    broken_route = (chttp_server_route_options){
+        .method = CHTTP_METHOD_GET,
+        .path = "/broken",
+        .middleware = &error_middleware,
+        .middleware_count = 1u,
+        .handler = auth_http_protected,
+        .user = &error_probe};
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/csrf", auth_http_csrf, NULL), SALTS_OK);
+    check_equal(
+        chttp_server_post(&server, "/login", auth_http_login, NULL), SALTS_OK);
+    check_equal(
+        chttp_server_route_with(&server, &protected_route), SALTS_OK);
+    check_equal(
+        chttp_server_route_with(&server, &denied_route), SALTS_OK);
+    check_equal(
+        chttp_server_route_with(&server, &broken_route), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(snprintf(
+        uri, sizeof(uri), "tcp://127.0.0.1:%u",
+        (unsigned int)port) > 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(auth_http_get(
+        &client, uri, "/protected?tab=security", NULL, 0,
+        CHTTP_HTTP_1_1, &ordinary), SALTS_OK);
+    check_equal(ordinary.status_code, 303u);
+    check_equal(
+        chttp_response_header(&ordinary, "Location"),
+        "/login-page?return_to=%2Fprotected%3Ftab%3Dsecurity",
+        strlen("/login-page?return_to=%2Fprotected%3Ftab%3Dsecurity"));
+    check_equal(allow_probe.handler_calls, (size_t)0u);
+    check_equal(allow_probe.authorize_calls, (size_t)0u);
+
+    check_equal(auth_http_get(
+        &client, uri, "/protected?tab=security", NULL, 1,
+        CHTTP_HTTP_2, &htmx), SALTS_OK);
+    check_equal(htmx.status_code, 200u);
+    check_equal(
+        chttp_response_header(&htmx, "HX-Redirect"),
+        "/login-page?return_to=%2Fprotected%3Ftab%3Dsecurity",
+        strlen("/login-page?return_to=%2Fprotected%3Ftab%3Dsecurity"));
+    check_equal(allow_probe.handler_calls, (size_t)0u);
+    check_equal(allow_probe.authorize_calls, (size_t)0u);
+
+    check_equal(auth_http_get(
+        &client, uri, "/csrf", NULL, 0,
+        CHTTP_HTTP_1_1, &csrf), SALTS_OK);
+    check_equal(csrf.status_code, 200u);
+    memcpy(token, csrf.body, CHTTP_WEB_CSRF_TOKEN_BYTES);
+    token[CHTTP_WEB_CSRF_TOKEN_BYTES] = '\0';
+    check_equal(
+        auth_http_copy_cookie(
+            &csrf, prelogin_cookie, sizeof(prelogin_cookie)),
+        SALTS_OK);
+    check_greater(snprintf(
+        login_body, sizeof(login_body),
+        "_csrf=%s&username=alice&password=secret", token), 0);
+    check_equal(auth_http_post(
+        &client, uri, "/login", prelogin_cookie, login_body,
+        CHTTP_HTTP_1_1, &login), SALTS_OK);
+    check_equal(login.status_code, 200u);
+    check_equal(
+        auth_http_copy_cookie(
+            &login, authenticated_cookie, sizeof(authenticated_cookie)),
+        SALTS_OK);
+
+    check_equal(auth_http_get(
+        &client, uri, "/protected", authenticated_cookie, 0,
+        CHTTP_HTTP_1_1, &allowed), SALTS_OK);
+    check_equal(allowed.status_code, 200u);
+    check_equal(allowed.body, "protected", sizeof("protected") - 1u);
+    check_equal(allow_probe.authorize_calls, (size_t)1u);
+    check_equal(allow_probe.handler_calls, (size_t)1u);
+
+    check_equal(auth_http_get(
+        &client, uri, "/denied", authenticated_cookie, 0,
+        CHTTP_HTTP_1_1, &denied), SALTS_OK);
+    check_equal(denied.status_code, 403u);
+    check_equal(denied.body, "forbidden", sizeof("forbidden") - 1u);
+    check_equal(deny_probe.authorize_calls, (size_t)1u);
+    check_equal(deny_probe.forbidden_calls, (size_t)1u);
+    check_equal(deny_probe.handler_calls, (size_t)0u);
+
+    check_equal(auth_http_get(
+        &client, uri, "/broken", authenticated_cookie, 0,
+        CHTTP_HTTP_1_1, &broken), SALTS_OK);
+    check_equal(broken.status_code, 500u);
+    check_equal(error_probe.authorize_calls, (size_t)1u);
+    check_equal(error_probe.handler_calls, (size_t)0u);
+
+    chttp_response_destroy(&broken);
+    chttp_response_destroy(&denied);
+    chttp_response_destroy(&allowed);
+    chttp_response_destroy(&login);
+    chttp_response_destroy(&csrf);
+    chttp_response_destroy(&htmx);
+    chttp_response_destroy(&ordinary);
+    check_equal(
+        chttp_client_destroy(&client, AUTH_HTTP_TIMEOUT_MS), SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, AUTH_HTTP_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
 
 }
