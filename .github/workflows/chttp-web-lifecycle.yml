@@ -9,6 +9,7 @@ on:
       - feature/chttp-web-multipart
       - feature/chttp-body-sink-context
       - feature/chttp-web-upload
+      - feature/chttp-web-form-upload-example
   workflow_dispatch:
 
 permissions:
@@ -200,6 +201,7 @@ jobs:
           set -euxo pipefail
           printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
           printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
 
       - name: Run full Chttp CTest graph
         shell: bash
