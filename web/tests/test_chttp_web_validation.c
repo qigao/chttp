@@ -4,18 +4,16 @@
 
 #include <string.h>
 
-static void web_validation_init_or_fail(
+static chttp_web_status web_validation_init(
     chttp_web_validation *validation,
     chttp_web_validation_error *errors,
     size_t error_capacity,
     char *bytes,
     size_t byte_capacity) {
   chttp_web_error error = CHTTP_WEB_ERROR_INIT;
-  check_equal(
-      chttp_web_validation_init(
-          validation, errors, error_capacity,
-          bytes, byte_capacity, &error),
-      CHTTP_WEB_OK);
+  return chttp_web_validation_init(
+      validation, errors, error_capacity,
+      bytes, byte_capacity, &error);
 }
 
 spec("CHttp::Web structured validation") {
@@ -27,8 +25,10 @@ spec("CHttp::Web structured validation") {
     const chttp_web_validation_error *first;
     const chttp_web_validation_error *second;
 
-    web_validation_init_or_fail(
-        &validation, errors, 4u, bytes, sizeof(bytes));
+    check_equal(
+        web_validation_init(
+            &validation, errors, 4u, bytes, sizeof(bytes)),
+        CHTTP_WEB_OK);
 
     check_true(validation.valid);
     check_equal(validation.errors.count, (size_t)0u);
@@ -85,9 +85,11 @@ spec("CHttp::Web structured validation") {
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
     size_t used;
 
-    web_validation_init_or_fail(
-        &validation, one_error, 1u,
-        exact_bytes, sizeof(exact_bytes));
+    check_equal(
+        web_validation_init(
+            &validation, one_error, 1u,
+            exact_bytes, sizeof(exact_bytes)),
+        CHTTP_WEB_OK);
 
     check_equal(
         chttp_web_validation_add_field(
@@ -110,8 +112,10 @@ spec("CHttp::Web structured validation") {
       chttp_web_validation_error storage[1];
       char bytes[11];
 
-      web_validation_init_or_fail(
-          &small, storage, 1u, bytes, sizeof(bytes));
+      check_equal(
+          web_validation_init(
+              &small, storage, 1u, bytes, sizeof(bytes)),
+          CHTTP_WEB_OK);
       check_equal(
           chttp_web_validation_add_field(
               &small, "name", "required", &error),
@@ -128,8 +132,10 @@ spec("CHttp::Web structured validation") {
     char bytes[64];
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
 
-    web_validation_init_or_fail(
-        &validation, errors, 2u, bytes, sizeof(bytes));
+    check_equal(
+        web_validation_init(
+            &validation, errors, 2u, bytes, sizeof(bytes)),
+        CHTTP_WEB_OK);
     check_equal(
         chttp_web_validation_add_field(
             &validation, "old", "old error", &error),
@@ -185,8 +191,10 @@ spec("CHttp::Web structured validation") {
 
     check_true(cmeta_data_desc_valid(chttp_web_validation_error_data()));
     check_true(cmeta_data_desc_valid(chttp_web_validation_data()));
-    web_validation_init_or_fail(
-        &validation, errors, 4u, bytes, sizeof(bytes));
+    check_equal(
+        web_validation_init(
+            &validation, errors, 4u, bytes, sizeof(bytes)),
+        CHTTP_WEB_OK);
 
     check_equal(
         chttp_web_validation_add_field(
