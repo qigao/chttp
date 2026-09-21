@@ -11,6 +11,7 @@ on:
       - feature/chttp-web-upload
       - feature/chttp-web-form-upload-example
       - qualify/chttp-web-ii
+      - feature/chttp-session-regenerate
   workflow_dispatch:
 
 permissions:
