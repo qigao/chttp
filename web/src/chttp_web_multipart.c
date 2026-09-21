@@ -898,10 +898,11 @@ chttp_web_status chttp_web_multipart_finish(
 chttp_web_status chttp_web_multipart_reset(
     chttp_web_multipart_parser *parser,
     chttp_web_error *error) {
-  if (!chttp_web_multipart_parser_valid(parser))
+  if (!chttp_web_multipart_parser_valid(parser) ||
+      (parser->active && !parser->failed))
     return chttp_web_multipart_error(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0, 0u,
-        "multipart reset parser state is invalid");
+        "multipart reset requires a finished or failed parser");
   chttp_web_multipart_start_body(parser);
   return chttp_web_multipart_error(
       error, CHTTP_WEB_OK, 0, 0u, NULL);
