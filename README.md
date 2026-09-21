@@ -18,7 +18,7 @@ That gives the library a shared foundation:
 - **SaltsUtils crypto helpers** where explicitly required by protocol features.
 - **BoringSSL/OpenSSL-compatible package dependencies** for the low-level cryptographic provider selected by the build.
 
-CHTTP owns HTTP, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
+CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
 
 ## Ecosystem role
 
