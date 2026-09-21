@@ -62,7 +62,7 @@ static chttp_server_config assets_http_server_config(void) {
       .max_response_header_count = 24u,
       .max_response_header_bytes = 8192u,
       .max_response_body_bytes = ASSETS_HTTP_BODY_BYTES,
-      .max_buffered_response_body_bytes = ASSETS_HTTP_BODY_BYTES,
+      .max_buffered_response_body_bytes = 4096u,
       .buffer_capacity_bytes = 2u * 1024u * 1024u,
       .poll_slice_ms = 1u,
       .enable_http2 = 1,
