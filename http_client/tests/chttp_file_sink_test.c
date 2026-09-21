@@ -2,9 +2,11 @@
 
 #include "tinytest.h"
 
+#include <salts/clock.h>
 #include <salts/error_codes.h>
 #include <salts/thread.h>
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,17 +20,20 @@ static cflow_io_native_backend_kind chttp_file_sink_test_backend(void) {
 #endif
 }
 
+static const uint64_t CHTTP_FILE_SINK_TEST_TIMEOUT_NS = UINT64_C(5000000000);
+
 static int chttp_file_sink_test_drive(cflow_io_file_runtime *runtime,
                                       chttp_file_sink_transfer *transfer) {
-  size_t attempts;
-  for (attempts = 0u; attempts < 100000u; ++attempts) {
+  const uint64_t started = salts_hrtime();
+  for (;;) {
     size_t progressed = 0u;
     int status = cflow_io_file_runtime_run_ready(runtime, 32u, &progressed);
     if (status != SALTS_OK) return status;
     if (chttp_file_sink_transfer_ready(transfer)) return SALTS_OK;
+    if (salts_hrtime() - started >= CHTTP_FILE_SINK_TEST_TIMEOUT_NS)
+      return SALTS_ETIMEDOUT;
     if (progressed == 0u) salts_thread_yield();
   }
-  return SALTS_ETIMEDOUT;
 }
 
 spec("CHTTP asynchronous file sink") {
