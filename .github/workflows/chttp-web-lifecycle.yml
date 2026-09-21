@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - qualify/chttp-web-lifecycle
+      - qualify/chttp-web-product
   workflow_dispatch:
 
 permissions:
