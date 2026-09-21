@@ -84,6 +84,8 @@ int main(void) {
   chttp_web_auth_policy auth_policy =
       (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
   chttp_server_middleware auth_middleware = {0};
+  chttp_web_asset_mount asset_mount =
+      (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
 
   if (chttp_web_validation_init(&validation, validation_errors, 2u,
           validation_bytes, sizeof(validation_bytes), &error) != CHTTP_WEB_OK)
@@ -169,5 +171,11 @@ int main(void) {
   if (auth_middleware.handler == NULL ||
       auth_middleware.user != &auth_policy)
     return 18;
+
+  asset_mount.url_prefix = "/assets";
+  asset_mount.filesystem_root = ".";
+  asset_mount.max_relative_path_bytes = 128u;
+  if (chttp_web_assets_use(NULL, &asset_mount) != SALTS_EINVAL)
+    return 19;
   return 0;
 }
