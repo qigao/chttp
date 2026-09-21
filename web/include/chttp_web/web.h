@@ -145,6 +145,65 @@ typedef struct chttp_web_auth_policy {
 #define CHTTP_WEB_AUTH_POLICY_INIT \
   {sizeof(chttp_web_auth_policy), NULL, false, 0u, NULL, NULL, NULL, NULL}
 
+enum {
+  CHTTP_WEB_ASSET_PREFIX_HARD_MAX = 1024,
+  CHTTP_WEB_ASSET_ROOT_HARD_MAX = 4096,
+  CHTTP_WEB_ASSET_RELATIVE_HARD_MAX = 4096
+};
+
+typedef bool (*chttp_web_asset_immutable_fn)(
+    void *user, const char *relative_path);
+typedef const char *(*chttp_web_asset_etag_fn)(
+    void *user, const char *relative_path);
+
+/**
+ * Borrowed static-asset mount policy.
+ *
+ * CHttp::Web maps URL paths only; CHTTP remains the file streaming/runtime
+ * owner. url_prefix and optional spa_url_prefix reserve explicit namespaces.
+ * filesystem_root and its topology must remain immutable from server start
+ * until stop. Every generated relative component is checked without following
+ * symlinks (and Windows reparse points) before CHTTP opens the final file.
+ *
+ * cache_control defaults to "no-cache" when NULL. immutable is an optional
+ * application classifier for fingerprinted assets; when it returns true,
+ * immutable_cache_control is used when non-NULL. etag may return one borrowed
+ * quoted strong ETag for the normalized relative path, or NULL to reuse CHTTP
+ * metadata validators. user is passed to both callbacks.
+ *
+ * SPA fallback is opt-in and scoped only to spa_url_prefix. Asset-prefix
+ * misses never fall through to the SPA fallback, and unrelated namespaces
+ * continue through the ordinary CHTTP route chain.
+ */
+typedef struct chttp_web_asset_mount {
+  size_t size;
+  const char *url_prefix;
+  const char *filesystem_root;
+  size_t max_relative_path_bytes;
+  const char *cache_control;
+  const char *immutable_cache_control;
+  chttp_web_asset_immutable_fn immutable;
+  chttp_web_asset_etag_fn etag;
+  void *user;
+  const char *spa_url_prefix;
+  const char *spa_fallback_relative_path;
+} chttp_web_asset_mount;
+
+#define CHTTP_WEB_ASSET_MOUNT_INIT \
+  {sizeof(chttp_web_asset_mount), NULL, NULL, 0u, NULL, NULL, NULL, NULL, \
+   NULL, NULL, NULL}
+
+/**
+ * Registers one global asset/shell middleware before server start.
+ *
+ * Matched namespaces admit GET/HEAD only. Malformed, escaping, missing, or
+ * symlink/reparse paths produce deterministic 404 responses. Other namespaces
+ * call the next middleware/route unchanged.
+ */
+int chttp_web_assets_use(
+    chttp_server *server,
+    const chttp_web_asset_mount *mount);
+
 const cmeta_data_desc *chttp_web_principal_data(void);
 
 /**
