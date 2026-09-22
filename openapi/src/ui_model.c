@@ -20,7 +20,7 @@ struct oa_ui_model {
     char *route_key_bytes;
 };
 
-static atomic_int OA_UI_DESCRIPTOR_BIND_STATE = ATOMIC_VAR_INIT(0);
+static atomic_int OA_UI_DESCRIPTOR_BIND_STATE;
 
 static const char *const OA_UI_METHODS[] = {
     "get", "post", "put", "patch", "delete", "head", "options", "trace"
