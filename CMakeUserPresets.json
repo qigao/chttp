@@ -3,7 +3,15 @@
     "include": [
         "CMakePresets.json"
     ],
-    "configurePresets": [        {
+    "configurePresets": [
+        {
+            "name": "http-services-package",
+            "hidden": true,
+            "cacheVariables": {
+                "VCPKG_OVERLAY_PORTS": ""
+            }
+        },
+        {
             "name": "win-toolchain",
             "hidden": true,
             "environment": {
@@ -92,7 +100,9 @@
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
-            "inherits": [                "base-win-dev-user",
+            "inherits": [
+                "http-services-package",
+                "base-win-dev-user",
                 "win-paths"
             ]
         },
@@ -107,7 +117,9 @@
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
-            "inherits": [                "base-win-release-user",
+            "inherits": [
+                "http-services-package",
+                "base-win-release-user",
                 "win-paths"
             ]
         },
@@ -124,7 +136,9 @@
                 "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
              },
-            "inherits": [                "base-linux-dev-user",
+            "inherits": [
+                "http-services-package",
+                "base-linux-dev-user",
                 "linux-paths"
             ]
         },
@@ -140,7 +154,9 @@
                 "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
-            "inherits": [                "release-linux-ninja",
+            "inherits": [
+                "http-services-package",
+                "release-linux-ninja",
                 "linux-paths"
             ]
         },
@@ -161,7 +177,9 @@
                 "PATH": "${sourceDir}/build/linux-gcc-sdk-package/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
-            "inherits": [                "release-linux-ninja",
+            "inherits": [
+                "http-services-package",
+                "release-linux-ninja",
                 "linux-paths"
             ]
         },
@@ -170,7 +188,9 @@
             "environment": {
                 "ANDROID_BUILD_VARIANT": "android-arm64-v8a-debug"
             },
-            "inherits": [                "android-dependencies-debug",
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-debug",
                 "android-arm64-v8a-debug",
                 "android-win-paths",
                 "android-win-environment"
@@ -181,7 +201,9 @@
             "environment": {
                 "ANDROID_BUILD_VARIANT": "android-arm64-v8a-release"
             },
-            "inherits": [                "android-dependencies-release",
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-release",
                 "android-arm64-v8a-release",
                 "android-win-paths",
                 "android-win-environment"
@@ -192,7 +214,9 @@
             "environment": {
                 "ANDROID_BUILD_VARIANT": "android-x86_64-debug"
             },
-            "inherits": [                "android-dependencies-debug",
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-debug",
                 "android-x86_64-debug",
                 "android-win-paths",
                 "android-win-environment"
@@ -203,7 +227,9 @@
             "environment": {
                 "ANDROID_BUILD_VARIANT": "android-x86_64-release"
             },
-            "inherits": [                "android-dependencies-release",
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-release",
                 "android-x86_64-release",
                 "android-win-paths",
                 "android-win-environment"
@@ -214,7 +240,9 @@
             "environment": {
                 "ANDROID_BUILD_VARIANT": "android-x86-debug"
             },
-            "inherits": [                "android-dependencies-debug",
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-debug",
                 "android-x86-debug",
                 "android-win-paths",
                 "android-win-environment"
@@ -225,7 +253,9 @@
             "environment": {
                 "ANDROID_BUILD_VARIANT": "android-x86-release"
             },
-            "inherits": [                "android-dependencies-release",
+            "inherits": [
+                "http-services-package",
+                "android-dependencies-release",
                 "android-x86-release",
                 "android-win-paths",
                 "android-win-environment"
@@ -243,7 +273,9 @@
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Clang/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
              },
-            "inherits": [                "base-win-dev-clang-user",
+            "inherits": [
+                "http-services-package",
+                "base-win-dev-clang-user",
                 "win-paths"
             ]
         },
@@ -260,7 +292,9 @@
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Clang-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
-            "inherits": [                "base-win-release-clang-user",
+            "inherits": [
+                "http-services-package",
+                "base-win-release-clang-user",
                 "win-paths"
             ]
         }
