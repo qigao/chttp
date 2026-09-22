@@ -216,11 +216,8 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
-          $cache = Join-Path $env:GITHUB_WORKSPACE "build\vcpkg-binary-cache"
-          New-Item -ItemType Directory -Force -Path $cache | Out-Null
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-          "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> $env:GITHUB_ENV
 
       - name: Restore versioned native SDK graph
         shell: pwsh
