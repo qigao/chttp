@@ -73,12 +73,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
-          if [ -n "${VCPKG_INSTALLATION_ROOT:-}" ]; then
-            echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-          else
-            vcpkg_bin="$(readlink -f "$(command -v vcpkg)")"
-            echo "VCPKG_ROOT=$(dirname "$vcpkg_bin")" >> "$GITHUB_ENV"
-          fi
+          test -n "${VCPKG_ROOT:-}"
+          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Restore versioned native SDK graph
         shell: bash
@@ -138,15 +134,8 @@ jobs:
         run: |
           set -euo pipefail
           brew install nasm ninja
-          if [ -n "${VCPKG_ROOT:-}" ] && [ -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ]; then
-            true
-          elif [ -n "${VCPKG_INSTALLATION_ROOT:-}" ] && [ -f "$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" ]; then
-            echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-          elif [ -f "$(brew --prefix)/share/vcpkg/scripts/buildsystems/vcpkg.cmake" ]; then
-            echo "VCPKG_ROOT=$(brew --prefix)/share/vcpkg" >> "$GITHUB_ENV"
-          else
-            echo "vcpkg unavailable" >&2; exit 1
-          fi
+          test -n "${VCPKG_ROOT:-}"
+          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
           case "$RUNNER_ARCH" in
             X64) rid=macos-x64; triplet=x64-osx ;;
             ARM64) rid=macos-arm64; triplet=arm64-osx ;;
@@ -212,11 +201,12 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           choco install nasm ninja -y --no-progress
-          if ([string]::IsNullOrWhiteSpace($env:VCPKG_INSTALLATION_ROOT)) { throw "VCPKG_INSTALLATION_ROOT unavailable" }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) { throw "canonical VCPKG_ROOT unavailable" }
+          $toolchain = Join-Path $env:VCPKG_ROOT "scripts\buildsystems\vcpkg.cmake"
+          if (-not (Test-Path -LiteralPath $toolchain -PathType Leaf)) { throw "vcpkg toolchain unavailable: $toolchain" }
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
-          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
 
       - name: Restore versioned native SDK graph
@@ -280,12 +270,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
-          if [ -n "${VCPKG_INSTALLATION_ROOT:-}" ]; then
-            echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-          else
-            vcpkg_bin="$(readlink -f "$(command -v vcpkg)")"
-            echo "VCPKG_ROOT=$(dirname "$vcpkg_bin")" >> "$GITHUB_ENV"
-          fi
+          test -n "${VCPKG_ROOT:-}"
+          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
           test -n "${ANDROID_NDK_HOME:-}"
 
       - name: Restore versioned target SDK graph
