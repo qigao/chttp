@@ -86,10 +86,9 @@ jobs:
           cmake --build "$build" -j2
       - name: Run standalone installed consumer
         shell: bash
-        env:
-          LD_LIBRARY_PATH: ${{ runner.temp }}/chttp-install/lib:/opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:${{ runner.temp }}/salts-project/external/pkgs/salts/debug/lib
         run: |
           set -euxo pipefail
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/chttp-install/lib:${LD_LIBRARY_PATH:-}"
           "$RUNNER_TEMP/chttp-web-consumer-build/chttp_web_consumer"
       - name: Verify exact head and clean tracked source
         if: always()
