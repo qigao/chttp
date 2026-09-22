@@ -1,141 +1,97 @@
-name: Set up Salts and SaltsUtils master SDKs
-description: Build matching installed debug SDKs and record dependency provenance.
+name: Set up versioned Salts SDKs
+description: Restore exact Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
 runs:
   using: composite
   steps:
-    - name: Checkout Salts master
-      uses: actions/checkout@v4
+    - name: Set up .NET for GitHub Packages
+      uses: actions/setup-dotnet@v4
       with:
-        repository: qigao/salts
-        ref: master
-        path: salts
-        persist-credentials: false
-    - name: Checkout SaltsUtils master
-      uses: actions/checkout@v4
-      with:
-        repository: qigao/salts-utils
-        ref: master
-        path: salts-utils
-        persist-credentials: false
+        dotnet-version: '8.0.x'
+
     - name: Checkout vcpkg
       uses: actions/checkout@v4
       with:
         repository: microsoft/vcpkg
         ref: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
         path: vcpkg
+        fetch-depth: 0
         persist-credentials: false
-    - name: Record resolved dependency provenance
+
+    - name: Restore versioned Salts SDK graph
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        SALTS_VERSION: '1.1.0'
+        SALTS_UTILS_VERSION: '2.0.0'
       run: |
         set -euo pipefail
-        chttp_commit="$(git rev-parse HEAD)"
-        salts_commit="$(git -C salts rev-parse HEAD)"
-        utils_commit="$(git -C salts-utils rev-parse HEAD)"
-        vcpkg_commit="$(git -C vcpkg rev-parse HEAD)"
+        packages="$RUNNER_TEMP/qigao-native-sdk"
+        config="$RUNNER_TEMP/qigao-native-sdk.config"
+        project="$RUNNER_TEMP/qigao-native-sdk.csproj"
+
+        cat > "$config" <<'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources><clear /></packageSources>
+        </configuration>
+        EOF
+
+        dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+          --name github --username qigao --password "$GITHUB_TOKEN" \
+          --store-password-in-clear-text --configfile "$config"
+
+        cat > "$project" <<EOF
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+          <ItemGroup>
+            <PackageReference Include="Salts.Native" Version="[$SALTS_VERSION]" />
+            <PackageReference Include="SaltsUtils.Native" Version="[$SALTS_UTILS_VERSION]" />
+          </ItemGroup>
+        </Project>
+        EOF
+
+        dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
+
+        salts_root="$packages/salts.native/$SALTS_VERSION/sdk/linux-x64"
+        salts_utils_root="$packages/saltsutils.native/$SALTS_UTILS_VERSION/sdk/linux-x64"
+        test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+        test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+        test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsDataBindTargets.cmake"
+
         {
-          echo "SALTS_COMMIT=$salts_commit"
-          echo "SALTS_UTILS_COMMIT=$utils_commit"
-          echo "VCPKG_COMMIT=$vcpkg_commit"
-          echo "SALTS_CACHE_COMPILER=gcc-$(gcc -dumpfullversion -dumpversion)"
-          echo "SALTS_ROOT=$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
-          echo "SALTS_UTILS_ROOT=/opt/salts-utils/debug"
-          echo "PROJECT_ROOT=$RUNNER_TEMP/salts-project"
+          echo "SALTS_VERSION=$SALTS_VERSION"
+          echo "SALTS_UTILS_VERSION=$SALTS_UTILS_VERSION"
+          echo "SALTS_ROOT=$salts_root"
+          echo "SALTS_UTILS_ROOT=$salts_utils_root"
           echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg"
-          echo "LD_LIBRARY_PATH=/opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:$RUNNER_TEMP/salts-project/external/pkgs/salts/debug/lib"
+          echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib"
         } >> "$GITHUB_ENV"
+
         {
           echo '## Dependency provenance'
-          echo "CHttp checked-out head: $chttp_commit"
+          echo "CHttp checked-out head: $(git rev-parse HEAD)"
           echo "Workflow event SHA: $GITHUB_SHA"
-          echo "Salts master: $salts_commit"
-          echo "SaltsUtils master: $utils_commit"
-          echo "vcpkg: $vcpkg_commit"
+          echo "Salts.Native: $SALTS_VERSION"
+          echo "SaltsUtils.Native: $SALTS_UTILS_VERSION"
+          echo "vcpkg: $(git -C vcpkg rev-parse HEAD)"
         } >> "$GITHUB_STEP_SUMMARY"
+
     - name: Restore vcpkg binary archives
       uses: actions/cache@v4
       with:
         path: ~/.cache/vcpkg/archives
-        key: tbe-30-vcpkg-x64-linux-b1b19307-v1
+        key: chttp-vcpkg-${{ runner.os }}-${{ runner.arch }}-b1b19307-v2
+
     - name: Set up Go for BoringSSL
       uses: actions/setup-go@v5
       with:
         go-version: '1.24.x'
         cache: false
-    - name: Prepare toolchain
+
+    - name: Prepare CHttp toolchain
       shell: bash
       run: |
         set -euxo pipefail
         sudo apt-get update
-        sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
+        sudo apt-get install -y ninja-build pkg-config nasm
         ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        sudo mkdir -p /opt/salts
-        sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
-        bash salts-utils/cmake/ci/install-re2c.sh
-    - name: Restore resolved Salts debug package
-      id: salts-cache
-      uses: actions/cache/restore@v4
-      with:
-        path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-        key: chttp-salts-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.SALTS_CACHE_COMPILER }}-debug-${{ env.SALTS_COMMIT }}-vcpkg-${{ env.VCPKG_COMMIT }}
-    - name: Build and install resolved Salts
-      if: steps.salts-cache.outputs.cache-hit != 'true'
-      shell: bash
-      working-directory: salts
-      env:
-        PROJECT_ROOT: ${{ runner.temp }}/salts-project
-        VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      run: |
-        set -euxo pipefail
-        cmake --preset linux-dev-user \
-          -DENABLE_SANITIZER_ADDRESS=OFF \
-          -DENABLE_SANITIZER_UNDEFINED=OFF
-        cmake --build build/linux-gcc-debug --target install -j2
-    - name: Save resolved Salts debug package
-      if: steps.salts-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
-      with:
-        path: ${{ runner.temp }}/salts-project/external/pkgs/salts/debug
-        key: chttp-salts-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.SALTS_CACHE_COMPILER }}-debug-${{ env.SALTS_COMMIT }}-vcpkg-${{ env.VCPKG_COMMIT }}
-    - name: Expose Salts profile
-      shell: bash
-      run: |
-        set -euxo pipefail
-        test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
-        sudo ln -sfn "$SALTS_ROOT" /opt/salts/debug
-    - name: Build host Lemon
-      shell: bash
-      run: |
-        set -euxo pipefail
-        cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon \
-          -G Ninja -DCMAKE_BUILD_TYPE=Release
-        cmake --build salts-utils/build/host-lemon --target lemon -j2
-    - name: Build and install resolved SaltsUtils
-      shell: bash
-      working-directory: salts-utils
-      env:
-        VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      run: |
-        set -euxo pipefail
-        cmake --preset linux-dev-user \
-          -DENABLE_SANITIZER_ADDRESS=OFF \
-          -DENABLE_SANITIZER_UNDEFINED=OFF \
-          -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon" \
-          -DDATABIND_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon" \
-          -DCMAKE_INSTALL_PREFIX="$SALTS_UTILS_ROOT"
-        cmake --build build/linux-gcc-debug --target install -j2
-        test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-        test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsDataBindTargets.cmake"
-    - name: Expose SaltsUtils profile
-      shell: bash
-      run: |
-        set -euxo pipefail
-        mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
-        ln -sfn "$SALTS_UTILS_ROOT" "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
-    - name: Verify dependency source integrity
-      shell: bash
-      run: |
-        set -euo pipefail
-        test "$(git -C salts rev-parse HEAD)" = "$SALTS_COMMIT"
-        test "$(git -C salts-utils rev-parse HEAD)" = "$SALTS_UTILS_COMMIT"
-        test -z "$(git -C salts status --porcelain --untracked-files=no)"
-        test -z "$(git -C salts-utils status --porcelain --untracked-files=no)"
