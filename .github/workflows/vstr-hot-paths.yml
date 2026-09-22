@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: chttp-web-sse-${{ github.ref_name }}
@@ -24,7 +25,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 2
           persist-credentials: false
-      - name: Set up current master SDKs
+      - name: Set up versioned Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
       - name: Install OpenAPI conformance test requirements
         shell: bash
