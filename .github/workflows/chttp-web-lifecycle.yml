@@ -13,6 +13,7 @@ env:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: chttp-web-lifecycle-${{ github.event.pull_request.number || github.ref }}
@@ -29,7 +30,7 @@ jobs:
           ref: ${{ env.CHTTP_HEAD_SHA }}
           fetch-depth: 2
           persist-credentials: false
-      - name: Set up current master SDKs
+      - name: Set up versioned Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
       - name: Configure exact Chttp head
         shell: bash
