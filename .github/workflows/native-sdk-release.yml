@@ -56,6 +56,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -76,16 +79,7 @@ jobs:
             vcpkg_bin="$(readlink -f "$(command -v vcpkg)")"
             echo "VCPKG_ROOT=$(dirname "$vcpkg_bin")" >> "$GITHUB_ENV"
           fi
-          cache="$GITHUB_WORKSPACE/build/vcpkg-binary-cache"
-          mkdir -p "$cache"
-          echo "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> "$GITHUB_ENV"
-          echo "image=${ImageOS:-linux}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: build/vcpkg-binary-cache
-          key: chttp-native-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.env.outputs.image }}-x64-linux-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            chttp-native-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.env.outputs.image }}-x64-linux-
+
       - name: Restore versioned native SDK graph
         shell: bash
         env:
@@ -128,6 +122,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -157,15 +154,7 @@ jobs:
           esac
           echo "rid=$rid" >> "$GITHUB_OUTPUT"
           echo "triplet=$triplet" >> "$GITHUB_OUTPUT"
-          cache="$GITHUB_WORKSPACE/build/vcpkg-binary-cache"
-          mkdir -p "$cache"
-          echo "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
-        with:
-          path: build/vcpkg-binary-cache
-          key: chttp-native-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.env.outputs.triplet }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            chttp-native-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.env.outputs.triplet }}-
+
       - name: Restore versioned native SDK graph
         shell: bash
         env:
@@ -208,6 +197,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -224,17 +216,9 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
-          $cache = Join-Path $env:GITHUB_WORKSPACE "build\vcpkg-binary-cache"
-          New-Item -ItemType Directory -Force -Path $cache | Out-Null
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-          "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> $env:GITHUB_ENV
-      - uses: actions/cache@v4
-        with:
-          path: build/vcpkg-binary-cache
-          key: chttp-native-vcpkg-${{ runner.os }}-${{ runner.arch }}-x64-windows-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            chttp-native-vcpkg-${{ runner.os }}-${{ runner.arch }}-x64-windows-
+
       - name: Restore versioned native SDK graph
         shell: pwsh
         env:
@@ -280,6 +264,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -300,15 +287,7 @@ jobs:
             echo "VCPKG_ROOT=$(dirname "$vcpkg_bin")" >> "$GITHUB_ENV"
           fi
           test -n "${ANDROID_NDK_HOME:-}"
-          cache="$GITHUB_WORKSPACE/build/vcpkg-binary-cache"
-          mkdir -p "$cache"
-          echo "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
-        with:
-          path: build/vcpkg-binary-cache
-          key: chttp-native-vcpkg-android-arm64-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            chttp-native-vcpkg-android-arm64-
+
       - name: Restore versioned target SDK graph
         shell: bash
         env:
