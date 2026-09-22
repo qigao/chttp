@@ -14,6 +14,8 @@ Versioned prebuilt Release SDKs for qigao/chttp.
 - `sdk/macos-x64/` or `sdk/macos-arm64/`
 - `sdk/android-arm64-v8a/`
 
+Android arm64-v8a requires API 26 or newer, matching `SaltsUtils.Native 2.0.0`.
+
 Consumers restore the package graph, set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
 `CHTTP_ROOT` to the matching platform directories, then use:
 
