@@ -73,8 +73,8 @@
                 "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/debug"
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}"
             }
         },
         {
@@ -84,8 +84,8 @@
                 "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts-android/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils-android/release"
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}"
             }
         },
         {
@@ -96,8 +96,8 @@
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
@@ -113,8 +113,8 @@
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
@@ -131,8 +131,8 @@
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
              },
@@ -149,8 +149,8 @@
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
@@ -172,8 +172,8 @@
                 "BUILD_EXAMPLES": "OFF"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/linux-gcc-sdk-package/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
@@ -269,8 +269,8 @@
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/debug",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Clang/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
              },
             "inherits": [
@@ -288,8 +288,8 @@
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {
-                "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-                "SALTS_UTILS_ROOT": "$env{PKG_ROOT}/salts-utils/release",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
                 "PATH": "${sourceDir}/build/Clang-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
