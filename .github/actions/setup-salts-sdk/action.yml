@@ -8,6 +8,11 @@ runs:
       with:
         dotnet-version: '8.0.x'
 
+    - name: Configure shared vcpkg binary cache
+      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      with:
+        mode: read
+
     - name: Checkout vcpkg
       uses: actions/checkout@v4
       with:
@@ -76,11 +81,6 @@ runs:
           echo "vcpkg: $(git -C vcpkg rev-parse HEAD)"
         } >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Restore vcpkg binary archives
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/vcpkg/archives
-        key: chttp-vcpkg-${{ runner.os }}-${{ runner.arch }}-b1b19307-v2
 
     - name: Set up Go for BoringSSL
       uses: actions/setup-go@v5

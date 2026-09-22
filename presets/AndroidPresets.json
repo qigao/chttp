@@ -22,7 +22,6 @@
             "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_MANIFEST_MODE": true,
-                "VCPKG_OVERLAY_PORTS": "${sourceDir}/vcpkg-ports",
                 "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake"
             }
         },
