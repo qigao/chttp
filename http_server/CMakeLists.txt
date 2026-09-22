@@ -22,7 +22,6 @@ set_target_properties(chttp_server PROPERTIES
   VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}
   WINDOWS_EXPORT_ALL_SYMBOLS ON LINKER_LANGUAGE CXX)
 target_compile_features(chttp_server PUBLIC c_std_11)
-target_compile_definitions(chttp_server PRIVATE CSTL_NO_LEGACY_STACK_T=1)
 target_include_directories(chttp_server
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/http_common/include>
