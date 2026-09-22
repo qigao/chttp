@@ -13,14 +13,6 @@ runs:
       with:
         mode: read
 
-    - name: Checkout vcpkg
-      uses: actions/checkout@v4
-      with:
-        repository: microsoft/vcpkg
-        ref: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
-        path: vcpkg
-        fetch-depth: 0
-        persist-credentials: false
 
     - name: Restore versioned Salts SDK graph
       shell: bash
@@ -68,7 +60,6 @@ runs:
           echo "SALTS_UTILS_VERSION=$SALTS_UTILS_VERSION"
           echo "SALTS_ROOT=$salts_root"
           echo "SALTS_UTILS_ROOT=$salts_utils_root"
-          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg"
           echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib"
         } >> "$GITHUB_ENV"
 
@@ -78,7 +69,7 @@ runs:
           echo "Workflow event SHA: $GITHUB_SHA"
           echo "Salts.Native: $SALTS_VERSION"
           echo "SaltsUtils.Native: $SALTS_UTILS_VERSION"
-          echo "vcpkg: $(git -C vcpkg rev-parse HEAD)"
+          echo "vcpkg: $(git -C "$VCPKG_ROOT" rev-parse HEAD)"
         } >> "$GITHUB_STEP_SUMMARY"
 
 
@@ -94,4 +85,4 @@ runs:
         set -euxo pipefail
         sudo apt-get update
         sudo apt-get install -y ninja-build pkg-config nasm
-        ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+        test -x "$VCPKG_ROOT/vcpkg"
