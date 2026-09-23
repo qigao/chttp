@@ -22,6 +22,7 @@ typedef struct chttp_service_config {
   size_t method_capacity;
   size_t max_binding_value_bytes;
   size_t max_json_depth;
+  size_t max_response_body_bytes;
   size_t native_workspace_bytes;
   size_t native_max_depth;
   size_t native_max_items;
@@ -29,15 +30,18 @@ typedef struct chttp_service_config {
 } chttp_service_config;
 
 #define CHTTP_SERVICE_CONFIG_INIT \
-  { sizeof(chttp_service_config), NULL, 0u, 1024u, 16u, 16384u, 16u, 256u, 65536u }
+  { sizeof(chttp_service_config), NULL, 0u, 1024u, 16u, 4096u, 16384u, 16u, 256u, 65536u }
 
 typedef struct chttp_service_context {
   size_t size;
   const chttp_server_request_view *http;
+  /** Handler-scoped bounded output scratch owned by CHttp::Service. */
+  void *response_scratch;
+  size_t response_scratch_bytes;
 } chttp_service_context;
 
 #define CHTTP_SERVICE_CONTEXT_INIT \
-  { sizeof(chttp_service_context), NULL }
+  { sizeof(chttp_service_context), NULL, NULL, 0u }
 
 typedef struct chttp_service_result {
   size_t size;
@@ -56,8 +60,9 @@ typedef struct chttp_service_result {
  * The adapter may create typed request/parameter/response storage on its stack,
  * call data_bind_binding_plan_bind_inputs(), invoke the reflected native
  * function through its exact C signature, and publish a response body into
- * result. The BindingPlan/provider/native-options/context pointers are borrowed
- * only for this callback.
+ * context->response_scratch. result.body must either be NULL for an empty body
+ * or point inside that bounded scratch. The BindingPlan/provider/native-options/
+ * context pointers are borrowed only for this callback.
  *
  * Until DataBind native encode (#151) lands, response serialization remains
  * adapter-owned. The callback must not retain request/provider/context views.
