@@ -29,6 +29,8 @@ struct chttp_service_impl {
   char *scalar_scratch;
   size_t scalar_capacity;
   unsigned char *native_workspace;
+  unsigned char *response_scratch;
+  size_t response_scratch_bytes;
   DataBindNativeOptions native_options;
   size_t max_json_depth;
 };
@@ -549,10 +551,25 @@ static int chttp_service_lower_route(const char *source, char **out_route) {
   return SALTS_OK;
 }
 
-static int chttp_service_result_valid(const chttp_service_result *result) {
-  return result != NULL && result->size >= sizeof(*result) &&
-         result->status_code >= 100u && result->status_code <= 599u &&
-         (result->body_size == 0u || result->body != NULL);
+static int chttp_service_result_valid(const chttp_service_impl *service,
+                                      const chttp_service_result *result) {
+  const unsigned char *begin;
+  const unsigned char *end;
+  const unsigned char *body;
+
+  if (service == NULL || result == NULL || result->size < sizeof(*result) ||
+      result->status_code < 100u || result->status_code > 599u ||
+      (result->body_size != 0u && result->body == NULL))
+    return 0;
+  if (result->body_size == 0u) return 1;
+  if (result->body_size > service->response_scratch_bytes)
+    return 0;
+
+  begin = service->response_scratch;
+  end = begin + service->response_scratch_bytes;
+  body = (const unsigned char *)result->body;
+  return body >= begin && body <= end &&
+         result->body_size <= (size_t)(end - body);
 }
 
 static int chttp_service_http_handler(
@@ -582,6 +599,8 @@ static int chttp_service_http_handler(
   provider.open_input = chttp_service_http_open_input;
 
   context.http = request;
+  context.response_scratch = record->owner->response_scratch;
+  context.response_scratch_bytes = record->owner->response_scratch_bytes;
   status = record->execute(
       record->user, record->plan, &provider,
       &record->owner->native_options, &context,
@@ -598,7 +617,7 @@ static int chttp_service_http_handler(
         response, 500u, "text/plain", "Internal Server Error", 21u);
   }
 
-  if (!chttp_service_result_valid(&result))
+  if (!chttp_service_result_valid(record->owner, &result))
     return chttp_server_reply(
         response, 500u, "text/plain", "Internal Server Error", 21u);
 
@@ -616,12 +635,14 @@ int chttp_service_init(chttp_service *service,
       config->method_capacity == 0u ||
       config->max_binding_value_bytes == 0u ||
       config->max_json_depth == 0u ||
+      config->max_response_body_bytes == 0u ||
       config->native_workspace_bytes == 0u ||
       config->native_max_depth == 0u ||
       config->native_max_items == 0u)
     return SALTS_EINVAL;
   if (service->impl != NULL) return SALTS_EALREADY;
-  if (config->max_binding_value_bytes == SIZE_MAX)
+  if (config->max_binding_value_bytes == SIZE_MAX ||
+      config->max_response_body_bytes == SIZE_MAX)
     return SALTS_ERANGE;
 
   impl = (chttp_service_impl *)calloc(1u, sizeof(*impl));
@@ -632,8 +653,11 @@ int chttp_service_init(chttp_service *service,
       (char *)malloc(config->max_binding_value_bytes + 1u);
   impl->native_workspace =
       (unsigned char *)malloc(config->native_workspace_bytes);
+  impl->response_scratch =
+      (unsigned char *)malloc(config->max_response_body_bytes);
   if (impl->methods == NULL || impl->scalar_scratch == NULL ||
-      impl->native_workspace == NULL) {
+      impl->native_workspace == NULL || impl->response_scratch == NULL) {
+    free(impl->response_scratch);
     free(impl->native_workspace);
     free(impl->scalar_scratch);
     free(impl->methods);
@@ -645,6 +669,7 @@ int chttp_service_init(chttp_service *service,
   impl->method_capacity = config->method_capacity;
   impl->scalar_capacity = config->max_binding_value_bytes;
   impl->max_json_depth = config->max_json_depth;
+  impl->response_scratch_bytes = config->max_response_body_bytes;
   impl->native_options =
       (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
   impl->native_options.workspace = impl->native_workspace;
@@ -748,6 +773,7 @@ int chttp_service_destroy(chttp_service *service) {
     free(impl->methods[i].route);
   }
 
+  free(impl->response_scratch);
   free(impl->native_workspace);
   free(impl->scalar_scratch);
   free(impl->methods);
