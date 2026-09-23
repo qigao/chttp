@@ -20,7 +20,7 @@ target_include_directories(chttp_service
 
 target_link_libraries(chttp_service
   PUBLIC CHttp::Server Salts::DataBind
-  PRIVATE Salts::Core)
+  PRIVATE Salts::DataBindJsonAdapter Salts::Core)
 
 install(TARGETS chttp_service EXPORT ChttpTargets)
 install(DIRECTORY include/chttp_service DESTINATION include)
