@@ -34,8 +34,8 @@ find_package(Salts 1.3.0 EXACT CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(SaltsUtils 3.1.0 EXACT CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-if(NOT TARGET Salts::Databind)
-  message(FATAL_ERROR "SaltsUtils must provide the Salts::Databind component")
+if(NOT TARGET Salts::DataBind)
+  message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
 endif()
 find_package(llhttp CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
