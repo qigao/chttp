@@ -1,8 +1,8 @@
 param([Parameter(Mandatory=$true)][string]$Rid)
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw "GITHUB_TOKEN is required" }
-$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.2.0" }
-$utilsVersion = if ($env:SALTS_UTILS_SDK_VERSION) { $env:SALTS_UTILS_SDK_VERSION } else { "2.0.2" }
+$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.3.0" }
+$utilsVersion = if ($env:SALTS_UTILS_SDK_VERSION) { $env:SALTS_UTILS_SDK_VERSION } else { "3.1.0" }
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
 $config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
 $project = Join-Path $env:RUNNER_TEMP "qigao-chttp-sdk-restore.csproj"
@@ -25,7 +25,12 @@ dotnet restore $project --packages $packages --configfile $config --no-cache
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
 $saltsRoot = Join-Path $packages "salts.native\$saltsVersion\sdk\$Rid"
 $utilsRoot = Join-Path $packages "saltsutils.native\$utilsVersion\sdk\$Rid"
-foreach ($p in @((Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"), (Join-Path $utilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"))) {
+foreach ($p in @(
+  (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
+  (Join-Path $saltsRoot "include\cmeta\function.h"),
+  (Join-Path $utilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
+  (Join-Path $utilsRoot "include\data_bind_binding_plan.h")
+)) {
   if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw "missing restored SDK file: $p" }
 }
 "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
