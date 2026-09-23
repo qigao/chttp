@@ -279,7 +279,7 @@ static DataBindStatus chttp_service_scalar_reader_init(
     long long value;
     if (text_size > provider->service->scalar_capacity)
       return DATA_BIND_ERR_LIMIT;
-    memcpy(provider->service->scalar_scratch, text, text_size);
+    memmove(provider->service->scalar_scratch, text, text_size);
     provider->service->scalar_scratch[text_size] = '\0';
     value = strtoll(provider->service->scalar_scratch, &end, 10);
     if (errno != 0 || end == provider->service->scalar_scratch ||
@@ -301,7 +301,7 @@ static DataBindStatus chttp_service_scalar_reader_init(
                               "Invalid unsigned HTTP binding value");
       return DATA_BIND_ERR_PARSE;
     }
-    memcpy(provider->service->scalar_scratch, text, text_size);
+    memmove(provider->service->scalar_scratch, text, text_size);
     provider->service->scalar_scratch[text_size] = '\0';
     value = strtoull(provider->service->scalar_scratch, &end, 10);
     if (errno != 0 || end == provider->service->scalar_scratch ||
@@ -319,7 +319,7 @@ static DataBindStatus chttp_service_scalar_reader_init(
     double value;
     if (text_size > provider->service->scalar_capacity)
       return DATA_BIND_ERR_LIMIT;
-    memcpy(provider->service->scalar_scratch, text, text_size);
+    memmove(provider->service->scalar_scratch, text, text_size);
     provider->service->scalar_scratch[text_size] = '\0';
     value = strtod(provider->service->scalar_scratch, &end);
     if (errno != 0 || end == provider->service->scalar_scratch ||
@@ -670,6 +670,7 @@ int chttp_service_register_http(
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   chttp_server_route_options route_options;
   DataBindStatus bind_status;
+  DataBindBindingPlan *plan = NULL;
   chttp_method http_method;
   char *route = NULL;
   int status;
@@ -699,7 +700,7 @@ int chttp_service_register_http(
 
   bind_status = data_bind_binding_plan_compile_service(
       impl->contract, method->service, method->operation,
-      &projection, method->native, &record, &diagnostic);
+      &projection, method->native, &plan, &diagnostic);
   if (bind_status != DATA_BIND_OK) {
     free(route);
     return SALTS_EINVAL;
@@ -708,20 +709,11 @@ int chttp_service_register_http(
   record = &impl->methods[impl->method_count];
   memset(record, 0, sizeof(*record));
   record->owner = impl;
+  record->plan = plan;
   record->route = route;
   record->method = http_method;
   record->execute = method->execute;
   record->user = method->user;
-
-  /* Recompile into the stable record after the earlier admission probe. */
-  bind_status = data_bind_binding_plan_compile_service(
-      impl->contract, method->service, method->operation,
-      &projection, method->native, &record->plan, &diagnostic);
-  if (bind_status != DATA_BIND_OK) {
-    free(route);
-    memset(record, 0, sizeof(*record));
-    return SALTS_EINVAL;
-  }
 
   route_options = (chttp_server_route_options){
       .method = http_method,
