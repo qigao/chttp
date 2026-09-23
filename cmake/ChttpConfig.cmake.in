@@ -1,8 +1,8 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(Salts 1.2.0 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
-find_dependency(SaltsUtils 2.0.2 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
+find_dependency(Salts 1.3.0 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
+find_dependency(SaltsUtils 3.1.0 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 if(NOT TARGET Salts::Databind)
   set(Chttp_FOUND FALSE)
   set(Chttp_NOT_FOUND_MESSAGE "SaltsUtils must provide the Salts::Databind component")
