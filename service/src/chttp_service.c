@@ -6,6 +6,7 @@
 #include <salts/error_codes.h>
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -553,9 +554,9 @@ static int chttp_service_lower_route(const char *source, char **out_route) {
 
 static int chttp_service_result_valid(const chttp_service_impl *service,
                                       const chttp_service_result *result) {
-  const unsigned char *begin;
-  const unsigned char *end;
-  const unsigned char *body;
+  uintptr_t begin;
+  uintptr_t end;
+  uintptr_t body;
 
   if (service == NULL || result == NULL || result->size < sizeof(*result) ||
       result->status_code < 100u || result->status_code > 599u ||
@@ -565,9 +566,10 @@ static int chttp_service_result_valid(const chttp_service_impl *service,
   if (result->body_size > service->response_scratch_bytes)
     return 0;
 
-  begin = service->response_scratch;
+  begin = (uintptr_t)service->response_scratch;
+  if (begin > UINTPTR_MAX - service->response_scratch_bytes) return 0;
   end = begin + service->response_scratch_bytes;
-  body = (const unsigned char *)result->body;
+  body = (uintptr_t)result->body;
   return body >= begin && body <= end &&
          result->body_size <= (size_t)(end - body);
 }
