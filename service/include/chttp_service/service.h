@@ -66,6 +66,11 @@ typedef struct chttp_service_result {
  *
  * Until DataBind native encode (#151) lands, response serialization remains
  * adapter-owned. The callback must not retain request/provider/context views.
+ *
+ * Phase 1 execution is synchronous on the CHTTP owner thread. The executor
+ * must not defer completion, retain these views, or re-enter the server.
+ * Async/deferred execution is a separate Service runtime slice built on
+ * chttp_server_response_defer().
  */
 typedef int (*chttp_service_executor_fn)(
     void *user,
