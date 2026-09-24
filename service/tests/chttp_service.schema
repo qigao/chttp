@@ -1,5 +1,5 @@
 message AddRequest {
-  uint32 left;
+  @Min(1) uint32 left;
   uint32 right;
   optional uint32 scale default 1;
 }
