@@ -806,8 +806,8 @@ static int chttp_service_http_handler(
   provider = chttp_service_provider(&state);
 
   status = record->invoke(
-      record->user, record->plan, &provider,
-      &record->owner->native_options, &outcome, &diagnostic);
+      record->user, data_bind_http_method_plan_binding(record->plan),
+      &provider, &record->owner->native_options, &outcome, &diagnostic);
   if (status != SALTS_OK) {
     if (status == SALTS_EINVAL)
       return chttp_server_reply(
