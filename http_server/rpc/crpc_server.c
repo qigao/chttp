@@ -11,6 +11,7 @@
 
 enum {
   CRPC_SERVER_RESPONSE_MAGIC = 0x43525043u,
+  CRPC_SERVER_PARAMS_MAGIC = 0x43525050u,
   CRPC_PARSE_ERROR = -32700,
   CRPC_INVALID_REQUEST = -32600,
   CRPC_METHOD_NOT_FOUND = -32601,
@@ -57,12 +58,71 @@ typedef struct crpc_server_dispatch_result {
   crpc_encoded_request encoded;
 } crpc_server_dispatch_result;
 
+typedef struct crpc_server_params_selection_context {
+  uint32_t magic;
+  const json_value_t *params;
+  size_t max_depth;
+} crpc_server_params_selection_context;
+
 static crpc_server_impl *crpc_server_get(crpc_server *server) {
   return server != NULL ? (crpc_server_impl *)server->impl : NULL;
 }
 
 static const crpc_server_impl *crpc_server_get_const(const crpc_server *server) {
   return server != NULL ? (const crpc_server_impl *)server->impl : NULL;
+}
+
+int crpc_server_request_param_open(
+    const crpc_server_request_view *request,
+    const char *name,
+    size_t ordinal,
+    crpc_server_param_reader *out_reader,
+    int *present) {
+  crpc_server_params_selection_context *context;
+  const json_value_t *selected = NULL;
+  cserde_reader *reader;
+
+  if (out_reader == NULL || present == NULL ||
+      out_reader->size < sizeof(*out_reader))
+    return SALTS_EINVAL;
+  if (out_reader->reader != NULL) return SALTS_EALREADY;
+  *present = 0;
+
+  if (request == NULL || request->params_selection_context == NULL)
+    return SALTS_EINVAL;
+  context = (crpc_server_params_selection_context *)
+      request->params_selection_context;
+  if (context->magic != CRPC_SERVER_PARAMS_MAGIC ||
+      context->max_depth == 0u)
+    return SALTS_EPROTO;
+  if (context->params == NULL) return SALTS_OK;
+
+  if (json_type(context->params) == JSON_OBJECT) {
+    size_t count = 0u;
+    if (name == NULL || name[0] == '\0') return SALTS_EINVAL;
+    selected = crpc_json_unique_member(context->params, name, &count);
+    if (count > 1u) return SALTS_EPROTO;
+    if (count == 0u || selected == NULL) return SALTS_OK;
+  } else if (json_type(context->params) == JSON_ARRAY) {
+    if (ordinal == SIZE_MAX) return SALTS_EINVAL;
+    if (ordinal >= json_array_size(context->params)) return SALTS_OK;
+    selected = json_array_get(context->params, ordinal);
+    if (selected == NULL) return SALTS_EPROTO;
+  } else {
+    return SALTS_EPROTO;
+  }
+
+  reader = json_cserde_reader_create(selected, context->max_depth);
+  if (reader == NULL) return SALTS_ENOMEM;
+  out_reader->reader = reader;
+  *present = 1;
+  return SALTS_OK;
+}
+
+void crpc_server_request_param_close(crpc_server_param_reader *reader) {
+  if (reader == NULL) return;
+  json_cserde_reader_destroy(reader->reader);
+  reader->reader = NULL;
 }
 
 static bool crpc_server_multiply(size_t left, size_t right, size_t *out) {
@@ -202,6 +262,7 @@ static int crpc_server_dispatch_object(crpc_server_impl *server,
   crpc_server_method_record *record;
   cserde_reader *params_reader = NULL;
   crpc_server_response_context response_context;
+  crpc_server_params_selection_context params_selection;
   crpc_server_request_view request_view;
   crpc_server_response response;
   int handler_status;
@@ -250,6 +311,10 @@ static int crpc_server_dispatch_object(crpc_server_impl *server,
                                                     .response_body_limit = response_body_limit,
                                                     .request_id = request_id,
                                                     .notification = notification};
+  params_selection = (crpc_server_params_selection_context){
+      .magic = CRPC_SERVER_PARAMS_MAGIC,
+      .params = params_count == 1u ? params : NULL,
+      .max_depth = server->config.max_json_depth};
   request_view =
       (crpc_server_request_view){.http = http_request,
                                  .target = record->target,
@@ -257,9 +322,11 @@ static int crpc_server_dispatch_object(crpc_server_impl *server,
                                  .request_id = request_id,
                                  .notification = notification ? 1 : 0,
                                  .params = params_reader,
-                                 .callable = record->has_callable ? &record->callable : NULL};
+                                 .callable = record->has_callable ? &record->callable : NULL,
+                                 .params_selection_context = &params_selection};
   response = (crpc_server_response){.impl = &response_context};
   handler_status = record->handler(record->user, &request_view, &response);
+  params_selection.magic = 0u;
   response_context.magic = 0u;
   json_cserde_reader_destroy(params_reader);
 
