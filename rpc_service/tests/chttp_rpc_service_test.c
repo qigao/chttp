@@ -275,7 +275,7 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
   it("mounts generated wire mapping and preserves DataBind defaults") {
     static const char schema[] =
         "message AddRequest {"
-        " uint32 left;"
+        " @Min(1) uint32 left;"
         " uint32 right;"
         " optional uint32 scale default 1;"
         "}"
@@ -382,8 +382,19 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     crpc_response_destroy(&response);
 
     params.count = 2u;
-    params.invalid_first = 1;
+    params.invalid_first = 0;
+    params.values[0] = 0u;
     options.request_id = UINT64_C(3);
+    response = (crpc_response){0};
+    check_equal(
+        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.kind, CRPC_RESPONSE_REMOTE_ERROR);
+    check_equal(response.value.remote_error.code, (int64_t)-32602);
+    crpc_response_destroy(&response);
+
+    params.values[0] = 3u;
+    params.invalid_first = 1;
+    options.request_id = UINT64_C(4);
     response = (crpc_response){0};
     check_equal(
         crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
