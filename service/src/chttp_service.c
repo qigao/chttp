@@ -632,6 +632,13 @@ static DataBindStatus chttp_service_http_write_output(
       &provider->service->native_options,
       entry->data, value, value_bytes,
       &provider->writer, &provider->native_diagnostic);
+  if (status == DATA_BIND_OK &&
+      cserde_writer_finish(&provider->writer) != CSERDE_OK) {
+    chttp_service_error_set(
+        error, DATA_BIND_ERR_RUNTIME,
+        "HTTP scalar response writer could not finish");
+    return DATA_BIND_ERR_RUNTIME;
+  }
   if (status != DATA_BIND_OK && error != NULL)
     *error = provider->native_diagnostic.error;
   return status;
