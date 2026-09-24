@@ -25,6 +25,8 @@ typedef struct crpc_server_request_view {
   int notification;
   cserde_reader *params;
   const cmeta_callable *callable;
+  /** Internal callback-scoped selector context; never inspect or retain. */
+  void *params_selection_context;
 } crpc_server_request_view;
 
 /** Handler-scoped response completion handle. */
@@ -34,6 +36,37 @@ typedef struct crpc_server_response {
 
 typedef int (*crpc_server_method_fn)(void *user, const crpc_server_request_view *request,
                                      crpc_server_response *response);
+
+/**
+ * Independent callback-scoped reader over one selected JSON-RPC params value.
+ * The reader borrows the request DOM and must be closed before the handler
+ * returns. A zero/closed lease is accepted by close().
+ */
+typedef struct crpc_server_param_reader {
+  size_t size;
+  cserde_reader *reader;
+} crpc_server_param_reader;
+
+#define CRPC_SERVER_PARAM_READER_INIT \
+  { sizeof(crpc_server_param_reader), NULL }
+
+/**
+ * Open one params member/item as an independent CSerde reader.
+ *
+ * For object params, name must be non-empty and ordinal is ignored.
+ * For array params, ordinal must not be SIZE_MAX and name is ignored.
+ * Missing params/member/item returns SALTS_OK with *present == 0.
+ * Duplicate object keys or malformed request-scoped state return SALTS_EPROTO.
+ */
+int crpc_server_request_param_open(
+    const crpc_server_request_view *request,
+    const char *name,
+    size_t ordinal,
+    crpc_server_param_reader *out_reader,
+    int *present);
+
+/** Close one reader lease; zero/closed leases are accepted. */
+void crpc_server_request_param_close(crpc_server_param_reader *reader);
 
 /**
  * All method, JSON, HTTP, and network capacities are hard bounds. The server
