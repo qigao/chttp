@@ -2,6 +2,7 @@
 #define CHTTP_SERVICE_SERVICE_H
 
 #include <http_server/http.h>
+#include <http_server/rpc.h>
 
 #include <data_bind_method_plan.h>
 #include <data_bind_native.h>
@@ -75,6 +76,19 @@ typedef struct chttp_service_http_mount {
 #define CHTTP_SERVICE_HTTP_MOUNT_INIT \
   { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u }
 
+typedef struct chttp_service_rpc_mount {
+  size_t size;
+  /** Fixed CRPC endpoint, e.g. "/rpc". Deployment/runtime concern. */
+  const char *target;
+  /** Borrowed immutable plan; must outlive the mounted service/server method. */
+  const DataBindRpcMethodPlan *plan;
+  chttp_service_invoke_fn invoke;
+  void *user;
+} chttp_service_rpc_mount;
+
+#define CHTTP_SERVICE_RPC_MOUNT_INIT \
+  { sizeof(chttp_service_rpc_mount), NULL, NULL, NULL, NULL }
+
 /** Initialize an empty bounded registry. */
 int chttp_service_init(
     chttp_service *service, const chttp_service_config *config);
@@ -89,6 +103,20 @@ int chttp_service_mount_http(
     chttp_service *service,
     chttp_server *server,
     const chttp_service_http_mount *mount);
+
+/**
+ * Register one already-compiled RPC MethodPlan on an existing CRPC server.
+ *
+ * The RPC wire method comes only from the MethodPlan. target remains a runtime
+ * endpoint/deployment value owned by CRPC, not canonical DataBind IDL.
+ *
+ * Phase 1 admits scalar named/positional params and at most one scalar result.
+ * Structured params/results fail closed pending FormatPlan integration.
+ */
+int chttp_service_mount_rpc(
+    chttp_service *service,
+    crpc_server *server,
+    const chttp_service_rpc_mount *mount);
 
 /**
  * Release owned route strings/scratch.
