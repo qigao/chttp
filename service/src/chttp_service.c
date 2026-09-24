@@ -23,6 +23,7 @@ typedef struct chttp_service_method_record {
 } chttp_service_method_record;
 
 struct chttp_service_impl {
+  chttp_server *http_owner;
   chttp_service_method_record *methods;
   size_t method_capacity;
   size_t method_count;
@@ -922,6 +923,8 @@ int chttp_service_mount_http(
     return SALTS_ENOTSUP;
 
   impl = (chttp_service_impl *)service->impl;
+  if (impl->http_owner != NULL && impl->http_owner != server)
+    return SALTS_EBUSY;
   if (impl->method_count == impl->method_capacity) return SALTS_ENOBUFS;
 
   method_text = data_bind_http_method_plan_method(mount->plan);
@@ -955,6 +958,7 @@ int chttp_service_mount_http(
     return status;
   }
 
+  if (impl->http_owner == NULL) impl->http_owner = server;
   ++impl->method_count;
   return SALTS_OK;
 }
