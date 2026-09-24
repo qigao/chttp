@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "http": {
+    "operations": [
+      {
+        "service": "Calc",
+        "operation": "Add",
+        "method": "POST",
+        "route": "/calc/{left}",
+        "success_status": 201,
+        "fields": [
+          {"direction": "ingress", "field": "left", "location": "path", "name": "left"},
+          {"direction": "ingress", "field": "right", "location": "query", "name": "right"},
+          {"direction": "ingress", "field": "tag", "location": "header", "name": "X-Tag"},
+          {"direction": "ingress", "field": "note", "location": "body", "name": "note"},
+          {"direction": "egress", "field": "sum", "location": "response_body", "name": "sum"},
+          {"direction": "egress", "field": "trace", "location": "response_header", "name": "X-Trace"}
+        ],
+        "errors": [
+          {"type": "CalcError", "status": 422}
+        ]
+      }
+    ]
+  }
+}
