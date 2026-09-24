@@ -6,8 +6,8 @@ set -euo pipefail
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
 
 rid="${1:?target RID is required}"
-salts_version="${SALTS_SDK_VERSION:-1.2.0}"
-utils_version="${SALTS_UTILS_SDK_VERSION:-2.0.2}"
+salts_version="${SALTS_SDK_VERSION:-1.5.0}"
+utils_version="${SALTS_UTILS_SDK_VERSION:-4.0.0}"
 packages="${QIGAO_NUGET_PACKAGES:-$RUNNER_TEMP/qigao-nuget}"
 config="$RUNNER_TEMP/qigao-nuget.config"
 project="$RUNNER_TEMP/qigao-chttp-sdk-restore.csproj"
