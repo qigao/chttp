@@ -1,3 +1,30 @@
+databind_target(
+  TARGET openapi_databind_http_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/test_databind_http.schema"
+  ARTIFACT_NAME "openapi_databind"
+  PROJECTIONS HTTP
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_databind_http.projection.json")
+
+add_executable(test_databind_http_provider
+  test_databind_http_provider.c)
+set_target_properties(test_databind_http_provider PROPERTIES
+  FOLDER "tests"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_link_libraries(test_databind_http_provider PRIVATE
+  openapi_generator
+  Salts::DataBind
+  Salts::JsonParser
+  Salts::CYamlJsonAdapter)
+target_include_directories(test_databind_http_provider PRIVATE
+  "${openapi_databind_http_fixture_GENERATED_DIR}")
+add_dependencies(test_databind_http_provider
+  openapi_databind_http_fixture_databind_codegen)
+add_test(NAME openapi_databind_http_provider
+  COMMAND test_databind_http_provider)
+
 add_executable(test_generator test_generator.c)
 set_target_properties(test_generator PROPERTIES FOLDER "tests")
 target_link_libraries(test_generator PRIVATE "${OPENAPI_C_GRAMMAR_LIBRARY}" openapi_generator)
