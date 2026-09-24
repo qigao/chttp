@@ -851,7 +851,9 @@ int chttp_service_init(
       config->native_max_items == 0u)
     return SALTS_EINVAL;
   if (service->impl != NULL) return SALTS_EALREADY;
-  if (config->max_binding_value_bytes == SIZE_MAX ||
+  if (config->method_capacity >
+          SIZE_MAX / sizeof(chttp_service_method_record) ||
+      config->max_binding_value_bytes == SIZE_MAX ||
       config->max_response_body_bytes == SIZE_MAX)
     return SALTS_ERANGE;
 
