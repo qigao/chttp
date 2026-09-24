@@ -281,6 +281,7 @@ spec("CHttp::Service generated MethodPlan runtime") {
         DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
     const DataBindHttpProjectionConfig *projection;
     DataBindHttpMethodPlan *plan = NULL;
+    DataBindHttpMethodPlan *body_plan = NULL;
     DataBindServiceNativeBinding native =
         DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
             FunctionMeta(chttp_service_test_add),
@@ -328,6 +329,28 @@ spec("CHttp::Service generated MethodPlan runtime") {
     check_equal(
         chttp_server_init(&server, &server_config), SALTS_OK);
 
+    /*
+     * Convention-only HTTP compilation projects request/response fields to
+     * body by default. This phase intentionally requires FormatPlan support
+     * before mounting that shape.
+     */
+    diagnostic =
+        (DataBindBindingPlanDiagnostic)DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", NULL, &native,
+            &body_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(body_plan);
+    mount.plan = body_plan;
+    mount.invoke = chttp_service_test_invoke;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount),
+        SALTS_ENOTSUP);
+    data_bind_http_method_plan_free(body_plan);
+    body_plan = NULL;
+
+    mount = (chttp_service_http_mount)CHTTP_SERVICE_HTTP_MOUNT_INIT;
     mount.plan = plan;
     mount.invoke = chttp_service_test_invoke;
     check_equal(
