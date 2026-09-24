@@ -277,6 +277,12 @@ static DataBindStatus chttp_service_scalar_reader_init(
   if (provider == NULL || entry == NULL || entry->data == NULL ||
       text == NULL || reader == NULL)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (text_size > provider->service->scalar_capacity) {
+    chttp_service_error_set(
+        error, DATA_BIND_ERR_LIMIT,
+        "HTTP binding value exceeds configured bound");
+    return DATA_BIND_ERR_LIMIT;
+  }
 
   provider->scalar = (chttp_service_scalar_reader){0};
   errno = 0;
