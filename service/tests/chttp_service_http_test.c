@@ -235,7 +235,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
   it("mounts generated transport projection without IDL HTTP annotations") {
     static const char schema[] =
         "message AddRequest {"
-        " uint32 left;"
+        " @Min(1) uint32 left;"
         " uint32 right;"
         " optional uint32 scale default 1;"
         "}"
@@ -324,6 +324,15 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(response.status_code, 201u);
     check_equal(response.body_size, (size_t)1u);
     check_equal(response.body, "7", 1u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/0?right=4", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 400u);
+    check_equal(response.body, "Bad Request", 11u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};
