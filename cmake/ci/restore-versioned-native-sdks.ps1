@@ -25,7 +25,12 @@ dotnet restore $project --packages $packages --configfile $config --no-cache
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
 $saltsRoot = Join-Path $packages "salts.native\$saltsVersion\sdk\$Rid"
 $utilsRoot = Join-Path $packages "saltsutils.native\$utilsVersion\sdk\$Rid"
-foreach ($p in @((Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"), (Join-Path $utilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"))) {
+foreach ($p in @(
+  (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
+  (Join-Path $saltsRoot "include\cmeta\function.h"),
+  (Join-Path $utilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
+  (Join-Path $utilsRoot "include\data_bind_method_plan.h")
+)) {
   if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw "missing restored SDK file: $p" }
 }
 "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
