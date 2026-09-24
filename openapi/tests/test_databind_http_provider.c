@@ -11,7 +11,7 @@
 
 #define REQUIRE(x) do { \
   if (!(x)) { \
-    fprintf(stderr, "line %d: %s (%s)\n", __LINE__, #x, error.message); \
+    fprintf(stderr, "line %d: %s\n", __LINE__, #x); \
     goto fail; \
   } \
 } while (0)
