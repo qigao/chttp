@@ -22,11 +22,30 @@ typedef struct chttp_service_method_record {
   void *user;
 } chttp_service_method_record;
 
+typedef struct chttp_service_rpc_param_slot {
+  const char *schema_field;
+  const char *wire_name;
+  size_t ordinal;
+  cserde_token token;
+  int present;
+} chttp_service_rpc_param_slot;
+
+typedef struct chttp_service_rpc_method_record {
+  chttp_service_impl *owner;
+  const DataBindRpcMethodPlan *plan;
+  chttp_service_invoke_fn invoke;
+  void *user;
+  chttp_service_rpc_param_slot *params;
+  size_t param_count;
+} chttp_service_rpc_method_record;
+
 struct chttp_service_impl {
   chttp_server *http_owner;
   chttp_service_method_record *methods;
+  chttp_service_rpc_method_record *rpc_methods;
   size_t method_capacity;
   size_t method_count;
+  size_t rpc_method_count;
 
   char *scalar_scratch;
   size_t scalar_capacity;
@@ -862,6 +881,8 @@ int chttp_service_init(
   if (service->impl != NULL) return SALTS_EALREADY;
   if (config->method_capacity >
           SIZE_MAX / sizeof(chttp_service_method_record) ||
+      config->method_capacity >
+          SIZE_MAX / sizeof(chttp_service_rpc_method_record) ||
       config->max_binding_value_bytes == SIZE_MAX ||
       config->max_response_body_bytes == SIZE_MAX)
     return SALTS_ERANGE;
@@ -925,7 +946,8 @@ int chttp_service_mount_http(
   impl = (chttp_service_impl *)service->impl;
   if (impl->http_owner != NULL && impl->http_owner != server)
     return SALTS_EBUSY;
-  if (impl->method_count == impl->method_capacity) return SALTS_ENOBUFS;
+  if (impl->method_count + impl->rpc_method_count >= impl->method_capacity)
+    return SALTS_ENOBUFS;
 
   method_text = data_bind_http_method_plan_method(mount->plan);
   route_text = data_bind_http_method_plan_route(mount->plan);
@@ -973,6 +995,9 @@ int chttp_service_destroy(chttp_service *service) {
 
   for (i = 0u; i < impl->method_count; ++i)
     free(impl->methods[i].route);
+  for (i = 0u; i < impl->rpc_method_count; ++i)
+    free(impl->rpc_methods[i].params);
+  free(impl->rpc_methods);
   free(impl->native_workspace);
   free(impl->response_scratch);
   free(impl->scalar_scratch);
