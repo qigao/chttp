@@ -52,8 +52,10 @@ runs:
         salts_root="$packages/salts.native/$SALTS_VERSION/sdk/linux-x64"
         salts_utils_root="$packages/saltsutils.native/$SALTS_UTILS_VERSION/sdk/linux-x64"
         test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+        test -f "$salts_root/include/cmeta/function.h"
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"
+        test -f "$salts_utils_root/include/data_bind_method_plan.h"
 
         {
           echo "SALTS_VERSION=$SALTS_VERSION"
