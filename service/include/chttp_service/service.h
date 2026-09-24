@@ -53,7 +53,7 @@ typedef struct chttp_service_config {
  */
 typedef int (*chttp_service_invoke_fn)(
     void *user,
-    const DataBindHttpMethodPlan *plan,
+    const DataBindBindingPlan *binding,
     const DataBindBindingProvider *provider,
     const DataBindNativeOptions *native_options,
     DataBindBindingOutcome *outcome,
