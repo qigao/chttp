@@ -18,8 +18,8 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        SALTS_VERSION: '1.2.0'
-        SALTS_UTILS_VERSION: '2.0.2'
+        SALTS_VERSION: '1.5.0'
+        SALTS_UTILS_VERSION: '4.0.0'
       run: |
         set -euo pipefail
         packages="$RUNNER_TEMP/qigao-native-sdk"
