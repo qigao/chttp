@@ -7,6 +7,7 @@ on:
       - "CMakeLists.txt"
       - "cmake/**"
       - "packaging/nuget/**"
+      - "service/**"
       - "presets/AndroidPresets.json"
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
@@ -16,6 +17,7 @@ on:
       - "CMakeLists.txt"
       - "cmake/**"
       - "packaging/nuget/**"
+      - "service/**"
       - "presets/AndroidPresets.json"
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
@@ -96,6 +98,11 @@ jobs:
           cmake --build build/native-sdk --parallel 2
           cmake --install build/native-sdk
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          test -f "$prefix/include/chttp_service/service.h"
+          cmake -S service/tests/installed -B build/service-installed -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$prefix"
+          cmake --build build/service-installed --parallel 2
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
@@ -164,6 +171,7 @@ jobs:
           cmake --build build/native-sdk --parallel 2
           cmake --install build/native-sdk
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          test -f "$prefix/include/chttp_service/service.h"
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
@@ -231,7 +239,9 @@ jobs:
         run: |
           $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
           $config = Join-Path $prefix "lib\cmake\Chttp\ChttpConfig.cmake"
+          $serviceHeader = Join-Path $prefix "include\chttp_service\service.h"
           if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "missing $config" }
+          if (-not (Test-Path -LiteralPath $serviceHeader -PathType Leaf)) { throw "missing $serviceHeader" }
           @(
             "version=${{ needs.metadata.outputs.version }}"
             "commit=$env:GITHUB_SHA"
@@ -297,6 +307,7 @@ jobs:
           cmake --build build/android-native-sdk --parallel 2
           cmake --install build/android-native-sdk
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          test -f "$prefix/include/chttp_service/service.h"
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
@@ -330,8 +341,11 @@ jobs:
         run: |
           set -euo pipefail
           test -f package/sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/linux-x64/include/chttp_service/service.h
           test -f package/sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/windows-x64/include/chttp_service/service.h
           test -f package/sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/android-arm64-v8a/include/chttp_service/service.h
           test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 4
       - uses: actions/setup-dotnet@v4
         with:
