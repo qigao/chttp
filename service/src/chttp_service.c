@@ -822,9 +822,17 @@ static int chttp_service_http_handler(
         response, 500u, "text/plain", "Internal Server Error", 21u);
   }
 
-  if (!state.output_committed)
-    return chttp_server_reply(
-        response, 500u, "text/plain", "Internal Server Error", 21u);
+  {
+    const DataBindBindingPlan *binding =
+        data_bind_http_method_plan_binding(record->plan);
+    const int needs_output_transaction =
+        outcome.kind == DATA_BIND_BINDING_OUTCOME_TYPED_ERROR ||
+        (binding != NULL &&
+         data_bind_binding_plan_egress_count(binding) != 0u);
+    if (needs_output_transaction && !state.output_committed)
+      return chttp_server_reply(
+          response, 500u, "text/plain", "Internal Server Error", 21u);
+  }
 
   return chttp_server_reply(
       response, (unsigned int)http_status,
