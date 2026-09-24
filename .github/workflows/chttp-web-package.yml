@@ -44,12 +44,12 @@ jobs:
           project(salts_utils_component_probe LANGUAGES C)
           find_package(SaltsUtils CONFIG REQUIRED
             PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
-          if(NOT TARGET Salts::Databind)
-            message(FATAL_ERROR "SaltsUtils did not export Salts::Databind")
+          if(NOT TARGET Salts::DataBind)
+            message(FATAL_ERROR "SaltsUtils did not export Salts::DataBind")
           endif()
-          get_target_property(component_type Salts::Databind TYPE)
+          get_target_property(component_type Salts::DataBind TYPE)
           if(NOT component_type STREQUAL "SHARED_LIBRARY")
-            message(FATAL_ERROR "Salts::Databind must be the concrete runtime")
+            message(FATAL_ERROR "Salts::DataBind must be the concrete runtime")
           endif()
           CMAKE
           cmake -S "$src" -B "$build" -G Ninja
