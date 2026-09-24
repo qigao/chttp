@@ -451,18 +451,18 @@ static cserde_status chttp_service_scalar_write(
 
   switch (token->kind) {
   case CSERDE_NULL:
-    if (capacity < 4u) return CSERDE_LIMIT;
+    if (capacity < 4u) return CSERDE_LIMIT_EXCEEDED;
     memcpy(buffer, "null", 4u);
     provider->staged_body_size = 4u;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_BOOL:
     if (token->value.boolean) {
-      if (capacity < 4u) return CSERDE_LIMIT;
+      if (capacity < 4u) return CSERDE_LIMIT_EXCEEDED;
       memcpy(buffer, "true", 4u);
       provider->staged_body_size = 4u;
     } else {
-      if (capacity < 5u) return CSERDE_LIMIT;
+      if (capacity < 5u) return CSERDE_LIMIT_EXCEEDED;
       memcpy(buffer, "false", 5u);
       provider->staged_body_size = 5u;
     }
@@ -471,33 +471,33 @@ static cserde_status chttp_service_scalar_write(
   case CSERDE_SINT:
     written = snprintf(
         buffer, capacity, "%" PRId64, token->value.sint);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT;
+    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_UINT:
     written = snprintf(
         buffer, capacity, "%" PRIu64, token->value.uint);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT;
+    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_FLOAT:
     written = snprintf(
         buffer, capacity, "%.17g", token->value.floating);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT;
+    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_STRING:
-    if (token->value.slice.size > capacity) return CSERDE_LIMIT;
+    if (token->value.slice.size > capacity) return CSERDE_LIMIT_EXCEEDED;
     if (token->value.slice.size != 0u)
       memcpy(buffer, token->value.slice.data, token->value.slice.size);
     provider->staged_body_size = token->value.slice.size;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_BYTES:
-    if (token->value.slice.size > capacity) return CSERDE_LIMIT;
+    if (token->value.slice.size > capacity) return CSERDE_LIMIT_EXCEEDED;
     if (token->value.slice.size != 0u)
       memcpy(buffer, token->value.slice.data, token->value.slice.size);
     provider->staged_body_size = token->value.slice.size;
