@@ -192,7 +192,7 @@ static chttp_client_config chttp_service_test_client_config(void) {
 
 static int chttp_service_test_invoke(
     void *user,
-    const DataBindHttpMethodPlan *plan,
+    const DataBindBindingPlan *binding,
     const DataBindBindingProvider *provider,
     const DataBindNativeOptions *native_options,
     DataBindBindingOutcome *outcome,
@@ -204,19 +204,16 @@ static int chttp_service_test_invoke(
   DataBindBindingCallFrame frame = DATA_BIND_BINDING_CALL_FRAME_INIT;
   DataBindNativeDiagnostic native_diagnostic =
       DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
-  const DataBindBindingPlan *binding;
   DataBindStatus bind_status;
   int native_status;
   int status = SALTS_OK;
 
   (void)user;
-  if (plan == NULL || provider == NULL || native_options == NULL ||
+  if (binding == NULL || provider == NULL || native_options == NULL ||
       outcome == NULL || diagnostic == NULL)
     return SALTS_EINVAL;
 
-  binding = data_bind_http_method_plan_binding(plan);
-  if (binding == NULL ||
-      data_bind_binding_plan_function(binding) !=
+  if (data_bind_binding_plan_function(binding) !=
           FunctionMeta(chttp_service_test_add))
     return SALTS_EPROTO;
 
