@@ -15,6 +15,8 @@ static_assert(std::is_standard_layout<crpc_server_request_view>::value,
               "server request view must be C ABI data");
 static_assert(std::is_standard_layout<crpc_server_response>::value,
               "server response must be C ABI data");
+static_assert(std::is_standard_layout<crpc_server_param_reader>::value,
+              "server params reader lease must be C ABI data");
 
 int main() {
   crpc_client client = {};
@@ -22,9 +24,10 @@ int main() {
   crpc_request request = {};
   crpc_options options = {};
   crpc_server server = {};
+  crpc_server_param_reader param_reader = CRPC_SERVER_PARAM_READER_INIT;
   return client.impl == nullptr && async_client.impl == nullptr && request.slot == 0u &&
                  options.tls == nullptr && options.protocol == CHTTP_HTTP_1_1 &&
-                 server.impl == nullptr
+                 server.impl == nullptr && param_reader.reader == nullptr
              ? 0
              : 1;
 }
