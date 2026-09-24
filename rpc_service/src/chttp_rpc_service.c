@@ -38,6 +38,7 @@ typedef struct chttp_rpc_service_provider {
   cserde_token token;
   int token_valid;
 
+  int output_attempted;
   int output_active;
   int output_published;
   int output_is_error;
@@ -193,6 +194,7 @@ static DataBindStatus chttp_rpc_service_begin_output(
   provider->writer = (cserde_writer){0};
   provider->token = (cserde_token){0};
   provider->token_valid = 0;
+  provider->output_attempted = 1;
   provider->output_active = 1;
   provider->output_published = 0;
   provider->output_is_error = 0;
@@ -344,7 +346,8 @@ static int chttp_rpc_service_handler(
   crpc_server_request_param_close(&provider_context.param_reader);
 
   if (status != DATA_BIND_OK) {
-    if (chttp_rpc_service_input_failure(status))
+    if (!provider_context.output_attempted &&
+        chttp_rpc_service_input_failure(status))
       return crpc_server_response_error(
           response, -32602, "Invalid params", NULL, NULL);
     return SALTS_EPROTO;
