@@ -1,0 +1,16 @@
+message AddRequest {
+  @Min(1) uint32 left;
+  optional uint32 right default 2;
+  optional nullable @Pattern("^[a-z]+$") string tag;
+  string note;
+}
+message AddResponse {
+  uint32 sum;
+  optional string trace;
+}
+message CalcError {
+  string detail;
+}
+service Calc {
+  Add: AddRequest -> AddResponse throws CalcError;
+}
