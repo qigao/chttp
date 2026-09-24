@@ -1,12 +1,32 @@
 #include "internal.h"
 
-#include <ctype.h>
-#include <errno.h>
 #include <stdint.h>
 
-static int db_put(json_value_t *object, const char *key, json_value_t *value) {
+static int db_put_new(
+    json_value_t *object, const char *key, json_value_t *value) {
   if (value != NULL && json_object_add_checked(object, key, value)) return 1;
   json_free(value);
+  return 0;
+}
+
+static int db_put_take(
+    json_value_t *object, const char *key, json_value_t **value) {
+  json_value_t *owned;
+  if (value == NULL) return 0;
+  owned = *value;
+  *value = NULL;
+  if (owned != NULL && json_object_add_checked(object, key, owned)) return 1;
+  json_free(owned);
+  return 0;
+}
+
+static int db_array_add_take(json_value_t *array, json_value_t **value) {
+  json_value_t *owned;
+  if (value == NULL) return 0;
+  owned = *value;
+  *value = NULL;
+  if (owned != NULL && json_array_add_checked(array, owned)) return 1;
+  json_free(owned);
   return 0;
 }
 
@@ -26,19 +46,27 @@ static const DataBindHttpFieldProjection *db_field_mapping(
   return NULL;
 }
 
-static int db_type(
+static int db_schema_type(
     json_value_t *schema, const char *name, int nullable) {
   if (!nullable)
-    return db_put(schema, "type", json_create_string(name));
+    return db_put_new(schema, "type", json_create_string(name));
+
   {
     json_value_t *types = json_create_array();
-    if (types == NULL ||
-        !json_array_add_checked(types, json_create_string(name)) ||
-        !json_array_add_checked(types, json_create_string("null"))) {
+    json_value_t *value = NULL;
+    if (types == NULL) return 0;
+
+    value = json_create_string(name);
+    if (!db_array_add_take(types, &value)) {
       json_free(types);
       return 0;
     }
-    return db_put(schema, "type", types);
+    value = json_create_string("null");
+    if (!db_array_add_take(types, &value)) {
+      json_free(types);
+      return 0;
+    }
+    return db_put_take(schema, "type", &types);
   }
 }
 
@@ -85,13 +113,17 @@ static int db_constraints(
     oa_error *error) {
   size_t count;
   size_t i;
-  int seen_min = 0, seen_max = 0, seen_size = 0, seen_pattern = 0;
+  int seen_min = 0;
+  int seen_max = 0;
+  int seen_size = 0;
+  int seen_pattern = 0;
 
   count = data_bind_schema_field_constraint_count(
       contract, type_name, field_index);
   for (i = 0u; i < count; ++i) {
     DataBindSchemaConstraint constraint =
         DATA_BIND_SCHEMA_CONSTRAINT_INIT;
+
     if (!data_bind_schema_field_constraint_at(
             contract, type_name, field_index, i, &constraint))
       return oa_fail(error, "%s.%s: invalid reflected constraint",
@@ -104,22 +136,24 @@ static int db_constraints(
         return oa_fail(error, "%s.%s: duplicate/invalid minimum",
                        type_name, field->name);
       number = db_number(constraint.value);
-      if (number == NULL || !db_put(schema, "minimum", number))
+      if (number == NULL || !db_put_take(schema, "minimum", &number))
         return oa_fail(error, "%s.%s: invalid minimum",
                        type_name, field->name);
       break;
     }
+
     case DATA_BIND_SCHEMA_CONSTRAINT_MAX: {
       json_value_t *number;
       if (seen_max++ || constraint.value == NULL)
         return oa_fail(error, "%s.%s: duplicate/invalid maximum",
                        type_name, field->name);
       number = db_number(constraint.value);
-      if (number == NULL || !db_put(schema, "maximum", number))
+      if (number == NULL || !db_put_take(schema, "maximum", &number))
         return oa_fail(error, "%s.%s: invalid maximum",
                        type_name, field->name);
       break;
     }
+
     case DATA_BIND_SCHEMA_CONSTRAINT_SIZE:
       if (seen_size++ ||
           (field->cmeta_kind != CMETA_DATA_STRING &&
@@ -127,22 +161,27 @@ static int db_constraints(
         return oa_fail(error, "%s.%s: unsupported size constraint",
                        type_name, field->name);
       if (constraint.has_min &&
-          !db_put(schema, "minLength",
-                  json_create_uint64(constraint.min_size)))
+          !db_put_new(
+              schema, "minLength",
+              json_create_uint64(constraint.min_size)))
         return oa_fail(error, "out of memory");
       if (constraint.has_max &&
-          !db_put(schema, "maxLength",
-                  json_create_uint64(constraint.max_size)))
+          !db_put_new(
+              schema, "maxLength",
+              json_create_uint64(constraint.max_size)))
         return oa_fail(error, "out of memory");
       break;
+
     case DATA_BIND_SCHEMA_CONSTRAINT_PATTERN:
       if (seen_pattern++ || constraint.pattern == NULL ||
           field->cmeta_kind != CMETA_DATA_STRING ||
-          !db_put(schema, "pattern",
-                  json_create_string(constraint.pattern)))
+          !db_put_new(
+              schema, "pattern",
+              json_create_string(constraint.pattern)))
         return oa_fail(error, "%s.%s: invalid pattern constraint",
                        type_name, field->name);
       break;
+
     default:
       return oa_fail(error, "%s.%s: unsupported reflected constraint",
                      type_name, field->name);
@@ -156,6 +195,7 @@ static json_value_t *db_field_schema(
     DataBindSchemaField *out_field, oa_error *error) {
   DataBindSchemaField field = DATA_BIND_SCHEMA_FIELD_INIT;
   json_value_t *schema = NULL;
+  json_value_t *values = NULL;
   json_value_t *default_value = NULL;
   const char *type = NULL;
 
@@ -175,19 +215,29 @@ static json_value_t *db_field_schema(
       field.cmeta_kind == CMETA_DATA_SET ||
       field.cmeta_kind == CMETA_DATA_MAP ||
       field.cmeta_kind == CMETA_DATA_CUSTOM) {
-    oa_fail(error, "%s.%s: composite/container OpenAPI schema is not admitted by this slice",
-            type_name, field.name);
+    oa_fail(
+        error,
+        "%s.%s: composite/container OpenAPI schema is not admitted by this slice",
+        type_name, field.name);
     return NULL;
   }
 
   switch (field.cmeta_kind) {
-  case CMETA_DATA_BOOL: type = "boolean"; break;
+  case CMETA_DATA_BOOL:
+    type = "boolean";
+    break;
   case CMETA_DATA_SINT:
-  case CMETA_DATA_UINT: type = "integer"; break;
-  case CMETA_DATA_FLOAT: type = "number"; break;
+  case CMETA_DATA_UINT:
+    type = "integer";
+    break;
+  case CMETA_DATA_FLOAT:
+    type = "number";
+    break;
   case CMETA_DATA_STRING:
   case CMETA_DATA_BYTES:
-  case CMETA_DATA_ENUM: type = "string"; break;
+  case CMETA_DATA_ENUM:
+    type = "string";
+    break;
   default:
     oa_fail(error, "%s.%s: unsupported CMeta data kind",
             type_name, field.name);
@@ -195,41 +245,44 @@ static json_value_t *db_field_schema(
   }
 
   schema = json_create_object();
-  if (schema == NULL || !db_type(schema, type, field.is_nullable))
+  if (schema == NULL ||
+      !db_schema_type(schema, type, field.is_nullable))
     goto oom;
 
   if (field.cmeta_kind == CMETA_DATA_BYTES &&
-      !db_put(schema, "format", json_create_string("byte")))
+      !db_put_new(schema, "format", json_create_string("byte")))
     goto oom;
   if (field.format != NULL && field.format[0] != '\0' &&
       field.cmeta_kind != CMETA_DATA_BYTES &&
-      !db_put(schema, "format", json_create_string(field.format)))
+      !db_put_new(schema, "format", json_create_string(field.format)))
     goto oom;
 
   if (field.cmeta_kind == CMETA_DATA_ENUM) {
     size_t count = data_bind_schema_enum_item_count(
         contract, field.type);
     size_t i;
-    json_value_t *values = json_create_array();
-    if (values == NULL || count == 0u) {
-      json_free(values);
+    if (count == 0u) {
       oa_fail(error, "%s.%s: enum reflection is unavailable",
               type_name, field.name);
       goto fail;
     }
+    values = json_create_array();
+    if (values == NULL) goto oom;
+
     for (i = 0u; i < count; ++i) {
       DataBindSchemaEnumItem item = DATA_BIND_SCHEMA_ENUM_ITEM_INIT;
+      json_value_t *name = NULL;
       if (!data_bind_schema_enum_item_at(
               contract, field.type, i, &item) ||
-          item.name == NULL ||
-          !json_array_add_checked(values, json_create_string(item.name))) {
-        json_free(values);
+          item.name == NULL) {
         oa_fail(error, "%s.%s: invalid enum reflection",
                 type_name, field.name);
         goto fail;
       }
+      name = json_create_string(item.name);
+      if (!db_array_add_take(values, &name)) goto oom;
     }
-    if (!db_put(schema, "enum", values)) goto oom;
+    if (!db_put_take(schema, "enum", &values)) goto oom;
   }
 
   if (!db_constraints(
@@ -238,14 +291,13 @@ static json_value_t *db_field_schema(
 
   if (field.has_default) {
     default_value = db_default_value(&field);
-    if (default_value == NULL ||
-        !db_put(schema, "default", default_value)) {
-      default_value = NULL;
+    if (default_value == NULL) {
       oa_fail(error, "%s.%s: invalid canonical default",
               type_name, field.name);
       goto fail;
     }
-    default_value = NULL;
+    if (!db_put_take(schema, "default", &default_value))
+      goto oom;
   }
 
   if (out_field != NULL) *out_field = field;
@@ -255,13 +307,14 @@ oom:
   oa_fail(error, "out of memory constructing DataBind OpenAPI schema");
 fail:
   json_free(default_value);
+  json_free(values);
   json_free(schema);
   return NULL;
 }
 
-static int db_required_add(
-    json_value_t *required, const char *name) {
-  return json_array_add_checked(required, json_create_string(name));
+static int db_required_add(json_value_t *required, const char *name) {
+  json_value_t *value = json_create_string(name);
+  return db_array_add_take(required, &value);
 }
 
 static int db_object_fields(
@@ -270,6 +323,7 @@ static int db_object_fields(
     DataBindBindingDirection direction,
     DataBindHttpFieldLocation body_location,
     json_value_t **out_schema,
+    int *out_body_required,
     oa_error *error) {
   json_value_t *schema = NULL;
   json_value_t *properties = NULL;
@@ -277,8 +331,13 @@ static int db_object_fields(
   size_t field_count;
   size_t i;
   size_t selected = 0u;
+  int body_required = 0;
 
+  if (out_schema == NULL)
+    return oa_fail(error, "invalid body schema output");
   *out_schema = NULL;
+  if (out_body_required != NULL) *out_body_required = 0;
+
   field_count = data_bind_schema_field_count(contract, type_name);
   schema = json_create_object();
   properties = json_create_object();
@@ -286,7 +345,7 @@ static int db_object_fields(
   if (schema == NULL || properties == NULL || required == NULL)
     goto oom;
 
-  if (!db_put(schema, "type", json_create_string("object")))
+  if (!db_put_new(schema, "type", json_create_string("object")))
     goto oom;
 
   for (i = 0u; i < field_count; ++i) {
@@ -294,20 +353,18 @@ static int db_object_fields(
     const DataBindHttpFieldProjection *mapping;
     DataBindHttpFieldLocation location;
     const char *wire;
-    json_value_t *field_schema;
+    json_value_t *field_schema = NULL;
 
     if (!data_bind_schema_field_at(
             contract, type_name, i, &field) ||
-        field.name == NULL)
-      return oa_fail(error, "%s[%zu]: field reflection failed",
-                     type_name, i);
+        field.name == NULL) {
+      oa_fail(error, "%s[%zu]: field reflection failed",
+              type_name, i);
+      goto fail;
+    }
 
     mapping = db_field_mapping(config, direction, field.name);
-    if (mapping != NULL)
-      location = mapping->location;
-    else
-      location = body_location;
-
+    location = mapping != NULL ? mapping->location : body_location;
     if (location != body_location) continue;
 
     wire = mapping != NULL && mapping->wire_name != NULL
@@ -315,9 +372,12 @@ static int db_object_fields(
     field_schema = db_field_schema(
         contract, type_name, i, &field, error);
     if (field_schema == NULL) goto fail;
-    if (!db_put(properties, wire, field_schema)) goto oom;
-    if (!field.is_optional && !db_required_add(required, wire))
-      goto oom;
+
+    if (!db_put_take(properties, wire, &field_schema)) goto oom;
+    if (!field.is_optional) {
+      if (!db_required_add(required, wire)) goto oom;
+      body_required = 1;
+    }
     ++selected;
   }
 
@@ -328,14 +388,14 @@ static int db_object_fields(
     return 1;
   }
 
-  if (!db_put(schema, "properties", properties)) goto oom;
-  properties = NULL;
-  if (json_array_size(required) != 0u) {
-    if (!db_put(schema, "required", required)) goto oom;
-    required = NULL;
-  }
+  if (!db_put_take(schema, "properties", &properties)) goto oom;
+  if (json_array_size(required) != 0u &&
+      !db_put_take(schema, "required", &required))
+    goto oom;
+
   json_free(required);
   *out_schema = schema;
+  if (out_body_required != NULL) *out_body_required = body_required;
   return 1;
 
 oom:
@@ -347,13 +407,19 @@ fail:
   return 0;
 }
 
-static const char *db_parameter_location(DataBindHttpFieldLocation location) {
+static const char *db_parameter_location(
+    DataBindHttpFieldLocation location) {
   switch (location) {
-  case DATA_BIND_HTTP_PATH: return "path";
-  case DATA_BIND_HTTP_QUERY: return "query";
-  case DATA_BIND_HTTP_HEADER: return "header";
-  case DATA_BIND_HTTP_COOKIE: return "cookie";
-  default: return NULL;
+  case DATA_BIND_HTTP_PATH:
+    return "path";
+  case DATA_BIND_HTTP_QUERY:
+    return "query";
+  case DATA_BIND_HTTP_HEADER:
+    return "header";
+  case DATA_BIND_HTTP_COOKIE:
+    return "cookie";
+  default:
+    return NULL;
   }
 }
 
@@ -382,6 +448,7 @@ static int db_parameters(
       return oa_fail(error, "%s[%zu]: field reflection failed",
                      type_name, i);
     }
+
     mapping = db_field_mapping(
         config, DATA_BIND_BINDING_INGRESS, field.name);
     if (mapping == NULL) continue;
@@ -396,31 +463,34 @@ static int db_parameters(
       json_free(parameters);
       return 0;
     }
+
     parameter = json_create_object();
-    if (parameter == NULL ||
-        !db_put(parameter, "name", json_create_string(wire)) ||
-        !db_put(parameter, "in", json_create_string(location)) ||
-        !db_put(parameter, "required",
-                json_create_bool(
-                    mapping->location == DATA_BIND_HTTP_PATH
-                        ? true : !field.is_optional)) ||
-        !db_put(parameter, "schema", schema) ||
-        !json_array_add_checked(parameters, parameter)) {
-      json_free(schema);
-      json_free(parameter);
-      json_free(parameters);
-      return oa_fail(error, "out of memory constructing parameter");
-    }
+    if (parameter == NULL) goto oom;
+    if (!db_put_new(parameter, "name", json_create_string(wire)) ||
+        !db_put_new(parameter, "in", json_create_string(location)) ||
+        !db_put_new(
+            parameter, "required",
+            json_create_bool(
+                mapping->location == DATA_BIND_HTTP_PATH
+                    ? true : !field.is_optional)) ||
+        !db_put_take(parameter, "schema", &schema))
+      goto oom;
+    if (!db_array_add_take(parameters, &parameter)) goto oom;
+    continue;
+
+oom:
+    json_free(schema);
+    json_free(parameter);
+    json_free(parameters);
+    return oa_fail(error, "out of memory constructing parameter");
   }
 
   if (json_array_size(parameters) == 0u) {
     json_free(parameters);
     return 1;
   }
-  if (!db_put(operation, "parameters", parameters)) {
-    json_free(parameters);
+  if (!db_put_take(operation, "parameters", &parameters))
     return oa_fail(error, "out of memory");
-  }
   return 1;
 }
 
@@ -432,29 +502,35 @@ static int db_request_body(
   json_value_t *media = NULL;
   json_value_t *content = NULL;
   json_value_t *body = NULL;
+  int required = 0;
 
   if (!db_object_fields(
           contract, type_name, config,
           DATA_BIND_BINDING_INGRESS, DATA_BIND_HTTP_BODY,
-          &schema, error))
+          &schema, &required, error))
     return 0;
   if (schema == NULL) return 1;
 
   media = json_create_object();
   content = json_create_object();
   body = json_create_object();
-  if (media == NULL || content == NULL || body == NULL ||
-      !db_put(media, "schema", schema) ||
-      !db_put(content, "application/json", media) ||
-      !db_put(body, "content", content) ||
-      !db_put(operation, "requestBody", body)) {
-    json_free(schema);
-    json_free(media);
-    json_free(content);
-    json_free(body);
-    return oa_fail(error, "out of memory constructing requestBody");
-  }
+  if (media == NULL || content == NULL || body == NULL)
+    goto oom;
+
+  if (!db_put_take(media, "schema", &schema) ||
+      !db_put_take(content, "application/json", &media) ||
+      !db_put_new(body, "required", json_create_bool(required)) ||
+      !db_put_take(body, "content", &content) ||
+      !db_put_take(operation, "requestBody", &body))
+    goto oom;
   return 1;
+
+oom:
+  json_free(schema);
+  json_free(media);
+  json_free(content);
+  json_free(body);
+  return oa_fail(error, "out of memory constructing requestBody");
 }
 
 static int db_response_headers(
@@ -466,6 +542,7 @@ static int db_response_headers(
   size_t i;
 
   if (headers == NULL) return oa_fail(error, "out of memory");
+
   for (i = 0u; i < count; ++i) {
     DataBindSchemaField field = DATA_BIND_SCHEMA_FIELD_INIT;
     const DataBindHttpFieldProjection *mapping;
@@ -480,6 +557,7 @@ static int db_response_headers(
       return oa_fail(error, "%s[%zu]: field reflection failed",
                      type_name, i);
     }
+
     mapping = db_field_mapping(
         config, DATA_BIND_BINDING_EGRESS, field.name);
     if (mapping == NULL ||
@@ -494,9 +572,11 @@ static int db_response_headers(
       json_free(headers);
       return 0;
     }
+
     header = json_create_object();
-    if (header == NULL || !db_put(header, "schema", schema) ||
-        !db_put(headers, wire, header)) {
+    if (header == NULL ||
+        !db_put_take(header, "schema", &schema) ||
+        !db_put_take(headers, wire, &header)) {
       json_free(schema);
       json_free(header);
       json_free(headers);
@@ -508,10 +588,8 @@ static int db_response_headers(
     json_free(headers);
     return 1;
   }
-  if (!db_put(response, "headers", headers)) {
-    json_free(headers);
+  if (!db_put_take(response, "headers", &headers))
     return oa_fail(error, "out of memory");
-  }
   return 1;
 }
 
@@ -520,47 +598,53 @@ static int db_success_response(
     const DataBindHttpProjectionConfig *config,
     json_value_t *responses, oa_error *error) {
   char status[4];
-  json_value_t *response = json_create_object();
+  json_value_t *response = NULL;
   json_value_t *body_schema = NULL;
+  json_value_t *media = NULL;
+  json_value_t *content = NULL;
+  int ignored_required = 0;
 
   if (config->success_status < 100 || config->success_status > 599 ||
-      snprintf(status, sizeof(status), "%03d", config->success_status) != 3) {
-    json_free(response);
+      snprintf(status, sizeof(status), "%03d", config->success_status) != 3)
     return oa_fail(error, "%s.%s: invalid success status",
                    service_operation->service_name,
                    service_operation->name);
-  }
+
+  response = json_create_object();
   if (response == NULL ||
-      !db_put(response, "description", json_create_string("Success")))
+      !db_put_new(response, "description", json_create_string("Success")))
     goto oom;
+
   if (!db_response_headers(
           contract, service_operation->response_type,
           config, response, error))
     goto fail;
+
   if (!db_object_fields(
           contract, service_operation->response_type, config,
           DATA_BIND_BINDING_EGRESS, DATA_BIND_HTTP_RESPONSE_BODY,
-          &body_schema, error))
+          &body_schema, &ignored_required, error))
     goto fail;
+
   if (body_schema != NULL) {
-    json_value_t *media = json_create_object();
-    json_value_t *content = json_create_object();
+    media = json_create_object();
+    content = json_create_object();
     if (media == NULL || content == NULL ||
-        !db_put(media, "schema", body_schema) ||
-        !db_put(content, "application/json", media) ||
-        !db_put(response, "content", content)) {
-      json_free(body_schema);
-      json_free(media);
-      json_free(content);
+        !db_put_take(media, "schema", &body_schema) ||
+        !db_put_take(content, "application/json", &media) ||
+        !db_put_take(response, "content", &content))
       goto oom;
-    }
   }
-  if (!db_put(responses, status, response)) goto oom;
+
+  if (!db_put_take(responses, status, &response)) goto oom;
   return 1;
 
 oom:
   oa_fail(error, "out of memory constructing success response");
 fail:
+  json_free(content);
+  json_free(media);
+  json_free(body_schema);
   json_free(response);
   return 0;
 }
@@ -569,10 +653,11 @@ static int db_error_status(
     const DataBindHttpProjectionConfig *config,
     const char *error_type) {
   size_t i;
-  for (i = 0u; i < config->error_count; ++i)
+  for (i = 0u; i < config->error_count; ++i) {
     if (config->errors[i].error_type != NULL &&
         strcmp(config->errors[i].error_type, error_type) == 0)
       return config->errors[i].status;
+  }
   return 500;
 }
 
@@ -581,32 +666,39 @@ static int db_error_responses(
     const DataBindHttpProjectionConfig *config,
     json_value_t *responses, oa_error *error) {
   size_t i;
+
   for (i = 0u; i < operation->error_count; ++i) {
     const char *name = data_bind_service_operation_error_at(
         contract, operation->service_name, operation->name, i);
     int status = db_error_status(config, name);
     char code[4];
     char description[192];
-    json_value_t *response;
+    json_value_t *response = NULL;
+    int written;
 
     if (name == NULL || status < 100 || status > 599 ||
         snprintf(code, sizeof(code), "%03d", status) != 3)
       return oa_fail(error, "%s.%s: invalid typed-error mapping",
                      operation->service_name, operation->name);
-    if (json_object_get(responses, code) != NULL)
-      return oa_fail(error,
-                     "%s.%s: response status %s is ambiguous in this OpenAPI slice",
-                     operation->service_name, operation->name, code);
 
-    if (snprintf(
-            description, sizeof(description),
-            "Typed Service error: %s", name) < 0)
-      return oa_fail(error, "could not format typed-error description");
+    if (json_object_get(responses, code) != NULL)
+      return oa_fail(
+          error,
+          "%s.%s: response status %s is ambiguous in this OpenAPI slice",
+          operation->service_name, operation->name, code);
+
+    written = snprintf(
+        description, sizeof(description),
+        "Typed Service error: %s", name);
+    if (written < 0 || (size_t)written >= sizeof(description))
+      return oa_fail(error, "typed-error description is too long");
+
     response = json_create_object();
     if (response == NULL ||
-        !db_put(response, "description",
-                json_create_string(description)) ||
-        !db_put(responses, code, response)) {
+        !db_put_new(
+            response, "description",
+            json_create_string(description)) ||
+        !db_put_take(responses, code, &response)) {
       json_free(response);
       return oa_fail(error, "out of memory constructing typed-error response");
     }
@@ -628,9 +720,15 @@ static const char *db_method(const char *method) {
 
 static char *db_default_route(
     const char *service, const char *operation) {
-  size_t a = strlen(service), b = strlen(operation);
+  size_t a;
+  size_t b;
   char *route;
+
+  if (service == NULL || operation == NULL) return NULL;
+  a = strlen(service);
+  b = strlen(operation);
   if (a > SIZE_MAX - b - 3u) return NULL;
+
   route = (char *)malloc(a + b + 3u);
   if (route == NULL) return NULL;
   route[0] = '/';
@@ -641,7 +739,8 @@ static char *db_default_route(
 }
 
 static size_t db_operation_count(const json_value_t *paths) {
-  size_t count = 0u, i;
+  size_t count = 0u;
+  size_t i;
   for (i = 0u; i < json_object_size(paths); ++i)
     count += json_object_size(json_object_value(paths, i));
   return count;
@@ -656,7 +755,8 @@ static const char *db_string_field(
 
 static int db_id_exists(
     const json_value_t *paths, const char *operation_id) {
-  size_t i, j;
+  size_t i;
+  size_t j;
   for (i = 0u; i < json_object_size(paths); ++i) {
     const json_value_t *path = json_object_value(paths, i);
     for (j = 0u; j < json_object_size(path); ++j) {
@@ -686,10 +786,10 @@ static int db_same_path_template(const char *a, const char *b) {
 static int db_append_operation(
     json_value_t *root, DataBind *contract,
     const DataBindHttpProjectionArtifactEntry *entry,
+    const DataBindHttpProjectionConfig *config,
     oa_error *error) {
   DataBindServiceOperation service_operation =
       DATA_BIND_SERVICE_OPERATION_INIT;
-  const DataBindHttpProjectionConfig *config;
   const char *method;
   const char *route;
   char *default_route = NULL;
@@ -698,19 +798,14 @@ static int db_append_operation(
   json_value_t *path_item;
   json_value_t *operation = NULL;
   json_value_t *responses = NULL;
+  json_value_t *new_path_item = NULL;
   size_t i;
+  int written;
 
   if (entry == NULL || entry->size < sizeof(*entry) ||
-      entry->service_name == NULL || entry->operation_name == NULL)
+      entry->service_name == NULL || entry->operation_name == NULL ||
+      config == NULL)
     return oa_fail(error, "invalid DataBind HTTP projection entry");
-
-  config = data_bind_http_projection_artifact_find(
-      (const DataBindHttpProjectionArtifact *)
-          ((const char *)entry -
-           offsetof(DataBindHttpProjectionArtifactEntry, size)),
-      entry->service_name, entry->operation_name);
-  (void)config;
-  config = &entry->config;
 
   if (!data_bind_service_operation_find(
           contract, entry->service_name, entry->operation_name,
@@ -720,8 +815,9 @@ static int db_append_operation(
 
   method = db_method(config->method);
   if (method == NULL)
-    return oa_fail(error, "%s.%s: HTTP method is not representable in OpenAPI",
-                   entry->service_name, entry->operation_name);
+    return oa_fail(
+        error, "%s.%s: HTTP method is not representable in OpenAPI",
+        entry->service_name, entry->operation_name);
 
   if (config->route != NULL) {
     route = config->route;
@@ -730,6 +826,7 @@ static int db_append_operation(
         entry->service_name, entry->operation_name);
     route = default_route;
   }
+
   if (route == NULL || route[0] != '/' ||
       strpbrk(route, " \t\r\n?#") != NULL) {
     free(default_route);
@@ -737,10 +834,10 @@ static int db_append_operation(
                    entry->service_name, entry->operation_name);
   }
 
-  if (snprintf(
-          operation_id, sizeof(operation_id), "%s.%s",
-          entry->service_name, entry->operation_name) <= 0 ||
-      strlen(operation_id) >= sizeof(operation_id) - 1u) {
+  written = snprintf(
+      operation_id, sizeof(operation_id), "%s.%s",
+      entry->service_name, entry->operation_name);
+  if (written <= 0 || (size_t)written >= sizeof(operation_id)) {
     free(default_route);
     return oa_fail(error, "operationId is too long");
   }
@@ -759,13 +856,14 @@ static int db_append_operation(
     free(default_route);
     return oa_fail(error, "%s: duplicate operationId", operation_id);
   }
+
   for (i = 0u; i < json_object_size(paths); ++i) {
     const char *other = json_object_key(paths, i);
     if (strcmp(route, other) != 0 &&
         db_same_path_template(route, other)) {
       free(default_route);
-      return oa_fail(error,
-                     "%s: equivalent route template already exists", route);
+      return oa_fail(
+          error, "%s: equivalent route template already exists", route);
     }
   }
 
@@ -778,9 +876,12 @@ static int db_append_operation(
   operation = json_create_object();
   responses = json_create_object();
   if (operation == NULL || responses == NULL ||
-      !db_put(operation, "operationId",
-              json_create_string(operation_id)) ||
-      !db_parameters(
+      !db_put_new(
+          operation, "operationId",
+          json_create_string(operation_id)))
+    goto oom;
+
+  if (!db_parameters(
           contract, service_operation.request_type,
           config, operation, error) ||
       !db_request_body(
@@ -791,32 +892,32 @@ static int db_append_operation(
           responses, error) ||
       !db_error_responses(
           contract, &service_operation, config,
-          responses, error) ||
-      !db_put(operation, "responses", responses)) {
-    json_free(operation);
-    json_free(responses);
-    free(default_route);
-    return 0;
-  }
-  responses = NULL;
+          responses, error))
+    goto fail;
+
+  if (!db_put_take(operation, "responses", &responses))
+    goto oom;
 
   if (path_item == NULL) {
-    path_item = json_create_object();
-    if (path_item == NULL || !db_put(paths, route, path_item)) {
-      json_free(path_item);
-      json_free(operation);
-      free(default_route);
-      return oa_fail(error, "out of memory constructing path");
-    }
-  }
-  if (!db_put(path_item, method, operation)) {
-    json_free(operation);
-    free(default_route);
-    return oa_fail(error, "out of memory constructing operation");
+    new_path_item = json_create_object();
+    if (new_path_item == NULL) goto oom;
+    if (!db_put_take(paths, route, &new_path_item)) goto oom;
+    path_item = json_object_get(paths, route);
+    if (path_item == NULL) goto oom;
   }
 
+  if (!db_put_take(path_item, method, &operation)) goto oom;
   free(default_route);
   return 1;
+
+oom:
+  oa_fail(error, "out of memory constructing DataBind OpenAPI operation");
+fail:
+  json_free(new_path_item);
+  json_free(responses);
+  json_free(operation);
+  free(default_route);
+  return 0;
 }
 
 int oa_document_add_databind_http(
@@ -837,8 +938,22 @@ int oa_document_add_databind_http(
   if (next == NULL) return oa_fail(error, "out of memory");
 
   for (i = 0u; i < artifact->entry_count; ++i) {
-    if (!db_append_operation(
-            next, contract, &artifact->entries[i], error)) {
+    const DataBindHttpProjectionArtifactEntry *entry =
+        &artifact->entries[i];
+    const DataBindHttpProjectionConfig *config;
+
+    if (entry->size < sizeof(*entry) ||
+        entry->service_name == NULL ||
+        entry->operation_name == NULL) {
+      json_free(next);
+      return oa_fail(error, "invalid generated HTTP projection entry");
+    }
+
+    config = data_bind_http_projection_artifact_find(
+        artifact, entry->service_name, entry->operation_name);
+    if (config == NULL ||
+        !db_append_operation(
+            next, contract, entry, config, error)) {
       json_free(next);
       return 0;
     }
