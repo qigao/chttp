@@ -20,8 +20,10 @@ typedef struct chttp_service {
  * Bounded synchronous MethodPlan runtime.
  *
  * The first slice intentionally admits scalar/text HTTP bindings only. Native
- * workspace is shared because CHttp::Server invokes route handlers serially on
- * its owner thread. Deferred execution is a later slice.
+ * workspace is shared and the service is therefore pinned to the first
+ * underlying CHttp::Server used for a successful mount. Additional mounts must
+ * use that same owner thread; a different server returns SALTS_EBUSY.
+ * Deferred execution is a later slice.
  */
 typedef struct chttp_service_config {
   size_t size;
