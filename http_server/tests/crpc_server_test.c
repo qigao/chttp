@@ -158,31 +158,100 @@ static cserde_status crpc_server_test_encode_params(void *user, cserde_writer *w
 }
 
 static int crpc_server_test_math(void *user, const crpc_server_request_view *request,
-                                 crpc_server_response *response) {
+                                  crpc_server_response *response) {
   static const uint64_t result = UINT64_C(14);
   crpc_server_test_probe *probe = (crpc_server_test_probe *)user;
+  crpc_server_param_reader selected = CRPC_SERVER_PARAM_READER_INIT;
   cserde_token token = {0};
   const cmeta_sig_desc *signature;
+  int present = 0;
   int status;
-  if (probe == NULL || request == NULL || response == NULL || request->params == NULL ||
-      strcmp(request->target, "/rpc/math") != 0 || strcmp(request->method, "math.double") != 0 ||
-      cserde_reader_next(request->params, &token) != CSERDE_OK ||
-      token.kind != CSERDE_ARRAY_BEGIN ||
-      cserde_reader_next(request->params, &token) != CSERDE_OK || token.kind != CSERDE_UINT ||
-      token.value.uint != UINT64_C(7) || cserde_reader_next(request->params, &token) != CSERDE_OK ||
-      token.kind != CSERDE_ARRAY_END || cserde_reader_next(request->params, &token) != CSERDE_DONE)
+
+  if (probe == NULL || request == NULL || response == NULL ||
+      request->params == NULL ||
+      strcmp(request->target, "/rpc/math") != 0 ||
+      strcmp(request->method, "math.double") != 0)
     return SALTS_EPROTO;
+
+  status = crpc_server_request_param_open(
+      request, NULL, 0u, &selected, &present);
+  if (status != SALTS_OK || !present || selected.reader == NULL ||
+      cserde_reader_next(selected.reader, &token) != CSERDE_OK ||
+      token.kind != CSERDE_UINT || token.value.uint != UINT64_C(7) ||
+      cserde_reader_next(selected.reader, &token) != CSERDE_DONE) {
+    crpc_server_request_param_close(&selected);
+    return SALTS_EPROTO;
+  }
+  crpc_server_request_param_close(&selected);
+
+  present = 1;
+  status = crpc_server_request_param_open(
+      request, NULL, 1u, &selected, &present);
+  if (status != SALTS_OK || present || selected.reader != NULL)
+    return SALTS_EPROTO;
+  crpc_server_request_param_close(&selected);
+
+  token = (cserde_token){0};
+  if (cserde_reader_next(request->params, &token) != CSERDE_OK ||
+      token.kind != CSERDE_ARRAY_BEGIN ||
+      cserde_reader_next(request->params, &token) != CSERDE_OK ||
+      token.kind != CSERDE_UINT || token.value.uint != UINT64_C(7) ||
+      cserde_reader_next(request->params, &token) != CSERDE_OK ||
+      token.kind != CSERDE_ARRAY_END ||
+      cserde_reader_next(request->params, &token) != CSERDE_DONE)
+    return SALTS_EPROTO;
+
   ++probe->calls;
   if (request->notification) ++probe->notifications;
   if (request->callable != NULL) {
     signature = cmeta_callable_signature(*request->callable);
-    if (signature == NULL || signature->protocol != CMETA_FN_PROTOCOL_VALUE) return SALTS_EPROTO;
+    if (signature == NULL ||
+        signature->protocol != CMETA_FN_PROTOCOL_VALUE)
+      return SALTS_EPROTO;
     ++probe->callable_calls;
   }
-  status = crpc_server_response_result(response, crpc_server_test_encode_uint, (void *)&result);
+  status = crpc_server_response_result(
+      response, crpc_server_test_encode_uint, (void *)&result);
   probe->second_response_status =
-      crpc_server_response_result(response, crpc_server_test_encode_uint, (void *)&result);
+      crpc_server_response_result(
+          response, crpc_server_test_encode_uint, (void *)&result);
   return status;
+}
+
+static int crpc_server_test_named(
+    void *user, const crpc_server_request_view *request,
+    crpc_server_response *response) {
+  static const uint64_t result = UINT64_C(3);
+  crpc_server_test_probe *probe = (crpc_server_test_probe *)user;
+  crpc_server_param_reader selected = CRPC_SERVER_PARAM_READER_INIT;
+  cserde_token token = {0};
+  int present = 0;
+  int status;
+
+  if (probe == NULL || request == NULL || response == NULL)
+    return SALTS_EPROTO;
+
+  status = crpc_server_request_param_open(
+      request, "left", SIZE_MAX, &selected, &present);
+  if (status != SALTS_OK || !present || selected.reader == NULL ||
+      cserde_reader_next(selected.reader, &token) != CSERDE_OK ||
+      token.kind != CSERDE_UINT || token.value.uint != UINT64_C(3) ||
+      cserde_reader_next(selected.reader, &token) != CSERDE_DONE) {
+    crpc_server_request_param_close(&selected);
+    return SALTS_EPROTO;
+  }
+  crpc_server_request_param_close(&selected);
+
+  present = 1;
+  status = crpc_server_request_param_open(
+      request, "missing", SIZE_MAX, &selected, &present);
+  if (status != SALTS_OK || present || selected.reader != NULL)
+    return SALTS_EPROTO;
+  crpc_server_request_param_close(&selected);
+
+  ++probe->calls;
+  return crpc_server_response_result(
+      response, crpc_server_test_encode_uint, (void *)&result);
 }
 
 static int crpc_server_test_status(void *user, const crpc_server_request_view *request,
@@ -391,6 +460,71 @@ spec("CRPC server") {
     check_equal(middleware_probe.middleware_calls, (size_t)2u);
     check_equal(crpc_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(crpc_server_destroy(&server), SALTS_OK);
+  }
+
+  it("selects object params by name without exposing the JSON DOM") {
+    static const char call[] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"named\","
+        "\"params\":{\"left\":3,\"right\":4},\"id\":11}";
+    static const char reply[] =
+        "{\"jsonrpc\":\"2.0\",\"result\":3,\"id\":11}";
+    static const char duplicate[] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"named\","
+        "\"params\":{\"left\":3,\"left\":4},\"id\":12}";
+    static const char duplicate_reply[] =
+        "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,"
+        "\"message\":\"Internal error\"},\"id\":12}";
+    crpc_server server = {0};
+    chttp_client client = {0};
+    crpc_server_config server_config = crpc_server_test_config(0);
+    chttp_client_config client_config =
+        crpc_server_test_http_client_config();
+    crpc_server_test_probe probe = {0};
+    crpc_method named = {.name = "named"};
+    chttp_response response = {0};
+    char uri[64];
+    uint16_t port = 0u;
+
+    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
+    check_equal(
+        crpc_server_register(
+            &server, "/rpc", &named, crpc_server_test_named, &probe),
+        SALTS_OK);
+    check_equal(crpc_server_start(&server), SALTS_OK);
+    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(
+        crpc_server_test_http_post(
+            &client, uri, "/rpc", call, sizeof(call) - 1u,
+            NULL, CHTTP_HTTP_1_1, &response),
+        SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, reply, sizeof(reply) - 1u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        crpc_server_test_http_post(
+            &client, uri, "/rpc", duplicate, sizeof(duplicate) - 1u,
+            NULL, CHTTP_HTTP_1_1, &response),
+        SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(
+        response.body, duplicate_reply, sizeof(duplicate_reply) - 1u);
+    chttp_response_destroy(&response);
+
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(
+        chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(crpc_server_destroy(&server), SALTS_OK);
   }
 
