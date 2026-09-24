@@ -369,8 +369,11 @@ jobs:
           test -f "$nupkg"
           unzip -Z1 "$nupkg" | sort | tee "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/linux-x64/include/chttp_service/service.h" "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/windows-x64/include/chttp_service/service.h" "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/android-arm64-v8a/include/chttp_service/service.h" "$RUNNER_TEMP/chttp-nupkg.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: chttp-native-nuget
