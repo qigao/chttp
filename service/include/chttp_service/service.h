@@ -40,16 +40,17 @@ typedef struct chttp_service_config {
 /**
  * Exact-ABI operation callback.
  *
- * CHttp owns HTTP extraction/publication. The callback owns only exact native
- * staging and invocation:
+ * The CHttp transport adapter owns transport extraction/publication. The
+ * callback owns only exact native staging and invocation:
  *
  *   BindingPlan bind_inputs -> exact C call -> BindingPlan write_outcome
  *
  * It must not inspect/compile HTTP projection metadata and must not retain any
  * borrowed argument after return.
  *
- * Return SALTS_EINVAL only for request/ingress rejection that should become
- * HTTP 400. Other negative Salts errors are treated as server failures.
+ * Return SALTS_EINVAL only for caller/input rejection. The mounted transport
+ * maps that class to its protocol-level invalid-input response. Other negative
+ * Salts errors are treated as server/runtime failures.
  */
 typedef int (*chttp_service_invoke_fn)(
     void *user,
