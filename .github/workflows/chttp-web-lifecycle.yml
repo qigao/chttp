@@ -59,7 +59,167 @@ jobs:
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
             -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
             --no-tests=error --output-on-failure
       - name: Build full Chttp graph
         shell: bash
@@ -177,6 +337,1045 @@ jobs:
             test_databind_http_provider test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
             -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Build full Chttp graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+      - name: Run Web reference example smoke tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_crud_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_deferred_example
+          printf '\n' | build/linux-gcc-debug/bin/chttp_web_form_upload_example
+          build/linux-gcc-debug/bin/chttp_web_authenticated_app_example --self-test
+      - name: Run full Chttp CTest graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with AddressSanitizer
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments))
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
+        shell: bash
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-dev-user \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=ON
+          cmake --build build/linux-gcc-debug --target \
+            chttp_web_renderer_test chttp_web_context_test \
+            chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
+            chttp_web_deferred_test chttp_web_sse_test \
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            test_databind_http_provider test_ui_renderer test_ui_fragments -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_databind_http_provider|openapi_ui_(renderer|fragments)) \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --no-tests=error --output-on-failure
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
             --no-tests=error --output-on-failure
       - name: Verify exact head and clean tracked source
         if: always()
