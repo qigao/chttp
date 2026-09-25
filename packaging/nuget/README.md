@@ -4,7 +4,7 @@ Versioned prebuilt Release SDKs for qigao/chttp.
 
 `CHttp.Native 1.0.0` has exact native SDK dependencies:
 
-- `Salts.Native 1.5.0`
+- `Salts.Native 1.6.0`
 - `SaltsUtils.Native 4.0.0`
 
 ## Layout
