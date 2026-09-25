@@ -1,7 +1,7 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(Salts 1.5.0 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
+find_dependency(Salts 1.6.0 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 find_dependency(SaltsUtils 4.0.0 EXACT CONFIG REQUIRED PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 if(NOT TARGET Salts::DataBind)
   set(Chttp_FOUND FALSE)
