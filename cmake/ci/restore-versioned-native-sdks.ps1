@@ -1,7 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$Rid)
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw "GITHUB_TOKEN is required" }
-$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.5.0" }
+$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.6.0" }
 $utilsVersion = if ($env:SALTS_UTILS_SDK_VERSION) { $env:SALTS_UTILS_SDK_VERSION } else { "4.0.0" }
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
 $config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
