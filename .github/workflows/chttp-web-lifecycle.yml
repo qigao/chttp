@@ -52,13 +52,15 @@ jobs:
             chttp_web_renderer_test chttp_web_context_test \
             chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
             chttp_web_deferred_test chttp_web_sse_test \
-            chttp_web_lifecycle_test chttp_web_authenticated_app_example test_ui_renderer test_ui_fragments -j2
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            chttp_service_http_test chttp_service_header_cpp_test \
+            test_ui_renderer test_ui_fragments -j2
       - name: Run focused lifecycle tests
         shell: bash
         run: |
           set -euxo pipefail
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|chttp_service_(http_test|header_cpp_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
       - name: Build full Chttp graph
         shell: bash
@@ -91,9 +93,11 @@ jobs:
             chttp_web_renderer_test chttp_web_context_test \
             chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
             chttp_web_deferred_test chttp_web_sse_test \
-            chttp_web_lifecycle_test chttp_web_authenticated_app_example test_ui_renderer test_ui_fragments -j2
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            chttp_service_http_test chttp_service_header_cpp_test \
+            test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|chttp_service_(http_test|header_cpp_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
       - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
         shell: bash
@@ -108,9 +112,11 @@ jobs:
             chttp_web_renderer_test chttp_web_context_test \
             chttp_web_validation_test chttp_web_multipart_test chttp_web_upload_test chttp_web_upload_http_test chttp_web_auth_http_test chttp_web_assets_http_test \
             chttp_web_deferred_test chttp_web_sse_test \
-            chttp_web_lifecycle_test chttp_web_authenticated_app_example test_ui_renderer test_ui_fragments -j2
+            chttp_web_lifecycle_test chttp_web_authenticated_app_example \
+            chttp_service_http_test chttp_service_header_cpp_test \
+            test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|chttp_service_(http_test|header_cpp_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
       - name: Verify exact head and clean tracked source
         if: always()
