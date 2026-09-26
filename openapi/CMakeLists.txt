@@ -1,11 +1,11 @@
 find_package(unofficial-tree-sitter CONFIG REQUIRED)
 find_library(OPENAPI_C_GRAMMAR_LIBRARY NAMES tree-sitter-c REQUIRED)
 
-add_library(openapi_generator STATIC src/plugin.c src/extract.c src/document.c src/comment.c)
+add_library(openapi_generator STATIC src/plugin.c src/extract.c src/document.c src/comment.c src/databind_http.c)
 add_library(OpenAPI::Generator ALIAS openapi_generator)
 target_include_directories(openapi_generator PUBLIC include PRIVATE src)
 target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sitter
-  Salts::CMeta Salts::CFlow Salts::JsonParser Salts::CYamlJsonAdapter
+  Salts::CMeta Salts::CFlow Salts::JsonParser Salts::CYamlJsonAdapter Salts::DataBind
   PRIVATE ${CMAKE_DL_LIBS})
 
 add_library(openapi_ui_model STATIC src/ui_model.c)
