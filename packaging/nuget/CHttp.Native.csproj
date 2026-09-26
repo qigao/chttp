@@ -4,7 +4,7 @@
     <IsPackable>true</IsPackable>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <PackageId>CHttp.Native</PackageId>
-    <PackageVersion Condition="'$(PackageVersion)' == ''">1.0.0</PackageVersion>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">1.1.0</PackageVersion>
     <Authors>qigao</Authors>
     <Description>Prebuilt CHttp C/C++ SDK install trees for native consumers.</Description>
     <PackageTags>chttp;http;native;c;cpp;cmake;android</PackageTags>
@@ -16,8 +16,8 @@
     <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[1.2.0]" />
-    <PackageReference Include="SaltsUtils.Native" Version="[2.0.2]" />
+    <PackageReference Include="Salts.Native" Version="[1.6.0]" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.0.0]" />
     <None Include="README.md" Pack="true" PackagePath="\" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
   </ItemGroup>
