@@ -873,12 +873,27 @@ static int chttp_server_connection_retry(chttp_server_connection *connection) {
   if (action == CHTTP_SERVER_PENDING_NONE) return SALTS_OK;
   if (action == CHTTP_SERVER_PENDING_RECEIVE)
     status = cnet_receive(&connection->server->network, connection->handle, 1u);
-  else if (action == CHTTP_SERVER_PENDING_SEND)
-    status = chttp_cnet_retained_send(
-        &connection->server->network, connection->handle, connection->outbound_retained,
-        connection->outbound, connection->outbound_capacity, connection->outbound_size,
-        connection->close_after_write ? 1 : 0);
-  else status = cnet_close(&connection->server->network, connection->handle);
+  else if (action == CHTTP_SERVER_PENDING_SEND) {
+    if (connection->retained_response_sg) {
+      chttp_server_response_builder *builder =
+          &connection->request_state.response_builder;
+      if (builder->retained_body == NULL ||
+          mem_buffer_used(builder->retained_body) !=
+              connection->retained_response_sg_body_size)
+        return SALTS_EPROTO;
+      status = chttp_cnet_retained_send_pair(
+          &connection->server->network, connection->handle,
+          connection->outbound_retained, connection->outbound,
+          connection->outbound_capacity, connection->outbound_size,
+          builder->retained_body, connection->close_after_write ? 1 : 0);
+    } else {
+      status = chttp_cnet_retained_send(
+          &connection->server->network, connection->handle,
+          connection->outbound_retained, connection->outbound,
+          connection->outbound_capacity, connection->outbound_size,
+          connection->close_after_write ? 1 : 0);
+    }
+  } else status = cnet_close(&connection->server->network, connection->handle);
   if (status == SALTS_OK) {
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
     if (action == CHTTP_SERVER_PENDING_SEND) connection->writing = true;
@@ -984,6 +999,8 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     connection->response_close_after_stream = false;
     connection->deferred_response_writing = false;
     connection->retained_response_paused = false;
+    connection->retained_response_sg = false;
+    connection->retained_response_sg_body_size = 0u;
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
     connection->outbound_size = 0u;
     chttp_server_connection_release_outbound(connection);
@@ -1305,14 +1322,28 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
   chttp_server_connection *connection = (chttp_server_connection *)user;
   const bool resume_deferred = connection != NULL && connection->deferred_response_writing;
   const bool resume_retained = connection != NULL && connection->retained_response_paused;
+  size_t expected_size;
   int status = SALTS_OK;
-  if (!chttp_server_connection_matches(connection, handle) || !connection->writing ||
-      size != connection->outbound_size) {
+  if (!chttp_server_connection_matches(connection, handle) || !connection->writing) {
+    chttp_server_connection_close(connection);
+    return;
+  }
+  expected_size = connection->outbound_size;
+  if (connection->retained_response_sg) {
+    if (connection->retained_response_sg_body_size > SIZE_MAX - expected_size) {
+      chttp_server_connection_close(connection);
+      return;
+    }
+    expected_size += connection->retained_response_sg_body_size;
+  }
+  if (size != expected_size) {
     chttp_server_connection_close(connection);
     return;
   }
   connection->writing = false;
   connection->outbound_size = 0u;
+  connection->retained_response_sg = false;
+  connection->retained_response_sg_body_size = 0u;
   connection->deferred_response_writing = false;
   connection->retained_response_paused = false;
   if (resume_retained)
@@ -1568,10 +1599,30 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
         connection, connection->outbound_size + connection->server->max_response_wire_bytes);
   }
   if (status == SALTS_OK) {
-    status =
-        chttp_server_response_serialize(builder, request, connection->outbound,
-                                        connection->outbound_capacity, &connection->outbound_size);
-    if (status != SALTS_OK) chttp_session_request_abort(&connection->request_state);
+    const bool retained_sg =
+        builder->retained_body != NULL &&
+        builder->body_size != 0u &&
+        request->method != CHTTP_METHOD_HEAD &&
+        connection->wire_protocol == CHTTP_SERVER_WIRE_HTTP_1_1 &&
+        !connection->server->tls_initialized;
+    status = retained_sg
+                 ? chttp_server_response_serialize_headers(
+                       builder, request, connection->outbound,
+                       connection->outbound_capacity,
+                       &connection->outbound_size)
+                 : chttp_server_response_serialize(
+                       builder, request, connection->outbound,
+                       connection->outbound_capacity,
+                       &connection->outbound_size);
+    if (status == SALTS_OK && retained_sg) {
+      connection->retained_response_sg = true;
+      connection->retained_response_sg_body_size = builder->body_size;
+    }
+    if (status != SALTS_OK) {
+      connection->retained_response_sg = false;
+      connection->retained_response_sg_body_size = 0u;
+      chttp_session_request_abort(&connection->request_state);
+    }
   }
   if (status == SALTS_OK) {
     chttp_server_stats_response(connection->server);
@@ -1655,6 +1706,8 @@ static int chttp_server_accept_ready(chttp_server_impl *server) {
     connection->deferred_disconnected = false;
     connection->deferred_response_writing = false;
     connection->retained_response_paused = false;
+    connection->retained_response_sg = false;
+    connection->retained_response_sg_body_size = 0u;
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
     connection->outbound_size = 0u;
     connection->h2_close_after_ms = 0u;
