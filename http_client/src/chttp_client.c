@@ -1023,6 +1023,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   chttp_client_impl *impl = chttp_client_get(client);
   chttp_slot *slot;
   unsigned char *request_data = NULL;
+  mem_buffer_t *request_buffer = NULL;
   size_t request_size = 0u;
   cnet_connect_options connect_options;
   chttp_tls_profile_impl *tls_profile = NULL;
@@ -1042,13 +1043,24 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   if (status != SALTS_OK) return status;
   status = chttp_request_build(options, &impl->limits, &request_data, &request_size);
   if (status != SALTS_OK) return status;
+  if (request_data == NULL || request_size == 0u) {
+    free(request_data);
+    return SALTS_EPROTO;
+  }
+  request_buffer =
+      mem_wrap_external(request_data, request_size, chttp_client_owned_external_free, NULL);
+  if (request_buffer == NULL) {
+    free(request_data);
+    return SALTS_ENOMEM;
+  }
+  mem_set_used(request_buffer, request_size);
   status = chttp_tls_profile_acquire(options->tls, &tls_profile);
   if (status != SALTS_OK) {
-    free(request_data);
+    mem_buffer_release(request_buffer);
     return status;
   }
   if (tls_profile != NULL && chttp_tls_profile_protocol(tls_profile) != options->protocol) {
-    free(request_data);
+    mem_buffer_release(request_buffer);
     chttp_tls_profile_release(tls_profile);
     return SALTS_EPROTONOSUPPORT;
   }
@@ -1057,13 +1069,13 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   if (slot != NULL) {
     chttp_tls_profile_release(tls_profile);
     if (!slot->receive_armed) {
-      free(request_data);
+      mem_buffer_release(request_buffer);
       (void)chttp_slot_try_close(slot);
       return SALTS_ENOBUFS;
     }
     status = chttp_slot_prepare_streaming(slot, options, file_sink_transfer);
     if (status != SALTS_OK) {
-      free(request_data);
+      mem_buffer_release(request_buffer);
       return status;
     }
     slot_index = (size_t)(slot - impl->slots);
@@ -1071,6 +1083,9 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
     slot->public_handle =
         (chttp_request){.slot = (uint32_t)(slot_index + 1u), .generation = slot->generation};
     slot->request_data = request_data;
+    slot->request_buffer = request_buffer;
+    request_data = NULL;
+    request_buffer = NULL;
     slot->protocol = CHTTP_HTTP_1_1;
     slot->request_size = request_size;
     slot->on_complete = options->on_complete;
@@ -1086,14 +1101,11 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
       chttp_file_transfer_set_ready(file_transfer, chttp_slot_file_ready, slot);
     if (file_sink_transfer != NULL)
       chttp_file_sink_transfer_set_ready(file_sink_transfer, chttp_slot_file_sink_ready, slot);
-    status = cnet_send(&impl->network, slot->connection, slot->request_data, slot->request_size);
+    status = cnet_send_buffer(&impl->network, slot->connection, slot->request_buffer);
     if (status != SALTS_OK) {
-      free(slot->request_data);
-      slot->request_data = NULL;
-      slot->request_size = 0u;
+      chttp_slot_release_request_buffer(slot);
       chttp_response_parser_destroy(&slot->response_parser);
-      free(slot->source_buffer);
-      slot->source_buffer = NULL;
+      chttp_slot_release_source_buffer(slot);
       slot->source_enabled = false;
       slot->source_complete = false;
       if (slot->file_transfer != NULL)
@@ -1108,16 +1120,15 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
       slot->state = CHTTP_SLOT_IDLE;
       return status;
     }
-    free(slot->request_data);
-    slot->request_data = NULL;
-    slot->request_size = 0u;
+    slot->request_send_pending = true;
+    chttp_slot_release_request_buffer(slot);
     *out_request = slot->public_handle;
     return SALTS_OK;
   }
 
   slot = chttp_slot_find_free(impl);
   if (slot == NULL) {
-    free(request_data);
+    mem_buffer_release(request_buffer);
     chttp_tls_profile_release(tls_profile);
     status = chttp_begin_idle_eviction(impl);
     if (status != SALTS_OK) return status;
@@ -1125,7 +1136,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   }
   status = chttp_slot_prepare_streaming(slot, options, file_sink_transfer);
   if (status != SALTS_OK) {
-    free(request_data);
+    mem_buffer_release(request_buffer);
     chttp_tls_profile_release(tls_profile);
     return status;
   }
@@ -1134,6 +1145,9 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   slot->public_handle =
       (chttp_request){.slot = (uint32_t)(slot_index + 1u), .generation = slot->generation};
   slot->request_data = request_data;
+  slot->request_buffer = request_buffer;
+  request_data = NULL;
+  request_buffer = NULL;
   slot->protocol = CHTTP_HTTP_1_1;
   slot->request_size = request_size;
   slot->on_complete = options->on_complete;
