@@ -65,9 +65,11 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build build/linux-gcc-debug --target install -j2
           test -f "$prefix/include/chttp_web/web.h"
+          test -f "$prefix/include/chttp_service/service.h"
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
           test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
           grep -q 'CHttp::Web' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+          grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
           if grep -R -n "$GITHUB_WORKSPACE" "$prefix/lib/cmake/Chttp"; then
             echo "installed Chttp package contains source-tree paths" >&2
             exit 1
@@ -84,12 +86,20 @@ jobs:
           cmake -S "$src" -B "$build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$prefix"
           cmake --build "$build" -j2
-      - name: Run standalone installed consumer
+          service_src="$RUNNER_TEMP/chttp-service-consumer"
+          service_build="$RUNNER_TEMP/chttp-service-consumer-build"
+          mkdir -p "$service_src"
+          cp service/tests/installed/CMakeLists.txt service/tests/installed/main.c "$service_src/"
+          cmake -S "$service_src" -B "$service_build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$prefix"
+          cmake --build "$service_build" -j2
+      - name: Run standalone installed consumers
         shell: bash
         run: |
           set -euxo pipefail
           export LD_LIBRARY_PATH="$RUNNER_TEMP/chttp-install/lib:${LD_LIBRARY_PATH:-}"
           "$RUNNER_TEMP/chttp-web-consumer-build/chttp_web_consumer"
+          "$RUNNER_TEMP/chttp-service-consumer-build/chttp_service_consumer"
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash

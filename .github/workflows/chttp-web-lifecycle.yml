@@ -60,6 +60,15 @@ jobs:
           ctest --test-dir build/linux-gcc-debug \
             -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
+      - name: Run Service CMeta admission tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target \
+            chttp_service_http_test chttp_service_header_cpp_test -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^chttp_service_(http_test|header_cpp_test)$' \
+            --no-tests=error --output-on-failure
       - name: Build full Chttp graph
         shell: bash
         run: |
@@ -95,6 +104,11 @@ jobs:
           ctest --test-dir build/linux-gcc-debug \
             -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
+          cmake --build build/linux-gcc-debug --target \
+            chttp_service_http_test chttp_service_header_cpp_test -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^chttp_service_(http_test|header_cpp_test)$' \
+            --no-tests=error --output-on-failure
       - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
         shell: bash
         env:
@@ -111,6 +125,11 @@ jobs:
             chttp_web_lifecycle_test chttp_web_authenticated_app_example test_ui_renderer test_ui_fragments -j2
           ctest --test-dir build/linux-gcc-debug \
             -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
+            --no-tests=error --output-on-failure
+          cmake --build build/linux-gcc-debug --target \
+            chttp_service_http_test chttp_service_header_cpp_test -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^chttp_service_(http_test|header_cpp_test)$' \
             --no-tests=error --output-on-failure
       - name: Verify exact head and clean tracked source
         if: always()
