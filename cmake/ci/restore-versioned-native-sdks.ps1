@@ -29,9 +29,14 @@ foreach ($p in @(
   (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
   (Join-Path $saltsRoot "include\cmeta\function.h"),
   (Join-Path $utilsRoot "lib\cmake\SaltsUtils\SaltsUtilsConfig.cmake"),
-  (Join-Path $utilsRoot "include\data_bind_method_plan.h")
+  (Join-Path $utilsRoot "include\data_bind_method_plan.h"),
+  (Join-Path $utilsRoot "include\data_bind_native_binding.h")
 )) {
   if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw "missing restored SDK file: $p" }
+}
+$nativeBinding = Join-Path $utilsRoot "include\data_bind_native_binding.h"
+if ((Get-Content -LiteralPath $nativeBinding -Raw) -notmatch "DataBindNativeExecution") {
+  throw "restored SaltsUtils SDK does not publish DataBindNativeExecution"
 }
 "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
 "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
