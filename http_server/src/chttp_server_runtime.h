@@ -247,6 +247,7 @@ struct chttp_server_connection {
   mem_buffer_t *outbound_retained;
   size_t outbound_capacity;
   size_t outbound_size;
+  size_t retained_response_sg_body_size;
   uint64_t h2_close_after_ms;
   unsigned char protocol_prefix[24];
   size_t protocol_prefix_size;
@@ -264,6 +265,7 @@ struct chttp_server_connection {
   bool deferred_disconnected;
   bool deferred_response_writing;
   bool retained_response_paused;
+  bool retained_response_sg;
   chttp_server_pending_action pending_action;
 };
 
