@@ -508,10 +508,14 @@ static cserde_status chttp_service_scalar_write(
     break;
   case CSERDE_SINT:
   case CSERDE_UINT:
-    required = 32u;
+    required = provider->service->response_capacity < 32u
+                   ? provider->service->response_capacity
+                   : 32u;
     break;
   case CSERDE_FLOAT:
-    required = 64u;
+    required = provider->service->response_capacity < 64u
+                   ? provider->service->response_capacity
+                   : 64u;
     break;
   case CSERDE_STRING:
   case CSERDE_BYTES:
@@ -544,21 +548,27 @@ static cserde_status chttp_service_scalar_write(
   case CSERDE_SINT:
     written = snprintf(
         buffer, capacity, "%" PRId64, token->value.sint);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
+    if (written < 0 || (size_t)written >= capacity ||
+        (size_t)written > provider->service->response_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_UINT:
     written = snprintf(
         buffer, capacity, "%" PRIu64, token->value.uint);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
+    if (written < 0 || (size_t)written >= capacity ||
+        (size_t)written > provider->service->response_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_FLOAT:
     written = snprintf(
         buffer, capacity, "%.17g", token->value.floating);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
+    if (written < 0 || (size_t)written >= capacity ||
+        (size_t)written > provider->service->response_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
