@@ -69,7 +69,7 @@ static const cmeta_type_desc WEB_FORM_DESCRIPTOR_TYPE = {
     &WEB_FORM_DESCRIPTOR_ID};
 static const cmeta_field_desc WEB_FORM_DESCRIPTOR_LAYOUT_FIELDS[] = {{
     "count", "uint32_t", offsetof(web_form_descriptor_model, count),
-    sizeof(uint32_t), _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL}};
+    sizeof(uint32_t), _Alignof(uint32_t), &cmeta_type_uint32, NULL}};
 static const cmeta_struct_desc WEB_FORM_DESCRIPTOR_LAYOUT = {
     "web_form_descriptor_model",
     sizeof(web_form_descriptor_model),
@@ -78,7 +78,7 @@ static const cmeta_struct_desc WEB_FORM_DESCRIPTOR_LAYOUT = {
     1u};
 static const cmeta_data_field_desc WEB_FORM_DESCRIPTOR_FIELDS[] = {{
     "chttp.web.form.ScalarForm.count", "count",
-    offsetof(web_form_descriptor_model, count), &salts_uint32_cmeta_data}};
+    offsetof(web_form_descriptor_model, count), &cmeta_data_uint32}};
 static const cmeta_data_struct_shape WEB_FORM_DESCRIPTOR_SHAPE = {
     &WEB_FORM_DESCRIPTOR_LAYOUT, WEB_FORM_DESCRIPTOR_FIELDS, 1u};
 static const cmeta_data_desc WEB_FORM_DESCRIPTOR_DATA = {
