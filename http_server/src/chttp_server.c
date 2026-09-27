@@ -983,6 +983,7 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     connection->response_source_chunked = false;
     connection->response_close_after_stream = false;
     connection->deferred_response_writing = false;
+    connection->retained_response_paused = false;
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
     connection->outbound_size = 0u;
     chttp_server_connection_release_outbound(connection);
@@ -1060,7 +1061,8 @@ static int chttp_server_h1_input(chttp_server_connection *connection, const void
     const chttp_server_deferred_state deferred_state = chttp_server_deferred_token_state(
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire));
     if (connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_HANDSHAKE &&
-        deferred_state == CHTTP_SERVER_DEFERRED_IDLE)
+        deferred_state == CHTTP_SERVER_DEFERRED_IDLE &&
+        !connection->retained_response_paused)
       return SALTS_EPROTO;
     status = chttp_server_buffer_grow(connection->server, &connection->websocket_upgrade_input,
                                       &connection->websocket_upgrade_input_capacity, remaining,
@@ -1278,7 +1280,7 @@ static void chttp_server_h1_file_ready(void *user) {
   else if (!connection->response_streaming) (void)chttp_server_send_pending(connection);
 }
 
-static int chttp_server_deferred_input_resume(chttp_server_connection *connection) {
+static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
   unsigned int http_status = 0u;
   size_t size;
   int status;
@@ -1302,6 +1304,7 @@ static int chttp_server_deferred_input_resume(chttp_server_connection *connectio
 static void chttp_server_on_send(void *user, cnet_connection handle, size_t size) {
   chttp_server_connection *connection = (chttp_server_connection *)user;
   const bool resume_deferred = connection != NULL && connection->deferred_response_writing;
+  const bool resume_retained = connection != NULL && connection->retained_response_paused;
   int status = SALTS_OK;
   if (!chttp_server_connection_matches(connection, handle) || !connection->writing ||
       size != connection->outbound_size) {
@@ -1311,6 +1314,10 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
   connection->writing = false;
   connection->outbound_size = 0u;
   connection->deferred_response_writing = false;
+  connection->retained_response_paused = false;
+  if (resume_retained)
+    chttp_server_response_builder_release_retained_body(
+        &connection->request_state.response_builder);
   if (connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_NONE)
     status = chttp_server_websocket_send_complete(connection);
   if (connection->response_streaming) status = chttp_server_response_stream_next(connection);
@@ -1318,8 +1325,9 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
       connection->websocket_peer.phase == CHTTP_SERVER_WEBSOCKET_NONE &&
       connection->wire_protocol != CHTTP_SERVER_WIRE_HTTP_2)
     chttp_server_connection_release_outbound(connection);
-  if (status == SALTS_OK && resume_deferred && !connection->close_after_write)
-    status = chttp_server_deferred_input_resume(connection);
+  if (status == SALTS_OK && (resume_deferred || resume_retained) &&
+      !connection->close_after_write)
+    status = chttp_server_h1_input_resume(connection);
   if (status != SALTS_OK) {
     chttp_server_connection_close(connection);
     return;
@@ -1580,6 +1588,11 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
     } else {
       if (builder->source_enabled) chttp_server_response_builder_close_source(builder, SALTS_OK);
       if (!request->protocol_keep_alive) connection->close_after_write = true;
+      if (builder->retained_body != NULL &&
+          connection->wire_protocol == CHTTP_SERVER_WIRE_HTTP_1_1) {
+        connection->retained_response_paused = true;
+        return CHTTP_SERVER_REQUEST_DEFERRED;
+      }
     }
   }
   return status;
@@ -1641,6 +1654,7 @@ static int chttp_server_accept_ready(chttp_server_impl *server) {
     connection->response_close_after_stream = false;
     connection->deferred_disconnected = false;
     connection->deferred_response_writing = false;
+    connection->retained_response_paused = false;
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
     connection->outbound_size = 0u;
     connection->h2_close_after_ms = 0u;
