@@ -334,6 +334,11 @@ int chttp_server_response_source_owned(chttp_server_response *response, unsigned
 int chttp_server_response_serialize(const chttp_server_response_builder *builder,
                                     const chttp_server_request_view *request, unsigned char *output,
                                     size_t output_capacity, size_t *inout_size);
+int chttp_server_response_serialize_headers(
+    const chttp_server_response_builder *builder,
+    const chttp_server_request_view *request,
+    unsigned char *output, size_t output_capacity,
+    size_t *inout_size);
 int chttp_server_error_serialize(unsigned int status_code, unsigned char *output,
                                  size_t output_capacity, size_t *inout_size);
 
