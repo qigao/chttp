@@ -954,6 +954,7 @@ int chttp_service_init(
       config->method_capacity == 0u ||
       config->max_binding_value_bytes == 0u ||
       config->max_response_body_bytes == 0u ||
+      config->max_call_frame_bytes == 0u ||
       config->native_workspace_bytes == 0u ||
       config->native_max_depth == 0u ||
       config->native_max_items == 0u)
@@ -985,6 +986,7 @@ int chttp_service_init(
   impl->method_capacity = config->method_capacity;
   impl->scalar_capacity = config->max_binding_value_bytes;
   impl->response_capacity = config->max_response_body_bytes;
+  impl->max_call_frame_bytes = config->max_call_frame_bytes;
   impl->native_options =
       (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
   impl->native_options.workspace = impl->native_workspace;
@@ -1007,17 +1009,28 @@ int chttp_service_mount_http(
   const char *method_text;
   const char *route_text;
   char *route = NULL;
+  size_t request_bytes = 0u;
+  size_t response_bytes = 0u;
+  size_t error_bytes = 0u;
+  size_t param_count = 0u;
   int status;
 
   if (service == NULL || service->impl == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
-      mount->method_plan == NULL || mount->invoke == NULL)
+      mount->method_plan == NULL || mount->native_binding == NULL ||
+      mount->execution == NULL)
     return SALTS_EINVAL;
   if (!chttp_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
 
   impl = (chttp_service_impl *)service->impl;
   if (impl->method_count == impl->method_capacity) return SALTS_ENOBUFS;
+
+  status = chttp_service_execution_admit(
+      mount->method_plan, mount->native_binding, mount->execution,
+      impl->max_call_frame_bytes, &request_bytes, &response_bytes,
+      &error_bytes, &param_count);
+  if (status != SALTS_OK) return status;
 
   method_text = data_bind_http_method_plan_method(mount->method_plan);
   route_text = data_bind_http_method_plan_route(mount->method_plan);
@@ -1030,8 +1043,42 @@ int chttp_service_mount_http(
   *record = (chttp_service_method_record){
       .owner = impl,
       .method_plan = mount->method_plan,
-      .invoke = mount->invoke,
-      .user = mount->user};
+      .native_binding = mount->native_binding,
+      .execution = mount->execution,
+      .request_bytes = request_bytes,
+      .response_bytes = response_bytes,
+      .error_bytes = error_bytes,
+      .param_count = param_count,
+      .frame = (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT};
+
+  record->request_storage =
+      (unsigned char *)calloc(1u, record->request_bytes);
+  record->response_storage =
+      (unsigned char *)calloc(1u, record->response_bytes);
+  if (record->error_bytes != 0u)
+    record->error_storage =
+        (unsigned char *)calloc(1u, record->error_bytes);
+  if (record->request_storage == NULL ||
+      record->response_storage == NULL ||
+      (record->error_bytes != 0u && record->error_storage == NULL)) {
+    free(route);
+    chttp_service_method_release(record);
+    return SALTS_ENOMEM;
+  }
+
+  record->params[0] = record->request_storage;
+  record->params[1] = record->response_storage;
+  record->param_bytes[0] = record->request_bytes;
+  record->param_bytes[1] = record->response_bytes;
+  if (record->param_count == 3u) {
+    record->params[2] = record->error_storage;
+    record->param_bytes[2] = record->error_bytes;
+  }
+  record->frame.request = record->request_storage;
+  record->frame.request_bytes = record->request_bytes;
+  record->frame.params = record->params;
+  record->frame.param_bytes = record->param_bytes;
+  record->frame.param_count = record->param_count;
 
   route_options.method = method;
   route_options.path = route;
@@ -1043,7 +1090,7 @@ int chttp_service_mount_http(
   status = chttp_server_route_with(server, &route_options);
   free(route);
   if (status != SALTS_OK) {
-    memset(record, 0, sizeof(*record));
+    chttp_service_method_release(record);
     return status;
   }
 
@@ -1053,9 +1100,12 @@ int chttp_service_mount_http(
 
 int chttp_service_destroy(chttp_service *service) {
   chttp_service_impl *impl;
+  size_t i;
   if (service == NULL) return SALTS_EINVAL;
   impl = (chttp_service_impl *)service->impl;
   if (impl == NULL) return SALTS_OK;
+  for (i = 0u; i < impl->method_count; ++i)
+    chttp_service_method_release(&impl->methods[i]);
   free(impl->response_scratch);
   free(impl->native_workspace);
   free(impl->scalar_scratch);
