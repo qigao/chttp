@@ -16,8 +16,20 @@ typedef struct chttp_service_impl chttp_service_impl;
 typedef struct chttp_service_method_record {
   chttp_service_impl *owner;
   const DataBindHttpMethodPlan *method_plan;
-  chttp_service_exact_http_fn invoke;
-  void *user;
+  const DataBindServiceNativeBinding *native_binding;
+  const DataBindNativeExecution *execution;
+
+  unsigned char *request_storage;
+  size_t request_bytes;
+  unsigned char *response_storage;
+  size_t response_bytes;
+  unsigned char *error_storage;
+  size_t error_bytes;
+
+  void *params[3];
+  size_t param_bytes[3];
+  size_t param_count;
+  DataBindBindingCallFrame frame;
 } chttp_service_method_record;
 
 struct chttp_service_impl {
@@ -33,6 +45,8 @@ struct chttp_service_impl {
 
   unsigned char *response_scratch;
   size_t response_capacity;
+  size_t max_call_frame_bytes;
+  int executing;
 };
 
 typedef struct chttp_service_scalar_reader {
@@ -74,8 +88,6 @@ static int chttp_service_scalar_kind(const cmeta_data_desc *data) {
   case CMETA_DATA_SINT:
   case CMETA_DATA_UINT:
   case CMETA_DATA_FLOAT:
-  case CMETA_DATA_STRING:
-  case CMETA_DATA_BYTES:
   case CMETA_DATA_ENUM:
     return 1;
   default:
