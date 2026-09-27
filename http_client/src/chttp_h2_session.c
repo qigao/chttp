@@ -1,4 +1,5 @@
 #include "chttp_h2_session.h"
+#include "chttp_cnet_retained.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -698,8 +699,10 @@ static int chttp_h2_session_flush(chttp_h2_session *session) {
     }
   }
   if (session->pending_output_size != 0u) {
-    status = cnet_send(session->network, session->connection, session->pending_output,
-                       session->pending_output_size);
+    status = chttp_cnet_retained_send(
+        session->network, session->connection, session->pending_output_retained,
+        session->pending_output, session->protocol_config.output_buffer_bytes,
+        session->pending_output_size, 0);
     if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) return SALTS_OK;
     if (status != SALTS_OK) {
       chttp_h2_session_fail(session, status, 0, "h2-send-admission");
@@ -834,6 +837,14 @@ int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
     chttp_h2_session_destroy(session);
     chttp_tls_profile_release(tls_profile);
     return SALTS_ENOMEM;
+  }
+  status = chttp_cnet_retained_bind(
+      &session->pending_output_retained, session->pending_output,
+      protocol_config->output_buffer_bytes);
+  if (status != SALTS_OK) {
+    chttp_h2_session_destroy(session);
+    chttp_tls_profile_release(tls_profile);
+    return status;
   }
   session->tls_profile = tls_profile;
   protocol_callbacks.user_data = session;
@@ -1210,7 +1221,8 @@ void chttp_h2_session_destroy(chttp_h2_session *session) {
   if (session == NULL) return;
   chttp_h2_proto_destroy(session->protocol);
   chttp_tls_profile_release(session->tls_profile);
-  free(session->pending_output);
+  if (chttp_cnet_retained_release(&session->pending_output_retained) == SALTS_OK)
+    free(session->pending_output);
   free(session->requests);
   free(session->authority);
   free(session->connection_uri);

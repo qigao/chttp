@@ -84,3 +84,13 @@ set_target_properties(crpc_header_cpp_test PROPERTIES
   CXX_STANDARD 11
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF)
+
+add_executable(chttp_cnet_retained_test chttp_cnet_retained_test.c)
+target_link_libraries(chttp_cnet_retained_test PRIVATE Salts::CNet Salts::Core Salts::TinyTest)
+target_include_directories(chttp_cnet_retained_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http)
+add_test(NAME chttp_cnet_retained_test COMMAND chttp_cnet_retained_test)
+set_target_properties(chttp_cnet_retained_test PROPERTIES FOLDER "http_common/tests")
+set_target_properties(chttp_cnet_retained_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)

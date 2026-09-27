@@ -8,6 +8,7 @@
 #include "chttp_tls.h"
 
 #include <stdbool.h>
+#include <salts_buffer.h>
 
 typedef enum chttp_h2_session_state {
   CHTTP_H2_SESSION_FREE = 0,
@@ -82,6 +83,7 @@ struct chttp_h2_session {
   chttp_h2_proto *protocol;
   chttp_h2_request_state **requests;
   unsigned char *pending_output;
+  mem_buffer_t *pending_output_retained;
   char *connection_uri;
   char *authority;
   chttp_tls_profile_impl *tls_profile;
