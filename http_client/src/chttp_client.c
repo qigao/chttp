@@ -46,6 +46,7 @@ typedef struct chttp_slot {
   char *authority;
   chttp_tls_profile_impl *tls_profile;
   size_t request_size;
+  size_t request_send_size;
   size_t source_transferred;
   chttp_body_source body_source;
   chttp_file_transfer *file_transfer;
@@ -623,7 +624,12 @@ static void chttp_cnet_send(void *user, cnet_connection connection, size_t size)
       slot->connection.generation != connection.generation)
     return;
   if (slot->request_send_pending) {
+    if (size != slot->request_send_size) {
+      chttp_slot_fail_and_close(slot, SALTS_EPROTO, 0, "request-send-size");
+      return;
+    }
     slot->request_send_pending = false;
+    slot->request_send_size = 0u;
   } else if (slot->source_send_pending) {
     if (size != slot->source_send_size) {
       chttp_slot_fail_and_close(slot, SALTS_EPROTO, 0, "request-source-send-size");
@@ -660,6 +666,8 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
       chttp_slot_fail_and_close(slot, status, 0, "send-admission");
       return;
     }
+    slot->request_send_size = slot->request_size;
+    slot->request_send_size = slot->request_size;
     slot->request_send_pending = true;
     chttp_slot_release_request_buffer(slot);
     status = chttp_slot_arm_receive(slot);
