@@ -1,6 +1,7 @@
 #include "chttp_h2_server.h"
 #include "chttp_jwt_internal.h"
 #include "chttp_server_runtime.h"
+#include "chttp_cnet_retained.h"
 #include "chttp_tls.h"
 
 #include <salts/clock.h>
@@ -298,14 +299,21 @@ void chttp_server_buffer_release(void *context, unsigned char *buffer, size_t ca
 }
 
 int chttp_server_connection_reserve_outbound(chttp_server_connection *connection, size_t required) {
+  int status;
   if (connection == NULL || connection->server == NULL) return SALTS_EINVAL;
-  return chttp_server_buffer_grow(
+  if (!chttp_cnet_retained_idle(connection->outbound_retained)) return SALTS_EBUSY;
+  status = chttp_server_buffer_grow(
       connection->server, &connection->outbound, &connection->outbound_capacity, required,
       connection->server->config.network.max_send_bytes, connection->outbound_size);
+  if (status != SALTS_OK) return status;
+  if (connection->outbound == NULL || connection->outbound_capacity == 0u) return SALTS_OK;
+  return chttp_cnet_retained_bind(&connection->outbound_retained, connection->outbound,
+                                  connection->outbound_capacity);
 }
 
 void chttp_server_connection_release_outbound(chttp_server_connection *connection) {
   if (connection == NULL || connection->outbound == NULL) return;
+  if (chttp_cnet_retained_release(&connection->outbound_retained) != SALTS_OK) return;
   chttp_server_buffer_release(connection->server, connection->outbound,
                               connection->outbound_capacity);
   connection->outbound = NULL;
@@ -866,11 +874,10 @@ static int chttp_server_connection_retry(chttp_server_connection *connection) {
   if (action == CHTTP_SERVER_PENDING_RECEIVE)
     status = cnet_receive(&connection->server->network, connection->handle, 1u);
   else if (action == CHTTP_SERVER_PENDING_SEND)
-    status = connection->close_after_write
-                 ? cnet_send_and_close(&connection->server->network, connection->handle,
-                                       connection->outbound, connection->outbound_size)
-                 : cnet_send(&connection->server->network, connection->handle, connection->outbound,
-                             connection->outbound_size);
+    status = chttp_cnet_retained_send(
+        &connection->server->network, connection->handle, connection->outbound_retained,
+        connection->outbound, connection->outbound_capacity, connection->outbound_size,
+        connection->close_after_write ? 1 : 0);
   else status = cnet_close(&connection->server->network, connection->handle);
   if (status == SALTS_OK) {
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
