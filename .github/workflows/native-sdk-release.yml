@@ -9,6 +9,7 @@ on:
       - "http_common/**"
       - "http_client/**"
       - "http_server/**"
+      - "service/**"
       - "web/**"
       - "s3/**"
       - "openapi/**"
