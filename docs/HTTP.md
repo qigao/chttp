@@ -88,11 +88,19 @@ HTTPS policy、H1 Upgrade、H2 Extended CONNECT、路由和 byte-stream Adapter�
 WebSocket client 通过 `chttp_websocket_client_config.socket_options` 配置。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
-`cnet_send()` admission 成功只证明 bytes 已复制进有界 command storage；`observer.on_send`
-在完整 ordered write terminal 后报告一次完成。H1 server 只在该 callback 后重新申请 receive；
-H2 为处理 WINDOW_UPDATE/PING 等控制帧允许收发全双工，但每条连接仍只有一个 CNet send in-flight。
-这个完成事实仍不等于应用级 exactly-once，CHTTP
-不会根据断线猜测 peer 是否消费了请求，也不做隐式 retry。
+CHTTP transport 现在以 retained/owned payload 作为 CNet 边界：H1/H2/WebSocket 的
+已序列化 outbound storage 通过 `cnet_send_buffer()`、`cnet_send_slice()` 或
+`cnet_send_buffer_and_close()` 交给 CNet；成功 admission 后 CNet 只 retain backing ownership，
+不再把 payload 再复制进 CNet write storage。调用方 storage 在匹配的 `observer.on_send`
+terminal 前保持 data/used/capacity 不变；对应的 `writing` / `write_pending` / `send_active`
+状态就是 mutation guard。H1 server 只在该 callback 后复用或释放 outbound storage；H2 为处理
+WINDOW_UPDATE/PING 等控制帧允许收发全双工，但每条连接仍只有一个 CNet transport send in-flight。
+
+兼容性 copied CNet API (`cnet_send()` / `cnet_send_and_close()`) 不再用于 CHTTP production transport。
+若上层协议只提供瞬时 wire pointer（例如 H1 WebSocket frame callback），CHTTP 可先复制进自己已有的
+bounded send buffer，再以 retained ownership 交给 CNet；这种兼容 copy 属于 consumer 层，不恢复
+CNet copied payload queue。terminal 完成事实仍不等于应用级 exactly-once，CHTTP 不会根据断线猜测
+peer 是否消费了请求，也不做隐式 retry。
 
 ## HTTP Server：路由、中间件与 Session
 
