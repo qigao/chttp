@@ -588,9 +588,11 @@ static int chttp_server_output_append(unsigned char *output, size_t capacity, si
   return SALTS_OK;
 }
 
-int chttp_server_response_serialize(const chttp_server_response_builder *builder,
-                                    const chttp_server_request_view *request, unsigned char *output,
-                                    size_t output_capacity, size_t *inout_size) {
+static int chttp_server_response_serialize_impl(
+    const chttp_server_response_builder *builder,
+    const chttp_server_request_view *request,
+    unsigned char *output, size_t output_capacity,
+    size_t *inout_size, bool include_body) {
   char line[128];
   char date[CHTTP_SERVER_DATE_CAPACITY];
   size_t initial_size;
@@ -605,7 +607,10 @@ int chttp_server_response_serialize(const chttp_server_response_builder *builder
   status = chttp_server_response_date(builder, date);
   if (status != SALTS_OK) return status;
   body_size =
-      request->method == CHTTP_METHOD_HEAD || builder->source_enabled ? 0u : builder->body_size;
+      include_body && request->method != CHTTP_METHOD_HEAD &&
+              !builder->source_enabled
+          ? builder->body_size
+          : 0u;
   const unsigned char *body_data =
       builder->retained_body != NULL
           ? (const unsigned char *)mem_buffer_const_data(builder->retained_body)
@@ -660,6 +665,24 @@ int chttp_server_response_serialize(const chttp_server_response_builder *builder
         chttp_server_output_append(output, output_capacity, inout_size, body_data, body_size);
   if (status != SALTS_OK) *inout_size = initial_size;
   return status;
+}
+
+int chttp_server_response_serialize(
+    const chttp_server_response_builder *builder,
+    const chttp_server_request_view *request,
+    unsigned char *output, size_t output_capacity,
+    size_t *inout_size) {
+  return chttp_server_response_serialize_impl(
+      builder, request, output, output_capacity, inout_size, true);
+}
+
+int chttp_server_response_serialize_headers(
+    const chttp_server_response_builder *builder,
+    const chttp_server_request_view *request,
+    unsigned char *output, size_t output_capacity,
+    size_t *inout_size) {
+  return chttp_server_response_serialize_impl(
+      builder, request, output, output_capacity, inout_size, false);
 }
 
 int chttp_server_error_serialize(unsigned int status_code, unsigned char *output,
