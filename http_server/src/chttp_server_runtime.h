@@ -242,6 +242,7 @@ struct chttp_server_connection {
   size_t websocket_upgrade_input_capacity;
   size_t websocket_upgrade_input_size;
   unsigned char *outbound;
+  mem_buffer_t *outbound_buffer;
   size_t outbound_capacity;
   size_t outbound_size;
   uint64_t h2_close_after_ms;
