@@ -105,9 +105,17 @@ int chttp_server_response_builder_init(chttp_server_response_builder *builder,
   return SALTS_OK;
 }
 
+static void chttp_server_response_builder_release_retained_body(
+    chttp_server_response_builder *builder) {
+  if (builder == NULL || builder->retained_body == NULL) return;
+  mem_buffer_release(builder->retained_body);
+  builder->retained_body = NULL;
+}
+
 void chttp_server_response_builder_reset(chttp_server_response_builder *builder) {
   if (builder == NULL) return;
   chttp_server_response_builder_close_source(builder, SALTS_ECANCELED);
+  chttp_server_response_builder_release_retained_body(builder);
   if (builder->body != NULL) {
     chttp_server_buffer_release(builder->server, builder->body, builder->body_capacity);
     builder->body = NULL;
@@ -141,6 +149,7 @@ void chttp_server_response_builder_close_source(chttp_server_response_builder *b
 void chttp_server_response_builder_destroy(chttp_server_response_builder *builder) {
   if (builder == NULL) return;
   chttp_server_response_builder_close_source(builder, SALTS_ECANCELED);
+  chttp_server_response_builder_release_retained_body(builder);
   if (builder->body != NULL)
     chttp_server_buffer_release(builder->server, builder->body, builder->body_capacity);
   free(builder->header_storage);
@@ -300,6 +309,50 @@ int chttp_server_reply(chttp_server_response *response, unsigned int status_code
     if (status != SALTS_OK) return status;
   }
   if (body_size != 0u) memcpy(builder->body, body, body_size);
+  builder->body_size = body_size;
+  builder->status_code = status_code;
+  builder->replied = true;
+  return SALTS_OK;
+}
+
+int chttp_server_reply_buffer(chttp_server_response *response,
+                              unsigned int status_code,
+                              const char *content_type,
+                              mem_buffer_t *body) {
+  chttp_server_response_builder *builder;
+  mem_buffer_t *retained = NULL;
+  const size_t body_size = body != NULL ? mem_buffer_used(body) : 0u;
+  int status;
+
+  if (response == NULL || response->impl == NULL ||
+      status_code < 200u || status_code > 599u ||
+      (content_type != NULL && content_type[0] == '\0') ||
+      (body_size != 0u &&
+       (body == NULL || mem_buffer_const_data(body) == NULL)))
+    return SALTS_EINVAL;
+  if ((status_code == 204u || status_code == 205u || status_code == 304u) &&
+      body_size != 0u)
+    return SALTS_EINVAL;
+
+  builder = (chttp_server_response_builder *)response->impl;
+  if (builder->deferred || builder->replied) return SALTS_EALREADY;
+  if (body_size > builder->body_limit) return SALTS_EMSGSIZE;
+
+  if (body != NULL) {
+    retained = mem_buffer_retain(body);
+    if (retained == NULL) return SALTS_EINVAL;
+  }
+
+  if (content_type != NULL) {
+    status = chttp_server_response_set_header(
+        response, "Content-Type", content_type);
+    if (status != SALTS_OK) {
+      if (retained != NULL) mem_buffer_release(retained);
+      return status;
+    }
+  }
+
+  builder->retained_body = retained;
   builder->body_size = body_size;
   builder->status_code = status_code;
   builder->replied = true;
@@ -553,6 +606,11 @@ int chttp_server_response_serialize(const chttp_server_response_builder *builder
   if (status != SALTS_OK) return status;
   body_size =
       request->method == CHTTP_METHOD_HEAD || builder->source_enabled ? 0u : builder->body_size;
+  const unsigned char *body_data =
+      builder->retained_body != NULL
+          ? (const unsigned char *)mem_buffer_const_data(builder->retained_body)
+          : builder->body;
+  if (body_size != 0u && body_data == NULL) return SALTS_EPROTO;
   line_size =
       snprintf(line, sizeof(line), "HTTP/%u.%u %u %s\r\n", request->http_major, request->http_minor,
                builder->status_code, chttp_server_reason(builder->status_code));
@@ -599,7 +657,7 @@ int chttp_server_response_serialize(const chttp_server_response_builder *builder
         chttp_server_output_append(output, output_capacity, inout_size, line, (size_t)line_size);
   if (status == SALTS_OK)
     status =
-        chttp_server_output_append(output, output_capacity, inout_size, builder->body, body_size);
+        chttp_server_output_append(output, output_capacity, inout_size, body_data, body_size);
   if (status != SALTS_OK) *inout_size = initial_size;
   return status;
 }
