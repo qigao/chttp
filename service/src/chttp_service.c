@@ -762,6 +762,7 @@ static int chttp_service_execution_admit(
     if (native->errors == NULL || native->error_param_index != 2u ||
         native->error_envelope_bytes == 0u ||
         native->error_kind_bytes != sizeof(uint32_t) ||
+        native->error_kind_bytes > native->error_envelope_bytes ||
         native->error_kind_offset >
             native->error_envelope_bytes - native->error_kind_bytes ||
         cmeta_function_param_abi(execution->abi, 2u) !=
