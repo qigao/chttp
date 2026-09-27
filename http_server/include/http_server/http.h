@@ -557,6 +557,22 @@ int chttp_server_deferred_cancel(chttp_server_deferred *deferred);
 int chttp_server_reply(chttp_server_response *response, unsigned int status_code,
                        const char *content_type, const void *body, size_t body_size);
 
+/**
+ * Completes the response from an already-owned shared buffer without copying
+ * the body into the response builder.
+ *
+ * The Server retains one buffer reference before returning SALTS_OK. The caller
+ * may immediately release its own reference after success. The buffer bytes and
+ * used length must not be mutated until Server terminal ownership releases its
+ * retained reference. This S3 API preserves the same buffered-body size limit
+ * as chttp_server_reply(); H1 scatter/gather lifting is a later transport slice.
+ *
+ * The complete used range [0, mem_buffer_used(body)) is the response body.
+ * NULL is accepted only for an empty body.
+ */
+int chttp_server_reply_buffer(chttp_server_response *response, unsigned int status_code,
+                              const char *content_type, mem_buffer_t *body);
+
 typedef void (*chttp_server_response_source_cleanup_fn)(void *user, int status);
 
 /**
