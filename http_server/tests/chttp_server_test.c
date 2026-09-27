@@ -1,4 +1,5 @@
 #include <http_server/rate_limit.h>
+#include "chttp_server_runtime.h"
 #include "tinytest.h"
 #include <http_client/http.h>
 #include <http_server/http.h>
@@ -737,7 +738,79 @@ static int chttp_test_slow_handler(void *user, const chttp_server_request_view *
   return chttp_server_test_static(user, request, response);
 }
 
+static void chttp_server_test_retained_outbound_wrapper_lifecycle(void) {
+  chttp_server_impl server = {0};
+  chttp_server_connection connection = {0};
+  mem_buffer_t *first_wrapper;
+  unsigned char *first_data;
+  size_t first_capacity;
+
+  server.config.network.max_send_bytes = 4096u;
+  server.config.buffer_capacity_bytes = 8192u;
+  atomic_init(&server.buffer_bytes, 0u);
+  atomic_init(&server.peak_buffer_bytes, 0u);
+  atomic_init(&server.rejected_buffer_allocations, 0u);
+  connection.server = &server;
+
+  check_equal(chttp_server_connection_reserve_outbound(&connection, 64u), SALTS_OK);
+  check_true(connection.outbound != NULL);
+  check_true(connection.outbound_buffer != NULL);
+  check_true(connection.outbound_capacity >= 64u);
+  check_true(mem_buffer_const_data(connection.outbound_buffer) ==
+             (const char *)connection.outbound);
+  check_equal(mem_buffer_capacity(connection.outbound_buffer), connection.outbound_capacity);
+  check_equal(mem_buffer_used(connection.outbound_buffer), (size_t)0u);
+  check_equal(mem_buffer_ref_count(connection.outbound_buffer), UINT32_C(1));
+  check_equal(atomic_load_explicit(&server.buffer_bytes, memory_order_acquire),
+              connection.outbound_capacity);
+
+  first_wrapper = connection.outbound_buffer;
+  first_data = connection.outbound;
+  first_capacity = connection.outbound_capacity;
+  check_true(mem_buffer_retain(first_wrapper) == first_wrapper);
+  check_equal(mem_buffer_ref_count(first_wrapper), UINT32_C(2));
+
+  connection.writing = true;
+  check_equal(chttp_server_connection_reserve_outbound(&connection, first_capacity + 1u),
+              SALTS_EBUSY);
+  check_true(connection.outbound == first_data);
+  check_true(connection.outbound_buffer == first_wrapper);
+
+  connection.writing = false;
+  check_equal(chttp_server_connection_reserve_outbound(&connection, first_capacity + 1u),
+              SALTS_EBUSY);
+  check_true(connection.outbound == first_data);
+  check_true(connection.outbound_buffer == first_wrapper);
+
+  mem_buffer_release(first_wrapper);
+  check_equal(mem_buffer_ref_count(connection.outbound_buffer), UINT32_C(1));
+  check_equal(chttp_server_connection_reserve_outbound(&connection, first_capacity + 1u),
+              SALTS_OK);
+  check_true(connection.outbound != NULL);
+  check_true(connection.outbound_buffer != NULL);
+  check_true(connection.outbound_capacity > first_capacity);
+  check_true(mem_buffer_const_data(connection.outbound_buffer) ==
+             (const char *)connection.outbound);
+  check_equal(mem_buffer_capacity(connection.outbound_buffer), connection.outbound_capacity);
+  check_equal(mem_buffer_ref_count(connection.outbound_buffer), UINT32_C(1));
+
+  connection.outbound_size = 17u;
+  mem_set_used(connection.outbound_buffer, connection.outbound_size);
+  check_equal(mem_buffer_used(connection.outbound_buffer), (size_t)17u);
+
+  chttp_server_connection_release_outbound(&connection);
+  check_true(connection.outbound == NULL);
+  check_true(connection.outbound_buffer == NULL);
+  check_equal(connection.outbound_capacity, (size_t)0u);
+  check_equal(atomic_load_explicit(&server.buffer_bytes, memory_order_acquire), (size_t)0u);
+}
+
 spec("CHTTP background HTTP/1.1 server") {
+  it("keeps retained outbound wrapper aligned with raw allocation lifetime") {
+    chttp_server_test_retained_outbound_wrapper_lifecycle();
+  }
+
+
   it("rate limits the same peer across connections before 100 Continue and body delivery") {
     chttp_rate_limiter limiter = {0};
     const chttp_rate_limit_config limit = {CHTTP_RATE_LIMIT_PEER_IP, 1, 1, 1, UINT32_MAX, 0};
