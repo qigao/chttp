@@ -138,14 +138,6 @@ static bool DATA_BIND_NATIVE_CALL chttp_service_test_invoke(
   return true;
 }
 
-static const DataBindNativeExecution CHTTP_SERVICE_TEST_EXECUTION = {
-    sizeof(DataBindNativeExecution),
-    DATA_BIND_NATIVE_EXECUTION_ABI_VERSION,
-    FunctionMeta(chttp_service_test_add),
-    FunctionAbi(chttp_service_test_add),
-    NULL,
-    chttp_service_test_invoke};
-
 FunctionDeclAsAbi(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
     chttp_service_test_other,
@@ -174,13 +166,6 @@ static bool DATA_BIND_NATIVE_CALL chttp_service_test_other_invoke(
   return true;
 }
 
-static const DataBindNativeExecution CHTTP_SERVICE_TEST_OTHER_EXECUTION = {
-    sizeof(DataBindNativeExecution),
-    DATA_BIND_NATIVE_EXECUTION_ABI_VERSION,
-    FunctionMeta(chttp_service_test_other),
-    FunctionAbi(chttp_service_test_other),
-    NULL,
-    chttp_service_test_other_invoke};
 
 static native_io_backend_kind chttp_service_test_backend(void) {
 #if defined(_WIN32)
@@ -280,7 +265,12 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
     chttp_service_http_mount mismatch = CHTTP_SERVICE_HTTP_MOUNT_INIT;
     chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    DataBindNativeExecution invalid_execution = CHTTP_SERVICE_TEST_EXECUTION;
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindNativeExecution other_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindNativeExecution invalid_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -290,6 +280,15 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_response response = {0};
     uint16_t port = 0u;
     char uri[64];
+
+    execution.function = FunctionMeta(chttp_service_test_add);
+    execution.abi = FunctionAbi(chttp_service_test_add);
+    execution.invoke = chttp_service_test_invoke;
+    other_execution.function = FunctionMeta(chttp_service_test_other);
+    other_execution.abi = FunctionAbi(chttp_service_test_other);
+    other_execution.invoke = chttp_service_test_other_invoke;
+    invalid_execution = execution;
+    invalid_execution.invoke = NULL;
 
     projection = data_bind_http_projection_artifact_find(
         &databind_chttp_service_http_projection, "Calc", "Add");
@@ -324,11 +323,10 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     mismatch.method_plan = method_plan;
     mismatch.native_binding = &native;
-    mismatch.execution = &CHTTP_SERVICE_TEST_OTHER_EXECUTION;
+    mismatch.execution = &other_execution;
     check_equal(
         chttp_service_mount_http(&service, &server, &mismatch), SALTS_EINVAL);
 
-    invalid_execution.invoke = NULL;
     invalid.method_plan = method_plan;
     invalid.native_binding = &native;
     invalid.execution = &invalid_execution;
@@ -337,7 +335,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
-    mount.execution = &CHTTP_SERVICE_TEST_EXECUTION;
+    mount.execution = &execution;
     check_equal(
         chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
 
