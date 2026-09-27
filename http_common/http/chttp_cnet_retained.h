@@ -55,6 +55,29 @@ static inline int chttp_cnet_retained_send(cnet_client *client, cnet_connection 
                           : cnet_send_buffer(client, connection, buffer);
 }
 
+static inline int chttp_cnet_retained_send_range(cnet_client *client,
+                                                  cnet_connection connection,
+                                                  mem_buffer_t *buffer,
+                                                  const void *data,
+                                                  size_t capacity,
+                                                  size_t offset,
+                                                  size_t length) {
+  mem_slice_t slice;
+  int status;
+  if (offset > capacity || length == 0u || length > capacity - offset) return SALTS_EINVAL;
+  status = chttp_cnet_retained_prepare(buffer, data, capacity, offset + length);
+  if (status != SALTS_OK) return status;
+  slice = mem_slice(buffer, offset, length);
+  if (slice.buffer == NULL || slice.length != length) {
+    mem_slice_release(&slice);
+    return SALTS_EPROTO;
+  }
+  status = cnet_send_slice(client, connection, &slice);
+  mem_slice_release(&slice);
+  return status;
+}
+
+
 static inline int chttp_cnet_retained_release(mem_buffer_t **slot) {
   mem_buffer_t *buffer;
   if (slot == NULL) return SALTS_EINVAL;
