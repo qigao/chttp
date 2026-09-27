@@ -274,16 +274,13 @@ typedef struct chttp_web_named_value {
 } chttp_web_named_value;
 
 /**
- * Public CHttp::Web sequence layout. The element descriptor and pointed
- * storage are borrowed. Applications should treat this as read-only after
- * chttp_web_request_context_init() until rendering completes.
+ * Public CHttp::Web borrowed sequence view.
+ *
+ * CHTTP uses the canonical CMeta collection-view ABI directly instead of
+ * duplicating a Jinja-private sequence layout. The element descriptor and
+ * pointed storage are borrowed and must remain immutable while consumed.
  */
-typedef struct chttp_web_sequence_view {
-  const void *data;
-  size_t count;
-  size_t stride;
-  const cmeta_data_desc *element;
-} chttp_web_sequence_view;
+typedef cmeta_data_collection_view chttp_web_sequence_view;
 
 /** One structured validation error copied into caller-owned storage. */
 typedef struct chttp_web_validation_error {
