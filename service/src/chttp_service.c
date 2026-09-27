@@ -17,6 +17,7 @@ typedef struct chttp_service_impl chttp_service_impl;
 typedef struct chttp_service_method_record {
   chttp_service_impl *owner;
   const DataBindHttpMethodPlan *method_plan;
+  const DataBindBindingPlan *binding;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
 
@@ -1001,8 +1002,9 @@ static int chttp_service_http_execute(
   int http_status = 500;
 
   if (record == NULL || record->owner == NULL ||
-      record->method_plan == NULL || record->native_binding == NULL ||
-      record->execution == NULL || record->request_storage == NULL ||
+      record->method_plan == NULL || record->binding == NULL ||
+      record->native_binding == NULL || record->execution == NULL ||
+      record->request_storage == NULL ||
       record->response_storage == NULL || request == NULL || response == NULL)
     return SALTS_EINVAL;
 
@@ -1023,7 +1025,7 @@ static int chttp_service_http_execute(
   provider.commit_output = chttp_service_http_commit_output;
   provider.abort_output = chttp_service_http_abort_output;
 
-  binding = data_bind_http_method_plan_binding(record->method_plan);
+  binding = record->binding;
   bind_status = data_bind_binding_plan_bind_inputs(
       binding, &provider, &record->owner->native_options,
       &record->frame, &diagnostic);
@@ -1161,6 +1163,7 @@ int chttp_service_mount_http(
   size_t response_bytes = 0u;
   size_t error_bytes = 0u;
   size_t param_count = 0u;
+  const DataBindBindingPlan *binding;
   int status;
 
   if (service == NULL || service->impl == NULL || server == NULL ||
@@ -1179,6 +1182,8 @@ int chttp_service_mount_http(
       impl->max_call_frame_bytes, &request_bytes, &response_bytes,
       &error_bytes, &param_count);
   if (status != SALTS_OK) return status;
+  binding = data_bind_http_method_plan_binding(mount->method_plan);
+  if (binding == NULL) return SALTS_EINVAL;
 
   method_text = data_bind_http_method_plan_method(mount->method_plan);
   route_text = data_bind_http_method_plan_route(mount->method_plan);
@@ -1191,6 +1196,7 @@ int chttp_service_mount_http(
   *record = (chttp_service_method_record){
       .owner = impl,
       .method_plan = mount->method_plan,
+      .binding = binding,
       .native_binding = mount->native_binding,
       .execution = mount->execution,
       .request_bytes = request_bytes,

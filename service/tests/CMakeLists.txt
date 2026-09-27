@@ -49,3 +49,11 @@ add_test(
   COMMAND ${CMAKE_COMMAND}
     -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
     -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_single_materialization_contract_test.cmake)
+
+
+add_test(
+  NAME chttp_service_hot_path_boundary_contract
+  COMMAND ${CMAKE_COMMAND}
+    -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
+    -DSERVER_HEADER=${PROJECT_SOURCE_DIR}/http_server/include/http_server/http.h
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_hot_path_boundary_contract_test.cmake)
