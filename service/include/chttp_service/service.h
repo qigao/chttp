@@ -5,6 +5,7 @@
 
 #include <data_bind_method_plan.h>
 #include <data_bind_native.h>
+#include <data_bind_native_binding.h>
 
 #include <stddef.h>
 
@@ -21,6 +22,7 @@ typedef struct chttp_service_config {
   size_t method_capacity;
   size_t max_binding_value_bytes;
   size_t max_response_body_bytes;
+  size_t max_call_frame_bytes;
   size_t native_workspace_bytes;
   size_t native_max_depth;
   size_t native_max_items;
@@ -28,36 +30,24 @@ typedef struct chttp_service_config {
 } chttp_service_config;
 
 #define CHTTP_SERVICE_CONFIG_INIT \
-  { sizeof(chttp_service_config), 0u, 1024u, 4096u, 16384u, 16u, 256u, 65536u }
+  { sizeof(chttp_service_config), 0u, 1024u, 4096u, 65536u, 16384u, 16u, 256u, 65536u }
 
 /**
- * Exact native operation adapter.
+ * One admitted generated HTTP operation.
  *
- * HTTP projection is already compiled into method_plan. The callback must not
- * inspect DataBind Service HTTP annotations or compile another projection.
+ * All semantic/native identity comes from DataBind/CMeta producer artifacts:
+ * - method_plan owns HTTP projection + BindingPlan semantics;
+ * - native_binding owns exact request/response/error storage layout;
+ * - execution owns FunctionMeta + FunctionAbi + generated exact adapter.
  *
- * A typical generated/exact adapter:
- *   1. creates exact request/param/return/error staging;
- *   2. calls data_bind_binding_plan_bind_inputs();
- *   3. invokes the exact C signature;
- *   4. calls data_bind_binding_plan_write_outcome();
- *   5. returns DATA_BIND_OK with the canonical outcome.
- *
- * provider/native_options/plan are borrowed for this synchronous callback only.
+ * Mount validates these three artifacts before publishing the route. The
+ * synchronous request hot path performs no reflection lookup/equality work.
  */
-typedef DataBindStatus (*chttp_service_exact_http_fn)(
-    void *user,
-    const DataBindBindingPlan *plan,
-    const DataBindBindingProvider *provider,
-    const DataBindNativeOptions *native_options,
-    DataBindBindingOutcome *outcome,
-    DataBindBindingPlanDiagnostic *diagnostic);
-
 typedef struct chttp_service_http_mount {
   size_t size;
   const DataBindHttpMethodPlan *method_plan;
-  chttp_service_exact_http_fn invoke;
-  void *user;
+  const DataBindServiceNativeBinding *native_binding;
+  const DataBindNativeExecution *execution;
   const chttp_server_middleware *middleware;
   size_t middleware_count;
 } chttp_service_http_mount;
@@ -68,9 +58,10 @@ typedef struct chttp_service_http_mount {
 /**
  * Initialize bounded owner-thread scratch for generated HTTP MethodPlan mounts.
  *
- * Phase 1 supports path/query/header/cookie scalar ingress and a single scalar
- * success/typed-error response body. Structured body/egress is intentionally
- * fail-closed until the shared DataBind FormatPlan writer is mounted.
+ * Phase S1/S2 supports fixed-width scalar/enum path/query/header/cookie ingress
+ * and one fixed-width scalar/enum response body. Owned string/bytes,
+ * structured body/egress, requested HTTP context, and async execution remain
+ * fail-closed until their producer-owned lifecycle/FormatPlan slices land.
  */
 int chttp_service_init(
     chttp_service *service, const chttp_service_config *config);
@@ -78,9 +69,11 @@ int chttp_service_init(
 /**
  * Mount one already-compiled DataBind HTTP MethodPlan on CHttp::Server.
  *
- * The MethodPlan and every native descriptor referenced by its BindingPlan are
- * borrowed until chttp_service_destroy(). The server copies route metadata, but
- * its route user pointer references service-owned method storage.
+ * method_plan, native_binding, execution, and every descriptor they reference
+ * are borrowed until chttp_service_destroy(). Mount performs canonical CMeta
+ * semantic/ABI admission exactly once before route publication. The server
+ * copies route metadata, while its route user pointer references immutable
+ * service-owned mounted-operation storage.
  */
 int chttp_service_mount_http(
     chttp_service *service,
