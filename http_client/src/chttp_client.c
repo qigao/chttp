@@ -39,7 +39,9 @@ typedef struct chttp_slot {
   chttp_response_parser response_parser;
   chttp_h2_request_state h2_request;
   unsigned char *request_data;
+  mem_buffer_t *request_buffer;
   unsigned char *source_buffer;
+  mem_buffer_t *source_buffer_ref;
   char *connection_uri;
   char *authority;
   chttp_tls_profile_impl *tls_profile;
@@ -61,6 +63,9 @@ typedef struct chttp_slot {
   bool source_enabled;
   bool source_complete;
   bool source_final_pending;
+  bool request_send_pending;
+  bool source_send_pending;
+  size_t source_send_size;
   bool transport_closed;
 } chttp_slot;
 
@@ -220,6 +225,58 @@ static int chttp_h2_stream_uri_supported(const char *uri, bool has_tls_profile) 
   return SALTS_ENOTSUP;
 }
 
+static void chttp_client_owned_external_free(void *data, void *user_data) {
+  (void)user_data;
+  free(data);
+}
+
+static void chttp_slot_release_request_buffer(chttp_slot *slot) {
+  if (slot == NULL) return;
+  if (slot->request_buffer != NULL) mem_buffer_release(slot->request_buffer);
+  else free(slot->request_data);
+  slot->request_buffer = NULL;
+  slot->request_data = NULL;
+  slot->request_size = 0u;
+}
+
+static void chttp_slot_release_source_buffer(chttp_slot *slot) {
+  if (slot == NULL) return;
+  if (slot->source_buffer_ref != NULL) mem_buffer_release(slot->source_buffer_ref);
+  else free(slot->source_buffer);
+  slot->source_buffer_ref = NULL;
+  slot->source_buffer = NULL;
+  slot->source_send_pending = false;
+  slot->source_send_size = 0u;
+}
+
+static int chttp_slot_send_source_range(chttp_slot *slot, size_t offset, size_t size) {
+  int status;
+  size_t capacity;
+  if (slot == NULL || slot->source_buffer_ref == NULL || slot->source_buffer == NULL ||
+      size == 0u || slot->source_send_pending)
+    return SALTS_EINVAL;
+  capacity = mem_buffer_capacity(slot->source_buffer_ref);
+  if (mem_buffer_const_data(slot->source_buffer_ref) != (const char *)slot->source_buffer ||
+      offset > capacity || size > capacity - offset)
+    return SALTS_EPROTO;
+
+  mem_set_used(slot->source_buffer_ref, offset + size);
+  if (offset == 0u) {
+    status = cnet_send_buffer(&slot->client->network, slot->connection,
+                              slot->source_buffer_ref);
+  } else {
+    mem_slice_t slice = mem_slice(slot->source_buffer_ref, offset, size);
+    if (slice.buffer == NULL || slice.length != size) return SALTS_EPROTO;
+    status = cnet_send_slice(&slot->client->network, slot->connection, &slice);
+    mem_slice_release(&slice);
+  }
+  if (status == SALTS_OK) {
+    slot->source_send_pending = true;
+    slot->source_send_size = size;
+  }
+  return status;
+}
+
 static void chttp_slot_release(chttp_slot *slot) {
   chttp_client_impl *client;
   uint32_t generation;
@@ -229,8 +286,8 @@ static void chttp_slot_release(chttp_slot *slot) {
   if (slot->file_transfer != NULL) chttp_file_transfer_set_ready(slot->file_transfer, NULL, NULL);
   if (slot->file_sink_transfer != NULL)
     chttp_file_sink_transfer_set_ready(slot->file_sink_transfer, NULL, NULL);
-  free(slot->request_data);
-  free(slot->source_buffer);
+  chttp_slot_release_request_buffer(slot);
+  chttp_slot_release_source_buffer(slot);
   free(slot->authority);
   free(slot->connection_uri);
   chttp_tls_profile_release(slot->tls_profile);
@@ -346,8 +403,7 @@ static int chttp_slot_arm_receive(chttp_slot *slot) {
 static void chttp_slot_source_finished(chttp_slot *slot) {
   if (slot == NULL) return;
   if (slot->file_transfer != NULL) chttp_file_transfer_set_ready(slot->file_transfer, NULL, NULL);
-  free(slot->source_buffer);
-  slot->source_buffer = NULL;
+  chttp_slot_release_source_buffer(slot);
   slot->body_source = (chttp_body_source){0};
   slot->file_transfer = NULL;
   slot->source_enabled = false;
@@ -372,11 +428,24 @@ static int chttp_slot_prepare_streaming(chttp_slot *slot, const chttp_request_op
     chttp_response_parser_destroy(&slot->response_parser);
     return SALTS_EMSGSIZE;
   }
-  slot->source_buffer = (unsigned char *)malloc(slot->client->limits.stream_chunk_bytes +
-                                                CHTTP_H1_CHUNK_OVERHEAD_BYTES);
-  if (slot->source_buffer == NULL) {
-    chttp_response_parser_destroy(&slot->response_parser);
-    return SALTS_ENOMEM;
+  {
+    const size_t source_capacity =
+        slot->client->limits.stream_chunk_bytes + CHTTP_H1_CHUNK_OVERHEAD_BYTES;
+    slot->source_buffer = (unsigned char *)malloc(source_capacity);
+    if (slot->source_buffer == NULL) {
+      chttp_response_parser_destroy(&slot->response_parser);
+      return SALTS_ENOMEM;
+    }
+    slot->source_buffer_ref =
+        mem_wrap_external(slot->source_buffer, source_capacity,
+                          chttp_client_owned_external_free, NULL);
+    if (slot->source_buffer_ref == NULL) {
+      free(slot->source_buffer);
+      slot->source_buffer = NULL;
+      chttp_response_parser_destroy(&slot->response_parser);
+      return SALTS_ENOMEM;
+    }
+    mem_set_used(slot->source_buffer_ref, 0u);
   }
   slot->body_source = *options->body_source;
   slot->source_transferred = 0u;
@@ -440,7 +509,8 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
   unsigned char *payload;
   int status;
   if (slot == NULL || !slot->source_enabled || slot->source_complete || slot->result_delivered ||
-      slot->cancel_requested || slot->client->stop_active || slot->state != CHTTP_SLOT_BUSY)
+      slot->cancel_requested || slot->client->stop_active || slot->state != CHTTP_SLOT_BUSY ||
+      slot->source_send_pending)
     return;
   if (slot->source_final_pending) {
     chttp_slot_source_finished(slot);
@@ -484,7 +554,7 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
       chttp_slot_fail_and_close(slot, SALTS_EPROTO, 0, "request-source-length");
       return;
     }
-    status = cnet_send(&slot->client->network, slot->connection, slot->source_buffer, produced);
+    status = chttp_slot_send_source_range(slot, 0u, produced);
     if (status != SALTS_OK) {
       chttp_slot_fail_and_close(slot, status, 0, "request-source-send");
       return;
@@ -506,8 +576,7 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
   if (produced == 0u) {
     static const unsigned char final_chunk[] = "0\r\n\r\n";
     memcpy(slot->source_buffer, final_chunk, sizeof(final_chunk) - 1u);
-    status = cnet_send(&slot->client->network, slot->connection, slot->source_buffer,
-                       sizeof(final_chunk) - 1u);
+    status = chttp_slot_send_source_range(slot, 0u, sizeof(final_chunk) - 1u);
     if (status != SALTS_OK) {
       chttp_slot_fail_and_close(slot, status, 0, "request-source-send");
       return;
@@ -533,7 +602,8 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
     memmove(wire, slot->source_buffer, (size_t)prefix_chars);
     memcpy(payload + produced, "\r\n", CHTTP_H1_CHUNK_TRAILER_BYTES);
     wire_size = (size_t)prefix_chars + produced + CHTTP_H1_CHUNK_TRAILER_BYTES;
-    status = cnet_send(&slot->client->network, slot->connection, wire, wire_size);
+    status = chttp_slot_send_source_range(
+        slot, (size_t)(wire - slot->source_buffer), wire_size);
   }
   if (status != SALTS_OK) {
     chttp_slot_fail_and_close(slot, status, 0, "request-source-send");
@@ -549,10 +619,19 @@ static void chttp_slot_file_ready(void *user) {
 
 static void chttp_cnet_send(void *user, cnet_connection connection, size_t size) {
   chttp_slot *slot = (chttp_slot *)user;
-  (void)size;
   if (slot == NULL || slot->connection.slot != connection.slot ||
       slot->connection.generation != connection.generation)
     return;
+  if (slot->request_send_pending) {
+    slot->request_send_pending = false;
+  } else if (slot->source_send_pending) {
+    if (size != slot->source_send_size) {
+      chttp_slot_fail_and_close(slot, SALTS_EPROTO, 0, "request-source-send-size");
+      return;
+    }
+    slot->source_send_pending = false;
+    slot->source_send_size = 0u;
+  }
   chttp_slot_source_advance(slot);
 }
 
@@ -570,18 +649,19 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
         slot->client->stop_active)
       return;
     slot->state = CHTTP_SLOT_BUSY;
-    if (slot->request_data == NULL || slot->request_size == 0u) {
+    if (slot->request_buffer == NULL || slot->request_data == NULL ||
+        slot->request_size == 0u) {
       chttp_slot_fail_and_close(slot, SALTS_EPROTO, 0, "request-state");
       return;
     }
-    status = cnet_send(&slot->client->network, connection, slot->request_data, slot->request_size);
+    mem_set_used(slot->request_buffer, slot->request_size);
+    status = cnet_send_buffer(&slot->client->network, connection, slot->request_buffer);
     if (status != SALTS_OK) {
       chttp_slot_fail_and_close(slot, status, 0, "send-admission");
       return;
     }
-    free(slot->request_data);
-    slot->request_data = NULL;
-    slot->request_size = 0u;
+    slot->request_send_pending = true;
+    chttp_slot_release_request_buffer(slot);
     status = chttp_slot_arm_receive(slot);
     if (status != SALTS_OK) chttp_slot_fail_and_close(slot, status, 0, "receive-admission");
     return;
