@@ -56,6 +56,8 @@ runs:
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"
         test -f "$salts_utils_root/include/data_bind_method_plan.h"
+        test -f "$salts_utils_root/include/data_bind_native_binding.h"
+        grep -q "DataBindNativeExecution" "$salts_utils_root/include/data_bind_native_binding.h"
 
         {
           echo "SALTS_VERSION=$SALTS_VERSION"
