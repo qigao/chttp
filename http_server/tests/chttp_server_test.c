@@ -798,10 +798,19 @@ static void chttp_server_test_retained_outbound_wrapper_lifecycle(void) {
   mem_set_used(connection.outbound_buffer, connection.outbound_size);
   check_equal(mem_buffer_used(connection.outbound_buffer), (size_t)17u);
 
+  first_wrapper = connection.outbound_buffer;
+  first_capacity = connection.outbound_capacity;
+  check_true(mem_buffer_retain(first_wrapper) == first_wrapper);
+  check_equal(mem_buffer_ref_count(first_wrapper), UINT32_C(2));
+
   chttp_server_connection_release_outbound(&connection);
   check_true(connection.outbound == NULL);
   check_true(connection.outbound_buffer == NULL);
+  check_true(connection.outbound_owner == NULL);
   check_equal(connection.outbound_capacity, (size_t)0u);
+  check_equal(atomic_load_explicit(&server.buffer_bytes, memory_order_acquire), first_capacity);
+
+  mem_buffer_release(first_wrapper);
   check_equal(atomic_load_explicit(&server.buffer_bytes, memory_order_acquire), (size_t)0u);
 }
 
