@@ -297,12 +297,22 @@ void chttp_server_buffer_release(void *context, unsigned char *buffer, size_t ca
     atomic_fetch_sub_explicit(&server->buffer_bytes, capacity, memory_order_release);
 }
 
+typedef struct chttp_server_outbound_owner {
+  chttp_server_impl *server;
+  size_t capacity;
+  bool release_data;
+} chttp_server_outbound_owner;
+
 static void chttp_server_outbound_wrapper_release(void *data, void *user_data) {
-  (void)data;
-  (void)user_data;
+  chttp_server_outbound_owner *owner = (chttp_server_outbound_owner *)user_data;
+  if (owner == NULL) return;
+  if (owner->release_data)
+    chttp_server_buffer_release(owner->server, (unsigned char *)data, owner->capacity);
+  free(owner);
 }
 
 static int chttp_server_connection_wrap_outbound(chttp_server_connection *connection) {
+  chttp_server_outbound_owner *owner;
   mem_buffer_t *wrapper;
   if (connection == NULL || connection->server == NULL) return SALTS_EINVAL;
   if (connection->outbound == NULL || connection->outbound_capacity == 0u)
@@ -310,17 +320,29 @@ static int chttp_server_connection_wrap_outbound(chttp_server_connection *connec
                ? SALTS_OK
                : SALTS_EPROTO;
   if (connection->outbound_buffer != NULL) {
-    if (mem_buffer_const_data(connection->outbound_buffer) !=
+    if (connection->outbound_owner == NULL ||
+        mem_buffer_const_data(connection->outbound_buffer) !=
             (const char *)connection->outbound ||
         mem_buffer_capacity(connection->outbound_buffer) != connection->outbound_capacity)
       return SALTS_EPROTO;
     return SALTS_OK;
   }
+
+  owner = (chttp_server_outbound_owner *)malloc(sizeof(*owner));
+  if (owner == NULL) return SALTS_ENOMEM;
+  *owner = (chttp_server_outbound_owner){
+      .server = connection->server,
+      .capacity = connection->outbound_capacity,
+      .release_data = true};
   wrapper = mem_wrap_external(connection->outbound, connection->outbound_capacity,
-                              chttp_server_outbound_wrapper_release, NULL);
-  if (wrapper == NULL) return SALTS_ENOMEM;
+                              chttp_server_outbound_wrapper_release, owner);
+  if (wrapper == NULL) {
+    free(owner);
+    return SALTS_ENOMEM;
+  }
   mem_set_used(wrapper, connection->outbound_size);
   connection->outbound_buffer = wrapper;
+  connection->outbound_owner = owner;
   return SALTS_OK;
 }
 
@@ -335,10 +357,14 @@ int chttp_server_connection_reserve_outbound(chttp_server_connection *connection
   }
 
   if (connection->outbound_buffer != NULL) {
-    if (mem_buffer_ref_count(connection->outbound_buffer) != UINT32_C(1))
+    chttp_server_outbound_owner *owner =
+        (chttp_server_outbound_owner *)connection->outbound_owner;
+    if (owner == NULL || mem_buffer_ref_count(connection->outbound_buffer) != UINT32_C(1))
       return SALTS_EBUSY;
+    owner->release_data = false;
     mem_buffer_release(connection->outbound_buffer);
     connection->outbound_buffer = NULL;
+    connection->outbound_owner = NULL;
   }
 
   grow_status = chttp_server_buffer_grow(
@@ -351,15 +377,22 @@ int chttp_server_connection_reserve_outbound(chttp_server_connection *connection
 }
 
 void chttp_server_connection_release_outbound(chttp_server_connection *connection) {
+  unsigned char *data;
+  size_t capacity;
   if (connection == NULL || connection->outbound == NULL) return;
-  if (connection->outbound_buffer != NULL) {
-    mem_buffer_release(connection->outbound_buffer);
-    connection->outbound_buffer = NULL;
-  }
-  chttp_server_buffer_release(connection->server, connection->outbound,
-                              connection->outbound_capacity);
+  data = connection->outbound;
+  capacity = connection->outbound_capacity;
   connection->outbound = NULL;
   connection->outbound_capacity = 0u;
+  connection->outbound_size = 0u;
+  if (connection->outbound_buffer != NULL) {
+    mem_buffer_t *wrapper = connection->outbound_buffer;
+    connection->outbound_buffer = NULL;
+    connection->outbound_owner = NULL;
+    mem_buffer_release(wrapper);
+  } else {
+    chttp_server_buffer_release(connection->server, data, capacity);
+  }
 }
 
 static bool chttp_server_multiply(size_t left, size_t right, size_t *out) {
