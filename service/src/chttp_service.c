@@ -686,6 +686,117 @@ static int chttp_service_lower_route(
   return SALTS_OK;
 }
 
+static int chttp_service_native_type_valid(
+    const DataBindNativeTypeBinding *binding, size_t *out_bytes) {
+  if (binding == NULL || out_bytes == NULL ||
+      binding->size < sizeof(*binding) ||
+      binding->abi_version != DATA_BIND_BINDING_PLAN_ABI_VERSION ||
+      binding->data == NULL || !cmeta_data_desc_valid(binding->data) ||
+      binding->data->storage_type == NULL ||
+      binding->data->storage_type->size == 0u)
+    return 0;
+  *out_bytes = binding->data->storage_type->size;
+  return 1;
+}
+
+static int chttp_service_add_size(
+    size_t *total, size_t value, size_t limit) {
+  if (total == NULL || value > SIZE_MAX - *total) return 0;
+  *total += value;
+  return *total <= limit;
+}
+
+static int chttp_service_execution_admit(
+    const DataBindHttpMethodPlan *method_plan,
+    const DataBindServiceNativeBinding *native,
+    const DataBindNativeExecution *execution,
+    size_t max_frame_bytes,
+    size_t *request_bytes,
+    size_t *response_bytes,
+    size_t *error_bytes,
+    size_t *param_count) {
+  const DataBindBindingPlan *binding;
+  const cmeta_function_desc *function;
+  size_t expected_params;
+  size_t total = 0u;
+  size_t i;
+
+  if (method_plan == NULL || native == NULL || execution == NULL ||
+      request_bytes == NULL || response_bytes == NULL ||
+      error_bytes == NULL || param_count == NULL ||
+      native->size < sizeof(*native) ||
+      native->abi_version != DATA_BIND_BINDING_PLAN_ABI_VERSION ||
+      !cmeta_function_desc_valid(native->function) ||
+      !data_bind_native_execution_valid(execution) ||
+      !chttp_service_native_type_valid(native->request, request_bytes) ||
+      !chttp_service_native_type_valid(native->response, response_bytes))
+    return SALTS_EINVAL;
+
+  binding = data_bind_http_method_plan_binding(method_plan);
+  function = binding != NULL ? data_bind_binding_plan_function(binding) : NULL;
+  if (function == NULL ||
+      !cmeta_function_desc_equal(function, native->function) ||
+      !cmeta_function_desc_equal(function, execution->function))
+    return SALTS_EINVAL;
+
+  if ((function->effects & CMETA_EFFECT_ASYNC) != 0u)
+    return SALTS_ENOTSUP;
+
+  expected_params = native->error_count == 0u ? 2u : 3u;
+  if (function->param_count != expected_params ||
+      execution->abi->param_count != expected_params ||
+      execution->abi->return_carrier != CMETA_ABI_SCALAR ||
+      cmeta_function_param_abi(execution->abi, 0u) !=
+          CMETA_ABI_OBJECT_POINTER ||
+      cmeta_function_param_abi(execution->abi, 1u) !=
+          CMETA_ABI_OBJECT_POINTER)
+    return SALTS_ENOTSUP;
+
+  *error_bytes = 0u;
+  if (native->error_count == 0u) {
+    if (native->errors != NULL || native->error_param_index != SIZE_MAX ||
+        native->error_envelope_bytes != 0u ||
+        native->error_kind_bytes != 0u)
+      return SALTS_EINVAL;
+  } else {
+    if (native->errors == NULL || native->error_param_index != 2u ||
+        native->error_envelope_bytes == 0u ||
+        native->error_kind_bytes != sizeof(uint32_t) ||
+        native->error_kind_offset >
+            native->error_envelope_bytes - native->error_kind_bytes ||
+        cmeta_function_param_abi(execution->abi, 2u) !=
+            CMETA_ABI_OBJECT_POINTER)
+      return SALTS_ENOTSUP;
+    for (i = 0u; i < native->error_count; ++i) {
+      if (native->errors[i].size < sizeof(DataBindNativeErrorBinding) ||
+          native->errors[i].idl_type_name == NULL ||
+          native->errors[i].data_resolver == NULL ||
+          native->errors[i].kind_value != (uint32_t)(i + 1u) ||
+          native->errors[i].payload_offset >= native->error_envelope_bytes)
+        return SALTS_EINVAL;
+    }
+    *error_bytes = native->error_envelope_bytes;
+  }
+
+  if (max_frame_bytes == 0u ||
+      !chttp_service_add_size(&total, *request_bytes, max_frame_bytes) ||
+      !chttp_service_add_size(&total, *response_bytes, max_frame_bytes) ||
+      !chttp_service_add_size(&total, *error_bytes, max_frame_bytes))
+    return SALTS_EMSGSIZE;
+
+  *param_count = expected_params;
+  return SALTS_OK;
+}
+
+static void chttp_service_method_release(
+    chttp_service_method_record *record) {
+  if (record == NULL) return;
+  free(record->error_storage);
+  free(record->response_storage);
+  free(record->request_storage);
+  memset(record, 0, sizeof(*record));
+}
+
 static int chttp_service_plan_supported(
     const DataBindHttpMethodPlan *plan) {
   const DataBindBindingPlan *binding;
