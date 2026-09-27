@@ -17,8 +17,8 @@ enum {
 };
 
 static void chttp_h2_pending_output_wrapper_release(void *data, void *user_data) {
-  (void)data;
   (void)user_data;
+  free(data);
 }
 
 static bool chttp_h2_size_add(size_t left, size_t right, size_t *out) {
@@ -1235,8 +1235,10 @@ void chttp_h2_session_destroy(chttp_h2_session *session) {
   chttp_tls_profile_release(session->tls_profile);
   if (session->pending_output_buffer != NULL)
     mem_buffer_release(session->pending_output_buffer);
+  else
+    free(session->pending_output);
   session->pending_output_buffer = NULL;
-  free(session->pending_output);
+  session->pending_output = NULL;
   free(session->requests);
   free(session->authority);
   free(session->connection_uri);
