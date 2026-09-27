@@ -16,6 +16,11 @@ enum {
   CHTTP_H2_HEADER_FIELD_OVERHEAD = 32
 };
 
+static void chttp_h2_pending_output_wrapper_release(void *data, void *user_data) {
+  (void)data;
+  (void)user_data;
+}
+
 static bool chttp_h2_size_add(size_t left, size_t right, size_t *out) {
   if (out == NULL || left > SIZE_MAX - right) return false;
   *out = left + right;
@@ -698,13 +703,22 @@ static int chttp_h2_session_flush(chttp_h2_session *session) {
     }
   }
   if (session->pending_output_size != 0u) {
-    status = cnet_send(session->network, session->connection, session->pending_output,
-                       session->pending_output_size);
+    if (session->pending_output_buffer == NULL ||
+        mem_buffer_const_data(session->pending_output_buffer) !=
+            (const char *)session->pending_output ||
+        session->pending_output_size > mem_buffer_capacity(session->pending_output_buffer)) {
+      chttp_h2_session_fail(session, SALTS_EPROTO, 0, "h2-send-buffer");
+      return SALTS_EPROTO;
+    }
+    mem_set_used(session->pending_output_buffer, session->pending_output_size);
+    status =
+        cnet_send_buffer(session->network, session->connection, session->pending_output_buffer);
     if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) return SALTS_OK;
     if (status != SALTS_OK) {
       chttp_h2_session_fail(session, status, 0, "h2-send-admission");
       return status;
     }
+    session->pending_send_size = session->pending_output_size;
     session->pending_output_size = 0u;
     session->send_active = true;
   }
@@ -797,12 +811,16 @@ static void chttp_h2_cnet_receive(void *user, cnet_connection connection,
 
 static void chttp_h2_cnet_send(void *user, cnet_connection connection, size_t size) {
   chttp_h2_session *session = (chttp_h2_session *)user;
-  (void)size;
   if (session == NULL || session->connection.slot != connection.slot ||
       session->connection.generation != connection.generation ||
       session->state == CHTTP_H2_SESSION_FREE || session->state == CHTTP_H2_SESSION_TERMINAL)
     return;
+  if (!session->send_active || size != session->pending_send_size) {
+    chttp_h2_session_fail(session, SALTS_EPROTO, 0, "h2-send-size");
+    return;
+  }
   session->send_active = false;
+  session->pending_send_size = 0u;
   (void)chttp_h2_session_flush(session);
 }
 
@@ -829,12 +847,17 @@ int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
   session->requests =
       (chttp_h2_request_state **)calloc(session->request_capacity, sizeof(*session->requests));
   session->pending_output = (unsigned char *)malloc(protocol_config->output_buffer_bytes);
+  if (session->pending_output != NULL)
+    session->pending_output_buffer =
+        mem_wrap_external(session->pending_output, protocol_config->output_buffer_bytes,
+                          chttp_h2_pending_output_wrapper_release, NULL);
   if (session->connection_uri == NULL || session->authority == NULL || session->requests == NULL ||
-      session->pending_output == NULL) {
+      session->pending_output == NULL || session->pending_output_buffer == NULL) {
     chttp_h2_session_destroy(session);
     chttp_tls_profile_release(tls_profile);
     return SALTS_ENOMEM;
   }
+  mem_set_used(session->pending_output_buffer, 0u);
   session->tls_profile = tls_profile;
   protocol_callbacks.user_data = session;
   protocol_callbacks.on_begin_headers = chttp_h2_on_begin_headers;
@@ -1210,6 +1233,9 @@ void chttp_h2_session_destroy(chttp_h2_session *session) {
   if (session == NULL) return;
   chttp_h2_proto_destroy(session->protocol);
   chttp_tls_profile_release(session->tls_profile);
+  if (session->pending_output_buffer != NULL)
+    mem_buffer_release(session->pending_output_buffer);
+  session->pending_output_buffer = NULL;
   free(session->pending_output);
   free(session->requests);
   free(session->authority);
