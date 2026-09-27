@@ -44,21 +44,21 @@ static const cmeta_type_desc ADD_RESPONSE_PTR_TYPE = {
 
 static const cmeta_field_desc ADD_REQUEST_LAYOUT_FIELDS[] = {
     {"left", "uint32_t", offsetof(AddRequest, left), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL},
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL},
     {"right", "uint32_t", offsetof(AddRequest, right), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL},
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL},
     {"scale", "uint32_t", offsetof(AddRequest, scale), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL}};
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL}};
 static const cmeta_struct_desc ADD_REQUEST_LAYOUT = {
     "AddRequest", sizeof(AddRequest), _Alignof(AddRequest),
     ADD_REQUEST_LAYOUT_FIELDS, 3u};
 static const cmeta_data_field_desc ADD_REQUEST_FIELDS[] = {
     {"test.chttp.AddRequest.left", "left", offsetof(AddRequest, left),
-     &salts_uint32_cmeta_data},
+     &cmeta_data_uint32},
     {"test.chttp.AddRequest.right", "right", offsetof(AddRequest, right),
-     &salts_uint32_cmeta_data},
+     &cmeta_data_uint32},
     {"test.chttp.AddRequest.scale", "scale", offsetof(AddRequest, scale),
-     &salts_uint32_cmeta_data}};
+     &cmeta_data_uint32}};
 static const cmeta_data_struct_shape ADD_REQUEST_SHAPE = {
     &ADD_REQUEST_LAYOUT, ADD_REQUEST_FIELDS, 3u};
 static const cmeta_data_desc ADD_REQUEST_DATA = {
@@ -72,13 +72,13 @@ static const cmeta_data_desc ADD_REQUEST_DATA = {
 
 static const cmeta_field_desc ADD_RESPONSE_LAYOUT_FIELDS[] = {
     {"sum", "uint32_t", offsetof(AddResponse, sum), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL}};
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL}};
 static const cmeta_struct_desc ADD_RESPONSE_LAYOUT = {
     "AddResponse", sizeof(AddResponse), _Alignof(AddResponse),
     ADD_RESPONSE_LAYOUT_FIELDS, 1u};
 static const cmeta_data_field_desc ADD_RESPONSE_FIELDS[] = {
     {"test.chttp.AddResponse.sum", "sum", offsetof(AddResponse, sum),
-     &salts_uint32_cmeta_data}};
+     &cmeta_data_uint32}};
 static const cmeta_data_struct_shape ADD_RESPONSE_SHAPE = {
     &ADD_RESPONSE_LAYOUT, ADD_RESPONSE_FIELDS, 1u};
 static const cmeta_data_desc ADD_RESPONSE_DATA = {
@@ -108,55 +108,79 @@ static const DataBindNativeTypeBinding ADD_RESPONSE_NATIVE = {
     .idl_type_name = "AddResponse",
     .data = &ADD_RESPONSE_DATA};
 
-FunctionDeclAs(
-    value, void, &cmeta_type_void, chttp_service_test_add,
+FunctionDeclAsAbi(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    chttp_service_test_add,
     (const AddRequest *, request,
-     CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &ADD_REQUEST_PTR_TYPE),
-    (AddResponse *, response, CMETA_PARAM_OUT, &ADD_RESPONSE_PTR_TYPE));
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
 
-void chttp_service_test_add(const AddRequest *request, AddResponse *response) {
-  if (request == NULL || response == NULL) return;
+int chttp_service_test_add(const AddRequest *request, AddResponse *response) {
+  if (request == NULL || response == NULL) return -1;
   response->sum = request->left + request->right * request->scale;
+  return 0;
 }
 
-static DataBindStatus chttp_service_test_execute(
-    void *user,
-    const DataBindBindingPlan *plan,
-    const DataBindBindingProvider *provider,
-    const DataBindNativeOptions *native_options,
-    DataBindBindingOutcome *outcome,
-    DataBindBindingPlanDiagnostic *diagnostic) {
-  AddRequest request = {0};
-  AddResponse response = {0};
-  void *params[2] = {NULL, &response};
-  const size_t param_bytes[2] = {0u, sizeof(response)};
-  DataBindBindingCallFrame frame =
-      (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT;
-  DataBindStatus status;
-
-  (void)user;
-  if (plan == NULL || provider == NULL || native_options == NULL ||
-      outcome == NULL || diagnostic == NULL)
-    return DATA_BIND_ERR_INVALID_ARG;
-  if (data_bind_binding_plan_function(plan) !=
-      FunctionMeta(chttp_service_test_add))
-    return DATA_BIND_ERR_SCHEMA;
-
-  frame.request = &request;
-  frame.request_bytes = sizeof(request);
-  frame.params = params;
-  frame.param_bytes = param_bytes;
-  frame.param_count = 2u;
-
-  status = data_bind_binding_plan_bind_inputs(
-      plan, provider, native_options, &frame, diagnostic);
-  if (status != DATA_BIND_OK) return status;
-
-  chttp_service_test_add(&request, &response);
-
-  return data_bind_binding_plan_write_outcome(
-      plan, provider, &frame, 0, outcome, diagnostic);
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 2u ||
+      params[0] == NULL || params[1] == NULL)
+    return false;
+  result = chttp_service_test_add(
+      (const AddRequest *)params[0], (AddResponse *)params[1]);
+  *(int *)return_storage = result;
+  return true;
 }
+
+static const DataBindNativeExecution CHTTP_SERVICE_TEST_EXECUTION = {
+    sizeof(DataBindNativeExecution),
+    DATA_BIND_NATIVE_EXECUTION_ABI_VERSION,
+    FunctionMeta(chttp_service_test_add),
+    FunctionAbi(chttp_service_test_add),
+    NULL,
+    chttp_service_test_invoke};
+
+FunctionDeclAsAbi(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    chttp_service_test_other,
+    (const AddRequest *, request,
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
+
+int chttp_service_test_other(const AddRequest *request, AddResponse *response) {
+  return chttp_service_test_add(request, response);
+}
+
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_other_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 2u ||
+      params[0] == NULL || params[1] == NULL)
+    return false;
+  result = chttp_service_test_other(
+      (const AddRequest *)params[0], (AddResponse *)params[1]);
+  *(int *)return_storage = result;
+  return true;
+}
+
+static const DataBindNativeExecution CHTTP_SERVICE_TEST_OTHER_EXECUTION = {
+    sizeof(DataBindNativeExecution),
+    DATA_BIND_NATIVE_EXECUTION_ABI_VERSION,
+    FunctionMeta(chttp_service_test_other),
+    FunctionAbi(chttp_service_test_other),
+    NULL,
+    chttp_service_test_other_invoke};
 
 static native_io_backend_kind chttp_service_test_backend(void) {
 #if defined(_WIN32)
@@ -254,6 +278,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_service service = {0};
     chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
     chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_service_http_mount mismatch = CHTTP_SERVICE_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -286,6 +311,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     service_config.method_capacity = 1u;
     service_config.max_binding_value_bytes = 64u;
     service_config.max_response_body_bytes = 64u;
+    service_config.max_call_frame_bytes = 512u;
     service_config.native_workspace_bytes = 4096u;
     service_config.native_max_depth = 16u;
     service_config.native_max_items = 64u;
@@ -293,8 +319,16 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
 
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    mismatch.method_plan = method_plan;
+    mismatch.native_binding = &native;
+    mismatch.execution = &CHTTP_SERVICE_TEST_OTHER_EXECUTION;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mismatch), SALTS_EINVAL);
+
     mount.method_plan = method_plan;
-    mount.invoke = chttp_service_test_execute;
+    mount.native_binding = &native;
+    mount.execution = &CHTTP_SERVICE_TEST_EXECUTION;
     check_equal(
         chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
 
