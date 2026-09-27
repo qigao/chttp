@@ -742,6 +742,46 @@ static int chttp_service_execution_admit(
   if ((function->effects & CMETA_EFFECT_ASYNC) != 0u)
     return SALTS_ENOTSUP;
 
+  if (data_bind_binding_plan_error_count(binding) != native->error_count)
+    return SALTS_EINVAL;
+  for (i = 0u; i < native->error_count; ++i) {
+    const char *plan_error = data_bind_binding_plan_error_at(binding, i);
+    if (plan_error == NULL || native->errors == NULL ||
+        native->errors[i].idl_type_name == NULL ||
+        strcmp(plan_error, native->errors[i].idl_type_name) != 0)
+      return SALTS_EINVAL;
+  }
+
+  {
+    DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+    size_t count = data_bind_binding_plan_ingress_count(binding);
+    for (i = 0u; i < count; ++i) {
+      size_t bytes;
+      entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+      if (!data_bind_binding_plan_ingress_at(binding, i, &entry) ||
+          entry.data == NULL || entry.data->storage_type == NULL ||
+          entry.function_param_index != 0u)
+        return SALTS_ENOTSUP;
+      bytes = entry.data->storage_type->size;
+      if (entry.native_offset > *request_bytes ||
+          bytes > *request_bytes - entry.native_offset)
+        return SALTS_EINVAL;
+    }
+    count = data_bind_binding_plan_egress_count(binding);
+    for (i = 0u; i < count; ++i) {
+      size_t bytes;
+      entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+      if (!data_bind_binding_plan_egress_at(binding, i, &entry) ||
+          entry.data == NULL || entry.data->storage_type == NULL ||
+          entry.target_is_return || entry.function_param_index != 1u)
+        return SALTS_ENOTSUP;
+      bytes = entry.data->storage_type->size;
+      if (entry.native_offset > *response_bytes ||
+          bytes > *response_bytes - entry.native_offset)
+        return SALTS_EINVAL;
+    }
+  }
+
   expected_params = native->error_count == 0u ? 2u : 3u;
   if (function->param_count != expected_params ||
       execution->abi->param_count != expected_params ||
