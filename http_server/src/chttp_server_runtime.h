@@ -263,6 +263,7 @@ struct chttp_server_connection {
   bool response_close_after_stream;
   bool deferred_disconnected;
   bool deferred_response_writing;
+  bool retained_response_paused;
   chttp_server_pending_action pending_action;
 };
 
@@ -325,6 +326,8 @@ int chttp_server_send_file(chttp_server_response *response, unsigned int status_
 void chttp_server_response_builder_reset(chttp_server_response_builder *builder);
 void chttp_server_response_builder_destroy(chttp_server_response_builder *builder);
 void chttp_server_response_builder_close_source(chttp_server_response_builder *builder, int status);
+void chttp_server_response_builder_release_retained_body(
+    chttp_server_response_builder *builder);
 int chttp_server_response_source_owned(chttp_server_response *response, unsigned int status_code,
                                        const char *content_type, const chttp_body_source *source,
                                        void (*cleanup)(void *user, int status), void *cleanup_user);
