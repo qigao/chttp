@@ -42,3 +42,10 @@ set_target_properties(chttp_service_header_cpp_test PROPERTIES
   CXX_STANDARD 17
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF)
+
+
+add_test(
+  NAME chttp_service_single_materialization_contract
+  COMMAND ${CMAKE_COMMAND}
+    -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_single_materialization_contract_test.cmake)
