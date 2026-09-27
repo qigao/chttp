@@ -845,11 +845,10 @@ static int chttp_service_input_failure(DataBindStatus status) {
          status == DATA_BIND_ERR_VALIDATION;
 }
 
-static int chttp_service_http_handler(
-    void *user, const chttp_server_request_view *request,
+static int chttp_service_http_execute(
+    chttp_service_method_record *record,
+    const chttp_server_request_view *request,
     chttp_server_response *response) {
-  chttp_service_method_record *record =
-      (chttp_service_method_record *)user;
   chttp_service_http_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
   DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
@@ -857,12 +856,19 @@ static int chttp_service_http_handler(
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   const DataBindBindingPlan *binding;
   DataBindStatus bind_status;
+  int native_status = 0;
   int http_status = 500;
 
   if (record == NULL || record->owner == NULL ||
-      record->method_plan == NULL || record->invoke == NULL ||
-      request == NULL || response == NULL)
+      record->method_plan == NULL || record->native_binding == NULL ||
+      record->execution == NULL || record->request_storage == NULL ||
+      record->response_storage == NULL || request == NULL || response == NULL)
     return SALTS_EINVAL;
+
+  memset(record->request_storage, 0, record->request_bytes);
+  memset(record->response_storage, 0, record->response_bytes);
+  if (record->error_storage != NULL)
+    memset(record->error_storage, 0, record->error_bytes);
 
   provider_context = (chttp_service_http_provider){
       .service = record->owner,
@@ -877,9 +883,20 @@ static int chttp_service_http_handler(
   provider.abort_output = chttp_service_http_abort_output;
 
   binding = data_bind_http_method_plan_binding(record->method_plan);
-  bind_status = record->invoke(
-      record->user, binding, &provider,
-      &record->owner->native_options, &outcome, &diagnostic);
+  bind_status = data_bind_binding_plan_bind_inputs(
+      binding, &provider, &record->owner->native_options,
+      &record->frame, &diagnostic);
+
+  if (bind_status == DATA_BIND_OK &&
+      !record->execution->invoke(
+          record->execution->context, &native_status,
+          record->params, record->param_count))
+    bind_status = DATA_BIND_ERR_RUNTIME;
+
+  if (bind_status == DATA_BIND_OK)
+    bind_status = data_bind_binding_plan_write_outcome(
+        binding, &provider, &record->frame, native_status,
+        &outcome, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
     if (!provider_context.output_attempted &&
@@ -908,6 +925,24 @@ static int chttp_service_http_handler(
       provider_context.staged_content_type,
       record->owner->response_scratch,
       provider_context.staged_body_size);
+}
+
+static int chttp_service_http_handler(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  chttp_service_method_record *record =
+      (chttp_service_method_record *)user;
+  int status;
+
+  if (record == NULL || record->owner == NULL)
+    return SALTS_EINVAL;
+  if (record->owner->executing)
+    return SALTS_EBUSY;
+
+  record->owner->executing = 1;
+  status = chttp_service_http_execute(record, request, response);
+  record->owner->executing = 0;
+  return status;
 }
 
 int chttp_service_init(
