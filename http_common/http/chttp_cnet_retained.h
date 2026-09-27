@@ -77,12 +77,15 @@ static inline void chttp_cnet_owned_free(void *data, void *user) {
  * caller must clear its raw pointer regardless of CNet admission result.
  */
 static inline int chttp_cnet_send_owned_malloc(cnet_client *client, cnet_connection connection,
-                                                void *data, size_t size) {
+                                                void **data, size_t size) {
   mem_buffer_t *buffer;
+  void *owned;
   int status;
-  if (client == NULL || data == NULL || size == 0u) return SALTS_EINVAL;
-  buffer = mem_wrap_external(data, size, chttp_cnet_owned_free, NULL);
+  if (client == NULL || data == NULL || *data == NULL || size == 0u) return SALTS_EINVAL;
+  owned = *data;
+  buffer = mem_wrap_external(owned, size, chttp_cnet_owned_free, NULL);
   if (buffer == NULL) return SALTS_ENOMEM;
+  *data = NULL;
   status = cnet_send_buffer(client, connection, buffer);
   mem_buffer_release(buffer);
   return status;
