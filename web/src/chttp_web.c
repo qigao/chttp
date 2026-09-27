@@ -479,7 +479,7 @@ const cmeta_data_desc *chttp_web_vstr_cmeta_data(void) {
 }
 
 const cmeta_data_desc *chttp_web_sequence_cmeta_data(void) {
-  return jinja_cmeta_sequence_data();
+  return &cmeta_data_sequence_view;
 }
 
 void chttp_web_output_free(char *html) {
