@@ -2,7 +2,7 @@ databind_target(
   TARGET chttp_service_http_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.schema"
   ARTIFACT_NAME "chttp_service"
-  PROJECTIONS HTTP
+  TRANSPORTS HTTP
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.projection.json")
 
