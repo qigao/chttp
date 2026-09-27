@@ -690,7 +690,7 @@ static int chttp_service_native_type_valid(
     const DataBindNativeTypeBinding *binding, size_t *out_bytes) {
   if (binding == NULL || out_bytes == NULL ||
       binding->size < sizeof(*binding) ||
-      binding->abi_version != DATA_BIND_BINDING_PLAN_ABI_VERSION ||
+      binding->abi_version != DATA_BIND_NATIVE_BINDING_ABI_VERSION ||
       binding->data == NULL || !cmeta_data_desc_valid(binding->data) ||
       binding->data->storage_type == NULL ||
       binding->data->storage_type->size == 0u)
