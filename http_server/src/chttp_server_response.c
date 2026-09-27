@@ -105,7 +105,7 @@ int chttp_server_response_builder_init(chttp_server_response_builder *builder,
   return SALTS_OK;
 }
 
-static void chttp_server_response_builder_release_retained_body(
+void chttp_server_response_builder_release_retained_body(
     chttp_server_response_builder *builder) {
   if (builder == NULL || builder->retained_body == NULL) return;
   mem_buffer_release(builder->retained_body);
