@@ -1,6 +1,7 @@
 #include <http_client/http.h>
 
 #include "chttp_h2_proto.h"
+#include "chttp_cnet_retained.h"
 #include "chttp_tls.h"
 
 #include <cnet/websocket.h>
@@ -82,6 +83,7 @@ struct chttp_websocket_pool_impl {
   unsigned char *event_payloads;
   unsigned char *frame_buffers;
   unsigned char *wire_buffer;
+  mem_buffer_t *wire_retained;
   unsigned char *header_name_buffer;
   size_t session_capacity;
   size_t active_sessions;
@@ -612,7 +614,9 @@ static int chttp_websocket_pool_flush(chttp_websocket_pool_impl *pool) {
     }
   }
   if (pool->wire_size == 0u) return SALTS_OK;
-  status = cnet_send(&pool->network, pool->connection, pool->wire_buffer, pool->wire_size);
+  status = chttp_cnet_retained_send(
+      &pool->network, pool->connection, pool->wire_retained,
+      pool->wire_buffer, pool->wire_capacity, pool->wire_size, 0);
   if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) return SALTS_OK;
   if (status != SALTS_OK) return status;
   pool->write_pending = true;
@@ -875,6 +879,8 @@ int chttp_websocket_pool_init(chttp_websocket_pool *pool,
     status = SALTS_ENOMEM;
     goto fail;
   }
+  status = chttp_cnet_retained_bind(&impl->wire_retained, impl->wire_buffer, impl->wire_capacity);
+  if (status != SALTS_OK) goto fail;
   for (index = 0u; index < config->session_capacity; ++index) {
     size_t event_index;
     chttp_websocket_pool_slot *slot = &impl->slots[index];
@@ -907,7 +913,8 @@ int chttp_websocket_pool_init(chttp_websocket_pool *pool,
 fail:
   chttp_h2_proto_destroy(impl->protocol);
   free(impl->header_name_buffer);
-  free(impl->wire_buffer);
+  if (chttp_cnet_retained_release(&impl->wire_retained) == SALTS_OK)
+    free(impl->wire_buffer);
   free(impl->frame_buffers);
   free(impl->event_payloads);
   free(impl->event_slots);
@@ -1287,7 +1294,8 @@ int chttp_websocket_pool_destroy(chttp_websocket_pool *pool, uint32_t timeout_ms
   chttp_h2_proto_destroy(impl->protocol);
   chttp_tls_profile_release(impl->tls_profile);
   free(impl->header_name_buffer);
-  free(impl->wire_buffer);
+  if (chttp_cnet_retained_release(&impl->wire_retained) == SALTS_OK)
+    free(impl->wire_buffer);
   free(impl->frame_buffers);
   free(impl->event_payloads);
   free(impl->event_slots);
