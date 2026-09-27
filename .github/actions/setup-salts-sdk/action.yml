@@ -18,8 +18,8 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        SALTS_VERSION: '1.7.9'
-        SALTS_UTILS_VERSION: '4.0.1'
+        SALTS_VERSION: '1.7.10'
+        SALTS_UTILS_VERSION: '4.0.2'
       run: |
         set -euo pipefail
         packages="$RUNNER_TEMP/qigao-native-sdk"
@@ -73,13 +73,6 @@ runs:
           echo "SaltsUtils.Native: $SALTS_UTILS_VERSION"
           echo "vcpkg: $(git -C "$VCPKG_ROOT" rev-parse HEAD)"
         } >> "$GITHUB_STEP_SUMMARY"
-
-
-    - name: Set up Go for BoringSSL
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.24.x'
-        cache: false
 
     - name: Prepare CHttp toolchain
       shell: bash
