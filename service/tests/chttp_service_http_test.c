@@ -279,6 +279,8 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
     chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
     chttp_service_http_mount mismatch = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    DataBindNativeExecution invalid_execution = CHTTP_SERVICE_TEST_EXECUTION;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -325,6 +327,13 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     mismatch.execution = &CHTTP_SERVICE_TEST_OTHER_EXECUTION;
     check_equal(
         chttp_service_mount_http(&service, &server, &mismatch), SALTS_EINVAL);
+
+    invalid_execution.invoke = NULL;
+    invalid.method_plan = method_plan;
+    invalid.native_binding = &native;
+    invalid.execution = &invalid_execution;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &invalid), SALTS_EINVAL);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
