@@ -88,11 +88,14 @@ HTTPS policy、H1 Upgrade、H2 Extended CONNECT、路由和 byte-stream Adapter�
 WebSocket client 通过 `chttp_websocket_client_config.socket_options` 配置。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
-`cnet_send()` admission 成功只证明 bytes 已复制进有界 command storage；`observer.on_send`
-在完整 ordered write terminal 后报告一次完成。H1 server 只在该 callback 后重新申请 receive；
-H2 为处理 WINDOW_UPDATE/PING 等控制帧允许收发全双工，但每条连接仍只有一个 CNet send in-flight。
-这个完成事实仍不等于应用级 exactly-once，CHTTP
-不会根据断线猜测 peer 是否消费了请求，也不做隐式 retry。
+CHTTP 的 production transport send 只使用 CNet retained ownership。长期 H1/H2/WebSocket
+wire buffer 通过 persistent external `mem_buffer_t` wrapper 交给 CNet；一次性 H1 request bytes
+把 malloc ownership 转交给 retained buffer。成功 admission 后 caller 不再修改对应 storage，直到
+`observer.on_send` 的完整 ordered write terminal。CNet 在发布该 callback 前已经释放 write-slot
+retain，因此 callback 内可以安全生成/复用下一块 wire bytes。H1 server 只在该 callback 后重新申请
+receive；H2 为处理 WINDOW_UPDATE/PING 等控制帧允许收发全双工，但每条连接仍只有一个 CNet
+send in-flight。这个完成事实仍不等于应用级 exactly-once，CHTTP 不会根据断线猜测 peer 是否消费
+请求，也不做隐式 retry。
 
 ## HTTP Server：路由、中间件与 Session
 
