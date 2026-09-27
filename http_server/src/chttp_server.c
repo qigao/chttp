@@ -297,15 +297,65 @@ void chttp_server_buffer_release(void *context, unsigned char *buffer, size_t ca
     atomic_fetch_sub_explicit(&server->buffer_bytes, capacity, memory_order_release);
 }
 
-int chttp_server_connection_reserve_outbound(chttp_server_connection *connection, size_t required) {
+static void chttp_server_outbound_wrapper_release(void *data, void *user_data) {
+  (void)data;
+  (void)user_data;
+}
+
+static int chttp_server_connection_wrap_outbound(chttp_server_connection *connection) {
+  mem_buffer_t *wrapper;
   if (connection == NULL || connection->server == NULL) return SALTS_EINVAL;
-  return chttp_server_buffer_grow(
+  if (connection->outbound == NULL || connection->outbound_capacity == 0u)
+    return connection->outbound == NULL && connection->outbound_capacity == 0u
+               ? SALTS_OK
+               : SALTS_EPROTO;
+  if (connection->outbound_buffer != NULL) {
+    if (mem_buffer_const_data(connection->outbound_buffer) !=
+            (const char *)connection->outbound ||
+        mem_buffer_capacity(connection->outbound_buffer) != connection->outbound_capacity)
+      return SALTS_EPROTO;
+    return SALTS_OK;
+  }
+  wrapper = mem_wrap_external(connection->outbound, connection->outbound_capacity,
+                              chttp_server_outbound_wrapper_release, NULL);
+  if (wrapper == NULL) return SALTS_ENOMEM;
+  mem_set_used(wrapper, connection->outbound_size);
+  connection->outbound_buffer = wrapper;
+  return SALTS_OK;
+}
+
+int chttp_server_connection_reserve_outbound(chttp_server_connection *connection, size_t required) {
+  int grow_status;
+  int wrap_status;
+  if (connection == NULL || connection->server == NULL) return SALTS_EINVAL;
+  if (connection->writing) return SALTS_EBUSY;
+  if (required <= connection->outbound_capacity) {
+    return connection->outbound == NULL ? SALTS_OK
+                                        : chttp_server_connection_wrap_outbound(connection);
+  }
+
+  if (connection->outbound_buffer != NULL) {
+    if (mem_buffer_ref_count(connection->outbound_buffer) != UINT32_C(1))
+      return SALTS_EBUSY;
+    mem_buffer_release(connection->outbound_buffer);
+    connection->outbound_buffer = NULL;
+  }
+
+  grow_status = chttp_server_buffer_grow(
       connection->server, &connection->outbound, &connection->outbound_capacity, required,
       connection->server->config.network.max_send_bytes, connection->outbound_size);
+  wrap_status = connection->outbound == NULL
+                    ? SALTS_OK
+                    : chttp_server_connection_wrap_outbound(connection);
+  return wrap_status != SALTS_OK ? wrap_status : grow_status;
 }
 
 void chttp_server_connection_release_outbound(chttp_server_connection *connection) {
   if (connection == NULL || connection->outbound == NULL) return;
+  if (connection->outbound_buffer != NULL) {
+    mem_buffer_release(connection->outbound_buffer);
+    connection->outbound_buffer = NULL;
+  }
   chttp_server_buffer_release(connection->server, connection->outbound,
                               connection->outbound_capacity);
   connection->outbound = NULL;
@@ -865,12 +915,22 @@ static int chttp_server_connection_retry(chttp_server_connection *connection) {
   if (action == CHTTP_SERVER_PENDING_NONE) return SALTS_OK;
   if (action == CHTTP_SERVER_PENDING_RECEIVE)
     status = cnet_receive(&connection->server->network, connection->handle, 1u);
-  else if (action == CHTTP_SERVER_PENDING_SEND)
-    status = connection->close_after_write
-                 ? cnet_send_and_close(&connection->server->network, connection->handle,
-                                       connection->outbound, connection->outbound_size)
-                 : cnet_send(&connection->server->network, connection->handle, connection->outbound,
-                             connection->outbound_size);
+  else if (action == CHTTP_SERVER_PENDING_SEND) {
+    status = chttp_server_connection_wrap_outbound(connection);
+    if (status == SALTS_OK) {
+      if (connection->outbound_buffer == NULL || connection->outbound_size == 0u)
+        status = SALTS_EPROTO;
+      else {
+        mem_set_used(connection->outbound_buffer, connection->outbound_size);
+        status = connection->close_after_write
+                     ? cnet_send_buffer_and_close(&connection->server->network,
+                                                  connection->handle,
+                                                  connection->outbound_buffer)
+                     : cnet_send_buffer(&connection->server->network, connection->handle,
+                                        connection->outbound_buffer);
+      }
+    }
+  }
   else status = cnet_close(&connection->server->network, connection->handle);
   if (status == SALTS_OK) {
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
