@@ -88,11 +88,21 @@ HTTPS policy、H1 Upgrade、H2 Extended CONNECT、路由和 byte-stream Adapter�
 WebSocket client 通过 `chttp_websocket_client_config.socket_options` 配置。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
-`cnet_send()` admission 成功只证明 bytes 已复制进有界 command storage；`observer.on_send`
-在完整 ordered write terminal 后报告一次完成。H1 server 只在该 callback 后重新申请 receive；
-H2 为处理 WINDOW_UPDATE/PING 等控制帧允许收发全双工，但每条连接仍只有一个 CNet send in-flight。
-这个完成事实仍不等于应用级 exactly-once，CHTTP
-不会根据断线猜测 peer 是否消费了请求，也不做隐式 retry。
+CHTTP production transport 以 retained/owned payload 作为 CNet 边界。H1/H2 已序列化
+outbound storage 通过 `cnet_send_buffer()`、`cnet_send_slice()` 或
+`cnet_send_buffer_and_close()` 交给 CNet；成功 admission 后 CNet retain backing ownership，
+不再把 payload 复制进 CNet write storage。匹配的 `observer.on_send` terminal 之前，
+data/used/capacity 保持不变，`writing` / `write_pending` / `send_active` 就是 mutation guard。
+
+H1 WebSocket 也不再增加一份 transport staging copy。CNet WebSocket 直接在 CHTTP 提供的
+persistent `mem_buffer_t` output backing 中构帧；write callback 用 `cnet_send_buffer()`
+admit 后返回 `CNET_WEBSOCKET_WRITE_PENDING`，匹配的 CNet `on_send` terminal 再调用
+`cnet_websocket_write_complete()` 解锁 frame storage。H2 WebSocket frame 仍需进入 H2 DATA
+framing，这是协议编码边界；最终 H2 wire buffer同样以 retained ownership 交给 CNet。
+
+兼容性 copied CNet API（`cnet_send()` / `cnet_send_and_close()`）不再用于 CHTTP production
+transport。terminal 完成事实仍不等于应用级 exactly-once；CHTTP 不会根据断线猜测 peer 是否消费了
+请求，也不做隐式 retry。
 
 ## HTTP Server：路由、中间件与 Session
 
