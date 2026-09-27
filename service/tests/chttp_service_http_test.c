@@ -311,7 +311,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     service_config.method_capacity = 1u;
     service_config.max_binding_value_bytes = 64u;
-    service_config.max_response_body_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
     service_config.max_call_frame_bytes = 512u;
     service_config.native_workspace_bytes = 4096u;
     service_config.native_max_depth = 16u;
@@ -355,6 +355,25 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(response.status_code, 201u);
     check_equal(response.body_size, (size_t)2u);
     check_equal(response.body, "11", 2u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/3?right=4", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body_size, (size_t)1u);
+    check_equal(response.body, "7", 1u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/3?right=100", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 500u);
+    check_equal(response.body, "Internal Server Error", 21u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};

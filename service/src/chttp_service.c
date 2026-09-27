@@ -1,6 +1,7 @@
 #include <chttp_service/service.h>
 
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 
 #include <cserde/cserde.h>
 
@@ -43,7 +44,6 @@ struct chttp_service_impl {
   unsigned char *native_workspace;
   DataBindNativeOptions native_options;
 
-  unsigned char *response_scratch;
   size_t response_capacity;
   size_t max_call_frame_bytes;
   int executing;
@@ -61,6 +61,7 @@ typedef struct chttp_service_http_provider {
 
   cserde_writer writer;
   size_t writer_tokens;
+  mem_buffer_t *output_buffer;
 
   int output_attempted;
   int output_active;
@@ -446,35 +447,99 @@ static DataBindStatus chttp_service_http_open_input(
   return status;
 }
 
+static void chttp_service_http_release_output(
+    chttp_service_http_provider *provider) {
+  if (provider == NULL) return;
+  if (provider->output_buffer != NULL) {
+    mem_buffer_release(provider->output_buffer);
+    provider->output_buffer = NULL;
+  }
+  provider->staged_body_size = 0u;
+}
+
+static cserde_status chttp_service_http_output_buffer(
+    chttp_service_http_provider *provider, size_t required,
+    char **out_data, size_t *out_capacity) {
+  mem_buffer_t *buffer;
+  if (provider == NULL || provider->service == NULL ||
+      out_data == NULL || out_capacity == NULL)
+    return CSERDE_INVALID_ARGUMENT;
+  if (provider->output_buffer != NULL)
+    return CSERDE_INVALID_STATE;
+  if (required > provider->service->response_capacity)
+    return CSERDE_LIMIT_EXCEEDED;
+  if (required == 0u) {
+    *out_data = NULL;
+    *out_capacity = 0u;
+    return CSERDE_OK;
+  }
+  buffer = mem_get_buffer(mem_global(), required);
+  if (buffer == NULL) return CSERDE_SINK_ERROR;
+  provider->output_buffer = buffer;
+  *out_data = mem_buffer_data(buffer);
+  *out_capacity = mem_buffer_capacity(buffer);
+  if (*out_data == NULL || *out_capacity < required) {
+    chttp_service_http_release_output(provider);
+    return CSERDE_SINK_ERROR;
+  }
+  return CSERDE_OK;
+}
+
 static cserde_status chttp_service_scalar_write(
     void *context, const cserde_token *token) {
   chttp_service_http_provider *provider =
       (chttp_service_http_provider *)context;
-  char *buffer;
-  size_t capacity;
+  char *buffer = NULL;
+  size_t capacity = 0u;
+  size_t required = 0u;
   int written;
+  cserde_status buffer_status;
 
   if (provider == NULL || provider->service == NULL || token == NULL)
     return CSERDE_INVALID_ARGUMENT;
   if (provider->writer_tokens != 0u) return CSERDE_INVALID_STATE;
 
-  buffer = (char *)provider->service->response_scratch;
-  capacity = provider->service->response_capacity;
+  switch (token->kind) {
+  case CSERDE_NULL:
+    required = 4u;
+    break;
+  case CSERDE_BOOL:
+    required = token->value.boolean ? 4u : 5u;
+    break;
+  case CSERDE_SINT:
+  case CSERDE_UINT:
+    required = provider->service->response_capacity < 32u
+                   ? provider->service->response_capacity
+                   : 32u;
+    break;
+  case CSERDE_FLOAT:
+    required = provider->service->response_capacity < 64u
+                   ? provider->service->response_capacity
+                   : 64u;
+    break;
+  case CSERDE_STRING:
+  case CSERDE_BYTES:
+    required = token->value.slice.size;
+    break;
+  default:
+    return CSERDE_UNSUPPORTED;
+  }
+
+  buffer_status = chttp_service_http_output_buffer(
+      provider, required, &buffer, &capacity);
+  if (buffer_status != CSERDE_OK) return buffer_status;
 
   switch (token->kind) {
   case CSERDE_NULL:
-    if (capacity < 4u) return CSERDE_LIMIT_EXCEEDED;
     memcpy(buffer, "null", 4u);
     provider->staged_body_size = 4u;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_BOOL:
     if (token->value.boolean) {
-      if (capacity < 4u) return CSERDE_LIMIT_EXCEEDED;
       memcpy(buffer, "true", 4u);
       provider->staged_body_size = 4u;
     } else {
-      if (capacity < 5u) return CSERDE_LIMIT_EXCEEDED;
       memcpy(buffer, "false", 5u);
       provider->staged_body_size = 5u;
     }
@@ -483,21 +548,27 @@ static cserde_status chttp_service_scalar_write(
   case CSERDE_SINT:
     written = snprintf(
         buffer, capacity, "%" PRId64, token->value.sint);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
+    if (written < 0 || (size_t)written >= capacity ||
+        (size_t)written > provider->service->response_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_UINT:
     written = snprintf(
         buffer, capacity, "%" PRIu64, token->value.uint);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
+    if (written < 0 || (size_t)written >= capacity ||
+        (size_t)written > provider->service->response_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
   case CSERDE_FLOAT:
     written = snprintf(
         buffer, capacity, "%.17g", token->value.floating);
-    if (written < 0 || (size_t)written >= capacity) return CSERDE_LIMIT_EXCEEDED;
+    if (written < 0 || (size_t)written >= capacity ||
+        (size_t)written > provider->service->response_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     provider->staged_body_size = (size_t)written;
     provider->staged_content_type = "text/plain";
     break;
@@ -520,6 +591,8 @@ static cserde_status chttp_service_scalar_write(
   }
 
   provider->writer_tokens = 1u;
+  if (provider->output_buffer != NULL)
+    mem_set_used(provider->output_buffer, provider->staged_body_size);
   return CSERDE_OK;
 }
 
@@ -541,6 +614,7 @@ static DataBindStatus chttp_service_http_begin_output(
   (void)error;
   if (provider == NULL || provider->service == NULL)
     return DATA_BIND_ERR_INVALID_ARG;
+  chttp_service_http_release_output(provider);
   provider->output_attempted = 1;
   provider->output_active = 1;
   provider->output_published = 0;
@@ -581,13 +655,8 @@ static DataBindStatus chttp_service_http_write_output(
     }
   }
 
-  if (state == DATA_BIND_VALUE_STATE_NULL) {
-    cserde_token token = {.kind = CSERDE_NULL};
-    return chttp_service_scalar_write(provider, &token) == CSERDE_OK
-               ? DATA_BIND_OK
-               : DATA_BIND_ERR_LIMIT;
-  }
-  if (state != DATA_BIND_VALUE_STATE_VALUE || value == NULL) {
+  if (state != DATA_BIND_VALUE_STATE_NULL &&
+      (state != DATA_BIND_VALUE_STATE_VALUE || value == NULL)) {
     chttp_service_error_set(
         error, DATA_BIND_ERR_TYPE_MISMATCH,
         "HTTP scalar egress requires VALUE or NULL state");
@@ -603,11 +672,32 @@ static DataBindStatus chttp_service_http_write_output(
     return DATA_BIND_ERR_RUNTIME;
   }
 
+  if (state == DATA_BIND_VALUE_STATE_NULL) {
+    const cserde_token token = {.kind = CSERDE_NULL};
+    const cserde_status write_status =
+        cserde_writer_write(&provider->writer, &token);
+    if (write_status != CSERDE_OK) {
+      chttp_service_http_release_output(provider);
+      chttp_service_error_set(
+          error,
+          write_status == CSERDE_LIMIT_EXCEEDED
+              ? DATA_BIND_ERR_LIMIT
+              : DATA_BIND_ERR_RUNTIME,
+          "Could not encode HTTP null response");
+      return write_status == CSERDE_LIMIT_EXCEEDED
+                 ? DATA_BIND_ERR_LIMIT
+                 : DATA_BIND_ERR_RUNTIME;
+    }
+    return DATA_BIND_OK;
+  }
+
   status = data_bind_native_encode(
       &provider->service->native_options, entry->data,
       value, value_bytes, &provider->writer, &diagnostic);
-  if (status != DATA_BIND_OK && error != NULL)
-    *error = diagnostic.error;
+  if (status != DATA_BIND_OK) {
+    chttp_service_http_release_output(provider);
+    if (error != NULL) *error = diagnostic.error;
+  }
   return status;
 }
 
@@ -615,9 +705,18 @@ static DataBindStatus chttp_service_http_commit_output(
     void *context, DataBindError *error) {
   chttp_service_http_provider *provider =
       (chttp_service_http_provider *)context;
-  (void)error;
   if (provider == NULL || !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->writer_tokens != 0u &&
+      cserde_writer_finish(&provider->writer) != CSERDE_OK) {
+    chttp_service_http_release_output(provider);
+    provider->output_active = 0;
+    provider->output_published = 0;
+    chttp_service_error_set(
+        error, DATA_BIND_ERR_RUNTIME,
+        "Could not finish HTTP response writer");
+    return DATA_BIND_ERR_RUNTIME;
+  }
   provider->output_active = 0;
   provider->output_published = 1;
   return DATA_BIND_OK;
@@ -627,10 +726,11 @@ static void chttp_service_http_abort_output(void *context) {
   chttp_service_http_provider *provider =
       (chttp_service_http_provider *)context;
   if (provider == NULL) return;
+  chttp_service_http_release_output(provider);
   provider->output_active = 0;
   provider->output_published = 0;
-  provider->staged_body_size = 0u;
   provider->writer_tokens = 0u;
+  provider->writer = (cserde_writer){0};
 }
 
 static int chttp_service_method_from_text(
@@ -940,6 +1040,7 @@ static int chttp_service_http_execute(
         &outcome, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
+    chttp_service_http_release_output(&provider_context);
     if (!provider_context.output_attempted &&
         chttp_service_input_failure(bind_status))
       return chttp_server_reply(
@@ -948,24 +1049,33 @@ static int chttp_service_http_execute(
         response, 500u, "text/plain", "Internal Server Error", 21u);
   }
 
-  if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS)
+  if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS) {
+    chttp_service_http_release_output(&provider_context);
     return chttp_server_reply(
         response, 500u, "text/plain", "Native Status", 13u);
+  }
 
   if (!data_bind_http_method_plan_status_for_outcome(
-          record->method_plan, &outcome, &http_status))
+          record->method_plan, &outcome, &http_status)) {
+    chttp_service_http_release_output(&provider_context);
     return chttp_server_reply(
         response, 500u, "text/plain", "Internal Server Error", 21u);
+  }
 
-  if (!provider_context.output_published)
+  if (!provider_context.output_published) {
+    chttp_service_http_release_output(&provider_context);
     return chttp_server_reply(
         response, (unsigned int)http_status, "text/plain", NULL, 0u);
+  }
 
-  return chttp_server_reply(
-      response, (unsigned int)http_status,
-      provider_context.staged_content_type,
-      record->owner->response_scratch,
-      provider_context.staged_body_size);
+  {
+    int reply_status = chttp_server_reply_buffer(
+        response, (unsigned int)http_status,
+        provider_context.staged_content_type,
+        provider_context.output_buffer);
+    chttp_service_http_release_output(&provider_context);
+    return reply_status;
+  }
 }
 
 static int chttp_service_http_handler(
@@ -1012,11 +1122,8 @@ int chttp_service_init(
       (char *)malloc(config->max_binding_value_bytes + 1u);
   impl->native_workspace =
       (unsigned char *)malloc(config->native_workspace_bytes);
-  impl->response_scratch =
-      (unsigned char *)malloc(config->max_response_body_bytes);
   if (impl->methods == NULL || impl->scalar_scratch == NULL ||
-      impl->native_workspace == NULL || impl->response_scratch == NULL) {
-    free(impl->response_scratch);
+      impl->native_workspace == NULL) {
     free(impl->native_workspace);
     free(impl->scalar_scratch);
     free(impl->methods);
@@ -1147,7 +1254,6 @@ int chttp_service_destroy(chttp_service *service) {
   if (impl == NULL) return SALTS_OK;
   for (i = 0u; i < impl->method_count; ++i)
     chttp_service_method_release(&impl->methods[i]);
-  free(impl->response_scratch);
   free(impl->native_workspace);
   free(impl->scalar_scratch);
   free(impl->methods);

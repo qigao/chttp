@@ -21,6 +21,7 @@ typedef struct chttp_service_config {
   size_t size;
   size_t method_capacity;
   size_t max_binding_value_bytes;
+  /** Hard bound for one DataBind/CSerde retained response materialization. */
   size_t max_response_body_bytes;
   size_t max_call_frame_bytes;
   size_t native_workspace_bytes;
@@ -56,11 +57,15 @@ typedef struct chttp_service_http_mount {
   { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u }
 
 /**
- * Initialize bounded owner-thread scratch for generated HTTP MethodPlan mounts.
+ * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
  *
- * Phase S1/S2 supports fixed-width scalar/enum path/query/header/cookie ingress
- * and one fixed-width scalar/enum response body. Owned string/bytes,
- * structured body/egress, requested HTTP context, and async execution remain
+ * Fixed-width scalar/enum ingress uses owner-thread scratch and native workspace.
+ * Egress is transaction-local: DataBind/CSerde materializes directly into a
+ * pooled mem_buffer_t bounded by max_response_body_bytes, explicitly finishes
+ * the writer, then publishes through chttp_server_reply_buffer(). No shared
+ * response scratch is reused across connections or H2 streams.
+ *
+ * Structured body/egress, requested HTTP context, and async execution remain
  * fail-closed until their producer-owned lifecycle/FormatPlan slices land.
  */
 int chttp_service_init(
