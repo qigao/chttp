@@ -71,6 +71,11 @@ typedef struct chttp_server_test_deferred_probe {
   atomic_int acquired;
 } chttp_server_test_deferred_probe;
 
+typedef struct chttp_server_retained_response_probe {
+  atomic_int calls;
+  atomic_int releases;
+} chttp_server_retained_response_probe;
+
 typedef struct chttp_server_test_deferred_terminal {
   chttp_server_deferred handle;
   atomic_int *start;
@@ -420,6 +425,38 @@ static int chttp_server_test_user(void *user, const chttp_server_request_view *r
   return chttp_server_reply(response, 200u, "text/plain", body, (size_t)body_size);
 }
 
+static void chttp_server_test_retained_release(
+    void *data, void *user_data) {
+  chttp_server_retained_response_probe *probe =
+      (chttp_server_retained_response_probe *)user_data;
+  (void)data;
+  if (probe != NULL)
+    atomic_fetch_add_explicit(&probe->releases, 1, memory_order_release);
+}
+
+static int chttp_server_test_retained(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  static char body[] = "retained";
+  chttp_server_retained_response_probe *probe =
+      (chttp_server_retained_response_probe *)user;
+  mem_buffer_t *buffer;
+  int status;
+  (void)request;
+  if (probe == NULL) return SALTS_EINVAL;
+  buffer = mem_wrap_external(
+      body, sizeof(body) - 1u,
+      chttp_server_test_retained_release, probe);
+  if (buffer == NULL) return SALTS_ENOMEM;
+  mem_set_used(buffer, sizeof(body) - 1u);
+  status = chttp_server_reply_buffer(
+      response, 200u, "text/plain", buffer);
+  mem_buffer_release(buffer);
+  if (status == SALTS_OK)
+    atomic_fetch_add_explicit(&probe->calls, 1, memory_order_release);
+  return status;
+}
+
 static int chttp_server_test_static(void *user, const chttp_server_request_view *request,
                                     chttp_server_response *response) {
   (void)user;
@@ -738,6 +775,49 @@ static int chttp_test_slow_handler(void *user, const chttp_server_request_view *
 }
 
 spec("CHTTP background HTTP/1.1 server") {
+  it("holds retained response bodies through H1 send terminal and resumes pipelining") {
+    chttp_server server = {0};
+    chttp_server_config config = chttp_server_test_config();
+    chttp_server_retained_response_probe probe = {0};
+    uint16_t port = 0u;
+    char response[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
+    size_t response_size = 0u;
+    static const char request[] =
+        "GET /retained HTTP/1.1\r\n"
+        "Host: localhost\r\n\r\n"
+        "GET /retained HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n\r\n";
+
+    atomic_init(&probe.calls, 0);
+    atomic_init(&probe.releases, 0);
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(
+        chttp_server_get(
+            &server, "/retained", chttp_server_test_retained, &probe),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_equal(
+        chttp_server_test_raw_exchange(
+            port, request, response, sizeof(response), &response_size),
+        SALTS_OK);
+    check_equal(
+        chttp_server_test_count(response, "HTTP/1.1 200 OK"),
+        (size_t)2u);
+    check_equal(
+        chttp_server_test_count(response, "\r\n\r\nretained"),
+        (size_t)2u);
+    check_equal(
+        atomic_load_explicit(&probe.calls, memory_order_acquire), 2);
+    check_equal(
+        atomic_load_explicit(&probe.releases, memory_order_acquire), 2);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("rate limits the same peer across connections before 100 Continue and body delivery") {
     chttp_rate_limiter limiter = {0};
     const chttp_rate_limit_config limit = {CHTTP_RATE_LIMIT_PEER_IP, 1, 1, 1, UINT32_MAX, 0};
