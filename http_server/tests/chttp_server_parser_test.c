@@ -5,6 +5,18 @@
 #include <stdint.h>
 #include <string.h>
 
+typedef struct chttp_server_retained_probe {
+  int releases;
+} chttp_server_retained_probe;
+
+static void chttp_server_retained_test_release(
+    void *data, void *user_data) {
+  chttp_server_retained_probe *probe =
+      (chttp_server_retained_probe *)user_data;
+  (void)data;
+  if (probe != NULL) ++probe->releases;
+}
+
 typedef struct chttp_server_parser_probe {
   int requests;
   int continues;
@@ -272,6 +284,79 @@ spec("CHTTP server request parser") {
     check_equal(chttp_server_error_serialize(400, wire, sizeof(wire) - 1, &size), SALTS_OK);
     wire[size] = 0;
     check_not_null(strstr((char *)wire, "\r\nDate: "));
+    chttp_server_response_builder_destroy(&builder);
+  }
+
+  it("retains shared response body ownership without builder copy") {
+    chttp_server_config config = {.max_response_header_count = 2u,
+      .max_response_header_bytes = 128u, .max_response_body_bytes = 128u,
+      .max_buffered_response_body_bytes = 128u};
+    chttp_server_response_builder builder = {0};
+    chttp_server_response response = {&builder};
+    chttp_server_request_view request = {.http_major = 1u, .http_minor = 1u,
+      .method = CHTTP_METHOD_GET, .protocol_keep_alive = 1};
+    chttp_server_retained_probe probe = {0};
+    char body[] = "retained-body";
+    mem_buffer_t *buffer = mem_wrap_external(
+        body, sizeof(body) - 1u,
+        chttp_server_retained_test_release, &probe);
+    unsigned char wire[512] = {0};
+    size_t size = 0u;
+
+    check_not_null(buffer);
+    mem_set_used(buffer, sizeof(body) - 1u);
+    check_equal(mem_buffer_ref_count(buffer), (uint32_t)1u);
+    check_equal(chttp_server_response_builder_init(&builder, &config), SALTS_OK);
+
+    check_equal(
+        chttp_server_reply_buffer(
+            &response, 200u, "text/plain", buffer),
+        SALTS_OK);
+    check_equal(builder.body, NULL);
+    check_equal(builder.retained_body, buffer);
+    check_equal(mem_buffer_ref_count(buffer), (uint32_t)2u);
+
+    mem_buffer_release(buffer);
+    check_equal(probe.releases, 0);
+
+    check_equal(
+        chttp_server_response_serialize(
+            &builder, &request, wire, sizeof(wire) - 1u, &size),
+        SALTS_OK);
+    wire[size] = 0;
+    check_not_null(strstr((char *)wire, "Content-Length: 13\r\n"));
+    check_not_null(strstr((char *)wire, "\r\n\r\nretained-body"));
+
+    chttp_server_response_builder_reset(&builder);
+    check_equal(probe.releases, 1);
+    check_equal(builder.retained_body, NULL);
+    chttp_server_response_builder_destroy(&builder);
+    check_equal(probe.releases, 1);
+  }
+
+  it("rejects oversized retained response before taking ownership") {
+    chttp_server_config config = {.max_response_header_count = 1u,
+      .max_response_header_bytes = 64u, .max_response_body_bytes = 64u,
+      .max_buffered_response_body_bytes = 4u};
+    chttp_server_response_builder builder = {0};
+    chttp_server_response response = {&builder};
+    chttp_server_retained_probe probe = {0};
+    char body[] = "large";
+    mem_buffer_t *buffer = mem_wrap_external(
+        body, sizeof(body) - 1u,
+        chttp_server_retained_test_release, &probe);
+
+    check_not_null(buffer);
+    mem_set_used(buffer, sizeof(body) - 1u);
+    check_equal(chttp_server_response_builder_init(&builder, &config), SALTS_OK);
+    check_equal(
+        chttp_server_reply_buffer(
+            &response, 200u, "text/plain", buffer),
+        SALTS_EMSGSIZE);
+    check_equal(mem_buffer_ref_count(buffer), (uint32_t)1u);
+    check_equal(builder.retained_body, NULL);
+    mem_buffer_release(buffer);
+    check_equal(probe.releases, 1);
     chttp_server_response_builder_destroy(&builder);
   }
 
