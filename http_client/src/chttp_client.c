@@ -455,15 +455,17 @@ static int chttp_slot_prepare_streaming(chttp_slot *slot, const chttp_request_op
   return SALTS_OK;
 }
 
-static void chttp_slot_complete_response(chttp_slot *slot) {
-  const bool keep_alive = slot->response_parser.response.protocol_keep_alive != 0;
+static void chttp_slot_finish_completed_response(chttp_slot *slot) {
+  const bool keep_alive =
+      slot != NULL && slot->response_parser.response.protocol_keep_alive != 0;
   int status;
-  chttp_slot_deliver(slot, &slot->response_parser.response, SALTS_OK, 0, NULL);
+  if (slot == NULL || !slot->result_delivered || !slot->response_parser.complete) return;
   if (slot->transport_closed) {
     slot->state = CHTTP_SLOT_TERMINAL;
     slot->close_pending = false;
     return;
   }
+  if (slot->request_send_pending || slot->source_send_pending) return;
   if (keep_alive && slot->source_complete && !slot->cancel_requested &&
       !slot->client->stop_active) {
     chttp_response_parser_destroy(&slot->response_parser);
@@ -478,6 +480,11 @@ static void chttp_slot_complete_response(chttp_slot *slot) {
   } else {
     (void)chttp_slot_try_close(slot);
   }
+}
+
+static void chttp_slot_complete_response(chttp_slot *slot) {
+  chttp_slot_deliver(slot, &slot->response_parser.response, SALTS_OK, 0, NULL);
+  chttp_slot_finish_completed_response(slot);
 }
 
 static void chttp_slot_file_sink_ready(void *user) {
@@ -638,6 +645,10 @@ static void chttp_cnet_send(void *user, cnet_connection connection, size_t size)
     slot->source_send_pending = false;
     slot->source_send_size = 0u;
   }
+  if (slot->result_delivered && slot->response_parser.complete) {
+    chttp_slot_finish_completed_response(slot);
+    return;
+  }
   chttp_slot_source_advance(slot);
 }
 
@@ -666,7 +677,6 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
       chttp_slot_fail_and_close(slot, status, 0, "send-admission");
       return;
     }
-    slot->request_send_size = slot->request_size;
     slot->request_send_size = slot->request_size;
     slot->request_send_pending = true;
     chttp_slot_release_request_buffer(slot);
@@ -1110,6 +1120,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
     if (file_sink_transfer != NULL)
       chttp_file_sink_transfer_set_ready(file_sink_transfer, chttp_slot_file_sink_ready, slot);
     status = cnet_send_buffer(&impl->network, slot->connection, slot->request_buffer);
+    if (status == SALTS_OK) slot->request_send_size = slot->request_size;
     if (status != SALTS_OK) {
       chttp_slot_release_request_buffer(slot);
       chttp_response_parser_destroy(&slot->response_parser);
