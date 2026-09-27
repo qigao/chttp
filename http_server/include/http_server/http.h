@@ -564,8 +564,11 @@ int chttp_server_reply(chttp_server_response *response, unsigned int status_code
  * The Server retains one buffer reference before returning SALTS_OK. The caller
  * may immediately release its own reference after success. The buffer bytes and
  * used length must not be mutated until Server terminal ownership releases its
- * retained reference. This S3 API preserves the same buffered-body size limit
- * as chttp_server_reply(); H1 scatter/gather lifting is a later transport slice.
+ * retained reference. Plain HTTP/1.1 publishes a non-empty retained body as
+ * header/prefix + body scatter/gather without flattening the body into the
+ * outbound buffer. TLS, HEAD and empty-body responses use the explicit
+ * contiguous/header-only transport path. The same buffered-body size limit is
+ * retained for bounded admission compatibility.
  *
  * The complete used range [0, mem_buffer_used(body)) is the response body.
  * NULL is accepted only for an empty body.

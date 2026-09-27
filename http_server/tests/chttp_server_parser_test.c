@@ -320,6 +320,17 @@ spec("CHTTP server request parser") {
     check_equal(probe.releases, 0);
 
     check_equal(
+        chttp_server_response_serialize_headers(
+            &builder, &request, wire, sizeof(wire) - 1u, &size),
+        SALTS_OK);
+    wire[size] = 0;
+    check_not_null(strstr((char *)wire, "Content-Length: 13\r\n"));
+    check_not_null(strstr((char *)wire, "\r\n\r\n"));
+    check_null(strstr((char *)wire, "retained-body"));
+
+    memset(wire, 0, sizeof(wire));
+    size = 0u;
+    check_equal(
         chttp_server_response_serialize(
             &builder, &request, wire, sizeof(wire) - 1u, &size),
         SALTS_OK);

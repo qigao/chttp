@@ -107,14 +107,24 @@ static int chttp_tls_test_middleware(void *user, const chttp_server_request_view
 
 static int chttp_tls_test_session(void *user, const chttp_server_request_view *request,
                                   chttp_server_response *response) {
+  static char digits[] = "0123456789";
   const char *previous = chttp_session_get(request->session, "visits");
   char current[2] = {'1', '\0'};
+  mem_buffer_t *buffer;
   int status;
   (void)user;
   if (previous != NULL) current[0] = (char)(previous[0] + 1);
+  if (current[0] < '0' || current[0] > '9') return SALTS_ERANGE;
   status = chttp_session_set(request->session, "visits", current);
-  return status == SALTS_OK ? chttp_server_reply(response, 200u, "text/plain", current, 1u)
-                            : status;
+  if (status != SALTS_OK) return status;
+  buffer = mem_wrap_external(
+      &digits[(size_t)(current[0] - '0')], 1u, NULL, NULL);
+  if (buffer == NULL) return SALTS_ENOMEM;
+  mem_set_used(buffer, 1u);
+  status = chttp_server_reply_buffer(
+      response, 200u, "text/plain", buffer);
+  mem_buffer_release(buffer);
+  return status;
 }
 
 static int chttp_tls_test_cookie(const chttp_response *response, char *output, size_t capacity) {
