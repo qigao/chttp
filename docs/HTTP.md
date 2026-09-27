@@ -393,9 +393,11 @@ session 状态。
 Server 另用 `max_buffered_response_body_bytes` 限制 `chttp_server_reply()` 的整块 copy；零选择
 `max_response_body_bytes` 与单次 transport send 可容纳值中的较小者。`chttp_server_reply_buffer()`
 接受已经 materialize 的 `mem_buffer_t`，Server 在成功 admission 时 retain 一份引用，因此 caller
-可立即 release 自己的引用；该 S3 路径不再复制到 response builder，但当前 H1 serializer 仍会将
-body flatten 到 outbound，真正的 header/body scatter-gather 属于后续 transport slice。retained buffer
-在 Server terminal/reset 前不得修改 data/used/capacity，并继续受同一
+可立即 release 自己的引用。plain H1 的 non-empty retained response 只把 status/headers（以及同批更早的
+copied-response prefix）写入 outbound，再以 `outbound slice + retained body slice` 调用
+`cnet_send_slicev()`；final-close 使用 `cnet_send_slicev_and_close()`。TLS 明确保留 contiguous retained
+transport，不把加密转换路径描述成 scatter-gather zero-copy。HEAD/empty body 只发送 header/prefix。
+retained buffer 在 Server terminal/reset 前不得修改 data/used/capacity，并继续受同一
 `max_buffered_response_body_bytes` 上限约束。这样
 `max_response_body_bytes` 可以作为大文件/source 的传输总量上限，而不要求每条 connection/stream
 预分配同样大的 response buffer。`stream_chunk_bytes` 同样限制服务端 response source；H2 还会受
