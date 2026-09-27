@@ -78,6 +78,46 @@ static inline int chttp_cnet_retained_send_range(cnet_client *client,
 }
 
 
+static inline int chttp_cnet_retained_send_pair(
+    cnet_client *client, cnet_connection connection,
+    mem_buffer_t *prefix_buffer, const void *prefix_data,
+    size_t prefix_capacity, size_t prefix_used,
+    mem_buffer_t *body_buffer, int close_after_send) {
+  mem_slice_t slices[2] = {{0}};
+  const size_t body_used =
+      body_buffer != NULL ? mem_buffer_used(body_buffer) : 0u;
+  int status;
+
+  if (client == NULL || prefix_buffer == NULL || prefix_data == NULL ||
+      prefix_capacity == 0u || prefix_used == 0u ||
+      body_buffer == NULL || body_used == 0u ||
+      mem_buffer_const_data(body_buffer) == NULL)
+    return SALTS_EINVAL;
+
+  status = chttp_cnet_retained_prepare(
+      prefix_buffer, prefix_data, prefix_capacity, prefix_used);
+  if (status != SALTS_OK) return status;
+
+  slices[0] = mem_slice(prefix_buffer, 0u, prefix_used);
+  slices[1] = mem_slice(body_buffer, 0u, body_used);
+  if (slices[0].buffer == NULL || slices[0].length != prefix_used ||
+      slices[1].buffer == NULL || slices[1].length != body_used) {
+    mem_slice_release(&slices[1]);
+    mem_slice_release(&slices[0]);
+    return SALTS_EPROTO;
+  }
+
+  status = close_after_send
+               ? cnet_send_slicev_and_close(
+                     client, connection, slices, 2u)
+               : cnet_send_slicev(
+                     client, connection, slices, 2u);
+  mem_slice_release(&slices[1]);
+  mem_slice_release(&slices[0]);
+  return status;
+}
+
+
 static inline int chttp_cnet_retained_release(mem_buffer_t **slot) {
   mem_buffer_t *buffer;
   if (slot == NULL) return SALTS_EINVAL;
