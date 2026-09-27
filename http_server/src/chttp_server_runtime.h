@@ -68,6 +68,7 @@ typedef struct chttp_server_response_builder {
   chttp_header *headers;
   char *header_storage;
   unsigned char *body;
+  mem_buffer_t *retained_body;
   size_t header_capacity;
   size_t header_storage_capacity;
   size_t body_capacity;
