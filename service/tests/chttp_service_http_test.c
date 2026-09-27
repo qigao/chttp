@@ -311,7 +311,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     service_config.method_capacity = 1u;
     service_config.max_binding_value_bytes = 64u;
-    service_config.max_response_body_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
     service_config.max_call_frame_bytes = 512u;
     service_config.native_workspace_bytes = 4096u;
     service_config.native_max_depth = 16u;
