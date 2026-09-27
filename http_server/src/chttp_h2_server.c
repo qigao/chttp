@@ -675,6 +675,11 @@ static int chttp_h2_server_submit_response_builder(chttp_h2_server_stream *strea
   const bool stream_source = source_response && stream->method != CHTTP_METHOD_HEAD;
   const size_t body_size =
       stream->method == CHTTP_METHOD_HEAD || stream_source ? 0u : builder->body_size;
+  const uint8_t *body_data =
+      builder->retained_body != NULL
+          ? (const uint8_t *)mem_buffer_const_data(builder->retained_body)
+          : builder->body;
+  if (body_size != 0u && body_data == NULL) return SALTS_EPROTO;
   size_t header_count = 0u;
   size_t index;
   char status_text[4];
@@ -721,7 +726,7 @@ static int chttp_h2_server_submit_response_builder(chttp_h2_server_stream *strea
   stream->response_submitted = true;
   submit_status = chttp_h2_proto_submit_response_ex(
       stream->owner->protocol, stream->stream_id, stream->response_headers, header_count,
-      body_size == 0u ? NULL : builder->body, body_size,
+      body_size == 0u ? NULL : body_data, body_size,
       stream_source ? chttp_h2_server_response_source_read : NULL, stream_source ? stream : NULL);
   if (submit_status != 0) {
     stream->response_submitted = false;
