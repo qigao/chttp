@@ -96,7 +96,7 @@ static const DataBindNativeStateBinding ADD_REQUEST_PRESENCE[] = {
 
 static const DataBindNativeTypeBinding ADD_REQUEST_NATIVE = {
     .size = sizeof(DataBindNativeTypeBinding),
-    .abi_version = DATA_BIND_BINDING_PLAN_ABI_VERSION,
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
     .idl_type_name = "AddRequest",
     .data = &ADD_REQUEST_DATA,
     .presence = ADD_REQUEST_PRESENCE,
@@ -104,7 +104,7 @@ static const DataBindNativeTypeBinding ADD_REQUEST_NATIVE = {
 
 static const DataBindNativeTypeBinding ADD_RESPONSE_NATIVE = {
     .size = sizeof(DataBindNativeTypeBinding),
-    .abi_version = DATA_BIND_BINDING_PLAN_ABI_VERSION,
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
     .idl_type_name = "AddResponse",
     .data = &ADD_RESPONSE_DATA};
 
