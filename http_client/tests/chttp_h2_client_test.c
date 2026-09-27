@@ -1,4 +1,5 @@
 #include "chttp_h2_proto.h"
+#include "chttp_h2_session.h"
 #include "chttp_tls_test_material.h"
 #include "tinytest.h"
 
@@ -667,7 +668,58 @@ static void chttp_h2_test_on_complete(void *user, chttp_request request,
   ++completion->count;
 }
 
+typedef struct chttp_h2_retained_free_probe {
+  atomic_int freed;
+} chttp_h2_retained_free_probe;
+
+static void chttp_h2_retained_free(void *data, void *user_data) {
+  chttp_h2_retained_free_probe *probe = (chttp_h2_retained_free_probe *)user_data;
+  free(data);
+  if (probe != NULL) atomic_fetch_add_explicit(&probe->freed, 1, memory_order_release);
+}
+
+static void chttp_h2_test_retained_output_destroy_order(void) {
+  chttp_h2_session session = {0};
+  chttp_h2_retained_free_probe probe;
+  mem_buffer_t *cnet_like_ref;
+  unsigned char *data = (unsigned char *)malloc(128u);
+
+  atomic_init(&probe.freed, 0);
+  check_true(data != NULL);
+  if (data == NULL) return;
+  memset(data, 0x5au, 128u);
+
+  session.pending_output = data;
+  session.pending_output_buffer =
+      mem_wrap_external(data, 128u, chttp_h2_retained_free, &probe);
+  check_true(session.pending_output_buffer != NULL);
+  if (session.pending_output_buffer == NULL) {
+    free(data);
+    return;
+  }
+  mem_set_used(session.pending_output_buffer, 17u);
+  check_equal(mem_buffer_used(session.pending_output_buffer), (size_t)17u);
+  check_equal(mem_buffer_ref_count(session.pending_output_buffer), UINT32_C(1));
+
+  cnet_like_ref = mem_buffer_retain(session.pending_output_buffer);
+  check_true(cnet_like_ref != NULL);
+  check_equal(mem_buffer_ref_count(session.pending_output_buffer), UINT32_C(2));
+
+  chttp_h2_session_destroy(&session);
+  check_true(session.pending_output == NULL);
+  check_true(session.pending_output_buffer == NULL);
+  check_equal(atomic_load_explicit(&probe.freed, memory_order_acquire), 0);
+
+  mem_buffer_release(cnet_like_ref);
+  check_equal(atomic_load_explicit(&probe.freed, memory_order_acquire), 1);
+}
+
 spec("CHTTP HTTP/2 client") {
+  it("keeps H2 output alive until the final retained transport reference releases") {
+    chttp_h2_test_retained_output_destroy_order();
+  }
+
+
   it("performs a blocking h2c prior-knowledge request without caller polling") {
     chttp_client client = {0};
     chttp_client_config config = chttp_h2_test_config();
