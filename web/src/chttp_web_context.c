@@ -1,28 +1,10 @@
 #include <chttp_web/web.h>
 
-#include <jinja_cmeta.h>
 #include <salts/error_codes.h>
 
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-
-_Static_assert(sizeof(chttp_web_sequence_view) == sizeof(JINJA_CMETA_SEQUENCE_VIEW),
-               "CHttp::Web sequence bridge must match Jinja sequence view size");
-_Static_assert(_Alignof(chttp_web_sequence_view) == _Alignof(JINJA_CMETA_SEQUENCE_VIEW),
-               "CHttp::Web sequence bridge must match Jinja sequence view alignment");
-_Static_assert(offsetof(chttp_web_sequence_view, data) ==
-                   offsetof(JINJA_CMETA_SEQUENCE_VIEW, data),
-               "sequence data offset mismatch");
-_Static_assert(offsetof(chttp_web_sequence_view, count) ==
-                   offsetof(JINJA_CMETA_SEQUENCE_VIEW, count),
-               "sequence count offset mismatch");
-_Static_assert(offsetof(chttp_web_sequence_view, stride) ==
-                   offsetof(JINJA_CMETA_SEQUENCE_VIEW, stride),
-               "sequence stride offset mismatch");
-_Static_assert(offsetof(chttp_web_sequence_view, element) ==
-                   offsetof(JINJA_CMETA_SEQUENCE_VIEW, element),
-               "sequence element offset mismatch");
 
 static chttp_web_status chttp_web_context_fail(
     chttp_web_error *error, chttp_web_status status, int native_status,
@@ -126,29 +108,6 @@ static const cmeta_data_desc CHTTP_WEB_STRING_DATA = {
     .shape = &CHTTP_WEB_STRING_SHAPE,
     .buffer_ops = &CHTTP_WEB_STRING_OPS};
 
-static const cmeta_type_identity CHTTP_WEB_SEQUENCE_ID =
-    CMETA_TYPE_ID_ATOM_INIT("salts-utils.jinja-cmeta.SequenceView.v1");
-
-static const cmeta_type_desc CHTTP_WEB_SEQUENCE_TYPE = {
-    "JINJA_CMETA_SEQUENCE_VIEW",
-    sizeof(chttp_web_sequence_view),
-    _Alignof(chttp_web_sequence_view),
-    CMETA_T_OBJECT,
-    NULL,
-    NULL,
-    &CHTTP_WEB_SEQUENCE_ID};
-
-static const unsigned char CHTTP_WEB_SEQUENCE_SHAPE = 1u;
-
-static const cmeta_data_desc CHTTP_WEB_SEQUENCE_DATA = {
-    .struct_size = sizeof(cmeta_data_desc),
-    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
-    .stable_id = "salts-utils.jinja-cmeta.SequenceView.data.v1",
-    .display_name = "Jinja sequence view",
-    .kind = CMETA_DATA_CUSTOM,
-    .storage_type = &CHTTP_WEB_SEQUENCE_TYPE,
-    .shape = &CHTTP_WEB_SEQUENCE_SHAPE};
-
 static const cmeta_type_identity CHTTP_WEB_VALIDATION_ERROR_ID =
     CMETA_TYPE_ID_ATOM_INIT("chttp.web.ValidationError.v1");
 
@@ -237,7 +196,7 @@ static const cmeta_data_field_desc CHTTP_WEB_VALIDATION_FIELDS[] = {
     {"chttp.web.Validation.valid", "valid",
      offsetof(chttp_web_validation, valid), &cmeta_data_bool},
     {"chttp.web.Validation.errors", "errors",
-     offsetof(chttp_web_validation, errors), &CHTTP_WEB_SEQUENCE_DATA}};
+     offsetof(chttp_web_validation, errors), &cmeta_data_sequence_view}};
 
 static const cmeta_data_struct_shape CHTTP_WEB_VALIDATION_SHAPE = {
     &CHTTP_WEB_VALIDATION_LAYOUT,
@@ -446,11 +405,11 @@ static const cmeta_data_field_desc CHTTP_WEB_REQUEST_CONTEXT_FIELDS[] = {
     {"chttp.web.RequestContext.csrf_available", "csrf_available",
      offsetof(chttp_web_request_context, csrf_available), &cmeta_data_bool},
     {"chttp.web.RequestContext.params", "params",
-     offsetof(chttp_web_request_context, params), &CHTTP_WEB_SEQUENCE_DATA},
+     offsetof(chttp_web_request_context, params), &cmeta_data_sequence_view},
     {"chttp.web.RequestContext.headers", "headers",
-     offsetof(chttp_web_request_context, headers), &CHTTP_WEB_SEQUENCE_DATA},
+     offsetof(chttp_web_request_context, headers), &cmeta_data_sequence_view},
     {"chttp.web.RequestContext.session", "session",
-     offsetof(chttp_web_request_context, session), &CHTTP_WEB_SEQUENCE_DATA}};
+     offsetof(chttp_web_request_context, session), &cmeta_data_sequence_view}};
 
 static const cmeta_data_struct_shape CHTTP_WEB_REQUEST_CONTEXT_SHAPE = {
     &CHTTP_WEB_REQUEST_CONTEXT_LAYOUT,
