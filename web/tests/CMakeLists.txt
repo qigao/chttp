@@ -22,7 +22,7 @@ set_target_properties(chttp_web_form_test PROPERTIES
 add_test(NAME chttp_web_form_test COMMAND chttp_web_form_test)
 
 
-databind_target(
+salts_idl_target(
   TARGET chttp_web_form_plan_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.schema"
   ARTIFACT_NAME "chttp_web_form_plan"
@@ -36,7 +36,7 @@ target_link_libraries(chttp_web_form_plan_test PRIVATE
 target_include_directories(chttp_web_form_plan_test PRIVATE
   "${chttp_web_form_plan_fixture_GENERATED_DIR}")
 add_dependencies(chttp_web_form_plan_test
-  chttp_web_form_plan_fixture_databind_codegen)
+  chttp_web_form_plan_fixture_idl_codegen)
 set_target_properties(chttp_web_form_plan_test PROPERTIES
   FOLDER "web/tests"
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
