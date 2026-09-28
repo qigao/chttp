@@ -175,7 +175,7 @@ static cserde_status chttp_rpc_service_capture_token(
       return CSERDE_INVALID_TOKEN;
     provider->token_storage =
         mem_get_buffer(mem_global(), size == 0u ? 1u : size);
-    if (provider->token_storage == NULL) return CSERDE_OUT_OF_MEMORY;
+    if (provider->token_storage == NULL) return CSERDE_SINK_ERROR;
     if (size != 0u)
       memcpy(mem_buffer_data(provider->token_storage),
              token->value.slice.data, size);
@@ -494,6 +494,16 @@ static int chttp_rpc_service_input_failure(DataBindStatus status) {
          status == DATA_BIND_ERR_VALIDATION;
 }
 
+static cserde_status chttp_rpc_service_encode_native_status(
+    void *user, cserde_writer *writer) {
+  const int *status = (const int *)user;
+  if (status == NULL || writer == NULL) return CSERDE_INVALID_ARGUMENT;
+  return cserde_writer_write(
+      writer,
+      &(const cserde_token){.kind = CSERDE_SINT,
+                           .value.sint = (int64_t)*status});
+}
+
 static int chttp_rpc_service_handler(
     void *user, const crpc_server_request_view *request,
     crpc_server_response *response) {
@@ -504,15 +514,22 @@ static int chttp_rpc_service_handler(
   DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
   DataBindBindingPlanDiagnostic diagnostic =
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
-  const DataBindBindingPlan *binding;
   DataBindStatus status;
+  int native_status = 0;
   int code = 0;
   int result;
 
   if (record == NULL || record->owner == NULL ||
-      record->method_plan == NULL || record->invoke == NULL ||
+      record->method_plan == NULL || record->binding == NULL ||
+      record->native_binding == NULL || record->execution == NULL ||
+      record->request_storage == NULL || record->response_storage == NULL ||
       request == NULL || response == NULL)
     return SALTS_EINVAL;
+
+  memset(record->request_storage, 0, record->request_bytes);
+  memset(record->response_storage, 0, record->response_bytes);
+  if (record->error_storage != NULL)
+    memset(record->error_storage, 0, record->error_bytes);
 
   provider_context = (chttp_rpc_service_provider){
       .service = record->owner,
@@ -526,14 +543,25 @@ static int chttp_rpc_service_handler(
   provider.commit_output = chttp_rpc_service_commit_output;
   provider.abort_output = chttp_rpc_service_abort_output;
 
-  binding = data_bind_rpc_method_plan_binding(record->method_plan);
-  status = record->invoke(
-      record->user, binding, &provider,
-      &record->owner->native_options, &outcome, &diagnostic);
+  status = data_bind_binding_plan_bind_inputs(
+      record->binding, &provider, &record->owner->native_options,
+      &record->frame, &diagnostic);
+
+  if (status == DATA_BIND_OK &&
+      !record->execution->invoke(
+          record->execution->context, &native_status,
+          record->params, record->param_count))
+    status = DATA_BIND_ERR_RUNTIME;
+
+  if (status == DATA_BIND_OK)
+    status = data_bind_binding_plan_write_outcome(
+        record->binding, &provider, &record->frame, native_status,
+        &outcome, &diagnostic);
 
   crpc_server_request_param_close(&provider_context.param_reader);
 
   if (status != DATA_BIND_OK) {
+    chttp_rpc_service_release_token_storage(&provider_context);
     if (!provider_context.output_attempted &&
         chttp_rpc_service_input_failure(status))
       return crpc_server_response_error(
@@ -543,22 +571,28 @@ static int chttp_rpc_service_handler(
 
   if (outcome.kind == DATA_BIND_BINDING_OUTCOME_SUCCESS) {
     if (!provider_context.output_published ||
-        provider_context.output_is_error)
+        provider_context.output_is_error) {
+      chttp_rpc_service_release_token_storage(&provider_context);
       return SALTS_EPROTO;
-    return crpc_server_response_result(
+    }
+    result = crpc_server_response_result(
         response,
         provider_context.token_valid
             ? chttp_rpc_service_encode_staged
             : NULL,
         provider_context.token_valid ? &provider_context : NULL);
+    chttp_rpc_service_release_token_storage(&provider_context);
+    return result;
   }
 
   if (outcome.kind == DATA_BIND_BINDING_OUTCOME_TYPED_ERROR) {
     if (!provider_context.output_published ||
         !provider_context.output_is_error ||
         !data_bind_rpc_method_plan_code_for_outcome(
-            record->method_plan, &outcome, &code))
+            record->method_plan, &outcome, &code)) {
+      chttp_rpc_service_release_token_storage(&provider_context);
       return SALTS_EPROTO;
+    }
     result = crpc_server_response_error(
         response, (int64_t)code,
         outcome.typed_error != NULL ? outcome.typed_error : "Service error",
@@ -566,14 +600,16 @@ static int chttp_rpc_service_handler(
             ? chttp_rpc_service_encode_staged
             : NULL,
         provider_context.token_valid ? &provider_context : NULL);
+    chttp_rpc_service_release_token_storage(&provider_context);
     return result;
   }
 
-  /*
-   * Native/business status deliberately has no implicit RPC-code mapping in
-   * DataBindRpcMethodPlan. Until an explicit application policy is mounted,
-   * fail closed and let CRPC emit its ordinary internal-error envelope.
-   */
+  chttp_rpc_service_release_token_storage(&provider_context);
+  if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS)
+    return crpc_server_response_error(
+        response, -32000, "Native status",
+        chttp_rpc_service_encode_native_status, &native_status);
+
   return SALTS_EPROTO;
 }
 
