@@ -152,6 +152,13 @@ static DataBindStatus chttp_rpc_service_open_input(
   return DATA_BIND_OK;
 }
 
+static void chttp_rpc_service_release_token_storage(
+    chttp_rpc_service_provider *provider) {
+  if (provider == NULL || provider->token_storage == NULL) return;
+  mem_buffer_release(provider->token_storage);
+  provider->token_storage = NULL;
+}
+
 static cserde_status chttp_rpc_service_capture_token(
     void *context, const cserde_token *token) {
   chttp_rpc_service_provider *provider =
@@ -163,17 +170,20 @@ static cserde_status chttp_rpc_service_capture_token(
 
   provider->token = *token;
   if (token->kind == CSERDE_STRING || token->kind == CSERDE_BYTES) {
-    if (token->value.slice.size > provider->service->output_capacity)
+    const size_t size = token->value.slice.size;
+    if (size > provider->service->output_capacity)
       return CSERDE_LIMIT_EXCEEDED;
-    if (token->value.slice.size != 0u) {
-      if (token->value.slice.data == NULL) return CSERDE_INVALID_TOKEN;
-      memcpy(
-          provider->service->output_scratch,
-          token->value.slice.data,
-          token->value.slice.size);
-    }
+    if (size != 0u && token->value.slice.data == NULL)
+      return CSERDE_INVALID_TOKEN;
+    provider->token_storage =
+        mem_get_buffer(mem_global(), size == 0u ? 1u : size);
+    if (provider->token_storage == NULL) return CSERDE_OUT_OF_MEMORY;
+    if (size != 0u)
+      memcpy(mem_buffer_data(provider->token_storage),
+             token->value.slice.data, size);
+    mem_set_used(provider->token_storage, size);
     provider->token.value.slice.data =
-        provider->service->output_scratch;
+        (const unsigned char *)mem_buffer_const_data(provider->token_storage);
     provider->token.value.slice.lifetime = CSERDE_VIEW_STABLE;
   } else if (token->kind == CSERDE_ARRAY_BEGIN ||
              token->kind == CSERDE_ARRAY_END ||
@@ -206,6 +216,7 @@ static DataBindStatus chttp_rpc_service_begin_output(
   if (provider == NULL || provider->service == NULL)
     return DATA_BIND_ERR_INVALID_ARG;
 
+  chttp_rpc_service_release_token_storage(provider);
   provider->writer = (cserde_writer){0};
   provider->token = (cserde_token){0};
   provider->token_valid = 0;
@@ -274,6 +285,9 @@ static DataBindStatus chttp_rpc_service_write_output(
   status = data_bind_native_encode(
       &provider->service->native_options, entry->data,
       value, value_bytes, &provider->writer, &diagnostic);
+  if (status == DATA_BIND_OK &&
+      cserde_writer_finish(&provider->writer) != CSERDE_OK)
+    status = DATA_BIND_ERR_RUNTIME;
   if (status != DATA_BIND_OK && error != NULL)
     *error = diagnostic.error;
   return status;
@@ -301,6 +315,7 @@ static void chttp_rpc_service_abort_output(void *context) {
   provider->token_valid = 0;
   provider->writer = (cserde_writer){0};
   provider->token = (cserde_token){0};
+  chttp_rpc_service_release_token_storage(provider);
 }
 
 static cserde_status chttp_rpc_service_encode_staged(
