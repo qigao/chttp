@@ -2,7 +2,7 @@ databind_target(
   TARGET chttp_rpc_service_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_rpc_service.schema"
   ARTIFACT_NAME "chttp_rpc_service"
-  PROJECTIONS RPC
+  TRANSPORTS RPC
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_rpc_service.projection.json")
 
