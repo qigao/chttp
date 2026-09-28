@@ -60,6 +60,14 @@ jobs:
           ctest --test-dir build/linux-gcc-debug \
             -R '^(chttp_web_(renderer_test|context_test|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
+      - name: Run OpenAPI DataBind HTTP projection tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target test_databind_http_provider -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^openapi_databind_http_provider$' \
+            --no-tests=error --output-on-failure
       - name: Run Service CMeta admission tests
         shell: bash
         run: |
@@ -123,6 +131,10 @@ jobs:
           ctest --test-dir build/linux-gcc-debug \
             -R '^chttp_rpc_service_(test|header_cpp_test)$' \
             --no-tests=error --output-on-failure
+          cmake --build build/linux-gcc-debug --target test_databind_http_provider -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^openapi_databind_http_provider$' \
+            --no-tests=error --output-on-failure
       - name: Verify Web lifecycle with UndefinedBehaviorSanitizer
         shell: bash
         env:
@@ -149,6 +161,10 @@ jobs:
             chttp_rpc_service_test chttp_rpc_service_header_cpp_test -j2
           ctest --test-dir build/linux-gcc-debug \
             -R '^chttp_rpc_service_(test|header_cpp_test)$' \
+            --no-tests=error --output-on-failure
+          cmake --build build/linux-gcc-debug --target test_databind_http_provider -j2
+          ctest --test-dir build/linux-gcc-debug \
+            -R '^openapi_databind_http_provider$' \
             --no-tests=error --output-on-failure
       - name: Verify exact head and clean tracked source
         if: always()
