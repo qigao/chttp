@@ -305,9 +305,9 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     chttp_rpc_service service = {0};
     chttp_rpc_service_config service_config =
         CHTTP_RPC_SERVICE_CONFIG_INIT;
-    chttp_rpc_service_mount mount = CHTTP_RPC_SERVICE_MOUNT_INIT;
-    chttp_rpc_service_mount mismatch = CHTTP_RPC_SERVICE_MOUNT_INIT;
-    chttp_rpc_service_mount invalid = CHTTP_RPC_SERVICE_MOUNT_INIT;
+    chttp_rpc_service_mount_options mount = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
+    chttp_rpc_service_mount_options mismatch = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
+    chttp_rpc_service_mount_options invalid = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
     DataBindNativeExecution execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindNativeExecution other_execution =
