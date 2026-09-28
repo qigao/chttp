@@ -14,12 +14,25 @@ runs:
         mode: read
 
 
+    - name: Verify canonical vcpkg binary cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -n "${VCPKG_ROOT:-}"
+        test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+        test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+        case "${VCPKG_BINARY_SOURCES:-}" in
+          *nugetconfig*) ;;
+          *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+        esac
+        test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
+
     - name: Restore versioned Salts SDK graph
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        SALTS_VERSION: '1.8.2'
-        SALTS_UTILS_VERSION: '4.1.2'
+        SALTS_VERSION: '1.8.3'
+        SALTS_UTILS_VERSION: '4.1.3'
       run: |
         set -euo pipefail
         packages="$RUNNER_TEMP/qigao-native-sdk"
