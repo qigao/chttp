@@ -44,6 +44,22 @@ foreach(REQUIRED
   endif()
 endforeach()
 
+foreach(REQUIRED_FAILURE_CLASS
+    "Binding Error"
+    "Validation Error"
+    "Binding Limit Error"
+    "Application Error")
+  string(FIND "${SERVICE_TEXT}" "${REQUIRED_FAILURE_CLASS}" POS)
+  if(POS EQUAL -1)
+    message(FATAL_ERROR "Service HTTP failure classes must remain distinguishable: ${REQUIRED_FAILURE_CLASS}")
+  endif()
+endforeach()
+
+string(FIND "${SERVICE_TEXT}" "\"Bad Request\"" COLLAPSED_BAD_REQUEST)
+if(NOT COLLAPSED_BAD_REQUEST EQUAL -1)
+  message(FATAL_ERROR "Generated Service binding failures must not collapse back into generic Bad Request")
+endif()
+
 string(FIND "${SERVICE_TEXT}" "typedef struct chttp_service_method_record {" RECORD_START)
 string(FIND "${SERVICE_TEXT}" "} chttp_service_method_record;" RECORD_END)
 if(RECORD_START LESS 0 OR RECORD_END LESS 0 OR RECORD_END LESS_EQUAL RECORD_START)
