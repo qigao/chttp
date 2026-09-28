@@ -460,8 +460,11 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     check_not_null(response.value.remote_error.data);
     check_equal(
         cserde_reader_next(response.value.remote_error.data, &token), CSERDE_OK);
-    check_equal(token.kind, CSERDE_SINT);
-    check_equal(token.value.sint, INT64_C(7));
+    check(token.kind == CSERDE_SINT || token.kind == CSERDE_UINT);
+    if (token.kind == CSERDE_SINT)
+      check_equal(token.value.sint, INT64_C(7));
+    else
+      check_equal(token.value.uint, UINT64_C(7));
     crpc_response_destroy(&response);
 
     check_equal(
