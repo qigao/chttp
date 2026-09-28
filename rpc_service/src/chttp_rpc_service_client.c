@@ -365,7 +365,7 @@ static int chttp_rpc_service_client_plan_admit(
         strcmp(entry.address.space, "rpc.params") != 0 ||
         entry.address.binding_class != DATA_BIND_BINDING_VALUE ||
         entry.address.name == NULL || entry.address.name[0] == '\0' ||
-        entry.function_param_index != 0u || entry.parameter_indirect ||
+        entry.function_param_index != 0u ||
         entry.target_is_return || !chttp_rpc_service_client_scalar_kind(entry.data) ||
         entry.data->storage_type == NULL)
       return SALTS_ENOTSUP;
