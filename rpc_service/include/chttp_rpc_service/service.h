@@ -41,17 +41,17 @@ typedef struct chttp_rpc_service_config {
  *
  * Mount validates these artifacts before registering the CRPC method.
  */
-typedef struct chttp_rpc_service_mount {
+typedef struct chttp_rpc_service_mount_options {
   size_t size;
   /** Fixed CRPC HTTP endpoint, for example "/rpc". Borrowed until register returns. */
   const char *target;
   const DataBindRpcMethodPlan *method_plan;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
-} chttp_rpc_service_mount;
+} chttp_rpc_service_mount_options;
 
-#define CHTTP_RPC_SERVICE_MOUNT_INIT \
-  { sizeof(chttp_rpc_service_mount), NULL, NULL, NULL, NULL }
+#define CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT \
+  { sizeof(chttp_rpc_service_mount_options), NULL, NULL, NULL, NULL }
 
 /**
  * Initialize bounded owner-thread execution storage for generated RPC MethodPlans.
@@ -75,7 +75,7 @@ int chttp_rpc_service_init(
 int chttp_rpc_service_mount(
     chttp_rpc_service *service,
     crpc_server *server,
-    const chttp_rpc_service_mount *mount);
+    const chttp_rpc_service_mount_options *mount);
 
 /**
  * Release service-owned method records and bounded staging.
