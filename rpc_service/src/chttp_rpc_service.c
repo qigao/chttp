@@ -51,6 +51,7 @@ typedef struct chttp_rpc_service_provider {
   cserde_writer writer;
   cserde_token token;
   mem_buffer_t *token_storage;
+  int writer_started;
   int token_valid;
 
   int output_attempted;
@@ -217,6 +218,7 @@ static DataBindStatus chttp_rpc_service_begin_output(
   chttp_rpc_service_release_token_storage(provider);
   provider->writer = (cserde_writer){0};
   provider->token = (cserde_token){0};
+  provider->writer_started = 0;
   provider->token_valid = 0;
   provider->output_attempted = 1;
   provider->output_active = 1;
@@ -279,13 +281,11 @@ static DataBindStatus chttp_rpc_service_write_output(
         "Could not initialize RPC scalar staging writer");
     return DATA_BIND_ERR_RUNTIME;
   }
+  provider->writer_started = 1;
 
   status = data_bind_native_encode(
       &provider->service->native_options, entry->data,
       value, value_bytes, &provider->writer, &diagnostic);
-  if (status == DATA_BIND_OK &&
-      cserde_writer_finish(&provider->writer) != CSERDE_OK)
-    status = DATA_BIND_ERR_RUNTIME;
   if (status != DATA_BIND_OK && error != NULL)
     *error = diagnostic.error;
   return status;
@@ -295,9 +295,18 @@ static DataBindStatus chttp_rpc_service_commit_output(
     void *context, DataBindError *error) {
   chttp_rpc_service_provider *provider =
       (chttp_rpc_service_provider *)context;
-  (void)error;
   if (provider == NULL || !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->writer_started &&
+      cserde_writer_finish(&provider->writer) != CSERDE_OK) {
+    chttp_rpc_service_error_set(
+        error, DATA_BIND_ERR_RUNTIME,
+        "Could not finish RPC scalar staging writer");
+    provider->output_active = 0;
+    provider->output_published = 0;
+    chttp_rpc_service_release_token_storage(provider);
+    return DATA_BIND_ERR_RUNTIME;
+  }
   provider->output_active = 0;
   provider->output_published = 1;
   return DATA_BIND_OK;
@@ -311,6 +320,7 @@ static void chttp_rpc_service_abort_output(void *context) {
   provider->output_published = 0;
   provider->output_is_error = 0;
   provider->token_valid = 0;
+  provider->writer_started = 0;
   provider->writer = (cserde_writer){0};
   provider->token = (cserde_token){0};
   chttp_rpc_service_release_token_storage(provider);
