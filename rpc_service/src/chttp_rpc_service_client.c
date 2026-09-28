@@ -179,7 +179,8 @@ static cserde_status chttp_rpc_service_client_encode_params(
     void *user, cserde_writer *writer) {
   chttp_rpc_service_client_encode_context *context =
       (chttp_rpc_service_client_encode_context *)user;
-  size_t count;
+  size_t ingress_count;
+  size_t egress_count;
   size_t i;
   cserde_status status;
 
@@ -304,10 +305,28 @@ static int chttp_rpc_service_client_plan_admit(
 
   if (data_bind_binding_plan_error_count(binding) != native->error_count)
     return SALTS_EINVAL;
+
+  if (native->error_count == 0u) {
+    if (native->errors != NULL || native->error_param_index != SIZE_MAX ||
+        native->error_envelope_bytes != 0u ||
+        native->error_kind_bytes != 0u)
+      return SALTS_EINVAL;
+  } else {
+    if (native->errors == NULL || native->error_param_index != 2u ||
+        native->error_envelope_bytes == 0u ||
+        native->error_kind_bytes != sizeof(uint32_t) ||
+        native->error_kind_bytes > native->error_envelope_bytes ||
+        native->error_kind_offset >
+            native->error_envelope_bytes - native->error_kind_bytes)
+      return SALTS_ENOTSUP;
+  }
+
   for (i = 0u; i < native->error_count; ++i) {
     DataBindRpcErrorMapping mapping = DATA_BIND_RPC_ERROR_MAPPING_INIT;
     const char *plan_error = data_bind_binding_plan_error_at(binding, i);
     size_t j;
+    const cmeta_data_desc *error_data = NULL;
+    DataBindError error = DATA_BIND_ERROR_INIT;
     if (native->errors == NULL || plan_error == NULL ||
         native->errors[i].size < sizeof(DataBindNativeErrorBinding) ||
         native->errors[i].idl_type_name == NULL ||
@@ -316,6 +335,15 @@ static int chttp_rpc_service_client_plan_admit(
         native->errors[i].kind_value != (uint32_t)(i + 1u) ||
         !data_bind_rpc_method_plan_error_at(method_plan, i, &mapping))
       return SALTS_EINVAL;
+    if (native->errors[i].data_resolver(&error_data, &error) != DATA_BIND_OK ||
+        error_data == NULL || !cmeta_data_desc_valid(error_data) ||
+        error_data->storage_type == NULL ||
+        native->errors[i].payload_offset >
+            native->error_envelope_bytes ||
+        error_data->storage_type->size >
+            native->error_envelope_bytes - native->errors[i].payload_offset ||
+        !chttp_rpc_service_client_scalar_kind(error_data))
+      return SALTS_ENOTSUP;
     for (j = 0u; j < i; ++j) {
       DataBindRpcErrorMapping previous = DATA_BIND_RPC_ERROR_MAPPING_INIT;
       if (!data_bind_rpc_method_plan_error_at(method_plan, j, &previous))
@@ -324,8 +352,8 @@ static int chttp_rpc_service_client_plan_admit(
     }
   }
 
-  count = data_bind_binding_plan_ingress_count(binding);
-  for (i = 0u; i < count; ++i) {
+  ingress_count = data_bind_binding_plan_ingress_count(binding);
+  for (i = 0u; i < ingress_count; ++i) {
     DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
     size_t bytes;
     size_t j;
@@ -340,14 +368,30 @@ static int chttp_rpc_service_client_plan_admit(
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
     if (entry.native_offset > request_bytes ||
-        bytes > request_bytes - entry.native_offset)
+        bytes > request_bytes - entry.native_offset ||
+        (entry.has_presence &&
+         (entry.presence_offset >= request_bytes ||
+          entry.presence_bit >= 8u)) ||
+        (entry.has_null &&
+         (entry.null_offset >= request_bytes ||
+          entry.null_bit >= 8u)))
       return SALTS_EINVAL;
 
     if (entry.address.ordinal == SIZE_MAX) {
       saw_name_only = 1;
+      for (j = 0u; j < i; ++j) {
+        DataBindBindingPlanEntry previous =
+            DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+        if (!data_bind_binding_plan_ingress_at(binding, j, &previous))
+          return SALTS_EINVAL;
+        if (previous.address.ordinal == SIZE_MAX &&
+            previous.address.name != NULL &&
+            strcmp(previous.address.name, entry.address.name) == 0)
+          return SALTS_ENOTSUP;
+      }
     } else {
       saw_ordinal = 1;
-      if (entry.address.ordinal >= count) return SALTS_ENOTSUP;
+      if (entry.address.ordinal >= ingress_count) return SALTS_ENOTSUP;
       for (j = 0u; j < i; ++j) {
         DataBindBindingPlanEntry previous = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
         if (!data_bind_binding_plan_ingress_at(binding, j, &previous))
@@ -359,9 +403,9 @@ static int chttp_rpc_service_client_plan_admit(
   }
   if (saw_ordinal && saw_name_only) return SALTS_ENOTSUP;
 
-  count = data_bind_binding_plan_egress_count(binding);
-  if (count > 1u) return SALTS_ENOTSUP;
-  if (count == 1u) {
+  egress_count = data_bind_binding_plan_egress_count(binding);
+  if (egress_count > 1u) return SALTS_ENOTSUP;
+  if (egress_count == 1u) {
     DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
     size_t bytes;
     if (!data_bind_binding_plan_egress_at(binding, 0u, &entry) ||
@@ -374,11 +418,17 @@ static int chttp_rpc_service_client_plan_admit(
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
     if (entry.native_offset > response_bytes ||
-        bytes > response_bytes - entry.native_offset)
+        bytes > response_bytes - entry.native_offset ||
+        (entry.has_presence &&
+         (entry.presence_offset >= response_bytes ||
+          entry.presence_bit >= 8u)) ||
+        (entry.has_null &&
+         (entry.null_offset >= response_bytes ||
+          entry.null_bit >= 8u)))
       return SALTS_EINVAL;
   }
 
-  *out_mode = count == 0u && data_bind_binding_plan_ingress_count(binding) == 0u
+  *out_mode = ingress_count == 0u
                   ? CHTTP_RPC_SERVICE_PARAMS_NONE
                   : saw_ordinal ? CHTTP_RPC_SERVICE_PARAMS_ARRAY
                                 : CHTTP_RPC_SERVICE_PARAMS_OBJECT;
