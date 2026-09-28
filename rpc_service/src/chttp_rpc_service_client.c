@@ -179,8 +179,7 @@ static cserde_status chttp_rpc_service_client_encode_params(
     void *user, cserde_writer *writer) {
   chttp_rpc_service_client_encode_context *context =
       (chttp_rpc_service_client_encode_context *)user;
-  size_t ingress_count;
-  size_t egress_count;
+  size_t count;
   size_t i;
   cserde_status status;
 
@@ -278,7 +277,8 @@ static int chttp_rpc_service_client_plan_admit(
   const cmeta_function_desc *function;
   size_t native_request_bytes = 0u;
   size_t native_response_bytes = 0u;
-  size_t count;
+  size_t ingress_count;
+  size_t egress_count;
   size_t i;
   int saw_ordinal = 0;
   int saw_name_only = 0;
