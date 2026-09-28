@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "http": {
+    "operations": [
+      {
+        "service": "Calc",
+        "operation": "Submit",
+        "method": "POST",
+        "route": "/calc",
+        "success_status": 200,
+        "fields": [
+          {
+            "direction": "ingress",
+            "field": "left",
+            "location": "body",
+            "name": "lhs"
+          },
+          {
+            "direction": "ingress",
+            "field": "right",
+            "location": "body",
+            "name": "rhs"
+          },
+          {
+            "direction": "ingress",
+            "field": "scale",
+            "location": "body",
+            "name": "factor"
+          },
+          {
+            "direction": "egress",
+            "field": "sum",
+            "location": "response_body",
+            "name": "sum"
+          }
+        ]
+      }
+    ]
+  }
+}

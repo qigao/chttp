@@ -33,6 +33,10 @@ typedef enum chttp_web_status {
 } chttp_web_status;
 
 typedef struct DataBind DataBind;
+typedef struct DataBindHttpMethodPlan DataBindHttpMethodPlan;
+typedef struct DataBindNativeOptions DataBindNativeOptions;
+typedef struct DataBindBindingCallFrame DataBindBindingCallFrame;
+typedef struct DataBindBindingPlanDiagnostic DataBindBindingPlanDiagnostic;
 typedef struct TbeTypedType TbeTypedType;
 typedef struct TbeTypedDescriptor TbeTypedDescriptor;
 
@@ -683,6 +687,22 @@ typedef struct chttp_web_form_bind_options {
 #define CHTTP_WEB_FORM_BIND_OPTIONS_INIT \
   {sizeof(chttp_web_form_bind_options), NULL, 0u}
 
+/**
+ * Caller-owned scalar parsing scratch for generated-plan form binding.
+ *
+ * This storage is transport-adapter scratch only. Required/default/nullability,
+ * validation, native addressing and type semantics remain owned by the
+ * generated DataBind BindingPlan.
+ */
+typedef struct chttp_web_form_plan_options {
+  size_t size;
+  char *scalar_storage;
+  size_t scalar_capacity;
+} chttp_web_form_plan_options;
+
+#define CHTTP_WEB_FORM_PLAN_OPTIONS_INIT \
+  {sizeof(chttp_web_form_plan_options), NULL, 0u}
+
 enum {
   CHTTP_WEB_FLASH_HARD_MAX_MESSAGES = 16,
   CHTTP_WEB_FLASH_HARD_MAX_SERIALIZED_BYTES = 1024
@@ -1077,6 +1097,34 @@ chttp_web_status chttp_web_form_bind_descriptor(
     const TbeTypedDescriptor *descriptor,
     void *destination,
     const chttp_web_form_bind_options *options,
+    chttp_web_error *error);
+
+/**
+ * Binds a browser form through one generated immutable HTTP MethodPlan.
+ *
+ * Form field names are matched against the generated ingress wire names
+ * (BindingPlan entry address.name). The adapter never parses DataBind schema,
+ * walks CMeta reflection, or rebuilds validation/default/nullability rules.
+ * Those semantics execute only through data_bind_binding_plan_bind_inputs().
+ *
+ * native_options and frame are caller-owned canonical DataBind runtime state.
+ * On binding failure, frame mutation follows BindingPlan's canonical rollback
+ * contract. validation is optional presentation state; when supplied it is
+ * reset first and populated from the producer diagnostic without redefining
+ * validation semantics.
+ *
+ * Duplicate generated wire names, unknown form fields, duplicate scalar form
+ * values, unsupported composite/container values, and malformed scalar text
+ * fail closed.
+ */
+chttp_web_status chttp_web_form_bind_method_plan(
+    const chttp_web_form *form,
+    const DataBindHttpMethodPlan *method_plan,
+    const DataBindNativeOptions *native_options,
+    DataBindBindingCallFrame *frame,
+    const chttp_web_form_plan_options *options,
+    chttp_web_validation *validation,
+    DataBindBindingPlanDiagnostic *diagnostic,
     chttp_web_error *error);
 
 

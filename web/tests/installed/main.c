@@ -86,6 +86,18 @@ int main(void) {
   chttp_server_middleware auth_middleware = {0};
   chttp_web_asset_mount asset_mount =
       (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
+  chttp_web_form_plan_options form_plan_options =
+      (chttp_web_form_plan_options)CHTTP_WEB_FORM_PLAN_OPTIONS_INIT;
+  chttp_web_status (*form_plan_bind)(
+      const chttp_web_form *,
+      const DataBindHttpMethodPlan *,
+      const DataBindNativeOptions *,
+      DataBindBindingCallFrame *,
+      const chttp_web_form_plan_options *,
+      chttp_web_validation *,
+      DataBindBindingPlanDiagnostic *,
+      chttp_web_error *) =
+      chttp_web_form_bind_method_plan;
 
   if (chttp_web_validation_init(&validation, validation_errors, 2u,
           validation_bytes, sizeof(validation_bytes), &error) != CHTTP_WEB_OK)
@@ -177,5 +189,8 @@ int main(void) {
   asset_mount.max_relative_path_bytes = 128u;
   if (chttp_web_assets_use(NULL, &asset_mount) != SALTS_EINVAL)
     return 19;
+  if (form_plan_bind == NULL ||
+      form_plan_options.size != sizeof(chttp_web_form_plan_options))
+    return 20;
   return 0;
 }

@@ -21,6 +21,33 @@ set_target_properties(chttp_web_form_test PROPERTIES
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME chttp_web_form_test COMMAND chttp_web_form_test)
 
+
+databind_target(
+  TARGET chttp_web_form_plan_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.schema"
+  ARTIFACT_NAME "chttp_web_form_plan"
+  TRANSPORTS HTTP
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.projection.json")
+
+add_executable(chttp_web_form_plan_test test_chttp_web_form_plan.c)
+target_link_libraries(chttp_web_form_plan_test PRIVATE
+  CHttp::Web Salts::DataBind Salts::TinyTest)
+target_include_directories(chttp_web_form_plan_test PRIVATE
+  "${chttp_web_form_plan_fixture_GENERATED_DIR}")
+add_dependencies(chttp_web_form_plan_test
+  chttp_web_form_plan_fixture_databind_codegen)
+set_target_properties(chttp_web_form_plan_test PROPERTIES
+  FOLDER "web/tests"
+  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_web_form_plan_test COMMAND chttp_web_form_plan_test)
+
+add_test(
+  NAME chttp_web_form_plan_boundary_contract
+  COMMAND ${CMAKE_COMMAND}
+    -DFORM_PLAN_SOURCE=${PROJECT_SOURCE_DIR}/web/src/chttp_web_form_plan.c
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan_contract_test.cmake)
+
 add_executable(chttp_web_validation_test test_chttp_web_validation.c)
 target_link_libraries(chttp_web_validation_test PRIVATE
   CHttp::Web Salts::TinyTest)

@@ -1,0 +1,11 @@
+message FormRequest {
+  @Min(1) uint32 left;
+  uint32 right;
+  optional uint32 scale default 2;
+}
+message FormResponse {
+  uint32 sum;
+}
+service Calc {
+  Submit: FormRequest -> FormResponse;
+}
