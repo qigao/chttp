@@ -1,4 +1,4 @@
-databind_target(
+salts_idl_target(
   TARGET openapi_databind_http_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/test_databind_http.schema"
   ARTIFACT_NAME "openapi_databind"
@@ -21,7 +21,7 @@ target_link_libraries(test_databind_http_provider PRIVATE
 target_include_directories(test_databind_http_provider PRIVATE
   "${openapi_databind_http_fixture_GENERATED_DIR}")
 add_dependencies(test_databind_http_provider
-  openapi_databind_http_fixture_databind_codegen)
+  openapi_databind_http_fixture_idl_codegen)
 add_test(NAME openapi_databind_http_provider
   COMMAND test_databind_http_provider)
 

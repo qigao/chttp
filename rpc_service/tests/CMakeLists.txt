@@ -1,4 +1,4 @@
-databind_target(
+salts_idl_target(
   TARGET chttp_rpc_service_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_rpc_service.schema"
   ARTIFACT_NAME "chttp_rpc_service"
@@ -15,7 +15,7 @@ target_link_libraries(chttp_rpc_service_test PRIVATE
 target_include_directories(chttp_rpc_service_test PRIVATE
   "${chttp_rpc_service_fixture_GENERATED_DIR}")
 add_dependencies(chttp_rpc_service_test
-  chttp_rpc_service_fixture_databind_codegen)
+  chttp_rpc_service_fixture_idl_codegen)
 add_test(NAME chttp_rpc_service_test COMMAND chttp_rpc_service_test)
 set_target_properties(chttp_rpc_service_test PROPERTIES
   FOLDER "rpc_service/tests"
