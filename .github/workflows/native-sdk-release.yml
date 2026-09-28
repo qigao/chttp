@@ -10,6 +10,7 @@ on:
       - "http_client/**"
       - "http_server/**"
       - "service/**"
+      - "rpc_service/**"
       - "web/**"
       - "s3/**"
       - "openapi/**"
@@ -327,7 +328,11 @@ jobs:
           test -f package/sdk/linux-x64/include/chttp_service/service.h
           test -f package/sdk/windows-x64/include/chttp_service/service.h
           test -f package/sdk/android-arm64-v8a/include/chttp_service/service.h
+          test -f package/sdk/linux-x64/include/chttp_rpc_service/service.h
+          test -f package/sdk/windows-x64/include/chttp_rpc_service/service.h
+          test -f package/sdk/android-arm64-v8a/include/chttp_rpc_service/service.h
           grep -q 'CHttp::Service' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          grep -q 'CHttp::RpcService' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
           test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 4
       - uses: actions/setup-dotnet@v4
         with:
