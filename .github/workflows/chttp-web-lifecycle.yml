@@ -37,6 +37,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --preset linux-dev-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF
       - name: Install OpenAPI conformance test requirements
@@ -112,6 +113,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --preset linux-dev-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=ON \
             -DENABLE_SANITIZER_UNDEFINED=OFF
           cmake --build build/linux-gcc-debug --target \
@@ -144,6 +146,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --preset linux-dev-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=ON
           cmake --build build/linux-gcc-debug --target \
