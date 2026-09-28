@@ -978,13 +978,44 @@ static int chttp_service_plan_supported(
   return 1;
 }
 
-static int chttp_service_input_failure(DataBindStatus status) {
-  return status == DATA_BIND_ERR_INVALID_ARG ||
-         status == DATA_BIND_ERR_PARSE ||
-         status == DATA_BIND_ERR_TYPE_NOT_FOUND ||
-         status == DATA_BIND_ERR_TYPE_MISMATCH ||
-         status == DATA_BIND_ERR_LIMIT ||
-         status == DATA_BIND_ERR_VALIDATION;
+typedef struct chttp_service_http_failure_response {
+  unsigned int status_code;
+  const char *body;
+  size_t body_size;
+} chttp_service_http_failure_response;
+
+static chttp_service_http_failure_response
+chttp_service_http_ingress_failure(DataBindStatus status) {
+  switch (status) {
+  case DATA_BIND_ERR_INVALID_ARG:
+  case DATA_BIND_ERR_PARSE:
+  case DATA_BIND_ERR_TYPE_NOT_FOUND:
+  case DATA_BIND_ERR_TYPE_MISMATCH:
+    return (chttp_service_http_failure_response){
+        400u, "Binding Error", sizeof("Binding Error") - 1u};
+
+  case DATA_BIND_ERR_VALIDATION:
+    return (chttp_service_http_failure_response){
+        422u, "Validation Error", sizeof("Validation Error") - 1u};
+
+  case DATA_BIND_ERR_LIMIT:
+  case DATA_BIND_ERR_BUFFER_TOO_SMALL:
+    return (chttp_service_http_failure_response){
+        413u, "Binding Limit Error", sizeof("Binding Limit Error") - 1u};
+
+  default:
+    return (chttp_service_http_failure_response){
+        500u, "Internal Server Error",
+        sizeof("Internal Server Error") - 1u};
+  }
+}
+
+static int chttp_service_http_failure_reply(
+    chttp_server_response *response,
+    chttp_service_http_failure_response failure) {
+  return chttp_server_reply(
+      response, failure.status_code, "text/plain",
+      failure.body, failure.body_size);
 }
 
 static int chttp_service_http_execute(
@@ -1030,8 +1061,14 @@ static int chttp_service_http_execute(
       binding, &provider, &record->owner->native_options,
       &record->frame, &diagnostic);
 
-  if (bind_status == DATA_BIND_OK &&
-      !record->execution->invoke(
+  if (bind_status != DATA_BIND_OK) {
+    const chttp_service_http_failure_response failure =
+        chttp_service_http_ingress_failure(bind_status);
+    chttp_service_http_release_output(&provider_context);
+    return chttp_service_http_failure_reply(response, failure);
+  }
+
+  if (!record->execution->invoke(
           record->execution->context, &native_status,
           record->params, record->param_count))
     bind_status = DATA_BIND_ERR_RUNTIME;
@@ -1043,18 +1080,18 @@ static int chttp_service_http_execute(
 
   if (bind_status != DATA_BIND_OK) {
     chttp_service_http_release_output(&provider_context);
-    if (!provider_context.output_attempted &&
-        chttp_service_input_failure(bind_status))
-      return chttp_server_reply(
-          response, 400u, "text/plain", "Bad Request", 11u);
     return chttp_server_reply(
-        response, 500u, "text/plain", "Internal Server Error", 21u);
+        response, 500u, "text/plain",
+        "Internal Server Error",
+        sizeof("Internal Server Error") - 1u);
   }
 
   if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS) {
     chttp_service_http_release_output(&provider_context);
     return chttp_server_reply(
-        response, 500u, "text/plain", "Native Status", 13u);
+        response, 500u, "text/plain",
+        "Application Error",
+        sizeof("Application Error") - 1u);
   }
 
   if (!data_bind_http_method_plan_status_for_outcome(
