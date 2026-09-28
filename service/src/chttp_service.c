@@ -999,7 +999,6 @@ chttp_service_http_ingress_failure(DataBindStatus status) {
         422u, "Validation Error", sizeof("Validation Error") - 1u};
 
   case DATA_BIND_ERR_LIMIT:
-  case DATA_BIND_ERR_BUFFER_TOO_SMALL:
     return (chttp_service_http_failure_response){
         413u, "Binding Limit Error", sizeof("Binding Limit Error") - 1u};
 
