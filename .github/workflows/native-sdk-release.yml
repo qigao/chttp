@@ -21,6 +21,8 @@ on:
       - ".github/workflows/native-sdk-release.yml"
   push:
     branches: [master]
+    tags:
+      - "v*"
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -367,7 +369,7 @@ jobs:
 
   publish:
     name: Publish package and GitHub Release
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [metadata, pack]
     runs-on: ubuntu-latest
     permissions:
@@ -389,7 +391,7 @@ jobs:
           set -euo pipefail
           dotnet nuget add source --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --name github https://nuget.pkg.github.com/qigao/index.json
           dotnet nuget push "dist/CHttp.Native.${{ needs.metadata.outputs.version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
-      - name: Create tag and GitHub Release
+      - name: Create GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
