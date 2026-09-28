@@ -2,10 +2,10 @@
 
 Versioned prebuilt Release SDKs for qigao/chttp.
 
-`CHttp.Native 1.1.2` has exact native SDK dependencies:
+`CHttp.Native 1.1.3` has exact native SDK dependencies:
 
-- `Salts.Native 1.8.0`
-- `SaltsUtils.Native 4.1.0`
+- `Salts.Native 1.8.2`
+- `SaltsUtils.Native 4.1.2`
 
 ## Layout
 
@@ -14,9 +14,9 @@ Versioned prebuilt Release SDKs for qigao/chttp.
 - `sdk/macos-x64/` or `sdk/macos-arm64/`
 - `sdk/android-arm64-v8a/`
 
-Android arm64-v8a requires API 26 or newer, matching `SaltsUtils.Native 4.1.0`.
+Android arm64-v8a requires API 26 or newer, matching `SaltsUtils.Native 4.1.2`.
 
 Consumers restore the package graph, set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
 `CHTTP_ROOT` to the matching platform directories, then use:
 
-    find_package(Chttp 1.1.2 EXACT CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
+    find_package(Chttp 1.1.3 EXACT CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
