@@ -1,5 +1,6 @@
 add_library(chttp_rpc_service SHARED
-  src/chttp_rpc_service.c)
+  src/chttp_rpc_service.c
+  src/chttp_rpc_service_client.c)
 
 add_library(CHttp::RpcService ALIAS chttp_rpc_service)
 
@@ -19,7 +20,7 @@ target_include_directories(chttp_rpc_service
     $<INSTALL_INTERFACE:include>)
 
 target_link_libraries(chttp_rpc_service
-  PUBLIC CHttp::Server Salts::DataBind
+  PUBLIC CHttp::Client CHttp::Server Salts::DataBind
   PRIVATE Salts::Core Salts::CSerde)
 
 install(TARGETS chttp_rpc_service EXPORT ChttpTargets)

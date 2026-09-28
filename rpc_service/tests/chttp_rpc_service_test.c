@@ -326,6 +326,15 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     crpc_error error = {0};
     chttp_rpc_service_params params = {{3u, 4u, 2u}, 3u, 0};
     cserde_token token = {0};
+    unsigned char client_workspace[4096];
+    DataBindNativeOptions client_native =
+        (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
+    chttp_rpc_service_client_call_options typed_call =
+        CHTTP_RPC_SERVICE_CLIENT_CALL_OPTIONS_INIT;
+    chttp_rpc_service_client_outcome typed_outcome =
+        CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+    AddRequest typed_request = {3u, 4u, 2u, 1u};
+    AddResponse typed_response = {0};
     char uri[64];
     uint16_t port = 0u;
 
@@ -396,6 +405,63 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
                  (unsigned int)port),
         0);
     check_equal(crpc_client_init(&client, &client_config), SALTS_OK);
+
+    client_native.workspace = client_workspace;
+    client_native.workspace_bytes = sizeof(client_workspace);
+    client_native.max_depth = 16u;
+    client_native.max_items = 64u;
+    client_native.max_owned_bytes = 1024u;
+
+    typed_call.connection_uri = uri;
+    typed_call.authority = "localhost";
+    typed_call.target = "/rpc";
+    typed_call.request_id = UINT64_C(100);
+    typed_call.deadline_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+    typed_call.method_plan = method_plan;
+    typed_call.native_binding = &native;
+    typed_call.native_options = &client_native;
+    typed_call.request = &typed_request;
+    typed_call.request_bytes = sizeof(typed_request);
+    typed_call.response = &typed_response;
+    typed_call.response_bytes = sizeof(typed_response);
+
+    check_equal(
+        chttp_rpc_service_client_call(
+            &client, &typed_call, &typed_outcome, &error),
+        SALTS_OK);
+    check_equal(
+        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
+    check_equal(typed_response.sum, (uint32_t)11u);
+
+    typed_request =
+        (AddRequest){.left = 3u, .right = 4u, .scale = 0u, .presence = 0u};
+    typed_response = (AddResponse){0};
+    typed_outcome =
+        (chttp_rpc_service_client_outcome)
+            CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+    typed_call.request_id = UINT64_C(101);
+    check_equal(
+        chttp_rpc_service_client_call(
+            &client, &typed_call, &typed_outcome, &error),
+        SALTS_OK);
+    check_equal(
+        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
+    check_equal(typed_response.sum, (uint32_t)7u);
+
+    typed_request =
+        (AddRequest){.left = 99u, .right = 1u, .scale = 1u, .presence = 1u};
+    typed_response = (AddResponse){0};
+    typed_outcome =
+        (chttp_rpc_service_client_outcome)
+            CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+    typed_call.request_id = UINT64_C(102);
+    check_equal(
+        chttp_rpc_service_client_call(
+            &client, &typed_call, &typed_outcome, &error),
+        SALTS_OK);
+    check_equal(
+        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
+    check_equal(typed_outcome.remote_code, INT64_C(-32000));
 
     options = (crpc_options){
         .connection_uri = uri,

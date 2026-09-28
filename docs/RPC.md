@@ -35,6 +35,50 @@ RPC 服务端编入 `CHttp::Server`，入口为 `<http_server/rpc.h>`。
 自动 retry、service discovery 或 HTTP/3。TLS、ALPN、H1/H2 与连接能力由 CHTTP/CNet 实现，CRPC
 只组合协议语义与 transport 选择，不私自建立第二套 socket runtime。
 
+### Generated RpcService typed client
+
+`CHttp::RpcService` 在低层 `crpc_client` 之上提供 generated-plan typed client。它不修改
+`CHttp::Client` / CRPC 的 DataBind-independent 边界，而是消费与 server mount 相同的
+`DataBindRpcMethodPlan + DataBindServiceNativeBinding`：
+
+```text
+native request
+  + generated RpcMethodPlan
+  + canonical native binding
+        |
+        v
+plan-driven params adapter
+        |
+        v
+CRPC JSON-RPC envelope / H1-H2 transport
+        |
+        v
+plan-driven result/error adapter
+        |
+        v
+native response / generated typed-error envelope
+```
+
+调用 `chttp_rpc_service_client_call()` 时不再提供手写 `encode_params`，也不手工读取
+`cserde_token`。参数名称/ordinal、native offset、optional presence/null state、result shape 与
+typed-error code 都来自 immutable generated plan/native binding；实际 scalar value 的转换只经过
+`data_bind_native_encode()/decode()`。
+
+当前 client slice 与 RpcService server 的已验证能力保持一致：bool/signed/unsigned/float/enum
+scalar params、最多一个 scalar result，以及 scalar typed-error payload。全部 ingress ordinal
+生成 JSON array；全部 name selector 生成 JSON object；混合 selector、重复 wire name/ordinal、
+structured value 与 array 中间的 ABSENT 字段均 fail closed。object ABSENT 字段被省略，因此
+DataBind server-side default 仍只对 ABSENT 生效。
+
+合法 JSON-RPC error 不伪装成 transport failure。typed client outcome 区分：
+
+- `SUCCESS` — result 已 decode 到 native response；
+- `TYPED_ERROR` — MethodPlan error code 已映射并 decode 到 generated native error envelope；
+- `REMOTE_ERROR` — 合法但不属于 generated typed-error mapping 的 JSON-RPC error。
+
+transport/HTTP/deadline/envelope/native encode/decode 失败仍以非 `SALTS_OK` 和 `crpc_error`
+返回。低层 `crpc_request_reply()` 与 async CRPC API 保持不变。
+
 ## CMeta 与 CSerde 的职责
 
 `crpc_method` 的 `service` 和 `name` 决定 wire method；可选 `cmeta_callable` 描述本地 callable 的
