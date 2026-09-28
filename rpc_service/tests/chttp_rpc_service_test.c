@@ -448,6 +448,21 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
     check_equal(typed_response.sum, (uint32_t)7u);
 
+    typed_request =
+        (AddRequest){.left = 99u, .right = 1u, .scale = 1u, .presence = 1u};
+    typed_response = (AddResponse){0};
+    typed_outcome =
+        (chttp_rpc_service_client_outcome)
+            CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+    typed_call.request_id = UINT64_C(102);
+    check_equal(
+        chttp_rpc_service_client_call(
+            &client, &typed_call, &typed_outcome, &error),
+        SALTS_OK);
+    check_equal(
+        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
+    check_equal(typed_outcome.remote_code, INT64_C(-32000));
+
     options = (crpc_options){
         .connection_uri = uri,
         .authority = "localhost",
