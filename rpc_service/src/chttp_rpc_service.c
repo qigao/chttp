@@ -706,7 +706,7 @@ int chttp_rpc_service_init(
 int chttp_rpc_service_mount(
     chttp_rpc_service *service,
     crpc_server *server,
-    const chttp_rpc_service_mount *mount) {
+    const chttp_rpc_service_mount_options *mount) {
   chttp_rpc_service_impl *impl;
   chttp_rpc_service_method_record *record;
   crpc_method method = {0};
