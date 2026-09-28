@@ -118,8 +118,12 @@ FunctionDeclAsAbi(
      CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
      &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
 
+static size_t CHTTP_SERVICE_TEST_ADD_CALLS;
+
 int chttp_service_test_add(const AddRequest *request, AddResponse *response) {
   if (request == NULL || response == NULL) return -1;
+  ++CHTTP_SERVICE_TEST_ADD_CALLS;
+  if (request->left == 99u) return 7;
   response->sum = request->left + request->right * request->scale;
   return 0;
 }
@@ -347,6 +351,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
                  (unsigned int)port),
         0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+    CHTTP_SERVICE_TEST_ADD_CALLS = 0u;
 
     check_equal(
         chttp_service_test_call(
@@ -355,6 +360,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(response.status_code, 201u);
     check_equal(response.body_size, (size_t)2u);
     check_equal(response.body, "11", 2u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)1u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};
@@ -365,6 +371,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(response.status_code, 201u);
     check_equal(response.body_size, (size_t)1u);
     check_equal(response.body, "7", 1u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)2u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};
@@ -374,6 +381,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         SALTS_OK);
     check_equal(response.status_code, 500u);
     check_equal(response.body, "Internal Server Error", 21u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)3u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};
@@ -384,6 +392,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(response.status_code, 201u);
     check_equal(response.body_size, (size_t)1u);
     check_equal(response.body, "7", 1u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)4u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};
@@ -391,8 +400,9 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         chttp_service_test_call(
             &client, uri, "/add/0?right=4", &response),
         SALTS_OK);
-    check_equal(response.status_code, 400u);
-    check_equal(response.body, "Bad Request", 11u);
+    check_equal(response.status_code, 422u);
+    check_equal(response.body, "Validation Error", 16u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)4u);
     chttp_response_destroy(&response);
 
     response = (chttp_response){0};
@@ -401,7 +411,40 @@ spec("CHttp::Service generated HTTP MethodPlan") {
             &client, uri, "/add/not-a-number?right=4", &response),
         SALTS_OK);
     check_equal(response.status_code, 400u);
-    check_equal(response.body, "Bad Request", 11u);
+    check_equal(response.body, "Binding Error", 13u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)4u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/3", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 400u);
+    check_equal(response.body, "Binding Error", 13u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)4u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri,
+            "/add/111111111111111111111111111111111111111111111111111111111111111111111?right=4",
+            &response),
+        SALTS_OK);
+    check_equal(response.status_code, 413u);
+    check_equal(response.body, "Binding Limit Error", 19u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)4u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/99?right=4", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 500u);
+    check_equal(response.body, "Application Error", 17u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)5u);
     chttp_response_destroy(&response);
 
     check_equal(
