@@ -1,4 +1,4 @@
-databind_target(
+salts_idl_target(
   TARGET chttp_service_http_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.schema"
   ARTIFACT_NAME "chttp_service"
@@ -18,7 +18,7 @@ target_include_directories(chttp_service_http_test PRIVATE
   "${chttp_service_http_fixture_GENERATED_DIR}")
 
 add_dependencies(chttp_service_http_test
-  chttp_service_http_fixture_databind_codegen)
+  chttp_service_http_fixture_idl_codegen)
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
 
