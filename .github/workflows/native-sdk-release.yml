@@ -1,34 +1,9 @@
 name: CHttp native SDK release
 
 on:
-  pull_request:
-    branches: [master]
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "http_common/**"
-      - "http_client/**"
-      - "http_server/**"
-      - "service/**"
-      - "rpc_service/**"
-      - "web/**"
-      - "s3/**"
-      - "openapi/**"
-      - "vendor/**"
-      - "packaging/nuget/**"
-      - "presets/AndroidPresets.json"
-      - "vcpkg.json"
-      - ".github/workflows/native-sdk-release.yml"
   push:
     tags:
       - "v*"
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "packaging/nuget/**"
-      - "presets/AndroidPresets.json"
-      - "vcpkg.json"
-      - ".github/workflows/native-sdk-release.yml"
 
 permissions:
   contents: read
@@ -56,8 +31,11 @@ jobs:
           set -euo pipefail
           version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
           test -n "$version"
+          tag="v$version"
+          test "$GITHUB_REF_TYPE" = "tag"
+          test "$GITHUB_REF_NAME" = "$tag"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux x64 SDK
@@ -213,8 +191,16 @@ jobs:
           $ErrorActionPreference = "Stop"
           choco install nasm ninja -y --no-progress
           if ([string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) { throw "canonical VCPKG_ROOT unavailable" }
-          $toolchain = Join-Path $env:VCPKG_ROOT "scripts\buildsystems\vcpkg.cmake"
-          if (-not (Test-Path -LiteralPath $toolchain -PathType Leaf)) { throw "vcpkg toolchain unavailable: $toolchain" }
+          if ([string]::IsNullOrWhiteSpace($env:QIGAO_VCPKG_TOOLCHAIN_FILE) -or
+              -not (Test-Path -LiteralPath $env:QIGAO_VCPKG_TOOLCHAIN_FILE -PathType Leaf)) {
+            throw "canonical qigao vcpkg toolchain unavailable"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_BINARY_SOURCES) -or $env:VCPKG_BINARY_SOURCES -notmatch "nugetconfig") {
+            throw "shared vcpkg NuGet cache unavailable"
+          }
+          if ($env:VCPKG_NUGET_REPOSITORY -ne "https://github.com/qigao/vcpkg-cache") {
+            throw "unexpected vcpkg cache repository: $env:VCPKG_NUGET_REPOSITORY"
+          }
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
@@ -231,7 +217,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
-          cmake -S . -B build\native-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64"
+          cmake -S . -B build\native-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64"
           if errorlevel 1 exit /b 1
           cmake --build build\native-sdk --parallel 2
           if errorlevel 1 exit /b 1
@@ -300,7 +286,7 @@ jobs:
           cmake -S . -B build/android-native-sdk -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-android \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
