@@ -303,6 +303,9 @@ static int chttp_rpc_service_client_plan_admit(
       data_bind_rpc_method_plan_wire_method(method_plan)[0] == '\0')
     return SALTS_EINVAL;
 
+  if (function->param_count != (native->error_count == 0u ? 2u : 3u))
+    return SALTS_ENOTSUP;
+
   if (data_bind_binding_plan_error_count(binding) != native->error_count)
     return SALTS_EINVAL;
 
@@ -367,13 +370,13 @@ static int chttp_rpc_service_client_plan_admit(
         entry.data->storage_type == NULL)
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
-    if (entry.native_offset > request_bytes ||
-        bytes > request_bytes - entry.native_offset ||
+    if (entry.native_offset > native_request_bytes ||
+        bytes > native_request_bytes - entry.native_offset ||
         (entry.has_presence &&
-         (entry.presence_offset >= request_bytes ||
+         (entry.presence_offset >= native_request_bytes ||
           entry.presence_bit >= 8u)) ||
         (entry.has_null &&
-         (entry.null_offset >= request_bytes ||
+         (entry.null_offset >= native_request_bytes ||
           entry.null_bit >= 8u)))
       return SALTS_EINVAL;
 
@@ -417,13 +420,13 @@ static int chttp_rpc_service_client_plan_admit(
         entry.data->storage_type == NULL)
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
-    if (entry.native_offset > response_bytes ||
-        bytes > response_bytes - entry.native_offset ||
+    if (entry.native_offset > native_response_bytes ||
+        bytes > native_response_bytes - entry.native_offset ||
         (entry.has_presence &&
-         (entry.presence_offset >= response_bytes ||
+         (entry.presence_offset >= native_response_bytes ||
           entry.presence_bit >= 8u)) ||
         (entry.has_null &&
-         (entry.null_offset >= response_bytes ||
+         (entry.null_offset >= native_response_bytes ||
           entry.null_bit >= 8u)))
       return SALTS_EINVAL;
   }
