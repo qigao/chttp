@@ -1,6 +1,7 @@
 #include <chttp_rpc_service/service.h>
 
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 
 #include <cserde/cserde.h>
 
@@ -13,8 +14,21 @@ typedef struct chttp_rpc_service_impl chttp_rpc_service_impl;
 typedef struct chttp_rpc_service_method_record {
   chttp_rpc_service_impl *owner;
   const DataBindRpcMethodPlan *method_plan;
-  chttp_rpc_service_exact_fn invoke;
-  void *user;
+  const DataBindBindingPlan *binding;
+  const DataBindServiceNativeBinding *native_binding;
+  const DataBindNativeExecution *execution;
+
+  unsigned char *request_storage;
+  size_t request_bytes;
+  unsigned char *response_storage;
+  size_t response_bytes;
+  unsigned char *error_storage;
+  size_t error_bytes;
+
+  void *params[3];
+  size_t param_bytes[3];
+  size_t param_count;
+  DataBindBindingCallFrame frame;
 } chttp_rpc_service_method_record;
 
 struct chttp_rpc_service_impl {
@@ -22,8 +36,8 @@ struct chttp_rpc_service_impl {
   size_t method_capacity;
   size_t method_count;
 
-  unsigned char *output_scratch;
   size_t output_capacity;
+  size_t max_call_frame_bytes;
 
   unsigned char *native_workspace;
   DataBindNativeOptions native_options;
@@ -36,6 +50,7 @@ typedef struct chttp_rpc_service_provider {
 
   cserde_writer writer;
   cserde_token token;
+  mem_buffer_t *token_storage;
   int token_valid;
 
   int output_attempted;
