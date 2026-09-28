@@ -10,7 +10,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: chttp-native-sdk-${{ github.event.pull_request.number || github.ref }}
+  group: chttp-native-sdk-${{ github.ref }}
   cancel-in-progress: true
 
 env:
