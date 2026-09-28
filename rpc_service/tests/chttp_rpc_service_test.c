@@ -44,21 +44,21 @@ static const cmeta_type_desc ADD_RESPONSE_PTR_TYPE = {
 
 static const cmeta_field_desc ADD_REQUEST_LAYOUT_FIELDS[] = {
     {"left", "uint32_t", offsetof(AddRequest, left), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL},
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL},
     {"right", "uint32_t", offsetof(AddRequest, right), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL},
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL},
     {"scale", "uint32_t", offsetof(AddRequest, scale), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL}};
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL}};
 static const cmeta_struct_desc ADD_REQUEST_LAYOUT = {
     "AddRequest", sizeof(AddRequest), _Alignof(AddRequest),
     ADD_REQUEST_LAYOUT_FIELDS, 3u};
 static const cmeta_data_field_desc ADD_REQUEST_FIELDS[] = {
     {"test.chttp.rpc.AddRequest.left", "left", offsetof(AddRequest, left),
-     &salts_uint32_cmeta_data},
+     &cmeta_data_uint32},
     {"test.chttp.rpc.AddRequest.right", "right", offsetof(AddRequest, right),
-     &salts_uint32_cmeta_data},
+     &cmeta_data_uint32},
     {"test.chttp.rpc.AddRequest.scale", "scale", offsetof(AddRequest, scale),
-     &salts_uint32_cmeta_data}};
+     &cmeta_data_uint32}};
 static const cmeta_data_struct_shape ADD_REQUEST_SHAPE = {
     &ADD_REQUEST_LAYOUT, ADD_REQUEST_FIELDS, 3u};
 static const cmeta_data_desc ADD_REQUEST_DATA = {
@@ -72,13 +72,13 @@ static const cmeta_data_desc ADD_REQUEST_DATA = {
 
 static const cmeta_field_desc ADD_RESPONSE_LAYOUT_FIELDS[] = {
     {"sum", "uint32_t", offsetof(AddResponse, sum), sizeof(uint32_t),
-     _Alignof(uint32_t), &salts_uint32_cmeta_type, NULL}};
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL}};
 static const cmeta_struct_desc ADD_RESPONSE_LAYOUT = {
     "AddResponse", sizeof(AddResponse), _Alignof(AddResponse),
     ADD_RESPONSE_LAYOUT_FIELDS, 1u};
 static const cmeta_data_field_desc ADD_RESPONSE_FIELDS[] = {
     {"test.chttp.rpc.AddResponse.sum", "sum", offsetof(AddResponse, sum),
-     &salts_uint32_cmeta_data}};
+     &cmeta_data_uint32}};
 static const cmeta_data_struct_shape ADD_RESPONSE_SHAPE = {
     &ADD_RESPONSE_LAYOUT, ADD_RESPONSE_FIELDS, 1u};
 static const cmeta_data_desc ADD_RESPONSE_DATA = {
@@ -96,7 +96,7 @@ static const DataBindNativeStateBinding ADD_REQUEST_PRESENCE[] = {
 
 static const DataBindNativeTypeBinding ADD_REQUEST_NATIVE = {
     .size = sizeof(DataBindNativeTypeBinding),
-    .abi_version = DATA_BIND_BINDING_PLAN_ABI_VERSION,
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
     .idl_type_name = "AddRequest",
     .data = &ADD_REQUEST_DATA,
     .presence = ADD_REQUEST_PRESENCE,
@@ -104,58 +104,69 @@ static const DataBindNativeTypeBinding ADD_REQUEST_NATIVE = {
 
 static const DataBindNativeTypeBinding ADD_RESPONSE_NATIVE = {
     .size = sizeof(DataBindNativeTypeBinding),
-    .abi_version = DATA_BIND_BINDING_PLAN_ABI_VERSION,
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
     .idl_type_name = "AddResponse",
     .data = &ADD_RESPONSE_DATA};
 
-FunctionDeclAs(
-    value, void, &cmeta_type_void, chttp_rpc_service_test_add,
+FunctionDeclAsAbi(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    chttp_rpc_service_test_add,
     (const AddRequest *, request,
-     CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &ADD_REQUEST_PTR_TYPE),
-    (AddResponse *, response, CMETA_PARAM_OUT, &ADD_RESPONSE_PTR_TYPE));
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
 
-void chttp_rpc_service_test_add(
+int chttp_rpc_service_test_add(
     const AddRequest *request, AddResponse *response) {
-  if (request == NULL || response == NULL) return;
+  if (request == NULL || response == NULL) return -1;
+  if (request->left == 99u) return 7;
   response->sum = request->left + request->right * request->scale;
+  return 0;
 }
 
-static DataBindStatus chttp_rpc_service_test_execute(
-    void *user,
-    const DataBindBindingPlan *plan,
-    const DataBindBindingProvider *provider,
-    const DataBindNativeOptions *native_options,
-    DataBindBindingOutcome *outcome,
-    DataBindBindingPlanDiagnostic *diagnostic) {
-  AddRequest request = {0};
-  AddResponse response = {0};
-  void *params[2] = {NULL, &response};
-  const size_t param_bytes[2] = {0u, sizeof(response)};
-  DataBindBindingCallFrame frame =
-      (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT;
-  DataBindStatus status;
+static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 2u ||
+      params[0] == NULL || params[1] == NULL)
+    return false;
+  result = chttp_rpc_service_test_add(
+      (const AddRequest *)params[0], (AddResponse *)params[1]);
+  *(int *)return_storage = result;
+  return true;
+}
 
-  (void)user;
-  if (plan == NULL || provider == NULL || native_options == NULL ||
-      outcome == NULL || diagnostic == NULL)
-    return DATA_BIND_ERR_INVALID_ARG;
-  if (data_bind_binding_plan_function(plan) !=
-      FunctionMeta(chttp_rpc_service_test_add))
-    return DATA_BIND_ERR_SCHEMA;
+FunctionDeclAsAbi(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    chttp_rpc_service_test_other,
+    (const AddRequest *, request,
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
 
-  frame.request = &request;
-  frame.request_bytes = sizeof(request);
-  frame.params = params;
-  frame.param_bytes = param_bytes;
-  frame.param_count = 2u;
+int chttp_rpc_service_test_other(
+    const AddRequest *request, AddResponse *response) {
+  return chttp_rpc_service_test_add(request, response);
+}
 
-  status = data_bind_binding_plan_bind_inputs(
-      plan, provider, native_options, &frame, diagnostic);
-  if (status != DATA_BIND_OK) return status;
-
-  chttp_rpc_service_test_add(&request, &response);
-  return data_bind_binding_plan_write_outcome(
-      plan, provider, &frame, 0, outcome, diagnostic);
+static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_other_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 2u ||
+      params[0] == NULL || params[1] == NULL)
+    return false;
+  result = chttp_rpc_service_test_other(
+      (const AddRequest *)params[0], (AddResponse *)params[1]);
+  *(int *)return_storage = result;
+  return true;
 }
 
 static native_io_backend_kind chttp_rpc_service_test_backend(void) {
@@ -295,6 +306,14 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     chttp_rpc_service_config service_config =
         CHTTP_RPC_SERVICE_CONFIG_INIT;
     chttp_rpc_service_mount mount = CHTTP_RPC_SERVICE_MOUNT_INIT;
+    chttp_rpc_service_mount mismatch = CHTTP_RPC_SERVICE_MOUNT_INIT;
+    chttp_rpc_service_mount invalid = CHTTP_RPC_SERVICE_MOUNT_INIT;
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindNativeExecution other_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindNativeExecution invalid_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     crpc_server server = {0};
     crpc_server_config server_config =
         chttp_rpc_service_test_server_config();
@@ -309,6 +328,15 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     cserde_token token = {0};
     char uri[64];
     uint16_t port = 0u;
+
+    execution.function = FunctionMeta(chttp_rpc_service_test_add);
+    execution.abi = FunctionAbi(chttp_rpc_service_test_add);
+    execution.invoke = chttp_rpc_service_test_invoke;
+    other_execution.function = FunctionMeta(chttp_rpc_service_test_other);
+    other_execution.abi = FunctionAbi(chttp_rpc_service_test_other);
+    other_execution.invoke = chttp_rpc_service_test_other_invoke;
+    invalid_execution = execution;
+    invalid_execution.invoke = NULL;
 
     projection = data_bind_rpc_projection_artifact_find(
         &databind_chttp_rpc_service_rpc_projection, "Calc", "Add");
@@ -330,6 +358,7 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
 
     service_config.method_capacity = 1u;
     service_config.max_output_value_bytes = 64u;
+    service_config.max_call_frame_bytes = 512u;
     service_config.native_workspace_bytes = 4096u;
     service_config.native_max_depth = 16u;
     service_config.native_max_items = 64u;
@@ -338,9 +367,25 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         chttp_rpc_service_init(&service, &service_config), SALTS_OK);
 
     check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
+
+    mismatch.target = "/rpc";
+    mismatch.method_plan = method_plan;
+    mismatch.native_binding = &native;
+    mismatch.execution = &other_execution;
+    check_equal(
+        chttp_rpc_service_mount(&service, &server, &mismatch), SALTS_EINVAL);
+
+    invalid.target = "/rpc";
+    invalid.method_plan = method_plan;
+    invalid.native_binding = &native;
+    invalid.execution = &invalid_execution;
+    check_equal(
+        chttp_rpc_service_mount(&service, &server, &invalid), SALTS_EINVAL);
+
     mount.target = "/rpc";
     mount.method_plan = method_plan;
-    mount.invoke = chttp_rpc_service_test_execute;
+    mount.native_binding = &native;
+    mount.execution = &execution;
     check_equal(
         chttp_rpc_service_mount(&service, &server, &mount), SALTS_OK);
 
@@ -400,6 +445,23 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
     check_equal(response.kind, CRPC_RESPONSE_REMOTE_ERROR);
     check_equal(response.value.remote_error.code, (int64_t)-32602);
+    crpc_response_destroy(&response);
+
+    params.count = 2u;
+    params.invalid_first = 0;
+    params.values[0] = 99u;
+    params.values[1] = 1u;
+    options.request_id = UINT64_C(5);
+    response = (crpc_response){0};
+    check_equal(
+        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
+    check_equal(response.kind, CRPC_RESPONSE_REMOTE_ERROR);
+    check_equal(response.value.remote_error.code, (int64_t)-32000);
+    check_not_null(response.value.remote_error.data);
+    check_equal(
+        cserde_reader_next(response.value.remote_error.data, &token), CSERDE_OK);
+    check_equal(token.kind, CSERDE_SINT);
+    check_equal(token.value.sint, INT64_C(7));
     crpc_response_destroy(&response);
 
     check_equal(
