@@ -20,7 +20,6 @@ on:
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
   push:
-    branches: [master]
     tags:
       - "v*"
     paths:
@@ -30,7 +29,6 @@ on:
       - "presets/AndroidPresets.json"
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,8 +39,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SALTS_SDK_VERSION: "1.8.2"
-  SALTS_UTILS_SDK_VERSION: "4.1.2"
+  SALTS_SDK_VERSION: "1.8.3"
+  SALTS_UTILS_SDK_VERSION: "4.1.3"
 
 jobs:
   metadata:
@@ -81,7 +79,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
           test -n "${VCPKG_ROOT:-}"
-          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
       - name: Restore versioned native SDK graph
         shell: bash
@@ -95,9 +99,10 @@ jobs:
           prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
           cmake -S . -B build/native-sdk -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build build/native-sdk --parallel 2
@@ -138,7 +143,13 @@ jobs:
           set -euo pipefail
           brew install nasm ninja
           test -n "${VCPKG_ROOT:-}"
-          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
           case "$RUNNER_ARCH" in
             X64) rid=macos-x64; triplet=x64-osx ;;
             ARM64) rid=macos-arm64; triplet=arm64-osx ;;
@@ -159,9 +170,10 @@ jobs:
           prefix="$GITHUB_WORKSPACE/stage/sdk/${{ steps.env.outputs.rid }}"
           cmake -S . -B build/native-sdk -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_TARGET_TRIPLET="${{ steps.env.outputs.triplet }}" \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build build/native-sdk --parallel 2
@@ -266,7 +278,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
           test -n "${VCPKG_ROOT:-}"
-          test -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
           test -n "${ANDROID_NDK_HOME:-}"
 
       - name: Restore versioned target SDK graph
@@ -286,6 +304,7 @@ jobs:
             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-android \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared \
             -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
             -DCMAKE_INSTALL_PREFIX="$prefix"
