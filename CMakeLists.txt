@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 project(
   Chttp
-  VERSION 1.1.1
+  VERSION 1.1.2
   LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
