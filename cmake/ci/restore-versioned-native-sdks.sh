@@ -31,10 +31,13 @@ dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cac
 sdk_root() {
   local package="$1"
   local roots=()
-  mapfile -t roots < <(
+  roots=()
+while IFS= read -r root; do
+  roots+=("$root")
+done < <(
     find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
       -path "*/sdk/$rid" -print
-  )
+)
   if [ "${#roots[@]}" -ne 1 ]; then
     printf 'expected exactly one restored %s SDK for %s, found %s\n' \
       "$package" "$rid" "${#roots[@]}" >&2
