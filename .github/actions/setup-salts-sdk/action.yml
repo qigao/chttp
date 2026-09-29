@@ -1,5 +1,5 @@
-name: Set up versioned Salts SDKs
-description: Restore exact Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
+name: Set up Salts SDKs
+description: Restore the current Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
 runs:
   using: composite
   steps:
@@ -27,12 +27,10 @@ runs:
         esac
         test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
-    - name: Restore versioned Salts SDK graph
+    - name: Restore Salts SDK graph
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        SALTS_VERSION: '1.8.3'
-        SALTS_UTILS_VERSION: '4.1.4'
       run: |
         set -euo pipefail
         packages="$RUNNER_TEMP/qigao-native-sdk"
@@ -54,16 +52,34 @@ runs:
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
           <ItemGroup>
-            <PackageReference Include="Salts.Native" Version="[$SALTS_VERSION]" />
-            <PackageReference Include="SaltsUtils.Native" Version="[$SALTS_UTILS_VERSION]" />
+            <PackageReference Include="Salts.Native" Version="*" />
+            <PackageReference Include="SaltsUtils.Native" Version="*" />
           </ItemGroup>
         </Project>
         EOF
 
         dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
 
-        salts_root="$packages/salts.native/$SALTS_VERSION/sdk/linux-x64"
-        salts_utils_root="$packages/saltsutils.native/$SALTS_UTILS_VERSION/sdk/linux-x64"
+        sdk_root() {
+          local package="$1"
+          local rid="$2"
+          local roots=()
+          local root
+          while IFS= read -r root; do
+            roots+=("$root")
+          done < <(
+            find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
+              -path "*/sdk/$rid" -print
+          )
+          if [ "${#roots[@]}" -ne 1 ]; then
+            printf 'expected exactly one restored %s SDK for %s, found %s\n' \
+              "$package" "$rid" "${#roots[@]}" >&2
+            return 1
+          fi
+          printf '%s' "${roots[0]}"
+        }
+        salts_root="$(sdk_root salts.native linux-x64)"
+        salts_utils_root="$(sdk_root saltsutils.native linux-x64)"
         test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
         test -f "$salts_root/include/cmeta/function.h"
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
@@ -73,8 +89,6 @@ runs:
         grep -q "DataBindNativeExecution" "$salts_utils_root/include/data_bind_native_binding.h"
 
         {
-          echo "SALTS_VERSION=$SALTS_VERSION"
-          echo "SALTS_UTILS_VERSION=$SALTS_UTILS_VERSION"
           echo "SALTS_ROOT=$salts_root"
           echo "SALTS_UTILS_ROOT=$salts_utils_root"
           echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib"
@@ -84,8 +98,6 @@ runs:
           echo '## Dependency provenance'
           echo "CHttp checked-out head: $(git rev-parse HEAD)"
           echo "Workflow event SHA: $GITHUB_SHA"
-          echo "Salts.Native: $SALTS_VERSION"
-          echo "SaltsUtils.Native: $SALTS_UTILS_VERSION"
           echo "vcpkg: $(git -C "$VCPKG_ROOT" rev-parse HEAD)"
         } >> "$GITHUB_STEP_SUMMARY"
 

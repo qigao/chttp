@@ -1,8 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$Rid)
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw "GITHUB_TOKEN is required" }
-$saltsVersion = if ($env:SALTS_SDK_VERSION) { $env:SALTS_SDK_VERSION } else { "1.8.3" }
-$utilsVersion = if ($env:SALTS_UTILS_SDK_VERSION) { $env:SALTS_UTILS_SDK_VERSION } else { "4.1.4" }
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
 $config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
 $project = Join-Path $env:RUNNER_TEMP "qigao-chttp-sdk-restore.csproj"
@@ -16,15 +14,28 @@ if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages" }
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[$saltsVersion]" />
-    <PackageReference Include="SaltsUtils.Native" Version="[$utilsVersion]" />
+    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="SaltsUtils.Native" Version="*" />
   </ItemGroup>
 </Project>
 "@ | Set-Content -LiteralPath $project
 dotnet restore $project --packages $packages --configfile $config --no-cache
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
-$saltsRoot = Join-Path $packages "salts.native\$saltsVersion\sdk\$Rid"
-$utilsRoot = Join-Path $packages "saltsutils.native\$utilsVersion\sdk\$Rid"
+function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
+  $packageRoot = Join-Path $packages $packageName
+  $roots = @(
+    Get-ChildItem -LiteralPath $packageRoot -Directory |
+      ForEach-Object { Join-Path $_.FullName "sdk\$rid" } |
+      Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+  )
+  if ($roots.Count -ne 1) {
+    throw "expected exactly one restored $packageName SDK for $rid, found $($roots.Count)"
+  }
+  return $roots[0]
+}
+
+$saltsRoot = Get-RestoredSdkRoot "salts.native" $Rid
+$utilsRoot = Get-RestoredSdkRoot "saltsutils.native" $Rid
 foreach ($p in @(
   (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
   (Join-Path $saltsRoot "include\cmeta\function.h"),

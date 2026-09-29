@@ -6,8 +6,6 @@ set -euo pipefail
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
 
 rid="${1:?target RID is required}"
-salts_version="${SALTS_SDK_VERSION:-1.8.3}"
-utils_version="${SALTS_UTILS_SDK_VERSION:-4.1.4}"
 packages="${QIGAO_NUGET_PACKAGES:-$RUNNER_TEMP/qigao-nuget}"
 config="$RUNNER_TEMP/qigao-nuget.config"
 project="$RUNNER_TEMP/qigao-chttp-sdk-restore.csproj"
@@ -23,15 +21,33 @@ cat > "$project" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[$salts_version]" />
-    <PackageReference Include="SaltsUtils.Native" Version="[$utils_version]" />
+    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="SaltsUtils.Native" Version="*" />
   </ItemGroup>
 </Project>
 EOF
 dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
 
-salts_root="$packages/salts.native/$salts_version/sdk/$rid"
-utils_root="$packages/saltsutils.native/$utils_version/sdk/$rid"
+sdk_root() {
+  local package="$1"
+  local roots=()
+  roots=()
+while IFS= read -r root; do
+  roots+=("$root")
+done < <(
+    find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
+      -path "*/sdk/$rid" -print
+)
+  if [ "${#roots[@]}" -ne 1 ]; then
+    printf 'expected exactly one restored %s SDK for %s, found %s\n' \
+      "$package" "$rid" "${#roots[@]}" >&2
+    return 1
+  fi
+  printf '%s' "${roots[0]}"
+}
+
+salts_root="$(sdk_root salts.native)"
+utils_root="$(sdk_root saltsutils.native)"
 test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
 test -f "$salts_root/include/cmeta/function.h"
 test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
