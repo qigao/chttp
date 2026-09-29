@@ -42,14 +42,9 @@ sdk_root() {
   fi
   printf '%s' "${roots[0]}"
 }
-sdk_version() {
-  basename "$(dirname "$(dirname "$1")")"
-}
 
 salts_root="$(sdk_root salts.native)"
 utils_root="$(sdk_root saltsutils.native)"
-salts_version="$(sdk_version "$salts_root")"
-utils_version="$(sdk_version "$utils_root")"
 test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
 test -f "$salts_root/include/cmeta/function.h"
 test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
@@ -58,6 +53,4 @@ test -f "$utils_root/include/data_bind_native_binding.h"
 grep -q "DataBindNativeExecution" "$utils_root/include/data_bind_native_binding.h"
 printf "SALTS_ROOT=%s\n" "$salts_root" >> "$GITHUB_ENV"
 printf "SALTS_UTILS_ROOT=%s\n" "$utils_root" >> "$GITHUB_ENV"
-printf "SALTS_SDK_VERSION=%s\n" "$salts_version" >> "$GITHUB_ENV"
-printf "SALTS_UTILS_SDK_VERSION=%s\n" "$utils_version" >> "$GITHUB_ENV"
 printf "QIGAO_NUGET_PACKAGES=%s\n" "$packages" >> "$GITHUB_ENV"
