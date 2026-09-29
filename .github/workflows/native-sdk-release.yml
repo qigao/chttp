@@ -1,6 +1,13 @@
 name: CHttp native SDK release
 
 on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/ChttpConfig.cmake.in"
+      - "packaging/nuget/**"
+      - "vcpkg.json"
+      - ".github/workflows/native-sdk-release.yml"
   push:
     tags:
       - "v*"
@@ -32,14 +39,17 @@ jobs:
           version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
           test -n "$version"
           tag="v$version"
-          test "$GITHUB_REF_TYPE" = "tag"
-          test "$GITHUB_REF_NAME" = "$tag"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            test "$GITHUB_REF_TYPE" = "tag"
+            test "$GITHUB_REF_NAME" = "$tag"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux x64 SDK
     needs: metadata
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +115,7 @@ jobs:
   macos:
     name: macOS SDK
     needs: metadata
+    if: github.event_name == 'push'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -263,6 +274,7 @@ jobs:
           cmake --build (Join-Path $probe "build")
           if ($LASTEXITCODE -ne 0) { throw "installed-package build failed" }
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: chttp-sdk-windows-x64
           path: stage/sdk
@@ -272,6 +284,7 @@ jobs:
   android:
     name: Android arm64-v8a SDK
     needs: metadata
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
