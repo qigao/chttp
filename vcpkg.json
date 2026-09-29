@@ -1,6 +1,6 @@
 {
   "name": "http-services",
-  "version-semver": "1.1.5",
+  "version-semver": "1.1.6",
   "dependencies": [
     "llhttp",
     "boringssl",
