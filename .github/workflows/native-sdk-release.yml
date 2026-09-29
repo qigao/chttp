@@ -238,6 +238,30 @@ jobs:
             "arch=x64"
             "profile=release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "chttp-sdk-manifest.txt")
+
+      - name: Verify Windows installed-package consumer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $probe = Join-Path $env:RUNNER_TEMP "chttp-installed-probe"
+          New-Item -ItemType Directory -Force -Path $probe | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.25)
+          project(chttp_installed_probe NONE)
+          find_package(Chttp 1.1.5 EXACT CONFIG REQUIRED
+            PATHS "$ENV{CHTTP_ROOT}"
+            NO_DEFAULT_PATH)
+          if(NOT TARGET CHttp::Client OR NOT TARGET CHttp::Server)
+            message(FATAL_ERROR "installed CHttp package is missing Client/Server targets")
+          endif()
+          add_custom_target(chttp_installed_probe ALL)
+          '@ | Set-Content -LiteralPath (Join-Path $probe "CMakeLists.txt")
+          $env:CHTTP_ROOT = $prefix
+          cmake -S $probe -B (Join-Path $probe "build") -G Ninja
+          if ($LASTEXITCODE -ne 0) { throw "installed-package configure failed" }
+          cmake --build (Join-Path $probe "build")
+          if ($LASTEXITCODE -ne 0) { throw "installed-package build failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: chttp-sdk-windows-x64
