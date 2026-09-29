@@ -4,22 +4,22 @@ include(CMakeFindDependencyMacro)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   set(Chttp_FOUND FALSE)
-  set(Chttp_NOT_FOUND_MESSAGE "SALTS_ROOT must name the installed Salts 1.8.3 SDK")
+  set(Chttp_NOT_FOUND_MESSAGE "SALTS_ROOT must name the installed Salts 1.8.4 SDK")
   return()
 endif()
 if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
   set(Chttp_FOUND FALSE)
-  set(Chttp_NOT_FOUND_MESSAGE "SALTS_UTILS_ROOT must name the installed SaltsUtils 4.1.4 SDK")
+  set(Chttp_NOT_FOUND_MESSAGE "SALTS_UTILS_ROOT must name the installed SaltsUtils 4.1.6 SDK")
   return()
 endif()
 
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" _CHTTP_SALTS_ROOT)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" _CHTTP_SALTS_UTILS_ROOT)
 
-find_dependency(Salts 1.8.3 EXACT CONFIG REQUIRED
+find_dependency(Salts 1.8.4 EXACT CONFIG REQUIRED
   PATHS "${_CHTTP_SALTS_ROOT}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_dependency(SaltsUtils 4.1.4 EXACT CONFIG REQUIRED
+find_dependency(SaltsUtils 4.1.6 EXACT CONFIG REQUIRED
   PATHS "${_CHTTP_SALTS_UTILS_ROOT}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
