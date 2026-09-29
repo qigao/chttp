@@ -2,7 +2,7 @@
 
 Versioned prebuilt Release SDKs for qigao/chttp.
 
-`CHttp.Native` declares its native SDK dependencies without pinning exact versions:
+`CHttp.Native` contains the prebuilt CHttp SDK only. Consumers restore these SDKs explicitly:
 
 - `Salts.Native`
 - `SaltsUtils.Native`
