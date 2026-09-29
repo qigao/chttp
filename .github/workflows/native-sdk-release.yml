@@ -84,7 +84,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-versioned-native-sdks.sh linux-x64
+        run: bash cmake/ci/restore-native-sdks.sh linux-x64
       - name: Configure, build and install
         shell: bash
         run: |
@@ -154,7 +154,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-versioned-native-sdks.sh "${{ steps.env.outputs.rid }}"
+        run: bash cmake/ci/restore-native-sdks.sh "${{ steps.env.outputs.rid }}"
       - name: Configure, build and install
         shell: bash
         run: |
@@ -222,7 +222,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid windows-x64
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
       - name: Configure, build and install
         shell: cmd
         run: |
@@ -314,7 +314,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-versioned-native-sdks.sh android-arm64-v8a
+        run: bash cmake/ci/restore-native-sdks.sh android-arm64-v8a
       - name: Configure, build and install
         shell: bash
         run: |
