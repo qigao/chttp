@@ -1,6 +1,6 @@
 # CHttp.Native
 
-Versioned prebuilt Release SDKs for qigao/chttp.
+Prebuilt Release SDKs for qigao/chttp.
 
 `CHttp.Native` contains the prebuilt CHttp SDK only. Consumers restore these SDKs explicitly:
 

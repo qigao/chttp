@@ -80,7 +80,7 @@ jobs:
           esac
           test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
-      - name: Restore versioned native SDK graph
+      - name: Restore native SDK graph
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -150,7 +150,7 @@ jobs:
           echo "rid=$rid" >> "$GITHUB_OUTPUT"
           echo "triplet=$triplet" >> "$GITHUB_OUTPUT"
 
-      - name: Restore versioned native SDK graph
+      - name: Restore native SDK graph
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -218,7 +218,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
 
-      - name: Restore versioned native SDK graph
+      - name: Restore native SDK graph
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -310,7 +310,7 @@ jobs:
           test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
           test -n "${ANDROID_NDK_HOME:-}"
 
-      - name: Restore versioned target SDK graph
+      - name: Restore target SDK graph
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

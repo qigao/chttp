@@ -30,7 +30,7 @@ jobs:
           ref: ${{ env.CHTTP_HEAD_SHA }}
           fetch-depth: 2
           persist-credentials: false
-      - name: Set up versioned Salts SDKs
+      - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
       - name: Configure exact Chttp head
         shell: bash
