@@ -3,8 +3,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>true</IsPackable>
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageId>CHttp.Native</PackageId>
-    <PackageVersion Condition="'$(PackageVersion)' == ''">1.1.7</PackageVersion>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">1.1.8</PackageVersion>
     <Authors>qigao</Authors>
     <Description>Prebuilt CHttp C/C++ SDK install trees for native consumers.</Description>
     <PackageTags>chttp;http;native;c;cpp;cmake;android</PackageTags>

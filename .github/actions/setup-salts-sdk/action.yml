@@ -95,13 +95,6 @@ runs:
           echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib"
         } >> "$GITHUB_ENV"
 
-        {
-          echo '## Dependency provenance'
-          echo "CHttp checked-out head: $(git rev-parse HEAD)"
-          echo "Workflow event SHA: $GITHUB_SHA"
-          echo "vcpkg: $(git -C "$VCPKG_ROOT" rev-parse HEAD)"
-        } >> "$GITHUB_STEP_SUMMARY"
-
     - name: Prepare CHttp toolchain
       shell: bash
       run: |

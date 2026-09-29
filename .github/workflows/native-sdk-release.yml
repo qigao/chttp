@@ -397,6 +397,12 @@ jobs:
           dotnet pack packaging/nuget/CHttp.Native.csproj --no-restore --configuration Release --output dist -p:PackageVersion=${{ needs.metadata.outputs.version }} -p:PackageRoot="$GITHUB_WORKSPACE/package" -p:RestorePackagesPath="$RUNNER_TEMP/pack-nuget"
           nupkg="dist/CHttp.Native.${{ needs.metadata.outputs.version }}.nupkg"
           test -f "$nupkg"
+          unzip -p "$nupkg" '*.nuspec' > "$RUNNER_TEMP/chttp.nuspec"
+          if grep -q '<dependencies' "$RUNNER_TEMP/chttp.nuspec"; then
+            echo "CHttp.Native must not publish dependency metadata" >&2
+            cat "$RUNNER_TEMP/chttp.nuspec" >&2
+            exit 1
+          fi
           unzip -Z1 "$nupkg" | sort | tee "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
