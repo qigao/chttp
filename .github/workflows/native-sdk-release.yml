@@ -1,4 +1,5 @@
 name: CHttp native SDK release
+# CHttp 1.1.6 bootstrap
 
 on:
   pull_request:
