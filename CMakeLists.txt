@@ -23,16 +23,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Sanitizers)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
-  message(FATAL_ERROR "SALTS_ROOT must name the installed Salts 1.8.4 SDK")
+  message(FATAL_ERROR "SALTS_ROOT must name the installed Salts SDK")
 endif()
 if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
-  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the installed SaltsUtils 4.1.6 SDK")
+  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the installed SaltsUtils SDK")
 endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
 file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
-find_package(Salts 1.8.4 EXACT CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
+find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsUtils 4.1.6 EXACT CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
+find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
