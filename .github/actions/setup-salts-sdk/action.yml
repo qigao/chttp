@@ -1,5 +1,5 @@
-name: Set up versioned Salts SDKs
-description: Restore exact Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
+name: Set up Salts SDKs
+description: Restore the current Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
 runs:
   using: composite
   steps:
@@ -27,12 +27,10 @@ runs:
         esac
         test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
-    - name: Restore versioned Salts SDK graph
+    - name: Restore Salts SDK graph
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        SALTS_VERSION: '1.8.4'
-        SALTS_UTILS_VERSION: '4.1.6'
       run: |
         set -euo pipefail
         packages="$RUNNER_TEMP/qigao-native-sdk"
@@ -54,16 +52,36 @@ runs:
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
           <ItemGroup>
-            <PackageReference Include="Salts.Native" Version="[$SALTS_VERSION]" />
-            <PackageReference Include="SaltsUtils.Native" Version="[$SALTS_UTILS_VERSION]" />
+            <PackageReference Include="Salts.Native" Version="*" />
+            <PackageReference Include="SaltsUtils.Native" Version="*" />
           </ItemGroup>
         </Project>
         EOF
 
         dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
 
-        salts_root="$packages/salts.native/$SALTS_VERSION/sdk/linux-x64"
-        salts_utils_root="$packages/saltsutils.native/$SALTS_UTILS_VERSION/sdk/linux-x64"
+        sdk_root() {
+          local package="$1"
+          local rid="$2"
+          local roots=()
+          mapfile -t roots < <(
+            find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
+              -path "*/sdk/$rid" -print
+          )
+          if [ "${#roots[@]}" -ne 1 ]; then
+            printf 'expected exactly one restored %s SDK for %s, found %s\n' \
+              "$package" "$rid" "${#roots[@]}" >&2
+            return 1
+          fi
+          printf '%s' "${roots[0]}"
+        }
+        sdk_version() {
+          basename "$(dirname "$(dirname "$1")")"
+        }
+        salts_root="$(sdk_root salts.native linux-x64)"
+        salts_utils_root="$(sdk_root saltsutils.native linux-x64)"
+        SALTS_VERSION="$(sdk_version "$salts_root")"
+        SALTS_UTILS_VERSION="$(sdk_version "$salts_utils_root")"
         test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
         test -f "$salts_root/include/cmeta/function.h"
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
