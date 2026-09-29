@@ -104,8 +104,6 @@ jobs:
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
           os=linux
           arch=x64
           profile=release
@@ -176,8 +174,6 @@ jobs:
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
           os=macos
           arch=$RUNNER_ARCH
           profile=release
@@ -248,8 +244,6 @@ jobs:
           @(
             "version=${{ needs.metadata.outputs.version }}"
             "commit=$env:GITHUB_SHA"
-            "salts=$env:SALTS_SDK_VERSION"
-            "salts_utils=$env:SALTS_UTILS_SDK_VERSION"
             "os=windows"
             "arch=x64"
             "profile=release"
@@ -343,8 +337,6 @@ jobs:
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=$GITHUB_SHA
-          salts=$SALTS_SDK_VERSION
-          salts_utils=$SALTS_UTILS_SDK_VERSION
           os=android
           abi=arm64-v8a
           api=android-26
