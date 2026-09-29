@@ -7,7 +7,7 @@ set -euo pipefail
 
 rid="${1:?target RID is required}"
 packages="${QIGAO_NUGET_PACKAGES:-$RUNNER_TEMP/qigao-nuget}"
-config="$RUNNER_TEMP/qigao-nuget.config"
+config="$RUNNER_TEMP/NuGet.Config"
 project="$RUNNER_TEMP/qigao-chttp-sdk-restore.csproj"
 
 cat > "$config" <<EOF
@@ -17,15 +17,16 @@ EOF
 dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
   --name github --username qigao --password "$GITHUB_TOKEN" \
   --store-password-in-clear-text --configfile "$config"
-cat > "$project" <<EOF
+cat > "$project" <<'EOF'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" />
-  </ItemGroup>
 </Project>
 EOF
+(
+  cd "$RUNNER_TEMP"
+  dotnet add "$project" package Salts.Native
+  dotnet add "$project" package SaltsUtils.Native
+)
 dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
 
 sdk_root() {

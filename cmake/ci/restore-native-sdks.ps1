@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$Rid)
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw "GITHUB_TOKEN is required" }
 $packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
-$config = Join-Path $env:RUNNER_TEMP "qigao-nuget.config"
+$config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
 $project = Join-Path $env:RUNNER_TEMP "qigao-chttp-sdk-restore.csproj"
 @'
 <?xml version="1.0" encoding="utf-8"?>
@@ -10,15 +10,21 @@ $project = Join-Path $env:RUNNER_TEMP "qigao-chttp-sdk-restore.csproj"
 '@ | Set-Content -LiteralPath $config
 dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
 if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages" }
-@"
+@'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" />
-  </ItemGroup>
 </Project>
-"@ | Set-Content -LiteralPath $project
+'@ | Set-Content -LiteralPath $project
+Push-Location $env:RUNNER_TEMP
+try {
+  dotnet add $project package Salts.Native
+  if ($LASTEXITCODE -ne 0) { throw "failed to resolve Salts.Native" }
+  dotnet add $project package SaltsUtils.Native
+  if ($LASTEXITCODE -ne 0) { throw "failed to resolve SaltsUtils.Native" }
+}
+finally {
+  Pop-Location
+}
 dotnet restore $project --packages $packages --configfile $config --no-cache
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
 function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {

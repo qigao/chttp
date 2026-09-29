@@ -9,12 +9,18 @@ on:
       - "packaging/nuget/**"
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
+      - ".github/actions/setup-salts-sdk/**"
   push:
     branches: [master]
     tags:
       - "v*"
     paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "packaging/nuget/**"
+      - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
+      - ".github/actions/setup-salts-sdk/**"
 
 permissions:
   contents: read
@@ -26,9 +32,6 @@ concurrency:
 
 jobs:
   metadata:
-    if: >-
-      github.ref_type == 'tag' ||
-      (github.ref_name == 'master' && startsWith(github.event.head_commit.message, 'release: bootstrap CHttp '))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -44,9 +47,10 @@ jobs:
           tag="v$version"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            :
           else
             test "$GITHUB_REF_NAME" = "master"
-            test "${{ startsWith(github.event.head_commit.message, 'release: bootstrap CHttp ') }}" = "true"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -54,7 +58,6 @@ jobs:
   linux:
     name: Linux x64 SDK
     needs: metadata
-    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +87,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-versioned-native-sdks.sh linux-x64
+        run: bash cmake/ci/restore-native-sdks.sh linux-x64
       - name: Configure, build and install
         shell: bash
         run: |
@@ -118,7 +121,6 @@ jobs:
   macos:
     name: macOS SDK
     needs: metadata
-    if: github.event_name == 'push'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -154,7 +156,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-versioned-native-sdks.sh "${{ steps.env.outputs.rid }}"
+        run: bash cmake/ci/restore-native-sdks.sh "${{ steps.env.outputs.rid }}"
       - name: Configure, build and install
         shell: bash
         run: |
@@ -222,7 +224,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-versioned-native-sdks.ps1 -Rid windows-x64
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
       - name: Configure, build and install
         shell: cmd
         run: |
@@ -274,7 +276,6 @@ jobs:
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { throw "installed-package configure/build failed" }
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'push'
         with:
           name: chttp-sdk-windows-x64
           path: stage/sdk
@@ -284,7 +285,6 @@ jobs:
   android:
     name: Android arm64-v8a SDK
     needs: metadata
-    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -314,7 +314,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-versioned-native-sdks.sh android-arm64-v8a
+        run: bash cmake/ci/restore-native-sdks.sh android-arm64-v8a
       - name: Configure, build and install
         shell: bash
         run: |
