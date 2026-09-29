@@ -70,7 +70,7 @@
             "name": "android-dependencies-debug",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}"
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
@@ -81,7 +81,7 @@
             "name": "android-dependencies-release",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}"
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
@@ -92,7 +92,7 @@
             "name": "win-dev-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
@@ -109,7 +109,7 @@
         {
             "name": "win-release-user",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {
@@ -127,7 +127,7 @@
             "name": "linux-dev-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug"
             },
             "environment": {
@@ -145,7 +145,7 @@
         {
             "name": "linux-release-user",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
             },
             "environment": {
@@ -164,7 +164,7 @@
             "name": "linux-sdk-package",
             "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
                 "ENABLE_TESTS": "OFF",
@@ -265,7 +265,7 @@
             "name": "win-clang-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
@@ -284,7 +284,7 @@
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
                 "ENABLE_TESTS": "ON",
-                "CMAKE_INSTALL_PREFIX": "$env{HTTP_SERVICES_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {

@@ -1,6 +1,13 @@
 name: CHttp native SDK release
 
 on:
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/ChttpConfig.cmake.in"
+      - "packaging/nuget/**"
+      - "vcpkg.json"
+      - ".github/workflows/native-sdk-release.yml"
   push:
     tags:
       - "v*"
@@ -32,14 +39,17 @@ jobs:
           version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
           test -n "$version"
           tag="v$version"
-          test "$GITHUB_REF_TYPE" = "tag"
-          test "$GITHUB_REF_NAME" = "$tag"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            test "$GITHUB_REF_TYPE" = "tag"
+            test "$GITHUB_REF_NAME" = "$tag"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux x64 SDK
     needs: metadata
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +115,7 @@ jobs:
   macos:
     name: macOS SDK
     needs: metadata
+    if: github.event_name == 'push'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -238,7 +249,33 @@ jobs:
             "arch=x64"
             "profile=release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "chttp-sdk-manifest.txt")
+
+      - name: Verify Windows installed-package consumer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $probe = Join-Path $env:RUNNER_TEMP "chttp-installed-probe"
+          New-Item -ItemType Directory -Force -Path $probe | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.25)
+          project(chttp_installed_probe LANGUAGES C)
+          find_package(Chttp 1.1.5 EXACT CONFIG REQUIRED
+            PATHS "$ENV{CHTTP_ROOT}"
+            NO_DEFAULT_PATH)
+          if(NOT TARGET CHttp::Client OR NOT TARGET CHttp::Server)
+            message(FATAL_ERROR "installed CHttp package is missing Client/Server targets")
+          endif()
+          add_custom_target(chttp_installed_probe ALL)
+          '@ | Set-Content -LiteralPath (Join-Path $probe "CMakeLists.txt")
+          $env:CHTTP_ROOT = $prefix
+          $build = Join-Path $probe "build"
+          $vsdev = Join-Path $env:VSINSTALL "Common7\Tools\VsDevCmd.bat"
+          $command = "call `"$vsdev`" -arch=x64 -host_arch=x64 >nul && cmake -S `"$probe`" -B `"$build`" -G Ninja && cmake --build `"$build`""
+          cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { throw "installed-package configure/build failed" }
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
         with:
           name: chttp-sdk-windows-x64
           path: stage/sdk
@@ -248,6 +285,7 @@ jobs:
   android:
     name: Android arm64-v8a SDK
     needs: metadata
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
