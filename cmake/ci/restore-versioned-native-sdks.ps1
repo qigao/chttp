@@ -36,8 +36,6 @@ function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
 
 $saltsRoot = Get-RestoredSdkRoot "salts.native" $Rid
 $utilsRoot = Get-RestoredSdkRoot "saltsutils.native" $Rid
-$saltsVersion = Split-Path (Split-Path $saltsRoot -Parent) -Parent | Split-Path -Leaf
-$utilsVersion = Split-Path (Split-Path $utilsRoot -Parent) -Parent | Split-Path -Leaf
 foreach ($p in @(
   (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
   (Join-Path $saltsRoot "include\cmeta\function.h"),
@@ -53,6 +51,4 @@ if ((Get-Content -LiteralPath $nativeBinding -Raw) -notmatch "DataBindNativeExec
 }
 "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
 "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
-"SALTS_SDK_VERSION=$saltsVersion" >> $env:GITHUB_ENV
-"SALTS_UTILS_SDK_VERSION=$utilsVersion" >> $env:GITHUB_ENV
 "QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
