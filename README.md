@@ -130,13 +130,13 @@ cmake --build --preset install-win-release-user
 
 Linux uses the corresponding `linux-*` presets.
 
-The current presets retain the historical environment variable `HTTP_SERVICES_ROOT` as the install-prefix variable. It names the CHTTP package root; it should not be interpreted as a separate runtime or repository boundary.
+The current presets retain the historical environment variable `CHTTP_ROOT` as the install-prefix variable. It names the CHTTP package root; it should not be interpreted as a separate runtime or repository boundary.
 
 ## Using CHTTP from CMake
 
 ```cmake
 find_package(Chttp CONFIG REQUIRED
-  PATHS "$ENV{HTTP_SERVICES_ROOT}"
+  PATHS "$ENV{CHTTP_ROOT}"
   NO_DEFAULT_PATH)
 
 target_link_libraries(my_app PRIVATE CHttp::Client)
