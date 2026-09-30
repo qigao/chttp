@@ -1,4 +1,5 @@
 #include "chttp_h2_proto.h"
+#include "chttp_cnet_retained.h"
 #include "chttp_tls_test_material.h"
 #include "tinytest.h"
 
@@ -534,12 +535,18 @@ static void chttp_h2_test_serve_after_timeout(void *user) {
 
 static int chttp_h2_tls_server_flush(chttp_h2_tls_server *server) {
   const uint8_t *wire = NULL;
+  void *owned = NULL;
   ptrdiff_t wire_size;
   int status;
   if (server->send_active || !chttp_h2_proto_want_write(server->protocol)) return SALTS_OK;
   wire_size = chttp_h2_proto_send(server->protocol, &wire);
   if (wire_size <= 0) return SALTS_EPROTO;
-  status = cnet_send(&server->network, server->connection, wire, (size_t)wire_size);
+  owned = malloc((size_t)wire_size);
+  if (owned == NULL) return SALTS_ENOMEM;
+  memcpy(owned, wire, (size_t)wire_size);
+  status =
+      chttp_cnet_send_owned_malloc(&server->network, server->connection, &owned, (size_t)wire_size);
+  if (owned != NULL) free(owned);
   if (status == SALTS_OK) server->send_active = 1;
   return status;
 }
