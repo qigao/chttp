@@ -19,15 +19,17 @@ dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
   --store-password-in-clear-text --configfile "$config"
 cat > "$project" <<'EOF'
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="SaltsUtils.Native" Version="*" />
+  </ItemGroup>
 </Project>
 EOF
-(
-  cd "$RUNNER_TEMP"
-  dotnet add "$project" package Salts.Native
-  dotnet add "$project" package SaltsUtils.Native
-)
-dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache
+dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache --force-evaluate
 
 sdk_root() {
   local package="$1"
