@@ -12,20 +12,17 @@ dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name git
 if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages" }
 @'
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="SaltsUtils.Native" Version="*" />
+  </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project
-Push-Location $env:RUNNER_TEMP
-try {
-  dotnet add $project package Salts.Native
-  if ($LASTEXITCODE -ne 0) { throw "failed to resolve Salts.Native" }
-  dotnet add $project package SaltsUtils.Native
-  if ($LASTEXITCODE -ne 0) { throw "failed to resolve SaltsUtils.Native" }
-}
-finally {
-  Pop-Location
-}
-dotnet restore $project --packages $packages --configfile $config --no-cache
+dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
 function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
   $packageRoot = Join-Path $packages $packageName
