@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum { CHTTP_SERVICE_TEST_TIMEOUT_MS = 5000 };
@@ -218,6 +219,257 @@ static bool DATA_BIND_NATIVE_CALL chttp_service_test_other_invoke(
 }
 
 
+
+typedef struct CHttpServiceOwnedString {
+  unsigned char *data;
+  size_t size;
+} CHttpServiceOwnedString;
+
+typedef struct CHttpServiceOwnedError {
+  CHttpServiceOwnedString detail;
+} CHttpServiceOwnedError;
+
+typedef struct CHttpServiceOwnedErrorEnvelope {
+  uint32_t kind;
+  union {
+    CHttpServiceOwnedError error_1;
+  } payload;
+} CHttpServiceOwnedErrorEnvelope;
+
+static _Atomic int CHTTP_SERVICE_OWNED_ERROR_RELEASES;
+
+static const cmeta_type_identity CHTTP_SERVICE_OWNED_STRING_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.OwnedString");
+static const cmeta_type_desc CHTTP_SERVICE_OWNED_STRING_TYPE = {
+    "CHttpServiceOwnedString",
+    sizeof(CHttpServiceOwnedString),
+    _Alignof(CHttpServiceOwnedString),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_OWNED_STRING_ID};
+static const cmeta_data_buffer_shape CHTTP_SERVICE_OWNED_STRING_SHAPE = {
+    CMETA_DATA_BUFFER_OWNED};
+
+static bool chttp_service_owned_string_is_zero(const void *object) {
+  const CHttpServiceOwnedString *value =
+      (const CHttpServiceOwnedString *)object;
+  return value != NULL && value->data == NULL && value->size == 0u;
+}
+
+static cmeta_status chttp_service_owned_string_init_zero(void *object) {
+  CHttpServiceOwnedString *value =
+      (CHttpServiceOwnedString *)object;
+  if (value == NULL) return CMETA_INVALID_ARGUMENT;
+  value->data = NULL;
+  value->size = 0u;
+  return CMETA_OK;
+}
+
+static cmeta_status chttp_service_owned_string_assign(
+    void *object, const unsigned char *data, size_t size, size_t max_bytes) {
+  CHttpServiceOwnedString *value =
+      (CHttpServiceOwnedString *)object;
+  unsigned char *copy = NULL;
+  if (value == NULL || (size != 0u && data == NULL) ||
+      size > max_bytes || !chttp_service_owned_string_is_zero(value))
+    return size > max_bytes
+               ? CMETA_CAPACITY_EXCEEDED
+               : CMETA_INVALID_ARGUMENT;
+  if (size != 0u) {
+    copy = (unsigned char *)malloc(size);
+    if (copy == NULL) return CMETA_OUT_OF_MEMORY;
+    memcpy(copy, data, size);
+  }
+  value->data = copy;
+  value->size = size;
+  return CMETA_OK;
+}
+
+static void chttp_service_owned_string_restore_zero(void *object) {
+  CHttpServiceOwnedString *value =
+      (CHttpServiceOwnedString *)object;
+  if (value == NULL) return;
+  if (value->data != NULL) {
+    free(value->data);
+    atomic_fetch_add_explicit(
+        &CHTTP_SERVICE_OWNED_ERROR_RELEASES, 1, memory_order_relaxed);
+  }
+  value->data = NULL;
+  value->size = 0u;
+}
+
+static cmeta_status chttp_service_owned_string_read(
+    const void *object, const unsigned char **out_data, size_t *out_size) {
+  const CHttpServiceOwnedString *value =
+      (const CHttpServiceOwnedString *)object;
+  if (value == NULL || out_data == NULL || out_size == NULL)
+    return CMETA_INVALID_ARGUMENT;
+  *out_data = value->data;
+  *out_size = value->size;
+  return value->size != 0u && value->data == NULL
+             ? CMETA_CALLBACK_ERROR
+             : CMETA_OK;
+}
+
+static void chttp_service_owned_string_move(
+    void *destination, void *source) {
+  CHttpServiceOwnedString *dst =
+      (CHttpServiceOwnedString *)destination;
+  CHttpServiceOwnedString *src =
+      (CHttpServiceOwnedString *)source;
+  if (dst == NULL || src == NULL) return;
+  dst->data = src->data;
+  dst->size = src->size;
+  src->data = NULL;
+  src->size = 0u;
+}
+
+static const cmeta_data_buffer_ops CHTTP_SERVICE_OWNED_STRING_OPS = {
+    sizeof(cmeta_data_buffer_ops),
+    CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    &CHTTP_SERVICE_OWNED_STRING_TYPE,
+    CMETA_DATA_BUFFER_OWNED,
+    chttp_service_owned_string_is_zero,
+    chttp_service_owned_string_assign,
+    chttp_service_owned_string_restore_zero,
+    chttp_service_owned_string_read,
+    chttp_service_owned_string_init_zero,
+    chttp_service_owned_string_move};
+
+static const cmeta_data_desc CHTTP_SERVICE_OWNED_STRING_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.OwnedString.data",
+    .display_name = "CHttpServiceOwnedString",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &CHTTP_SERVICE_OWNED_STRING_TYPE,
+    .shape = &CHTTP_SERVICE_OWNED_STRING_SHAPE,
+    .buffer_ops = &CHTTP_SERVICE_OWNED_STRING_OPS};
+
+static const cmeta_type_identity CHTTP_SERVICE_OWNED_ERROR_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.OwnedError");
+static const cmeta_type_desc CHTTP_SERVICE_OWNED_ERROR_TYPE = {
+    "CHttpServiceOwnedError",
+    sizeof(CHttpServiceOwnedError),
+    _Alignof(CHttpServiceOwnedError),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_OWNED_ERROR_ID};
+static const cmeta_field_desc CHTTP_SERVICE_OWNED_ERROR_LAYOUT_FIELDS[] = {
+    {"detail", "CHttpServiceOwnedString",
+     offsetof(CHttpServiceOwnedError, detail),
+     sizeof(CHttpServiceOwnedString),
+     _Alignof(CHttpServiceOwnedString),
+     &CHTTP_SERVICE_OWNED_STRING_TYPE,
+     NULL}};
+static const cmeta_struct_desc CHTTP_SERVICE_OWNED_ERROR_LAYOUT = {
+    "CHttpServiceOwnedError",
+    sizeof(CHttpServiceOwnedError),
+    _Alignof(CHttpServiceOwnedError),
+    CHTTP_SERVICE_OWNED_ERROR_LAYOUT_FIELDS,
+    1u};
+static const cmeta_data_field_desc CHTTP_SERVICE_OWNED_ERROR_FIELDS[] = {
+    {"test.chttp.OwnedError.detail",
+     "detail",
+     offsetof(CHttpServiceOwnedError, detail),
+     &CHTTP_SERVICE_OWNED_STRING_DATA}};
+static const cmeta_data_struct_shape CHTTP_SERVICE_OWNED_ERROR_SHAPE = {
+    &CHTTP_SERVICE_OWNED_ERROR_LAYOUT,
+    CHTTP_SERVICE_OWNED_ERROR_FIELDS,
+    1u};
+static const cmeta_data_desc CHTTP_SERVICE_OWNED_ERROR_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.OwnedError.data",
+    .display_name = "CHttpServiceOwnedError",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &CHTTP_SERVICE_OWNED_ERROR_TYPE,
+    .shape = &CHTTP_SERVICE_OWNED_ERROR_SHAPE};
+
+static const cmeta_type_identity CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.OwnedErrorEnvelope");
+static const cmeta_type_desc CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_TYPE = {
+    "CHttpServiceOwnedErrorEnvelope",
+    sizeof(CHttpServiceOwnedErrorEnvelope),
+    _Alignof(CHttpServiceOwnedErrorEnvelope),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_ID};
+static const cmeta_type_desc CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_PTR_TYPE = {
+    "CHttpServiceOwnedErrorEnvelope *",
+    sizeof(CHttpServiceOwnedErrorEnvelope *),
+    _Alignof(CHttpServiceOwnedErrorEnvelope *),
+    CMETA_T_POINTER,
+    &CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_TYPE,
+    NULL,
+    NULL};
+
+FunctionDeclAsAbi(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    chttp_service_test_owned_error,
+    (const AddRequest *, request,
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (CHttpServiceOwnedErrorEnvelope *, error,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_PTR_TYPE,
+     CMETA_ABI_OBJECT_POINTER));
+
+int chttp_service_test_owned_error(
+    const AddRequest *request, AddResponse *response,
+    CHttpServiceOwnedErrorEnvelope *error) {
+  static const unsigned char detail[] = "owned";
+  if (request == NULL || response == NULL || error == NULL) return -1;
+  if (request->left == 77u) {
+    if (chttp_service_owned_string_assign(
+            &error->payload.error_1.detail,
+            detail, sizeof(detail) - 1u, 16u) != CMETA_OK)
+      return -1;
+    error->kind = 1u;
+    return 0;
+  }
+  response->sum = request->left + request->right * request->scale;
+  return 0;
+}
+
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_owned_error_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 3u ||
+      params[0] == NULL || params[1] == NULL || params[2] == NULL)
+    return false;
+  result = chttp_service_test_owned_error(
+      (const AddRequest *)params[0],
+      (AddResponse *)params[1],
+      (CHttpServiceOwnedErrorEnvelope *)params[2]);
+  *(int *)return_storage = result;
+  return true;
+}
+
+static DataBindStatus chttp_service_owned_error_resolve(
+    const cmeta_data_desc **out, DataBindError *error) {
+  (void)error;
+  if (out == NULL) return DATA_BIND_ERR_INVALID_ARG;
+  *out = &CHTTP_SERVICE_OWNED_ERROR_DATA;
+  return DATA_BIND_OK;
+}
+
+static const DataBindNativeErrorBinding
+    CHTTP_SERVICE_OWNED_ERROR_BINDINGS[] = {
+        {sizeof(DataBindNativeErrorBinding),
+         "OwnedError",
+         1u,
+         chttp_service_owned_error_resolve,
+         offsetof(CHttpServiceOwnedErrorEnvelope, payload.error_1)}};
+
 static native_io_backend_kind chttp_service_test_backend(void) {
 #if defined(_WIN32)
   return NATIVE_IO_BACKEND_IOCP;
@@ -319,6 +571,26 @@ static const DataBindHttpProjectionConfig CHTTP_SERVICE_CFLOW_HTTP = {
         sizeof(CHTTP_SERVICE_CFLOW_FIELDS[0]),
     NULL,
     0u,
+    DATA_BIND_FORMAT_JSON,
+    DATA_BIND_FORMAT_JSON};
+
+static const DataBindHttpErrorMapping
+    CHTTP_SERVICE_OWNED_ERROR_MAPPINGS[] = {
+        {sizeof(DataBindHttpErrorMapping), "OwnedError", 409}};
+
+static const DataBindHttpProjectionConfig CHTTP_SERVICE_OWNED_ERROR_HTTP = {
+    sizeof(DataBindHttpProjectionConfig),
+    DATA_BIND_METHOD_PLAN_ABI_VERSION,
+    "GET",
+    "/owned-error/{left}",
+    201,
+    DATA_BIND_HTTP_CONTEXT_NONE,
+    CHTTP_SERVICE_CFLOW_FIELDS,
+    sizeof(CHTTP_SERVICE_CFLOW_FIELDS) /
+        sizeof(CHTTP_SERVICE_CFLOW_FIELDS[0]),
+    CHTTP_SERVICE_OWNED_ERROR_MAPPINGS,
+    sizeof(CHTTP_SERVICE_OWNED_ERROR_MAPPINGS) /
+        sizeof(CHTTP_SERVICE_OWNED_ERROR_MAPPINGS[0]),
     DATA_BIND_FORMAT_JSON,
     DATA_BIND_FORMAT_JSON};
 
@@ -703,6 +975,145 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(chttp_service_destroy(&service), SALTS_OK);
     cflow_executor_destroy(&executor);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+  it("releases owned typed-error payloads exactly once at invocation terminal") {
+    static const char schema[] =
+        "message AddRequest {"
+        " @Min(1) uint32 left;"
+        " uint32 right;"
+        " optional uint32 scale default 1;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "message OwnedError { @Size(max = 16) string detail; }"
+        "service Calc {"
+        " Fail: AddRequest -> AddResponse throws OwnedError;"
+        "}";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_owned_error),
+            &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    chttp_response response = {0};
+    uint16_t port = 0u;
+    char uri[64];
+
+    native.errors = CHTTP_SERVICE_OWNED_ERROR_BINDINGS;
+    native.error_count = 1u;
+    native.error_param_index = 2u;
+    native.error_envelope_bytes = sizeof(CHttpServiceOwnedErrorEnvelope);
+    native.error_kind_offset = offsetof(CHttpServiceOwnedErrorEnvelope, kind);
+    native.error_kind_bytes = sizeof(uint32_t);
+
+    execution.function = FunctionMeta(chttp_service_test_owned_error);
+    execution.abi = FunctionAbi(chttp_service_test_owned_error);
+    execution.invoke = chttp_service_test_owned_error_invoke;
+
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Fail", &CHTTP_SERVICE_OWNED_ERROR_HTTP,
+            &native, &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 64u;
+    service_config.max_call_frame_bytes = 1024u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = &execution;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    atomic_store_explicit(
+        &CHTTP_SERVICE_OWNED_ERROR_RELEASES, 0, memory_order_relaxed);
+
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/owned-error/0?right=1", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 422u);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_OWNED_ERROR_RELEASES, memory_order_relaxed),
+        0);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/owned-error/77?right=1", &response),
+        SALTS_OK);
+    /*
+     * Phase-1 Service egress does not flatten structured typed-error bodies;
+     * the publication failure is transport-visible as 500, but native error
+     * ownership must still terminate exactly once.
+     */
+    check_equal(response.status_code, 500u);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_OWNED_ERROR_RELEASES, memory_order_relaxed),
+        1);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/owned-error/3?right=4", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body, "7", 1u);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_OWNED_ERROR_RELEASES, memory_order_relaxed),
+        1);
+    chttp_response_destroy(&response);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }
