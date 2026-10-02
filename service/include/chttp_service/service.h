@@ -6,6 +6,7 @@
 #include <data_bind_method_plan.h>
 #include <data_bind_native.h>
 #include <data_bind_native_binding.h>
+#include <cflow/executor.h>
 
 #include <stddef.h>
 
@@ -33,6 +34,16 @@ typedef struct chttp_service_config {
 #define CHTTP_SERVICE_CONFIG_INIT \
   { sizeof(chttp_service_config), 0u, 1024u, 4096u, 65536u, 16384u, 16u, 256u, 65536u }
 
+typedef enum chttp_service_execution_mode {
+  /** Execute the admitted DataBindNativeExecution on the HTTP owner callback. */
+  CHTTP_SERVICE_EXECUTION_INLINE_DIRECT = 0,
+  /**
+   * Bind/materialize on the HTTP owner callback, defer the response, then run
+   * the admitted DataBindNativeExecution on the borrowed bounded executor.
+   */
+  CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT = 1
+} chttp_service_execution_mode;
+
 /**
  * One admitted generated HTTP operation.
  *
@@ -51,10 +62,20 @@ typedef struct chttp_service_http_mount {
   const DataBindNativeExecution *execution;
   const chttp_server_middleware *middleware;
   size_t middleware_count;
+  chttp_service_execution_mode execution_mode;
+  /**
+   * Borrowed bounded executor required by DEFERRED_DIRECT.
+   *
+   * The executor must outlive all accepted Service tasks. After server stop
+   * succeeds, the application must wait for this executor to become idle
+   * before destroying the server or Service.
+   */
+  cflow_executor *executor;
 } chttp_service_http_mount;
 
 #define CHTTP_SERVICE_HTTP_MOUNT_INIT \
-  { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u }
+  { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u, \
+    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL }
 
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
@@ -83,6 +104,10 @@ int chttp_service_init(
  * semantic/ABI admission exactly once before route publication. The server
  * copies route metadata, while its route user pointer references immutable
  * service-owned mounted-operation storage.
+ *
+ * INLINE_DIRECT requires executor == NULL. DEFERRED_DIRECT requires a valid
+ * borrowed cflow_executor and keeps request/CNet views callback-scoped: only
+ * the already-materialized native frame crosses to the worker.
  */
 int chttp_service_mount_http(
     chttp_service *service,
@@ -93,7 +118,9 @@ int chttp_service_mount_http(
  * Release service-owned bounded scratch/method records.
  *
  * Every server containing routes mounted by this service must be stopped and
- * destroyed before this call.
+ * destroyed before this call. For DEFERRED_DIRECT mounts, accepted executor
+ * work must also be idle before server destruction; this prevents a worker
+ * from outliving its generation-checked deferred target.
  */
 int chttp_service_destroy(chttp_service *service);
 
