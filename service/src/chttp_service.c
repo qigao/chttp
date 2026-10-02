@@ -20,6 +20,8 @@ typedef struct chttp_service_method_record {
   const DataBindBindingPlan *binding;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
+  chttp_service_execution_mode execution_mode;
+  cflow_executor *executor;
 
   size_t request_bytes;
   size_t response_bytes;
@@ -54,6 +56,7 @@ typedef struct chttp_service_invocation {
   char *scalar_scratch;
   unsigned char *native_workspace;
   DataBindNativeOptions native_options;
+  chttp_server_deferred deferred;
 } chttp_service_invocation;
 
 typedef struct chttp_service_scalar_reader {
@@ -960,6 +963,14 @@ static void chttp_service_invocation_release(
   memset(invocation, 0, sizeof(*invocation));
 }
 
+static void chttp_service_invocation_finalize(void *user) {
+  chttp_service_invocation *invocation =
+      (chttp_service_invocation *)user;
+  if (invocation == NULL) return;
+  chttp_service_invocation_release(invocation);
+  free(invocation);
+}
+
 static int chttp_service_invocation_init(
     chttp_service_method_record *record,
     chttp_service_invocation *invocation) {
@@ -1095,6 +1106,190 @@ static int chttp_service_http_failure_reply(
       failure.body, failure.body_size);
 }
 
+static void chttp_service_deferred_cancel_task(void *user) {
+  chttp_service_invocation *invocation =
+      (chttp_service_invocation *)user;
+  if (invocation == NULL || invocation->deferred.impl == NULL)
+    return;
+  (void)chttp_server_deferred_cancel(&invocation->deferred);
+}
+
+static int chttp_service_deferred_text_reply(
+    chttp_service_invocation *invocation,
+    unsigned int status_code,
+    const char *body) {
+  chttp_server_deferred_response reply;
+  int status;
+  if (invocation == NULL || invocation->deferred.impl == NULL ||
+      body == NULL)
+    return SALTS_EINVAL;
+  reply = (chttp_server_deferred_response){
+      sizeof(chttp_server_deferred_response),
+      status_code,
+      "text/plain",
+      NULL,
+      0u,
+      body,
+      strlen(body)};
+  status = chttp_server_deferred_reply(&invocation->deferred, &reply);
+  if (status != SALTS_OK && invocation->deferred.impl != NULL)
+    (void)chttp_server_deferred_cancel(&invocation->deferred);
+  return status;
+}
+
+static void chttp_service_deferred_run(void *user) {
+  chttp_service_invocation *invocation =
+      (chttp_service_invocation *)user;
+  chttp_service_method_record *record;
+  chttp_service_http_provider provider_context;
+  DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
+  DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
+  DataBindBindingPlanDiagnostic diagnostic =
+      DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+  DataBindStatus bind_status = DATA_BIND_OK;
+  int native_status = 0;
+  int http_status = 500;
+  int terminal_status;
+
+  if (invocation == NULL || invocation->record == NULL)
+    return;
+  record = invocation->record;
+
+  provider_context = (chttp_service_http_provider){
+      .service = record->owner,
+      .invocation = invocation,
+      .request = NULL,
+      .staged_content_type = "text/plain"};
+  provider.context = &provider_context;
+  provider.begin_output = chttp_service_http_begin_output;
+  provider.write_output = chttp_service_http_write_output;
+  provider.commit_output = chttp_service_http_commit_output;
+  provider.abort_output = chttp_service_http_abort_output;
+
+  if (!record->execution->invoke(
+          record->execution->context, &native_status,
+          invocation->params, record->param_count))
+    bind_status = DATA_BIND_ERR_RUNTIME;
+
+  if (bind_status == DATA_BIND_OK)
+    bind_status = data_bind_binding_plan_write_outcome(
+        record->binding, &provider, &invocation->frame, native_status,
+        &outcome, &diagnostic);
+
+  if (bind_status != DATA_BIND_OK) {
+    (void)chttp_service_deferred_text_reply(
+        invocation, 500u, "Internal Server Error");
+    chttp_service_http_release_output(&provider_context);
+    return;
+  }
+
+  if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS) {
+    (void)chttp_service_deferred_text_reply(
+        invocation, 500u, "Application Error");
+    chttp_service_http_release_output(&provider_context);
+    return;
+  }
+
+  if (!data_bind_http_method_plan_status_for_outcome(
+          record->method_plan, &outcome, &http_status)) {
+    (void)chttp_service_deferred_text_reply(
+        invocation, 500u, "Internal Server Error");
+    chttp_service_http_release_output(&provider_context);
+    return;
+  }
+
+  terminal_status = chttp_server_deferred_reply_buffer(
+      &invocation->deferred,
+      (unsigned int)http_status,
+      provider_context.output_published
+          ? provider_context.staged_content_type
+          : "text/plain",
+      NULL,
+      0u,
+      provider_context.output_published
+          ? provider_context.output_buffer
+          : NULL);
+  if (terminal_status != SALTS_OK &&
+      invocation->deferred.impl != NULL)
+    (void)chttp_server_deferred_cancel(&invocation->deferred);
+  chttp_service_http_release_output(&provider_context);
+}
+
+static int chttp_service_http_execute_deferred(
+    chttp_service_method_record *record,
+    const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  chttp_service_invocation *invocation;
+  chttp_service_http_provider provider_context;
+  DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
+  DataBindBindingPlanDiagnostic diagnostic =
+      DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+  cflow_executor_task task;
+  cflow_admission_status admission;
+  DataBindStatus bind_status;
+  int status;
+
+  if (record == NULL || record->owner == NULL ||
+      record->method_plan == NULL || record->binding == NULL ||
+      record->native_binding == NULL || record->execution == NULL ||
+      record->executor == NULL || request == NULL || response == NULL)
+    return SALTS_EINVAL;
+
+  invocation =
+      (chttp_service_invocation *)calloc(1u, sizeof(*invocation));
+  if (invocation == NULL) return SALTS_ENOMEM;
+  status = chttp_service_invocation_init(record, invocation);
+  if (status != SALTS_OK) {
+    free(invocation);
+    return status;
+  }
+
+  provider_context = (chttp_service_http_provider){
+      .service = record->owner,
+      .invocation = invocation,
+      .request = request,
+      .staged_content_type = "text/plain"};
+  provider.context = &provider_context;
+  provider.open_input = chttp_service_http_open_input;
+
+  bind_status = data_bind_binding_plan_bind_inputs(
+      record->binding, &provider, &invocation->native_options,
+      &invocation->frame, &diagnostic);
+  if (bind_status != DATA_BIND_OK) {
+    const chttp_service_http_failure_response failure =
+        chttp_service_http_ingress_failure(bind_status);
+    status = chttp_service_http_failure_reply(response, failure);
+    chttp_service_invocation_finalize(invocation);
+    return status;
+  }
+
+  status = chttp_server_response_defer(
+      response, &invocation->deferred);
+  if (status != SALTS_OK) {
+    chttp_service_invocation_finalize(invocation);
+    return status;
+  }
+
+  task = (cflow_executor_task){
+      .run = chttp_service_deferred_run,
+      .cancel = chttp_service_deferred_cancel_task,
+      .finalize = chttp_service_invocation_finalize,
+      .user = invocation};
+  admission = cflow_executor_try_post_task(record->executor, &task);
+  if (admission == CFLOW_ADMISSION_ACCEPTED)
+    return SALTS_OK;
+
+  /*
+   * Executor admission is deliberately non-blocking. The response has already
+   * been generation-safely deferred, so fail it explicitly rather than block
+   * the HTTP owner thread waiting for worker capacity.
+   */
+  (void)chttp_service_deferred_text_reply(
+      invocation, 503u, "Service Unavailable");
+  chttp_service_invocation_finalize(invocation);
+  return SALTS_OK;
+}
+
 static int chttp_service_http_execute(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
@@ -1202,6 +1397,10 @@ static int chttp_service_http_handler(
       (chttp_service_method_record *)user;
   if (record == NULL || record->owner == NULL)
     return SALTS_EINVAL;
+  if (record->execution_mode ==
+      CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT)
+    return chttp_service_http_execute_deferred(
+        record, request, response);
   return chttp_service_http_execute(record, request, response);
 }
 
@@ -1269,7 +1468,14 @@ int chttp_service_mount_http(
   if (service == NULL || service->impl == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
       mount->method_plan == NULL || mount->native_binding == NULL ||
-      mount->execution == NULL)
+      mount->execution == NULL ||
+      (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
+       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT) ||
+      (mount->execution_mode == CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
+       mount->executor != NULL) ||
+      (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+       (mount->executor == NULL ||
+        !cflow_executor_valid(mount->executor))))
     return SALTS_EINVAL;
   if (!chttp_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
@@ -1299,6 +1505,8 @@ int chttp_service_mount_http(
       .binding = binding,
       .native_binding = mount->native_binding,
       .execution = mount->execution,
+      .execution_mode = mount->execution_mode,
+      .executor = mount->executor,
       .request_bytes = request_bytes,
       .response_bytes = response_bytes,
       .error_bytes = error_bytes,
