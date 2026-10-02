@@ -705,5 +705,133 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
+
+  it("executes the same MethodPlan through an admitted CFlow Service projection") {
+    static const char schema[] =
+        "message AddRequest {"
+        " @Min(1) uint32 left;"
+        " uint32 right;"
+        " uint32 scale;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "service Calc { Add: AddRequest -> AddResponse; }";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_add),
+            &ADD_REQUEST_CFLOW_NATIVE, &ADD_RESPONSE_NATIVE);
+    DataBindHttpMethodPlan *method_plan = NULL;
+    cflow_function_typed_adapter_projection projection = {0};
+    cflow_executor executor = {0};
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    chttp_response response = {0};
+    uint16_t port = 0u;
+    char uri[64];
+
+    check_equal(
+        chttp_service_test_cflow_projection(&projection),
+        CFLOW_FUNCTION_PROJECTION_OK);
+    check_true(
+        cflow_function_typed_adapter_projection_valid(&projection));
+
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", &CHTTP_SERVICE_CFLOW_HTTP,
+            &native, &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+    check_equal(
+        data_bind_http_method_plan_route(method_plan), "/flow/{left}");
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
+    service_config.max_call_frame_bytes = 512u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+
+    check_true(cflow_executor_worker_init_with_capacity(
+        &executor, 1u, 2u));
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    invalid.method_plan = method_plan;
+    invalid.native_binding = &native;
+    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW;
+    invalid.executor = &executor;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &invalid),
+        SALTS_EINVAL);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = NULL;
+    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW;
+    mount.executor = &executor;
+    mount.cflow_projection = &projection;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount),
+        SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+    CHTTP_SERVICE_TEST_ADD_CALLS = 0u;
+
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/flow/3?right=4&scale=2", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body_size, (size_t)2u);
+    check_equal(response.body, "11", 2u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)1u);
+    chttp_response_destroy(&response);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/flow/0?right=4&scale=2", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 422u);
+    check_equal(response.body, "Validation Error", 16u);
+    check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)1u);
+    chttp_response_destroy(&response);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    cflow_executor_destroy(&executor);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
   }
 }
