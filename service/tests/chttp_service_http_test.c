@@ -705,6 +705,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
+  }
 
   it("executes the same MethodPlan through an admitted CFlow Service projection") {
     static const char schema[] =
@@ -832,6 +833,5 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
-  }
   }
 }
