@@ -65,6 +65,7 @@ int main() {
   auto *response_file = &chttp_server_response_file;
   auto *response_defer = &chttp_server_response_defer;
   auto *deferred_reply = &chttp_server_deferred_reply;
+  auto *deferred_reply_buffer = &chttp_server_deferred_reply_buffer;
   auto *deferred_cancel = &chttp_server_deferred_cancel;
   auto *post_file = &chttp_post_file;
   auto *put_file = &chttp_put_file;
@@ -75,6 +76,7 @@ int main() {
   (void)response_file;
   (void)response_defer;
   (void)deferred_reply;
+  (void)deferred_reply_buffer;
   (void)deferred_cancel;
   (void)post_file;
   (void)put_file;

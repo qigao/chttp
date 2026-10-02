@@ -466,6 +466,70 @@ int chttp_server_deferred_reply(chttp_server_deferred *deferred,
   return SALTS_OK;
 }
 
+int chttp_server_deferred_reply_buffer(
+    chttp_server_deferred *deferred,
+    unsigned int status_code,
+    const char *content_type,
+    const chttp_header *headers,
+    size_t header_count,
+    mem_buffer_t *body) {
+  chttp_server_deferred_target *target;
+  chttp_server_response_builder *base;
+  size_t index;
+  int status = SALTS_OK;
+
+  if (deferred == NULL || deferred->impl == NULL ||
+      deferred->generation == 0u ||
+      (header_count != 0u && headers == NULL))
+    return SALTS_EINVAL;
+
+  target = (chttp_server_deferred_target *)deferred->impl;
+  if (target->server == NULL || target->request_state == NULL ||
+      target->response_builder == NULL || target->response == NULL ||
+      target->token == NULL)
+    return SALTS_EINVAL;
+
+  status = chttp_server_deferred_claim(target->token, deferred->generation);
+  if (status != SALTS_OK) return status;
+
+  base = &target->request_state->response_builder;
+  chttp_server_response_builder_reset(target->response_builder);
+  for (index = 0u; status == SALTS_OK && index < base->header_count; ++index)
+    status = chttp_server_response_set_header(
+        target->response, base->headers[index].name, base->headers[index].value);
+
+  for (index = 0u; status == SALTS_OK && index < header_count; ++index) {
+    if (headers[index].name == NULL || headers[index].value == NULL)
+      status = SALTS_EINVAL;
+    else
+      status = chttp_server_response_set_header(
+          target->response, headers[index].name, headers[index].value);
+  }
+
+  if (status == SALTS_OK)
+    status = chttp_server_reply_buffer(
+        target->response, status_code, content_type, body);
+
+  if (status != SALTS_OK) {
+    chttp_server_response_builder_reset(target->response_builder);
+    atomic_store_explicit(
+        target->token,
+        chttp_server_deferred_token(
+            deferred->generation, CHTTP_SERVER_DEFERRED_PENDING),
+        memory_order_release);
+    return status;
+  }
+
+  atomic_store_explicit(
+      target->token,
+      chttp_server_deferred_token(
+          deferred->generation, CHTTP_SERVER_DEFERRED_READY),
+      memory_order_release);
+  *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
+  (void)cnet_client_wake(&target->server->network);
+  return SALTS_OK;
+}
+
 int chttp_server_deferred_cancel(chttp_server_deferred *deferred) {
   chttp_server_deferred_target *target;
   int status;

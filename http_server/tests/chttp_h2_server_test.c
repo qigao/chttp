@@ -9,6 +9,7 @@
 #include <http_server/http.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
+#include <salts_buffer.h>
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -1268,6 +1269,98 @@ spec("CHTTP background HTTP/2 server") {
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     check_equal(chttp_server_stop(&server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("completes an h2c deferred response from a retained body buffer") {
+    static const char payload[] = "later-retained";
+    chttp_server server = {0};
+    chttp_async_client client = {0};
+    chttp_server_config server_config = chttp_h2_server_test_config();
+    chttp_client_config client_config = chttp_h2_server_test_client_config();
+    chttp_h2_server_test_deferred deferred = {0};
+    chttp_h2_server_test_completion completion = {0};
+    chttp_request request = {0};
+    chttp_request_options options;
+    mem_buffer_t *buffer = NULL;
+    char uri[64];
+    char authority[64];
+    uint16_t port = 0u;
+    size_t completions = 0u;
+    size_t polls = 0u;
+
+    atomic_init(&deferred.admitted, 0);
+    server_config.session_capacity = 0u;
+    server_config.session_entry_capacity = 0u;
+    server_config.max_session_key_bytes = 0u;
+    server_config.max_session_value_bytes = 0u;
+    server_config.session_idle_timeout_ms = 0u;
+    server_config.session_cookie_name = NULL;
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(
+        chttp_server_get(
+            &server, "/deferred",
+            chttp_h2_server_test_deferred_handler, &deferred),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_equal(
+        chttp_h2_server_test_endpoint(
+            port, uri, sizeof(uri), authority, sizeof(authority)),
+        SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &client_config), SALTS_OK);
+
+    options = (chttp_request_options){
+        .connection_uri = uri,
+        .authority = authority,
+        .target = "/deferred",
+        .method = CHTTP_METHOD_GET,
+        .on_complete = chttp_h2_server_test_complete,
+        .user = &completion,
+        .protocol = CHTTP_HTTP_2};
+    check_equal(
+        chttp_async_client_submit(&client, &options, &request), SALTS_OK);
+
+    while (!atomic_load_explicit(
+               &deferred.admitted, memory_order_acquire) &&
+           polls++ < 40u)
+      check_equal(
+          chttp_async_client_poll(&client, 25u, &completions), SALTS_OK);
+
+    check_equal(
+        atomic_load_explicit(&deferred.admitted, memory_order_acquire), 1);
+    check_equal(deferred.defer_status, SALTS_OK);
+
+    buffer = mem_get_buffer(mem_global(), sizeof(payload) - 1u);
+    check_not_null(buffer);
+    memcpy(mem_buffer_data(buffer), payload, sizeof(payload) - 1u);
+    mem_set_used(buffer, sizeof(payload) - 1u);
+
+    check_equal(
+        chttp_server_deferred_reply_buffer(
+            &deferred.handle, 202u, "text/plain", NULL, 0u, buffer),
+        SALTS_OK);
+    mem_buffer_release(buffer);
+    buffer = NULL;
+
+    while (completion.calls == 0u && polls++ < 80u)
+      check_equal(
+          chttp_async_client_poll(&client, 25u, &completions), SALTS_OK);
+
+    check_equal(completion.calls, 1u);
+    check_equal(completion.status, SALTS_OK);
+    check_equal(completion.response_status, 202u);
+    check_equal(completion.body, payload);
+
+    check_equal(
+        chttp_async_client_stop(
+            &client, CHTTP_H2_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
