@@ -1016,6 +1016,47 @@ static void chttp_service_method_release(
   memset(record, 0, sizeof(*record));
 }
 
+static void chttp_service_typed_error_restore_zero(
+    chttp_service_invocation *invocation,
+    const DataBindServiceNativeBinding *native) {
+  const DataBindNativeErrorBinding *binding;
+  const cmeta_data_desc *data = NULL;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  uint32_t kind = 0u;
+
+  if (invocation == NULL || native == NULL ||
+      invocation->error_storage == NULL || native->errors == NULL ||
+      native->error_count == 0u ||
+      native->error_kind_bytes != sizeof(kind) ||
+      native->error_kind_offset > native->error_envelope_bytes ||
+      sizeof(kind) > native->error_envelope_bytes - native->error_kind_offset)
+    return;
+
+  memcpy(
+      &kind, invocation->error_storage + native->error_kind_offset,
+      sizeof(kind));
+  if (kind == 0u || (size_t)kind > native->error_count)
+    return;
+
+  binding = &native->errors[(size_t)kind - 1u];
+  if (binding->size < sizeof(*binding) ||
+      binding->kind_value != kind ||
+      binding->data_resolver == NULL ||
+      binding->payload_offset > native->error_envelope_bytes)
+    return;
+  if (binding->data_resolver(&data, &error) != DATA_BIND_OK ||
+      !cmeta_data_desc_valid(data) || data->storage_type == NULL ||
+      data->storage_type->size >
+          native->error_envelope_bytes - binding->payload_offset)
+    return;
+
+  (void)cmeta_data_value_restore_zero(
+      data, invocation->error_storage + binding->payload_offset);
+  memset(
+      invocation->error_storage + native->error_kind_offset, 0,
+      sizeof(kind));
+}
+
 static void chttp_service_invocation_release(
     chttp_service_invocation *invocation) {
   const DataBindServiceNativeBinding *native;
@@ -1024,6 +1065,7 @@ static void chttp_service_invocation_release(
                ? invocation->record->native_binding
                : NULL;
   if (invocation->frame_live && native != NULL) {
+    chttp_service_typed_error_restore_zero(invocation, native);
     if (native->response != NULL && native->response->data != NULL &&
         invocation->response_storage != NULL)
       (void)cmeta_data_value_restore_zero(
