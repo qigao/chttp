@@ -5,6 +5,7 @@
 #include "chttp_service.http.h"
 #include "tinytest.h"
 
+#include <salts/clock.h>
 #include <salts/thread.h>
 
 #include <stddef.h>
@@ -478,6 +479,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(chttp_service_destroy(&service), SALTS_OK);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
+  }
 
   it("defers direct execution onto a bounded borrowed executor") {
     static const char schema[] =
@@ -635,6 +637,5 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
-  }
   }
 }
