@@ -72,6 +72,49 @@ if(NOT REQUEST_CAPTURE EQUAL -1)
   message(FATAL_ERROR "Mounted operation must not retain callback-scoped HTTP request views")
 endif()
 
+foreach(FORBIDDEN_MUTABLE
+    "request_storage"
+    "response_storage"
+    "error_storage"
+    "DataBindBindingCallFrame"
+    "scalar_scratch"
+    "native_workspace")
+  string(FIND "${RECORD_TEXT}" "${FORBIDDEN_MUTABLE}" POS)
+  if(NOT POS EQUAL -1)
+    message(FATAL_ERROR
+      "Mounted operation must not own request-scoped mutable state: ${FORBIDDEN_MUTABLE}")
+  endif()
+endforeach()
+
+string(FIND "${SERVICE_TEXT}" "typedef struct chttp_service_invocation {" INVOCATION_START)
+string(FIND "${SERVICE_TEXT}" "} chttp_service_invocation;" INVOCATION_END)
+if(INVOCATION_START LESS 0 OR INVOCATION_END LESS 0 OR
+   INVOCATION_END LESS_EQUAL INVOCATION_START)
+  message(FATAL_ERROR "Could not isolate per-call Service invocation state")
+endif()
+math(EXPR INVOCATION_LENGTH "${INVOCATION_END} - ${INVOCATION_START}")
+string(SUBSTRING "${SERVICE_TEXT}" ${INVOCATION_START} ${INVOCATION_LENGTH}
+       INVOCATION_TEXT)
+foreach(REQUIRED_OWNED
+    "request_storage"
+    "response_storage"
+    "error_storage"
+    "DataBindBindingCallFrame"
+    "scalar_scratch"
+    "native_workspace")
+  string(FIND "${INVOCATION_TEXT}" "${REQUIRED_OWNED}" POS)
+  if(POS EQUAL -1)
+    message(FATAL_ERROR
+      "Per-call invocation must own native request state: ${REQUIRED_OWNED}")
+  endif()
+endforeach()
+
+string(FIND "${SERVICE_TEXT}" "executing" SINGLE_FLIGHT_POS)
+if(NOT SINGLE_FLIGHT_POS EQUAL -1)
+  message(FATAL_ERROR
+    "Service must not serialize independent invocations through a global executing gate")
+endif()
+
 string(FIND "${SERVICE_TEXT}" "chttp_server_response_defer" DEFER_POS)
 if(NOT DEFER_POS EQUAL -1)
   message(FATAL_ERROR "Current synchronous Service epoch must not silently introduce deferred request ownership")
