@@ -21,17 +21,10 @@ typedef struct chttp_service_method_record {
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
 
-  unsigned char *request_storage;
   size_t request_bytes;
-  unsigned char *response_storage;
   size_t response_bytes;
-  unsigned char *error_storage;
   size_t error_bytes;
-
-  void *params[3];
-  size_t param_bytes[3];
   size_t param_count;
-  DataBindBindingCallFrame frame;
 } chttp_service_method_record;
 
 struct chttp_service_impl {
@@ -39,16 +32,29 @@ struct chttp_service_impl {
   size_t method_capacity;
   size_t method_count;
 
-  char *scalar_scratch;
   size_t scalar_capacity;
-
-  unsigned char *native_workspace;
+  size_t native_workspace_bytes;
   DataBindNativeOptions native_options;
 
   size_t response_capacity;
   size_t max_call_frame_bytes;
-  int executing;
 };
+
+typedef struct chttp_service_invocation {
+  chttp_service_method_record *record;
+
+  unsigned char *request_storage;
+  unsigned char *response_storage;
+  unsigned char *error_storage;
+
+  void *params[3];
+  size_t param_bytes[3];
+  DataBindBindingCallFrame frame;
+
+  char *scalar_scratch;
+  unsigned char *native_workspace;
+  DataBindNativeOptions native_options;
+} chttp_service_invocation;
 
 typedef struct chttp_service_scalar_reader {
   cserde_token token;
@@ -57,6 +63,7 @@ typedef struct chttp_service_scalar_reader {
 
 typedef struct chttp_service_http_provider {
   chttp_service_impl *service;
+  chttp_service_invocation *invocation;
   const chttp_server_request_view *request;
   chttp_service_scalar_reader scalar;
 
