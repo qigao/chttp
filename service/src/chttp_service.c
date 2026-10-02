@@ -993,6 +993,11 @@ static int chttp_service_cflow_admit(
       !cmeta_type_equal(
           projection->output_type, native->response->data->storage_type))
     return SALTS_EINVAL;
+  if (native->request->presence_count != 0u ||
+      native->request->null_count != 0u ||
+      native->response->presence_count != 0u ||
+      native->response->null_count != 0u)
+    return SALTS_ENOTSUP;
 
   status = chttp_service_capability_admit(
       method_plan, native, projection->function, projection->abi, 0,
