@@ -59,7 +59,11 @@ typedef struct chttp_service_http_mount {
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
  *
- * Fixed-width scalar/enum ingress uses owner-thread scratch and native workspace.
+ * Fixed-width scalar/enum ingress uses per-invocation bounded scratch and
+ * native workspace. Mounted operations retain only immutable/control metadata;
+ * request/response/error staging is allocated for each invocation so independent
+ * calls do not share mutable native state.
+ *
  * Egress is transaction-local: DataBind/CSerde materializes directly into a
  * pooled mem_buffer_t bounded by max_response_body_bytes, explicitly finishes
  * the writer, then publishes through chttp_server_reply_buffer(). No shared
