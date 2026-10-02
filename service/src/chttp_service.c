@@ -703,8 +703,10 @@ static DataBindStatus chttp_service_http_write_output(
     return DATA_BIND_OK;
   }
 
+  if (provider->invocation == NULL)
+    return DATA_BIND_ERR_INVALID_ARG;
   status = data_bind_native_encode(
-      &provider->service->native_options, entry->data,
+      &provider->invocation->native_options, entry->data,
       value, value_bytes, &provider->writer, &diagnostic);
   if (status != DATA_BIND_OK) {
     chttp_service_http_release_output(provider);
