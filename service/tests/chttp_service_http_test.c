@@ -31,13 +31,18 @@ static const cmeta_type_identity ADD_REQUEST_ID =
     CMETA_TYPE_ID_ATOM_INIT("test.chttp.AddRequest");
 static const cmeta_type_identity ADD_RESPONSE_ID =
     CMETA_TYPE_ID_ATOM_INIT("test.chttp.AddResponse");
+static const cmeta_type_traits ADD_REQUEST_TRAITS = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
+static const cmeta_type_traits ADD_RESPONSE_TRAITS = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
+
 
 static const cmeta_type_desc ADD_REQUEST_TYPE = {
     "AddRequest", sizeof(AddRequest), _Alignof(AddRequest),
-    CMETA_T_OBJECT, NULL, NULL, &ADD_REQUEST_ID};
+    CMETA_T_OBJECT, NULL, &ADD_REQUEST_TRAITS, &ADD_REQUEST_ID};
 static const cmeta_type_desc ADD_RESPONSE_TYPE = {
     "AddResponse", sizeof(AddResponse), _Alignof(AddResponse),
-    CMETA_T_OBJECT, NULL, NULL, &ADD_RESPONSE_ID};
+    CMETA_T_OBJECT, NULL, &ADD_RESPONSE_TRAITS, &ADD_RESPONSE_ID};
 
 static const cmeta_type_desc ADD_REQUEST_PTR_TYPE = {
     "const AddRequest *", sizeof(AddRequest *), _Alignof(AddRequest *),
@@ -112,6 +117,13 @@ static const DataBindNativeTypeBinding ADD_RESPONSE_NATIVE = {
     .idl_type_name = "AddResponse",
     .data = &ADD_RESPONSE_DATA};
 
+static const DataBindNativeTypeBinding ADD_REQUEST_CFLOW_NATIVE = {
+    .size = sizeof(DataBindNativeTypeBinding),
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
+    .idl_type_name = "AddRequest",
+    .data = &ADD_REQUEST_DATA};
+
+
 FunctionDeclAsAbi(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
     chttp_service_test_add,
@@ -145,6 +157,37 @@ static bool DATA_BIND_NATIVE_CALL chttp_service_test_invoke(
   *(int *)return_storage = result;
   return true;
 }
+
+static bool chttp_service_test_cflow_invoke(
+    const cmeta_callable *self, void *out,
+    const void *const *args) {
+  AddResponse *response = (AddResponse *)out;
+  (void)self;
+  if (response == NULL || args == NULL || args[0] == NULL)
+    return false;
+  memset(response, 0, sizeof(*response));
+  return chttp_service_test_add(
+             (const AddRequest *)args[0], response) == 0;
+}
+
+static cflow_function_projection_status
+chttp_service_test_cflow_projection(
+    cflow_function_typed_adapter_projection *out) {
+  cmeta_callable adapter = {0};
+  adapter.meta.sig = CMETA_SIG_INVALID;
+  adapter.meta.effects = FunctionMeta(chttp_service_test_add)->effects;
+  adapter.meta.properties = FunctionMeta(chttp_service_test_add)->properties;
+  adapter.invoke = chttp_service_test_cflow_invoke;
+  adapter.dispatch = CMETA_CALLABLE_DISPATCH_ADAPTER;
+  return cflow_function_typed_adapter_projection_admit(
+      FunctionMeta(chttp_service_test_add),
+      FunctionAbi(chttp_service_test_add),
+      adapter,
+      &ADD_REQUEST_TYPE,
+      &ADD_RESPONSE_TYPE,
+      out);
+}
+
 
 FunctionDeclAsAbi(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
@@ -253,6 +296,31 @@ static void chttp_service_executor_gate_run(void *user) {
 static void chttp_service_executor_noop(void *user) {
   (void)user;
 }
+
+static const DataBindHttpFieldProjection CHTTP_SERVICE_CFLOW_FIELDS[] = {
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "left", DATA_BIND_HTTP_PATH, "left", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "right", DATA_BIND_HTTP_QUERY, "right", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "scale", DATA_BIND_HTTP_QUERY, "scale", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS,
+     "sum", DATA_BIND_HTTP_RESPONSE_BODY, "sum", SIZE_MAX}};
+
+static const DataBindHttpProjectionConfig CHTTP_SERVICE_CFLOW_HTTP = {
+    sizeof(DataBindHttpProjectionConfig),
+    DATA_BIND_METHOD_PLAN_ABI_VERSION,
+    "GET",
+    "/flow/{left}",
+    201,
+    DATA_BIND_HTTP_CONTEXT_NONE,
+    CHTTP_SERVICE_CFLOW_FIELDS,
+    sizeof(CHTTP_SERVICE_CFLOW_FIELDS) /
+        sizeof(CHTTP_SERVICE_CFLOW_FIELDS[0]),
+    NULL,
+    0u,
+    DATA_BIND_FORMAT_JSON,
+    DATA_BIND_FORMAT_JSON};
 
 static int chttp_service_test_call(
     chttp_client *client, const char *uri, const char *target,
