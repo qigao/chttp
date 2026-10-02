@@ -90,8 +90,10 @@ typedef struct chttp_service_http_mount {
  * the writer, then publishes through chttp_server_reply_buffer(). No shared
  * response scratch is reused across connections or H2 streams.
  *
- * Structured body/egress, requested HTTP context, and async execution remain
- * fail-closed until their producer-owned lifecycle/FormatPlan slices land.
+ * Structured body/egress and requested HTTP context remain fail-closed until
+ * their producer-owned lifecycle/FormatPlan slices land. DEFERRED_DIRECT
+ * offloads an already-admitted synchronous exact operation; a canonical
+ * FunctionDesc carrying CMETA_EFFECT_ASYNC is still rejected at mount.
  */
 int chttp_service_init(
     chttp_service *service, const chttp_service_config *config);
