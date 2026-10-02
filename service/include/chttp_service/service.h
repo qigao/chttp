@@ -7,6 +7,7 @@
 #include <data_bind_native.h>
 #include <data_bind_native_binding.h>
 #include <cflow/executor.h>
+#include <cflow/function_projection.h>
 
 #include <stddef.h>
 
@@ -41,7 +42,13 @@ typedef enum chttp_service_execution_mode {
    * Bind/materialize on the HTTP owner callback, defer the response, then run
    * the admitted DataBindNativeExecution on the borrowed bounded executor.
    */
-  CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT = 1
+  CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT = 1,
+  /**
+   * Bind/materialize on the HTTP owner callback, defer the response, then run
+   * the producer-owned typed Service projection through an immutable CFlow Plan
+   * on the borrowed bounded executor.
+   */
+  CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW = 2
 } chttp_service_execution_mode;
 
 /**
@@ -50,10 +57,14 @@ typedef enum chttp_service_execution_mode {
  * All semantic/native identity comes from DataBind/CMeta producer artifacts:
  * - method_plan owns HTTP projection + BindingPlan semantics;
  * - native_binding owns exact request/response/error storage layout;
- * - execution owns FunctionMeta + FunctionAbi + generated exact adapter.
+ * - execution owns FunctionMeta + FunctionAbi + generated exact adapter for
+ *   DIRECT modes;
+ * - cflow_projection owns the producer-admitted Request -> Response capability
+ *   for DEFERRED_CFLOW.
  *
- * Mount validates these three artifacts before publishing the route. The
- * synchronous request hot path performs no reflection lookup/equality work.
+ * Mount validates the selected execution capability against MethodPlan/native
+ * identity before publishing the route. Request execution performs no
+ * FunctionDesc/FunctionAbi lookup.
  */
 typedef struct chttp_service_http_mount {
   size_t size;
@@ -71,11 +82,19 @@ typedef struct chttp_service_http_mount {
    * before destroying the server or Service.
    */
   cflow_executor *executor;
+  /**
+   * Borrowed producer projection required only by DEFERRED_CFLOW.
+   *
+   * Mount copies the admitted projection into service-owned control state and
+   * compiles an immutable one-operation CFlow Plan. Descriptor/callable
+   * providers must remain loaded through Service destruction.
+   */
+  const cflow_function_typed_adapter_projection *cflow_projection;
 } chttp_service_http_mount;
 
 #define CHTTP_SERVICE_HTTP_MOUNT_INIT \
   { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u, \
-    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL }
+    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL, NULL }
 
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
@@ -92,8 +111,10 @@ typedef struct chttp_service_http_mount {
  *
  * Structured body/egress and requested HTTP context remain fail-closed until
  * their producer-owned lifecycle/FormatPlan slices land. DEFERRED_DIRECT
- * offloads an already-admitted synchronous exact operation; a canonical
- * FunctionDesc carrying CMETA_EFFECT_ASYNC is still rejected at mount.
+ * offloads an already-admitted synchronous exact operation. DEFERRED_CFLOW
+ * compiles the producer-owned typed projection once at mount and executes only
+ * the immutable Plan on workers. A canonical FunctionDesc carrying
+ * CMETA_EFFECT_ASYNC is still rejected at mount.
  */
 int chttp_service_init(
     chttp_service *service, const chttp_service_config *config);
@@ -101,15 +122,19 @@ int chttp_service_init(
 /**
  * Mount one already-compiled DataBind HTTP MethodPlan on CHttp::Server.
  *
- * method_plan, native_binding, execution, and every descriptor they reference
- * are borrowed until chttp_service_destroy(). Mount performs canonical CMeta
- * semantic/ABI admission exactly once before route publication. The server
- * copies route metadata, while its route user pointer references immutable
- * service-owned mounted-operation storage.
+ * method_plan, native_binding, the selected execution capability, and every
+ * descriptor/code provider they reference are borrowed until
+ * chttp_service_destroy(). Mount performs canonical semantic/ABI admission
+ * exactly once before route publication. The server copies route metadata,
+ * while its route user pointer references immutable service-owned
+ * mounted-operation storage.
  *
- * INLINE_DIRECT requires executor == NULL. DEFERRED_DIRECT requires a valid
- * borrowed cflow_executor and keeps request/CNet views callback-scoped: only
- * the already-materialized native frame crosses to the worker.
+ * INLINE_DIRECT requires execution and no executor/projection.
+ * DEFERRED_DIRECT requires execution + executor and no projection.
+ * DEFERRED_CFLOW requires executor + cflow_projection and no direct execution.
+ *
+ * Deferred modes keep request/CNet views callback-scoped: only the already
+ * materialized native request frame crosses to the worker.
  */
 int chttp_service_mount_http(
     chttp_service *service,
@@ -120,9 +145,10 @@ int chttp_service_mount_http(
  * Release service-owned bounded scratch/method records.
  *
  * Every server containing routes mounted by this service must be stopped and
- * destroyed before this call. For DEFERRED_DIRECT mounts, accepted executor
- * work must also be idle before server destruction; this prevents a worker
- * from outliving its generation-checked deferred target.
+ * destroyed before this call. For deferred mounts, accepted executor work
+ * must also be idle before server destruction; this prevents a worker from
+ * outliving its generation-checked deferred target. Mounted CFlow Plans are
+ * destroyed here after all worker execution has drained.
  */
 int chttp_service_destroy(chttp_service *service);
 
