@@ -138,7 +138,9 @@ static DataBindStatus chttp_service_decode_component(
   size_t dst = 0u;
   char *buffer;
 
-  if (provider == NULL || provider->service == NULL || source == NULL ||
+  if (provider == NULL || provider->service == NULL ||
+      provider->invocation == NULL ||
+      provider->invocation->scalar_scratch == NULL || source == NULL ||
       out_text == NULL || out_size == NULL)
     return DATA_BIND_ERR_INVALID_ARG;
   if (source_size > provider->service->scalar_capacity) {
@@ -148,7 +150,7 @@ static DataBindStatus chttp_service_decode_component(
     return DATA_BIND_ERR_LIMIT;
   }
 
-  buffer = provider->service->scalar_scratch;
+  buffer = provider->invocation->scalar_scratch;
   while (src < source_size) {
     unsigned char value = (unsigned char)source[src++];
     if (value == (unsigned char)'%') {
@@ -289,7 +291,9 @@ static DataBindStatus chttp_service_scalar_reader_init(
     cserde_reader *reader, DataBindError *error) {
   char *end = NULL;
 
-  if (provider == NULL || provider->service == NULL || entry == NULL ||
+  if (provider == NULL || provider->service == NULL ||
+      provider->invocation == NULL ||
+      provider->invocation->scalar_scratch == NULL || entry == NULL ||
       entry->data == NULL || text == NULL || reader == NULL)
     return DATA_BIND_ERR_INVALID_ARG;
 
@@ -316,10 +320,10 @@ static DataBindStatus chttp_service_scalar_reader_init(
     long long value;
     if (text_size > provider->service->scalar_capacity)
       return DATA_BIND_ERR_LIMIT;
-    memmove(provider->service->scalar_scratch, text, text_size);
-    provider->service->scalar_scratch[text_size] = '\0';
-    value = strtoll(provider->service->scalar_scratch, &end, 10);
-    if (errno != 0 || end == provider->service->scalar_scratch ||
+    memmove(provider->invocation->scalar_scratch, text, text_size);
+    provider->invocation->scalar_scratch[text_size] = '\0';
+    value = strtoll(provider->invocation->scalar_scratch, &end, 10);
+    if (errno != 0 || end == provider->invocation->scalar_scratch ||
         end == NULL || *end != '\0') {
       chttp_service_error_set(
           error, DATA_BIND_ERR_PARSE, "Invalid signed HTTP binding value");
@@ -338,10 +342,10 @@ static DataBindStatus chttp_service_scalar_reader_init(
           error, DATA_BIND_ERR_PARSE, "Invalid unsigned HTTP binding value");
       return DATA_BIND_ERR_PARSE;
     }
-    memmove(provider->service->scalar_scratch, text, text_size);
-    provider->service->scalar_scratch[text_size] = '\0';
-    value = strtoull(provider->service->scalar_scratch, &end, 10);
-    if (errno != 0 || end == provider->service->scalar_scratch ||
+    memmove(provider->invocation->scalar_scratch, text, text_size);
+    provider->invocation->scalar_scratch[text_size] = '\0';
+    value = strtoull(provider->invocation->scalar_scratch, &end, 10);
+    if (errno != 0 || end == provider->invocation->scalar_scratch ||
         end == NULL || *end != '\0') {
       chttp_service_error_set(
           error, DATA_BIND_ERR_PARSE, "Invalid unsigned HTTP binding value");
@@ -356,10 +360,10 @@ static DataBindStatus chttp_service_scalar_reader_init(
     double value;
     if (text_size > provider->service->scalar_capacity)
       return DATA_BIND_ERR_LIMIT;
-    memmove(provider->service->scalar_scratch, text, text_size);
-    provider->service->scalar_scratch[text_size] = '\0';
-    value = strtod(provider->service->scalar_scratch, &end);
-    if (errno != 0 || end == provider->service->scalar_scratch ||
+    memmove(provider->invocation->scalar_scratch, text, text_size);
+    provider->invocation->scalar_scratch[text_size] = '\0';
+    value = strtod(provider->invocation->scalar_scratch, &end);
+    if (errno != 0 || end == provider->invocation->scalar_scratch ||
         end == NULL || *end != '\0') {
       chttp_service_error_set(
           error, DATA_BIND_ERR_PARSE, "Invalid floating HTTP binding value");
@@ -940,10 +944,75 @@ static int chttp_service_execution_admit(
 static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
-  free(record->error_storage);
-  free(record->response_storage);
-  free(record->request_storage);
   memset(record, 0, sizeof(*record));
+}
+
+static void chttp_service_invocation_release(
+    chttp_service_invocation *invocation) {
+  if (invocation == NULL) return;
+  free(invocation->native_workspace);
+  free(invocation->scalar_scratch);
+  free(invocation->error_storage);
+  free(invocation->response_storage);
+  free(invocation->request_storage);
+  memset(invocation, 0, sizeof(*invocation));
+}
+
+static int chttp_service_invocation_init(
+    chttp_service_method_record *record,
+    chttp_service_invocation *invocation) {
+  chttp_service_impl *service;
+
+  if (record == NULL || record->owner == NULL || invocation == NULL ||
+      record->request_bytes == 0u || record->response_bytes == 0u ||
+      record->param_count < 2u || record->param_count > 3u)
+    return SALTS_EINVAL;
+
+  service = record->owner;
+  *invocation = (chttp_service_invocation){0};
+  invocation->record = record;
+  invocation->request_storage =
+      (unsigned char *)calloc(1u, record->request_bytes);
+  invocation->response_storage =
+      (unsigned char *)calloc(1u, record->response_bytes);
+  if (record->error_bytes != 0u)
+    invocation->error_storage =
+        (unsigned char *)calloc(1u, record->error_bytes);
+  invocation->scalar_scratch =
+      (char *)malloc(service->scalar_capacity + 1u);
+  invocation->native_workspace =
+      (unsigned char *)malloc(service->native_workspace_bytes);
+
+  if (invocation->request_storage == NULL ||
+      invocation->response_storage == NULL ||
+      (record->error_bytes != 0u && invocation->error_storage == NULL) ||
+      invocation->scalar_scratch == NULL ||
+      invocation->native_workspace == NULL) {
+    chttp_service_invocation_release(invocation);
+    return SALTS_ENOMEM;
+  }
+
+  invocation->params[0] = invocation->request_storage;
+  invocation->params[1] = invocation->response_storage;
+  invocation->param_bytes[0] = record->request_bytes;
+  invocation->param_bytes[1] = record->response_bytes;
+  if (record->param_count == 3u) {
+    invocation->params[2] = invocation->error_storage;
+    invocation->param_bytes[2] = record->error_bytes;
+  }
+
+  invocation->frame =
+      (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT;
+  invocation->frame.request = invocation->request_storage;
+  invocation->frame.request_bytes = record->request_bytes;
+  invocation->frame.params = invocation->params;
+  invocation->frame.param_bytes = invocation->param_bytes;
+  invocation->frame.param_count = record->param_count;
+
+  invocation->native_options = service->native_options;
+  invocation->native_options.workspace = invocation->native_workspace;
+  invocation->native_options.workspace_bytes = service->native_workspace_bytes;
+  return SALTS_OK;
 }
 
 static int chttp_service_plan_supported(
@@ -1028,6 +1097,7 @@ static int chttp_service_http_execute(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
     chttp_server_response *response) {
+  chttp_service_invocation invocation = {0};
   chttp_service_http_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
   DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
@@ -1037,21 +1107,20 @@ static int chttp_service_http_execute(
   DataBindStatus bind_status;
   int native_status = 0;
   int http_status = 500;
+  int result;
 
   if (record == NULL || record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->execution == NULL ||
-      record->request_storage == NULL ||
-      record->response_storage == NULL || request == NULL || response == NULL)
+      request == NULL || response == NULL)
     return SALTS_EINVAL;
 
-  memset(record->request_storage, 0, record->request_bytes);
-  memset(record->response_storage, 0, record->response_bytes);
-  if (record->error_storage != NULL)
-    memset(record->error_storage, 0, record->error_bytes);
+  result = chttp_service_invocation_init(record, &invocation);
+  if (result != SALTS_OK) return result;
 
   provider_context = (chttp_service_http_provider){
       .service = record->owner,
+      .invocation = &invocation,
       .request = request,
       .staged_content_type = "text/plain"};
 
@@ -1064,63 +1133,64 @@ static int chttp_service_http_execute(
 
   binding = record->binding;
   bind_status = data_bind_binding_plan_bind_inputs(
-      binding, &provider, &record->owner->native_options,
-      &record->frame, &diagnostic);
+      binding, &provider, &invocation.native_options,
+      &invocation.frame, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =
         chttp_service_http_ingress_failure(bind_status);
-    chttp_service_http_release_output(&provider_context);
-    return chttp_service_http_failure_reply(response, failure);
+    result = chttp_service_http_failure_reply(response, failure);
+    goto cleanup;
   }
 
   if (!record->execution->invoke(
           record->execution->context, &native_status,
-          record->params, record->param_count))
+          invocation.params, record->param_count))
     bind_status = DATA_BIND_ERR_RUNTIME;
 
   if (bind_status == DATA_BIND_OK)
     bind_status = data_bind_binding_plan_write_outcome(
-        binding, &provider, &record->frame, native_status,
+        binding, &provider, &invocation.frame, native_status,
         &outcome, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
-    chttp_service_http_release_output(&provider_context);
-    return chttp_server_reply(
+    result = chttp_server_reply(
         response, 500u, "text/plain",
         "Internal Server Error",
         sizeof("Internal Server Error") - 1u);
+    goto cleanup;
   }
 
   if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS) {
-    chttp_service_http_release_output(&provider_context);
-    return chttp_server_reply(
+    result = chttp_server_reply(
         response, 500u, "text/plain",
         "Application Error",
         sizeof("Application Error") - 1u);
+    goto cleanup;
   }
 
   if (!data_bind_http_method_plan_status_for_outcome(
           record->method_plan, &outcome, &http_status)) {
-    chttp_service_http_release_output(&provider_context);
-    return chttp_server_reply(
+    result = chttp_server_reply(
         response, 500u, "text/plain", "Internal Server Error", 21u);
+    goto cleanup;
   }
 
   if (!provider_context.output_published) {
-    chttp_service_http_release_output(&provider_context);
-    return chttp_server_reply(
+    result = chttp_server_reply(
         response, (unsigned int)http_status, "text/plain", NULL, 0u);
+    goto cleanup;
   }
 
-  {
-    int reply_status = chttp_server_reply_buffer(
-        response, (unsigned int)http_status,
-        provider_context.staged_content_type,
-        provider_context.output_buffer);
-    chttp_service_http_release_output(&provider_context);
-    return reply_status;
-  }
+  result = chttp_server_reply_buffer(
+      response, (unsigned int)http_status,
+      provider_context.staged_content_type,
+      provider_context.output_buffer);
+
+cleanup:
+  chttp_service_http_release_output(&provider_context);
+  chttp_service_invocation_release(&invocation);
+  return result;
 }
 
 static int chttp_service_http_handler(
@@ -1128,17 +1198,9 @@ static int chttp_service_http_handler(
     chttp_server_response *response) {
   chttp_service_method_record *record =
       (chttp_service_method_record *)user;
-  int status;
-
   if (record == NULL || record->owner == NULL)
     return SALTS_EINVAL;
-  if (record->owner->executing)
-    return SALTS_EBUSY;
-
-  record->owner->executing = 1;
-  status = chttp_service_http_execute(record, request, response);
-  record->owner->executing = 0;
-  return status;
+  return chttp_service_http_execute(record, request, response);
 }
 
 int chttp_service_init(
@@ -1163,26 +1225,19 @@ int chttp_service_init(
   if (impl == NULL) return SALTS_ENOMEM;
   impl->methods = (chttp_service_method_record *)calloc(
       config->method_capacity, sizeof(*impl->methods));
-  impl->scalar_scratch =
-      (char *)malloc(config->max_binding_value_bytes + 1u);
-  impl->native_workspace =
-      (unsigned char *)malloc(config->native_workspace_bytes);
-  if (impl->methods == NULL || impl->scalar_scratch == NULL ||
-      impl->native_workspace == NULL) {
-    free(impl->native_workspace);
-    free(impl->scalar_scratch);
-    free(impl->methods);
+  if (impl->methods == NULL) {
     free(impl);
     return SALTS_ENOMEM;
   }
 
   impl->method_capacity = config->method_capacity;
   impl->scalar_capacity = config->max_binding_value_bytes;
+  impl->native_workspace_bytes = config->native_workspace_bytes;
   impl->response_capacity = config->max_response_body_bytes;
   impl->max_call_frame_bytes = config->max_call_frame_bytes;
   impl->native_options =
       (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
-  impl->native_options.workspace = impl->native_workspace;
+  impl->native_options.workspace = NULL;
   impl->native_options.workspace_bytes = config->native_workspace_bytes;
   impl->native_options.max_depth = config->native_max_depth;
   impl->native_options.max_items = config->native_max_items;
@@ -1245,37 +1300,7 @@ int chttp_service_mount_http(
       .request_bytes = request_bytes,
       .response_bytes = response_bytes,
       .error_bytes = error_bytes,
-      .param_count = param_count,
-      .frame = (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT};
-
-  record->request_storage =
-      (unsigned char *)calloc(1u, record->request_bytes);
-  record->response_storage =
-      (unsigned char *)calloc(1u, record->response_bytes);
-  if (record->error_bytes != 0u)
-    record->error_storage =
-        (unsigned char *)calloc(1u, record->error_bytes);
-  if (record->request_storage == NULL ||
-      record->response_storage == NULL ||
-      (record->error_bytes != 0u && record->error_storage == NULL)) {
-    free(route);
-    chttp_service_method_release(record);
-    return SALTS_ENOMEM;
-  }
-
-  record->params[0] = record->request_storage;
-  record->params[1] = record->response_storage;
-  record->param_bytes[0] = record->request_bytes;
-  record->param_bytes[1] = record->response_bytes;
-  if (record->param_count == 3u) {
-    record->params[2] = record->error_storage;
-    record->param_bytes[2] = record->error_bytes;
-  }
-  record->frame.request = record->request_storage;
-  record->frame.request_bytes = record->request_bytes;
-  record->frame.params = record->params;
-  record->frame.param_bytes = record->param_bytes;
-  record->frame.param_count = record->param_count;
+      .param_count = param_count};
 
   route_options.method = method;
   route_options.path = route;
@@ -1303,8 +1328,6 @@ int chttp_service_destroy(chttp_service *service) {
   if (impl == NULL) return SALTS_OK;
   for (i = 0u; i < impl->method_count; ++i)
     chttp_service_method_release(&impl->methods[i]);
-  free(impl->native_workspace);
-  free(impl->scalar_scratch);
   free(impl->methods);
   free(impl);
   service->impl = NULL;
