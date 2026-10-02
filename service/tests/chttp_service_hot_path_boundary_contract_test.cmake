@@ -115,9 +115,28 @@ if(NOT SINGLE_FLIGHT_POS EQUAL -1)
     "Service must not serialize independent invocations through a global executing gate")
 endif()
 
-string(FIND "${SERVICE_TEXT}" "chttp_server_response_defer" DEFER_POS)
-if(NOT DEFER_POS EQUAL -1)
-  message(FATAL_ERROR "Current synchronous Service epoch must not silently introduce deferred request ownership")
+foreach(REQUIRED_DEFERRED
+    "chttp_server_response_defer"
+    "cflow_executor_try_post_task"
+    "chttp_server_deferred_reply_buffer"
+    "cflow_executor_task")
+  string(FIND "${SERVICE_TEXT}" "${REQUIRED_DEFERRED}" POS)
+  if(POS EQUAL -1)
+    message(FATAL_ERROR
+      "Deferred Service execution is missing canonical ownership/executor marker: ${REQUIRED_DEFERRED}")
+  endif()
+endforeach()
+
+string(FIND "${SERVICE_TEXT}" "cflow_executor_control_post_task" BLOCKING_POST)
+if(NOT BLOCKING_POST EQUAL -1)
+  message(FATAL_ERROR
+    "HTTP owner path must not wait for bounded executor capacity")
+endif()
+
+string(FIND "${INVOCATION_TEXT}" "chttp_server_request_view" INVOCATION_REQUEST_VIEW)
+if(NOT INVOCATION_REQUEST_VIEW EQUAL -1)
+  message(FATAL_ERROR
+    "Deferred invocation must not retain callback-scoped HTTP request views")
 endif()
 
 foreach(FORBIDDEN "DataBind" "cmeta_" "cflow_" "salts_plugin")
