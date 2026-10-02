@@ -3,6 +3,9 @@
 #include <http_client/http.h>
 #include <salts_cmeta_fixed_width.h>
 #include "chttp_service.http.h"
+#include "chttp_service_plugin.http.h"
+#include "chttp_service_plugin.service_native.h"
+#include "chttp_service_plugin_native.h"
 #include "tinytest.h"
 
 #include <salts/clock.h>
@@ -1114,6 +1117,185 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(chttp_service_destroy(&service), SALTS_OK);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+  it("executes a generated Plugin Service under one mount-owned lease") {
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindNativeTypeBinding request_native =
+        DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+    DataBindNativeTypeBinding response_native =
+        DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
+    const DataBindHttpProjectionConfig *projection = NULL;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    salts_plugin_registry registry = {0};
+    salts_plugin_registry_config registry_config = {.capacity = 2u};
+    salts_plugin_ref plugin_ref = {0};
+    salts_plugin_lifecycle_info lifecycle = {0};
+    salts_plugin_lease rejected_lease = {0};
+    const salts_plugin_manifest *rejected_manifest = NULL;
+    cflow_executor executor = {0};
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    chttp_response response = {0};
+    bool quiescent = true;
+    uint16_t port = 0u;
+    char uri[64];
+
+    check_equal(
+        CHttpPlugin_codec_create(&contract, &bind_error),
+        DATA_BIND_OK);
+    check_not_null(contract);
+    check_equal(
+        databind_11_CHttpPlugin_4_Calc_3_Add__databind_native_binding(
+            &request_native, &response_native, &native, &bind_error),
+        DATA_BIND_OK);
+
+    projection = data_bind_http_projection_artifact_find(
+        &databind_chttp_service_plugin_http_projection, "Calc", "Add");
+    check_not_null(projection);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &native,
+            &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+    check_equal(
+        data_bind_http_method_plan_route(method_plan), "/plugin/{left}");
+
+    check_equal(
+        salts_plugin_registry_init(&registry, &registry_config),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_load(
+            &registry, GENERATED_CHTTP_SERVICE_PLUGIN_PATH, &plugin_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_start(&registry, plugin_ref),
+        SALTS_PLUGIN_OK);
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
+    service_config.max_call_frame_bytes = 512u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+
+    check_true(cflow_executor_worker_init_with_capacity(
+        &executor, 1u, 2u));
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    invalid.method_plan = method_plan;
+    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+    invalid.executor = &executor;
+    invalid.plugin_ref = plugin_ref;
+    invalid.plugin_export_id = "CHttpPlugin.Calc.Add";
+    check_equal(
+        chttp_service_mount_http(&service, &server, &invalid),
+        SALTS_EINVAL);
+
+    mount.method_plan = method_plan;
+    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+    mount.executor = &executor;
+    mount.plugin_registry = &registry;
+    mount.plugin_ref = plugin_ref;
+    mount.plugin_export_id = "CHttpPlugin.Calc.Add";
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount),
+        SALTS_OK);
+
+    check_equal(
+        salts_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        SALTS_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)1u);
+
+    /*
+     * Close new lease admission before the HTTP request. The request can only
+     * succeed if mount already cached the exact execution capability under its
+     * own live lease.
+     */
+    check_equal(
+        salts_plugin_registry_request_stop(&registry, plugin_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_acquire(
+            &registry, plugin_ref, &rejected_lease, &rejected_manifest),
+        SALTS_PLUGIN_INVALID_STATE);
+    check_false(salts_plugin_lease_valid(rejected_lease));
+    check_null(rejected_manifest);
+    check_equal(
+        salts_plugin_registry_unload(&registry, plugin_ref),
+        SALTS_PLUGIN_BUSY);
+    check_equal(
+        salts_plugin_registry_poll_quiescent(
+            &registry, plugin_ref, &quiescent),
+        SALTS_PLUGIN_OK);
+    check_false(quiescent);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/plugin/3?right=4&scale=2", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body_size, (size_t)2u);
+    check_equal(response.body, "11", 2u);
+    chttp_response_destroy(&response);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+
+    check_equal(
+        salts_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        SALTS_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)1u);
+
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(
+        salts_plugin_registry_poll_quiescent(
+            &registry, plugin_ref, &quiescent),
+        SALTS_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(
+        salts_plugin_registry_unload(&registry, plugin_ref),
+        SALTS_PLUGIN_OK);
+    check_equal(
+        salts_plugin_registry_destroy(&registry),
+        SALTS_PLUGIN_OK);
+
+    cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }

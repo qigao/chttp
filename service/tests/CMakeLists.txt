@@ -6,19 +6,45 @@ salts_idl_target(
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.projection.json")
 
+salts_idl_target(
+  TARGET chttp_service_plugin_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.schema"
+  COMPONENT "CHttpPlugin.CalcPlugin"
+  VERSION "1.0.0"
+  ARTIFACT_NAME "chttp_service_plugin"
+  ARTIFACTS NATIVE PLUGIN
+  TRANSPORTS HTTP
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json"
+  SOURCES
+    chttp_service_plugin_business.c)
+
+# NATIVE and PLUGIN share one business implementation. The public salts_idl
+# SOURCES contract feeds PLUGIN; attach the same source explicitly to the local
+# NATIVE fixture so its exact generated execution descriptor is link-complete.
+target_sources(chttp_service_plugin_fixture_native PRIVATE
+  chttp_service_plugin_business.c)
+
 add_executable(chttp_service_http_test
   chttp_service_http_test.c)
 
 target_link_libraries(chttp_service_http_test PRIVATE
   CHttp::Service
   CHttp::Client
+  chttp_service_plugin_fixture_native
   Salts::TinyTest)
 
 target_include_directories(chttp_service_http_test PRIVATE
-  "${chttp_service_http_fixture_GENERATED_DIR}")
+  "${chttp_service_http_fixture_GENERATED_DIR}"
+  "${chttp_service_plugin_fixture_GENERATED_DIR}")
 
 add_dependencies(chttp_service_http_test
-  chttp_service_http_fixture_idl_codegen)
+  chttp_service_http_fixture_idl_codegen
+  chttp_service_plugin_fixture_plugin
+  chttp_service_plugin_fixture_native)
+
+target_compile_definitions(chttp_service_http_test PRIVATE
+  GENERATED_CHTTP_SERVICE_PLUGIN_PATH="$<TARGET_FILE:chttp_service_plugin_fixture_plugin>")
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
 

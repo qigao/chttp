@@ -2,6 +2,7 @@
 
 #include <salts/error_codes.h>
 #include <salts_buffer.h>
+#include <data_bind_plugin_execution.h>
 
 #include <cserde/cserde.h>
 #include <cflow/plan.h>
@@ -25,6 +26,12 @@ typedef struct chttp_service_method_record {
   chttp_service_execution_mode execution_mode;
   cflow_executor *executor;
   cflow_plan cflow_plan;
+
+  salts_plugin_registry *plugin_registry;
+  salts_plugin_lease plugin_lease;
+  DataBindPluginOperationBinding plugin_operation;
+  DataBindServiceNativeBinding plugin_native;
+  DataBindNativeExecution plugin_execution;
 
   size_t request_bytes;
   size_t response_bytes;
@@ -1009,52 +1016,111 @@ static int chttp_service_cflow_admit(
              : SALTS_ENOTSUP;
 }
 
+static int chttp_service_plugin_resolve(
+    chttp_service_method_record *record,
+    salts_plugin_registry *registry,
+    salts_plugin_ref ref,
+    const char *export_id) {
+  salts_plugin_lease lease = {0};
+  const salts_plugin_manifest *manifest = NULL;
+  const salts_plugin_export *catalog_entry = NULL;
+  const salts_plugin_export *function_entry = NULL;
+  data_bind_plugin_catalog *catalog = NULL;
+  DataBindPluginOperationBinding operation =
+      DATA_BIND_PLUGIN_OPERATION_BINDING_INIT;
+  DataBindNativeExecution execution =
+      (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  size_t count;
+  size_t i;
+  int found = 0;
+
+  if (record == NULL || registry == NULL ||
+      !salts_plugin_ref_valid(ref) ||
+      export_id == NULL || export_id[0] == '\0')
+    return SALTS_EINVAL;
+
+  if (salts_plugin_registry_acquire(
+          registry, ref, &lease, &manifest) != SALTS_PLUGIN_OK)
+    return SALTS_EINVAL;
+
+  if (manifest == NULL ||
+      salts_plugin_manifest_find_export(
+          manifest, DATA_BIND_PLUGIN_CATALOG_EXPORT_ID,
+          &catalog_entry) != SALTS_PLUGIN_OK ||
+      catalog_entry == NULL ||
+      salts_plugin_export_require_interface(
+          catalog_entry,
+          DATA_BIND_PLUGIN_CATALOG_CONTRACT_ID,
+          DATA_BIND_PLUGIN_CATALOG_CONTRACT_VERSION,
+          0u,
+          data_bind_plugin_catalog_interface()) != SALTS_PLUGIN_OK) {
+    (void)salts_plugin_registry_release(registry, &lease);
+    return SALTS_EINVAL;
+  }
+
+  catalog =
+      (data_bind_plugin_catalog *)catalog_entry->value.interface.value;
+  if (!data_bind_plugin_catalog_valid(catalog)) {
+    (void)salts_plugin_registry_release(registry, &lease);
+    return SALTS_EINVAL;
+  }
+
+  count = data_bind_plugin_catalog_operation_count(catalog);
+  for (i = 0u; i < count; ++i) {
+    DataBindPluginOperationBinding candidate =
+        DATA_BIND_PLUGIN_OPERATION_BINDING_INIT;
+    error = (DataBindError)DATA_BIND_ERROR_INIT;
+    if (data_bind_plugin_catalog_operation_at(
+            catalog, i, &candidate, &error) != DATA_BIND_OK ||
+        !data_bind_plugin_operation_binding_valid(&candidate))
+      continue;
+    if (strcmp(candidate.export_id, export_id) != 0)
+      continue;
+    if (found) {
+      (void)salts_plugin_registry_release(registry, &lease);
+      return SALTS_EINVAL;
+    }
+    operation = candidate;
+    found = 1;
+  }
+
+  if (!found ||
+      salts_plugin_manifest_find_export(
+          manifest, export_id, &function_entry) != SALTS_PLUGIN_OK ||
+      function_entry == NULL ||
+      !data_bind_plugin_operation_execution_admit(
+          &operation, function_entry, &execution)) {
+    (void)salts_plugin_registry_release(registry, &lease);
+    return SALTS_EINVAL;
+  }
+
+  record->plugin_registry = registry;
+  record->plugin_lease = lease;
+  record->plugin_operation = operation;
+  record->plugin_execution = execution;
+  if (!data_bind_plugin_operation_native_binding(
+          &record->plugin_operation, &record->plugin_native)) {
+    (void)salts_plugin_registry_release(registry, &record->plugin_lease);
+    memset(&record->plugin_lease, 0, sizeof(record->plugin_lease));
+    record->plugin_registry = NULL;
+    return SALTS_EINVAL;
+  }
+
+  record->native_binding = &record->plugin_native;
+  record->execution = &record->plugin_execution;
+  return SALTS_OK;
+}
+
 static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
+  if (record->plugin_registry != NULL &&
+      salts_plugin_lease_valid(record->plugin_lease))
+    (void)salts_plugin_registry_release(
+        record->plugin_registry, &record->plugin_lease);
   memset(record, 0, sizeof(*record));
-}
-
-static void chttp_service_typed_error_restore_zero(
-    chttp_service_invocation *invocation,
-    const DataBindServiceNativeBinding *native) {
-  const DataBindNativeErrorBinding *binding;
-  const cmeta_data_desc *data = NULL;
-  DataBindError error = DATA_BIND_ERROR_INIT;
-  uint32_t kind = 0u;
-
-  if (invocation == NULL || native == NULL ||
-      invocation->error_storage == NULL || native->errors == NULL ||
-      native->error_count == 0u ||
-      native->error_kind_bytes != sizeof(kind) ||
-      native->error_kind_offset > native->error_envelope_bytes ||
-      sizeof(kind) > native->error_envelope_bytes - native->error_kind_offset)
-    return;
-
-  memcpy(
-      &kind, invocation->error_storage + native->error_kind_offset,
-      sizeof(kind));
-  if (kind == 0u || (size_t)kind > native->error_count)
-    return;
-
-  binding = &native->errors[(size_t)kind - 1u];
-  if (binding->size < sizeof(*binding) ||
-      binding->kind_value != kind ||
-      binding->data_resolver == NULL ||
-      binding->payload_offset > native->error_envelope_bytes)
-    return;
-  if (binding->data_resolver(&data, &error) != DATA_BIND_OK ||
-      !cmeta_data_desc_valid(data) || data->storage_type == NULL ||
-      data->storage_type->size >
-          native->error_envelope_bytes - binding->payload_offset)
-    return;
-
-  (void)cmeta_data_value_restore_zero(
-      data, invocation->error_storage + binding->payload_offset);
-  memset(
-      invocation->error_storage + native->error_kind_offset, 0,
-      sizeof(kind));
 }
 
 static void chttp_service_invocation_release(
@@ -1065,7 +1131,15 @@ static void chttp_service_invocation_release(
                ? invocation->record->native_binding
                : NULL;
   if (invocation->frame_live && native != NULL) {
-    chttp_service_typed_error_restore_zero(invocation, native);
+    if (invocation->error_storage != NULL) {
+      DataBindError error = DATA_BIND_ERROR_INIT;
+      (void)data_bind_service_native_error_restore_zero(
+          native, invocation->error_storage,
+          invocation->record != NULL
+              ? invocation->record->error_bytes
+              : 0u,
+          &error);
+    }
     if (native->response != NULL && native->response->data != NULL &&
         invocation->response_storage != NULL)
       (void)cmeta_data_value_restore_zero(
@@ -1401,8 +1475,10 @@ static int chttp_service_http_execute_deferred(
   if (record == NULL || record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->executor == NULL ||
-      (record->execution_mode ==
-           CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+      ((record->execution_mode ==
+            CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+        record->execution_mode ==
+            CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN) &&
        record->execution == NULL) ||
       (record->execution_mode ==
            CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
@@ -1582,7 +1658,9 @@ static int chttp_service_http_handler(
   if (record->execution_mode ==
           CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
       record->execution_mode ==
-          CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW)
+          CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW ||
+      record->execution_mode ==
+          CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN)
     return chttp_service_http_execute_deferred(
         record, request, response);
   return chttp_service_http_execute(record, request, response);
@@ -1641,6 +1719,8 @@ int chttp_service_mount_http(
   chttp_method method;
   const char *method_text;
   const char *route_text;
+  const DataBindServiceNativeBinding *native = NULL;
+  const DataBindNativeExecution *execution = NULL;
   char *route = NULL;
   size_t request_bytes = 0u;
   size_t response_bytes = 0u;
@@ -1648,65 +1728,122 @@ int chttp_service_mount_http(
   size_t param_count = 0u;
   const DataBindBindingPlan *binding;
   int status;
+  int plugin_mode;
 
   if (service == NULL || service->impl == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
-      mount->method_plan == NULL || mount->native_binding == NULL ||
-      (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
-       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
-       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW) ||
-      (mount->execution_mode == CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
-       (mount->execution == NULL || mount->executor != NULL ||
-        mount->cflow_projection != NULL)) ||
-      (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
-       (mount->execution == NULL || mount->executor == NULL ||
-        !cflow_executor_valid(mount->executor) ||
-        mount->cflow_projection != NULL)) ||
-      (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
-       (mount->execution != NULL || mount->executor == NULL ||
-        !cflow_executor_valid(mount->executor) ||
-        mount->cflow_projection == NULL)))
+      mount->method_plan == NULL)
     return SALTS_EINVAL;
+
+  plugin_mode =
+      mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+  if (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
+      mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+      mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+      !plugin_mode)
+    return SALTS_EINVAL;
+
+  if (plugin_mode) {
+    if (mount->native_binding != NULL || mount->execution != NULL ||
+        mount->cflow_projection != NULL ||
+        mount->executor == NULL ||
+        !cflow_executor_valid(mount->executor) ||
+        mount->plugin_registry == NULL ||
+        !salts_plugin_ref_valid(mount->plugin_ref) ||
+        mount->plugin_export_id == NULL ||
+        mount->plugin_export_id[0] == '\0')
+      return SALTS_EINVAL;
+  } else {
+    if (mount->plugin_registry != NULL ||
+        salts_plugin_ref_valid(mount->plugin_ref) ||
+        mount->plugin_export_id != NULL ||
+        mount->native_binding == NULL)
+      return SALTS_EINVAL;
+    if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
+        (mount->execution == NULL || mount->executor != NULL ||
+         mount->cflow_projection != NULL))
+      return SALTS_EINVAL;
+    if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+        (mount->execution == NULL || mount->executor == NULL ||
+         !cflow_executor_valid(mount->executor) ||
+         mount->cflow_projection != NULL))
+      return SALTS_EINVAL;
+    if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+        (mount->execution != NULL || mount->executor == NULL ||
+         !cflow_executor_valid(mount->executor) ||
+         mount->cflow_projection == NULL))
+      return SALTS_EINVAL;
+  }
+
   if (!chttp_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
 
   impl = (chttp_service_impl *)service->impl;
-  if (impl->method_count == impl->method_capacity) return SALTS_ENOBUFS;
+  if (impl->method_count == impl->method_capacity)
+    return SALTS_ENOBUFS;
+
+  record = &impl->methods[impl->method_count];
+  memset(record, 0, sizeof(*record));
+  record->owner = impl;
+  record->method_plan = mount->method_plan;
+  record->execution_mode = mount->execution_mode;
+  record->executor = mount->executor;
+
+  if (plugin_mode) {
+    status = chttp_service_plugin_resolve(
+        record, mount->plugin_registry, mount->plugin_ref,
+        mount->plugin_export_id);
+    if (status != SALTS_OK) {
+      chttp_service_method_release(record);
+      return status;
+    }
+    native = record->native_binding;
+    execution = record->execution;
+  } else {
+    native = mount->native_binding;
+    execution = mount->execution;
+    record->native_binding = native;
+    record->execution = execution;
+  }
 
   if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW)
     status = chttp_service_cflow_admit(
-        mount->method_plan, mount->native_binding,
-        mount->cflow_projection, impl->max_call_frame_bytes,
+        mount->method_plan, native, mount->cflow_projection,
+        impl->max_call_frame_bytes,
         &request_bytes, &response_bytes, &error_bytes, &param_count);
   else
     status = chttp_service_direct_admit(
-        mount->method_plan, mount->native_binding, mount->execution,
-        impl->max_call_frame_bytes, &request_bytes, &response_bytes,
-        &error_bytes, &param_count);
-  if (status != SALTS_OK) return status;
+        mount->method_plan, native, execution,
+        impl->max_call_frame_bytes,
+        &request_bytes, &response_bytes, &error_bytes, &param_count);
+  if (status != SALTS_OK) {
+    chttp_service_method_release(record);
+    return status;
+  }
+
   binding = data_bind_http_method_plan_binding(mount->method_plan);
-  if (binding == NULL) return SALTS_EINVAL;
+  if (binding == NULL) {
+    chttp_service_method_release(record);
+    return SALTS_EINVAL;
+  }
+  record->binding = binding;
+  record->request_bytes = request_bytes;
+  record->response_bytes = response_bytes;
+  record->error_bytes = error_bytes;
+  record->param_count = param_count;
 
   method_text = data_bind_http_method_plan_method(mount->method_plan);
   route_text = data_bind_http_method_plan_route(mount->method_plan);
   status = chttp_service_method_from_text(method_text, &method);
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK) {
+    chttp_service_method_release(record);
+    return status;
+  }
   status = chttp_service_lower_route(route_text, &route);
-  if (status != SALTS_OK) return status;
-
-  record = &impl->methods[impl->method_count];
-  *record = (chttp_service_method_record){
-      .owner = impl,
-      .method_plan = mount->method_plan,
-      .binding = binding,
-      .native_binding = mount->native_binding,
-      .execution = mount->execution,
-      .execution_mode = mount->execution_mode,
-      .executor = mount->executor,
-      .request_bytes = request_bytes,
-      .response_bytes = response_bytes,
-      .error_bytes = error_bytes,
-      .param_count = param_count};
+  if (status != SALTS_OK) {
+    chttp_service_method_release(record);
+    return status;
+  }
 
   if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW) {
     cflow_graph graph = {0};

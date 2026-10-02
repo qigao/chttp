@@ -7,6 +7,7 @@
 #include <data_bind_native.h>
 #include <data_bind_native_binding.h>
 #include <cflow/executor.h>
+#include <salts/plugin.h>
 #include <cflow/function_projection.h>
 
 #include <stddef.h>
@@ -48,7 +49,13 @@ typedef enum chttp_service_execution_mode {
    * the producer-owned typed Service projection through an immutable CFlow Plan
    * on the borrowed bounded executor.
    */
-  CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW = 2
+  CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW = 2,
+  /**
+   * Resolve one generated Plugin Service capability at mount, retain a
+   * dedicated Plugin lease, then execute the admitted exact native adapter on
+   * the borrowed bounded executor.
+   */
+  CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN = 3
 } chttp_service_execution_mode;
 
 /**
@@ -60,7 +67,10 @@ typedef enum chttp_service_execution_mode {
  * - execution owns FunctionMeta + FunctionAbi + generated exact adapter for
  *   DIRECT modes;
  * - cflow_projection owns the producer-admitted Request -> Response capability
- *   for DEFERRED_CFLOW.
+ *   for DEFERRED_CFLOW;
+ * - Plugin registry/ref/export identity are control-plane inputs only for
+ *   DEFERRED_PLUGIN. Mount resolves and caches the canonical
+ *   DataBindNativeExecution while holding its own DSO lease.
  *
  * Mount validates the selected execution capability against MethodPlan/native
  * identity before publishing the route. Request execution performs no
@@ -90,11 +100,25 @@ typedef struct chttp_service_http_mount {
    * providers must remain loaded through Service destruction.
    */
   const cflow_function_typed_adapter_projection *cflow_projection;
+
+  /**
+   * DEFERRED_PLUGIN control-plane inputs.
+   *
+   * Mount acquires an independent lease from plugin_registry/plugin_ref,
+   * resolves plugin_export_id through the generated DataBind Service catalog,
+   * admits the matching FUNCTION export to DataBindNativeExecution, and keeps
+   * the lease until Service destruction.
+   *
+   * Non-Plugin modes require these fields to remain zero/NULL.
+   */
+  salts_plugin_registry *plugin_registry;
+  salts_plugin_ref plugin_ref;
+  const char *plugin_export_id;
 } chttp_service_http_mount;
 
 #define CHTTP_SERVICE_HTTP_MOUNT_INIT \
   { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u, \
-    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL, NULL }
+    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, {0u, 0u}, NULL }
 
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
@@ -132,6 +156,9 @@ int chttp_service_init(
  * INLINE_DIRECT requires execution and no executor/projection.
  * DEFERRED_DIRECT requires execution + executor and no projection.
  * DEFERRED_CFLOW requires executor + cflow_projection and no direct execution.
+ * DEFERRED_PLUGIN requires executor + plugin_registry + plugin_ref +
+ * plugin_export_id, and derives native_binding/execution under a mount-owned
+ * Plugin lease.
  *
  * Deferred modes keep request/CNet views callback-scoped: only the already
  * materialized native request frame crosses to the worker.
