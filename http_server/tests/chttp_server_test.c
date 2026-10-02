@@ -1763,6 +1763,186 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
+  it("retains deferred response buffers through the H1 send terminal") {
+    static char retained_body[] = "retained-deferred";
+    static const chttp_header headers[] = {
+        {"X-Deferred-Retained", "yes"}};
+    static const char request[] =
+        "GET /deferred HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n";
+    chttp_server server = {0};
+    chttp_server_config config = chttp_server_test_config();
+    chttp_server_test_deferred_probe deferred_probe;
+    chttp_server_retained_response_probe retained_probe;
+    chttp_server_test_socket client = CHTTP_SERVER_TEST_INVALID_SOCKET;
+    mem_buffer_t *buffer = NULL;
+    char response[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
+    size_t response_size = 0u;
+    uint64_t deadline;
+    uint16_t port = 0u;
+
+    memset(&deferred_probe, 0, sizeof(deferred_probe));
+    memset(&retained_probe, 0, sizeof(retained_probe));
+    atomic_init(&deferred_probe.acquired, 0);
+    atomic_init(&retained_probe.calls, 0);
+    atomic_init(&retained_probe.releases, 0);
+    config.session_capacity = 0u;
+
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(
+        chttp_server_get(
+            &server, "/deferred", chttp_server_test_deferred,
+            &deferred_probe),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
+    check_equal(
+        chttp_server_test_raw_send(client, request, sizeof(request) - 1u),
+        SALTS_OK);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(
+               &deferred_probe.acquired, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(
+            &deferred_probe.acquired, memory_order_acquire),
+        1);
+
+    buffer = mem_wrap_external(
+        retained_body, sizeof(retained_body) - 1u,
+        chttp_server_test_retained_release, &retained_probe);
+    check_not_null(buffer);
+    mem_set_used(buffer, sizeof(retained_body) - 1u);
+
+    check_equal(
+        chttp_server_deferred_reply_buffer(
+            &deferred_probe.handle, 200u, "text/plain",
+            headers, sizeof(headers) / sizeof(headers[0]), buffer),
+        SALTS_OK);
+    check_null(deferred_probe.handle.impl);
+    mem_buffer_release(buffer);
+    buffer = NULL;
+
+    check_equal(
+        atomic_load_explicit(&retained_probe.releases, memory_order_acquire),
+        0);
+    check_equal(
+        chttp_server_test_raw_receive(
+            client, response, sizeof(response), &response_size, true, NULL),
+        SALTS_OK);
+    check_not_null(strstr(response, "HTTP/1.1 200 OK"));
+    check_not_null(strstr(response, "X-Deferred-Retained: yes"));
+    check_not_null(strstr(response, "\r\n\r\nretained-deferred"));
+    check_equal(
+        chttp_server_test_wait_active(
+            &server, 0u, CHTTP_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(
+               &retained_probe.releases, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(&retained_probe.releases, memory_order_acquire),
+        1);
+
+    chttp_server_test_close_socket(client);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("keeps deferred retained replies pending after bounded admission failure") {
+    static char oversized_body[CHTTP_SERVER_TEST_LARGE_BODY_BYTES + 1u];
+    static const char request[] =
+        "GET /deferred HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n";
+    chttp_server server = {0};
+    chttp_server_config config = chttp_server_test_config();
+    chttp_server_test_deferred_probe deferred_probe;
+    chttp_server_retained_response_probe retained_probe;
+    chttp_server_test_socket client = CHTTP_SERVER_TEST_INVALID_SOCKET;
+    mem_buffer_t *buffer = NULL;
+    char response[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
+    size_t response_size = 0u;
+    uint64_t deadline;
+    uint16_t port = 0u;
+
+    memset(&deferred_probe, 0, sizeof(deferred_probe));
+    memset(&retained_probe, 0, sizeof(retained_probe));
+    atomic_init(&deferred_probe.acquired, 0);
+    atomic_init(&retained_probe.calls, 0);
+    atomic_init(&retained_probe.releases, 0);
+    config.session_capacity = 0u;
+
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(
+        chttp_server_get(
+            &server, "/deferred", chttp_server_test_deferred,
+            &deferred_probe),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
+    check_equal(
+        chttp_server_test_raw_send(client, request, sizeof(request) - 1u),
+        SALTS_OK);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(
+               &deferred_probe.acquired, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(
+            &deferred_probe.acquired, memory_order_acquire),
+        1);
+
+    buffer = mem_wrap_external(
+        oversized_body, sizeof(oversized_body),
+        chttp_server_test_retained_release, &retained_probe);
+    check_not_null(buffer);
+    mem_set_used(buffer, sizeof(oversized_body));
+
+    check_equal(
+        chttp_server_deferred_reply_buffer(
+            &deferred_probe.handle, 200u, "application/octet-stream",
+            NULL, 0u, buffer),
+        SALTS_EMSGSIZE);
+    check_not_null(deferred_probe.handle.impl);
+    mem_buffer_release(buffer);
+    buffer = NULL;
+    check_equal(
+        atomic_load_explicit(&retained_probe.releases, memory_order_acquire),
+        1);
+
+    check_equal(
+        chttp_server_deferred_cancel(&deferred_probe.handle), SALTS_OK);
+    check_null(deferred_probe.handle.impl);
+    check_equal(
+        chttp_server_test_raw_receive(
+            client, response, sizeof(response), &response_size, true, NULL),
+        SALTS_OK);
+    check_equal(response_size, (size_t)0u);
+
+    chttp_server_test_close_socket(client);
+    check_equal(
+        chttp_server_test_wait_active(
+            &server, 0u, CHTTP_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("cancels a deferred response and releases its connection before stop") {
     static const char request[] =
         "GET /deferred HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
