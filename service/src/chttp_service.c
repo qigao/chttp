@@ -4,6 +4,8 @@
 #include <salts_buffer.h>
 
 #include <cserde/cserde.h>
+#include <cflow/plan.h>
+#include <cmeta/data.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -22,6 +24,7 @@ typedef struct chttp_service_method_record {
   const DataBindNativeExecution *execution;
   chttp_service_execution_mode execution_mode;
   cflow_executor *executor;
+  cflow_plan cflow_plan;
 
   size_t request_bytes;
   size_t response_bytes;
@@ -57,6 +60,7 @@ typedef struct chttp_service_invocation {
   unsigned char *native_workspace;
   DataBindNativeOptions native_options;
   chttp_server_deferred deferred;
+  int frame_live;
 } chttp_service_invocation;
 
 typedef struct chttp_service_scalar_reader {
@@ -823,10 +827,12 @@ static int chttp_service_add_size(
   return *total <= limit;
 }
 
-static int chttp_service_execution_admit(
+static int chttp_service_capability_admit(
     const DataBindHttpMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
-    const DataBindNativeExecution *execution,
+    const cmeta_function_desc *capability_function,
+    const cmeta_function_abi_desc *capability_abi,
+    int allow_typed_errors,
     size_t max_frame_bytes,
     size_t *request_bytes,
     size_t *response_bytes,
@@ -838,13 +844,15 @@ static int chttp_service_execution_admit(
   size_t total = 0u;
   size_t i;
 
-  if (method_plan == NULL || native == NULL || execution == NULL ||
+  if (method_plan == NULL || native == NULL ||
+      capability_function == NULL || capability_abi == NULL ||
       request_bytes == NULL || response_bytes == NULL ||
       error_bytes == NULL || param_count == NULL ||
       native->size < sizeof(*native) ||
       native->abi_version != DATA_BIND_BINDING_PLAN_ABI_VERSION ||
       !cmeta_function_desc_valid(native->function) ||
-      !data_bind_native_execution_valid(execution) ||
+      !cmeta_function_desc_valid(capability_function) ||
+      !cmeta_function_abi_desc_valid(capability_abi) ||
       !chttp_service_native_type_valid(native->request, request_bytes) ||
       !chttp_service_native_type_valid(native->response, response_bytes))
     return SALTS_EINVAL;
@@ -853,7 +861,7 @@ static int chttp_service_execution_admit(
   function = binding != NULL ? data_bind_binding_plan_function(binding) : NULL;
   if (function == NULL ||
       !cmeta_function_desc_equal(function, native->function) ||
-      !cmeta_function_desc_equal(function, execution->function))
+      !cmeta_function_desc_equal(function, capability_function))
     return SALTS_EINVAL;
 
   if ((function->effects & CMETA_EFFECT_ASYNC) != 0u)
@@ -861,6 +869,8 @@ static int chttp_service_execution_admit(
 
   if (data_bind_binding_plan_error_count(binding) != native->error_count)
     return SALTS_EINVAL;
+  if (!allow_typed_errors && native->error_count != 0u)
+    return SALTS_ENOTSUP;
   for (i = 0u; i < native->error_count; ++i) {
     const char *plan_error = data_bind_binding_plan_error_at(binding, i);
     if (plan_error == NULL || native->errors == NULL ||
@@ -901,11 +911,11 @@ static int chttp_service_execution_admit(
 
   expected_params = native->error_count == 0u ? 2u : 3u;
   if (function->param_count != expected_params ||
-      execution->abi->param_count != expected_params ||
-      execution->abi->return_carrier != CMETA_ABI_SCALAR ||
-      cmeta_function_param_abi(execution->abi, 0u) !=
+      capability_abi->param_count != expected_params ||
+      capability_abi->return_carrier != CMETA_ABI_SCALAR ||
+      cmeta_function_param_abi(capability_abi, 0u) !=
           CMETA_ABI_OBJECT_POINTER ||
-      cmeta_function_param_abi(execution->abi, 1u) !=
+      cmeta_function_param_abi(capability_abi, 1u) !=
           CMETA_ABI_OBJECT_POINTER)
     return SALTS_ENOTSUP;
 
@@ -922,7 +932,7 @@ static int chttp_service_execution_admit(
         native->error_kind_bytes > native->error_envelope_bytes ||
         native->error_kind_offset >
             native->error_envelope_bytes - native->error_kind_bytes ||
-        cmeta_function_param_abi(execution->abi, 2u) !=
+        cmeta_function_param_abi(capability_abi, 2u) !=
             CMETA_ABI_OBJECT_POINTER)
       return SALTS_ENOTSUP;
     for (i = 0u; i < native->error_count; ++i) {
@@ -946,15 +956,83 @@ static int chttp_service_execution_admit(
   return SALTS_OK;
 }
 
+static int chttp_service_direct_admit(
+    const DataBindHttpMethodPlan *method_plan,
+    const DataBindServiceNativeBinding *native,
+    const DataBindNativeExecution *execution,
+    size_t max_frame_bytes,
+    size_t *request_bytes,
+    size_t *response_bytes,
+    size_t *error_bytes,
+    size_t *param_count) {
+  if (!data_bind_native_execution_valid(execution))
+    return SALTS_EINVAL;
+  return chttp_service_capability_admit(
+      method_plan, native, execution->function, execution->abi, 1,
+      max_frame_bytes, request_bytes, response_bytes, error_bytes,
+      param_count);
+}
+
+static int chttp_service_cflow_admit(
+    const DataBindHttpMethodPlan *method_plan,
+    const DataBindServiceNativeBinding *native,
+    const cflow_function_typed_adapter_projection *projection,
+    size_t max_frame_bytes,
+    size_t *request_bytes,
+    size_t *response_bytes,
+    size_t *error_bytes,
+    size_t *param_count) {
+  int status;
+  if (!cflow_function_typed_adapter_projection_valid(projection) ||
+      native == NULL || native->request == NULL || native->response == NULL ||
+      native->request->data == NULL || native->response->data == NULL ||
+      native->request->data->storage_type == NULL ||
+      native->response->data->storage_type == NULL ||
+      !cmeta_type_equal(
+          projection->input_type, native->request->data->storage_type) ||
+      !cmeta_type_equal(
+          projection->output_type, native->response->data->storage_type))
+    return SALTS_EINVAL;
+  if (native->request->presence_count != 0u ||
+      native->request->null_count != 0u ||
+      native->response->presence_count != 0u ||
+      native->response->null_count != 0u)
+    return SALTS_ENOTSUP;
+
+  status = chttp_service_capability_admit(
+      method_plan, native, projection->function, projection->abi, 0,
+      max_frame_bytes, request_bytes, response_bytes, error_bytes,
+      param_count);
+  if (status != SALTS_OK) return status;
+  return *param_count == 2u && *error_bytes == 0u
+             ? SALTS_OK
+             : SALTS_ENOTSUP;
+}
+
 static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
+  cflow_plan_destroy(&record->cflow_plan);
   memset(record, 0, sizeof(*record));
 }
 
 static void chttp_service_invocation_release(
     chttp_service_invocation *invocation) {
+  const DataBindServiceNativeBinding *native;
   if (invocation == NULL) return;
+  native = invocation->record != NULL
+               ? invocation->record->native_binding
+               : NULL;
+  if (invocation->frame_live && native != NULL) {
+    if (native->response != NULL && native->response->data != NULL &&
+        invocation->response_storage != NULL)
+      (void)cmeta_data_value_restore_zero(
+          native->response->data, invocation->response_storage);
+    if (native->request != NULL && native->request->data != NULL &&
+        invocation->request_storage != NULL)
+      (void)cmeta_data_value_restore_zero(
+          native->request->data, invocation->request_storage);
+  }
   free(invocation->native_workspace);
   free(invocation->scalar_scratch);
   free(invocation->error_storage);
@@ -1137,21 +1215,21 @@ static int chttp_service_deferred_text_reply(
   return status;
 }
 
-static void chttp_service_deferred_run(void *user) {
-  chttp_service_invocation *invocation =
-      (chttp_service_invocation *)user;
+static void chttp_service_deferred_publish(
+    chttp_service_invocation *invocation,
+    const DataBindBindingCallFrame *frame,
+    int native_status) {
   chttp_service_method_record *record;
   chttp_service_http_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
   DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
   DataBindBindingPlanDiagnostic diagnostic =
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
-  DataBindStatus bind_status = DATA_BIND_OK;
-  int native_status = 0;
+  DataBindStatus bind_status;
   int http_status = 500;
   int terminal_status;
 
-  if (invocation == NULL || invocation->record == NULL)
+  if (invocation == NULL || invocation->record == NULL || frame == NULL)
     return;
   record = invocation->record;
 
@@ -1166,16 +1244,9 @@ static void chttp_service_deferred_run(void *user) {
   provider.commit_output = chttp_service_http_commit_output;
   provider.abort_output = chttp_service_http_abort_output;
 
-  if (!record->execution->invoke(
-          record->execution->context, &native_status,
-          invocation->params, record->param_count))
-    bind_status = DATA_BIND_ERR_RUNTIME;
-
-  if (bind_status == DATA_BIND_OK)
-    bind_status = data_bind_binding_plan_write_outcome(
-        record->binding, &provider, &invocation->frame, native_status,
-        &outcome, &diagnostic);
-
+  bind_status = data_bind_binding_plan_write_outcome(
+      record->binding, &provider, frame, native_status,
+      &outcome, &diagnostic);
   if (bind_status != DATA_BIND_OK) {
     (void)chttp_service_deferred_text_reply(
         invocation, 500u, "Internal Server Error");
@@ -1215,6 +1286,62 @@ static void chttp_service_deferred_run(void *user) {
   chttp_service_http_release_output(&provider_context);
 }
 
+static void chttp_service_deferred_direct_run(void *user) {
+  chttp_service_invocation *invocation =
+      (chttp_service_invocation *)user;
+  chttp_service_method_record *record;
+  int native_status = 0;
+
+  if (invocation == NULL || invocation->record == NULL)
+    return;
+  record = invocation->record;
+  if (record->execution == NULL ||
+      !record->execution->invoke(
+          record->execution->context, &native_status,
+          invocation->params, record->param_count)) {
+    (void)chttp_service_deferred_text_reply(
+        invocation, 500u, "Internal Server Error");
+    return;
+  }
+  chttp_service_deferred_publish(
+      invocation, &invocation->frame, native_status);
+}
+
+static void chttp_service_deferred_cflow_run(void *user) {
+  chttp_service_invocation *invocation =
+      (chttp_service_invocation *)user;
+  chttp_service_method_record *record;
+  cflow_result result = {0};
+  DataBindBindingCallFrame frame;
+  void *params[3];
+  size_t param_bytes[3];
+
+  if (invocation == NULL || invocation->record == NULL)
+    return;
+  record = invocation->record;
+
+  if (!cflow_plan_eval_array(
+          &record->cflow_plan, invocation->request_storage, 1u, &result) ||
+      result.count != 1u || result.data == NULL ||
+      !cmeta_type_equal(result.type, record->cflow_plan.output_type)) {
+    cflow_result_destroy(&result);
+    (void)chttp_service_deferred_text_reply(
+        invocation, 500u, "Internal Server Error");
+    return;
+  }
+
+  memcpy(params, invocation->params, sizeof(params));
+  memcpy(param_bytes, invocation->param_bytes, sizeof(param_bytes));
+  params[1] = result.data;
+  param_bytes[1] = record->cflow_plan.output_type->size;
+  frame = invocation->frame;
+  frame.params = params;
+  frame.param_bytes = param_bytes;
+
+  chttp_service_deferred_publish(invocation, &frame, 0);
+  cflow_result_destroy(&result);
+}
+
 static int chttp_service_http_execute_deferred(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
@@ -1231,8 +1358,14 @@ static int chttp_service_http_execute_deferred(
 
   if (record == NULL || record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
-      record->native_binding == NULL || record->execution == NULL ||
-      record->executor == NULL || request == NULL || response == NULL)
+      record->native_binding == NULL || record->executor == NULL ||
+      (record->execution_mode ==
+           CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+       record->execution == NULL) ||
+      (record->execution_mode ==
+           CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+       record->cflow_plan.impl == NULL) ||
+      request == NULL || response == NULL)
     return SALTS_EINVAL;
 
   invocation =
@@ -1255,6 +1388,8 @@ static int chttp_service_http_execute_deferred(
   bind_status = data_bind_binding_plan_bind_inputs(
       record->binding, &provider, &invocation->native_options,
       &invocation->frame, &diagnostic);
+  if (bind_status == DATA_BIND_OK)
+    invocation->frame_live = 1;
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =
         chttp_service_http_ingress_failure(bind_status);
@@ -1271,7 +1406,10 @@ static int chttp_service_http_execute_deferred(
   }
 
   task = (cflow_executor_task){
-      .run = chttp_service_deferred_run,
+      .run = record->execution_mode ==
+                     CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW
+                 ? chttp_service_deferred_cflow_run
+                 : chttp_service_deferred_direct_run,
       .cancel = chttp_service_deferred_cancel_task,
       .finalize = chttp_service_invocation_finalize,
       .user = invocation};
@@ -1332,6 +1470,8 @@ static int chttp_service_http_execute(
   bind_status = data_bind_binding_plan_bind_inputs(
       binding, &provider, &invocation.native_options,
       &invocation.frame, &diagnostic);
+  if (bind_status == DATA_BIND_OK)
+    invocation.frame_live = 1;
 
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =
@@ -1398,7 +1538,9 @@ static int chttp_service_http_handler(
   if (record == NULL || record->owner == NULL)
     return SALTS_EINVAL;
   if (record->execution_mode ==
-      CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT)
+          CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+      record->execution_mode ==
+          CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW)
     return chttp_service_http_execute_deferred(
         record, request, response);
   return chttp_service_http_execute(record, request, response);
@@ -1468,14 +1610,20 @@ int chttp_service_mount_http(
   if (service == NULL || service->impl == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
       mount->method_plan == NULL || mount->native_binding == NULL ||
-      mount->execution == NULL ||
       (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
-       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT) ||
+       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW) ||
       (mount->execution_mode == CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
-       mount->executor != NULL) ||
+       (mount->execution == NULL || mount->executor != NULL ||
+        mount->cflow_projection != NULL)) ||
       (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
-       (mount->executor == NULL ||
-        !cflow_executor_valid(mount->executor))))
+       (mount->execution == NULL || mount->executor == NULL ||
+        !cflow_executor_valid(mount->executor) ||
+        mount->cflow_projection != NULL)) ||
+      (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+       (mount->execution != NULL || mount->executor == NULL ||
+        !cflow_executor_valid(mount->executor) ||
+        mount->cflow_projection == NULL)))
     return SALTS_EINVAL;
   if (!chttp_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
@@ -1483,10 +1631,16 @@ int chttp_service_mount_http(
   impl = (chttp_service_impl *)service->impl;
   if (impl->method_count == impl->method_capacity) return SALTS_ENOBUFS;
 
-  status = chttp_service_execution_admit(
-      mount->method_plan, mount->native_binding, mount->execution,
-      impl->max_call_frame_bytes, &request_bytes, &response_bytes,
-      &error_bytes, &param_count);
+  if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW)
+    status = chttp_service_cflow_admit(
+        mount->method_plan, mount->native_binding,
+        mount->cflow_projection, impl->max_call_frame_bytes,
+        &request_bytes, &response_bytes, &error_bytes, &param_count);
+  else
+    status = chttp_service_direct_admit(
+        mount->method_plan, mount->native_binding, mount->execution,
+        impl->max_call_frame_bytes, &request_bytes, &response_bytes,
+        &error_bytes, &param_count);
   if (status != SALTS_OK) return status;
   binding = data_bind_http_method_plan_binding(mount->method_plan);
   if (binding == NULL) return SALTS_EINVAL;
@@ -1511,6 +1665,20 @@ int chttp_service_mount_http(
       .response_bytes = response_bytes,
       .error_bytes = error_bytes,
       .param_count = param_count};
+
+  if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW) {
+    cflow_graph graph = {0};
+    cflow_graph_init(&graph, mount->cflow_projection->input_type);
+    if (!cflow_graph_add_function_typed_adapter_projection(
+            &graph, mount->cflow_projection) ||
+        !cflow_plan_compile_surface(&record->cflow_plan, &graph, NULL)) {
+      cflow_graph_destroy(&graph);
+      chttp_service_method_release(record);
+      free(route);
+      return SALTS_ENOTSUP;
+    }
+    cflow_graph_destroy(&graph);
+  }
 
   route_options.method = method;
   route_options.path = route;

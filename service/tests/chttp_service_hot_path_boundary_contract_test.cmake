@@ -44,6 +44,56 @@ foreach(REQUIRED
   endif()
 endforeach()
 
+string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" CFLOW_RUN_START)
+string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_execute_deferred(" CFLOW_RUN_END)
+if(CFLOW_RUN_START LESS 0 OR CFLOW_RUN_END LESS 0 OR
+   CFLOW_RUN_END LESS_EQUAL CFLOW_RUN_START)
+  message(FATAL_ERROR "Could not isolate deferred CFlow worker path")
+endif()
+math(EXPR CFLOW_RUN_LENGTH "${CFLOW_RUN_END} - ${CFLOW_RUN_START}")
+string(SUBSTRING "${SERVICE_TEXT}" ${CFLOW_RUN_START} ${CFLOW_RUN_LENGTH}
+       CFLOW_RUN_TEXT)
+
+foreach(FORBIDDEN_CFLOW_HOT
+    "cmeta_function_desc_equal"
+    "cmeta_function_abi_desc_valid"
+    "data_bind_http_method_plan_binding"
+    "cflow_graph_init"
+    "cflow_graph_add_"
+    "cflow_plan_compile"
+    "cflow_function_typed_adapter_projection"
+    "FunctionMeta("
+    "FunctionAbi("
+    "registry")
+  string(FIND "${CFLOW_RUN_TEXT}" "${FORBIDDEN_CFLOW_HOT}" POS)
+  if(NOT POS EQUAL -1)
+    message(FATAL_ERROR
+      "CFlow worker must consume the mounted Plan without control-plane lookup/build: ${FORBIDDEN_CFLOW_HOT}")
+  endif()
+endforeach()
+
+foreach(REQUIRED_CFLOW_HOT
+    "cflow_plan_eval_array"
+    "record->cflow_plan"
+    "chttp_service_deferred_publish"
+    "cflow_result_destroy")
+  string(FIND "${CFLOW_RUN_TEXT}" "${REQUIRED_CFLOW_HOT}" POS)
+  if(POS EQUAL -1)
+    message(FATAL_ERROR
+      "Deferred CFlow worker is missing immutable-Plan marker: ${REQUIRED_CFLOW_HOT}")
+  endif()
+endforeach()
+
+foreach(REQUIRED_CFLOW_CONTROL
+    "cflow_graph_add_function_typed_adapter_projection"
+    "cflow_plan_compile_surface")
+  string(FIND "${SERVICE_TEXT}" "${REQUIRED_CFLOW_CONTROL}" POS)
+  if(POS EQUAL -1)
+    message(FATAL_ERROR
+      "CFlow mount must compile the producer projection once: ${REQUIRED_CFLOW_CONTROL}")
+  endif()
+endforeach()
+
 foreach(REQUIRED_FAILURE_CLASS
     "Binding Error"
     "Validation Error"
