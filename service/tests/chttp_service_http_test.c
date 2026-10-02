@@ -5,9 +5,13 @@
 #include "chttp_service.http.h"
 #include "tinytest.h"
 
+#include <salts/clock.h>
+#include <salts/thread.h>
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 
 enum { CHTTP_SERVICE_TEST_TIMEOUT_MS = 5000 };
@@ -230,6 +234,24 @@ static chttp_client_config chttp_service_test_client_config(void) {
       .max_response_body_bytes = 512u,
       .max_informational_responses = 2u};
   return config;
+}
+
+typedef struct chttp_service_executor_gate {
+  _Atomic int started;
+  _Atomic int release;
+} chttp_service_executor_gate;
+
+static void chttp_service_executor_gate_run(void *user) {
+  chttp_service_executor_gate *gate =
+      (chttp_service_executor_gate *)user;
+  if (gate == NULL) return;
+  atomic_store_explicit(&gate->started, 1, memory_order_release);
+  while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
+    salts_thread_yield();
+}
+
+static void chttp_service_executor_noop(void *user) {
+  (void)user;
 }
 
 static int chttp_service_test_call(
@@ -455,6 +477,164 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(chttp_service_destroy(&service), SALTS_OK);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+  it("defers direct execution onto a bounded borrowed executor") {
+    static const char schema[] =
+        "message AddRequest {"
+        " @Min(1) uint32 left;"
+        " uint32 right;"
+        " optional uint32 scale default 1;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "service Calc { Add: AddRequest -> AddResponse; }";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_add),
+            &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    const DataBindHttpProjectionConfig *projection;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    cflow_executor executor = {0};
+    chttp_response response = {0};
+    chttp_service_executor_gate gate;
+    cflow_executor_task gate_task;
+    cflow_executor_task queued_task;
+    uint64_t deadline;
+    uint16_t port = 0u;
+    char uri[64];
+
+    execution.function = FunctionMeta(chttp_service_test_add);
+    execution.abi = FunctionAbi(chttp_service_test_add);
+    execution.invoke = chttp_service_test_invoke;
+
+    projection = data_bind_http_projection_artifact_find(
+        &databind_chttp_service_http_projection, "Calc", "Add");
+    check_not_null(projection);
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &native,
+            &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
+    service_config.max_call_frame_bytes = 512u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+
+    check_true(cflow_executor_worker_init_with_capacity(
+        &executor, 1u, 1u));
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    invalid.method_plan = method_plan;
+    invalid.native_binding = &native;
+    invalid.execution = &execution;
+    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &invalid),
+        SALTS_EINVAL);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = &execution;
+    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.executor = &executor;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/3?right=4&scale=2", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body_size, (size_t)2u);
+    check_equal(response.body, "11", 2u);
+    chttp_response_destroy(&response);
+    check_true(cflow_executor_wait_idle(&executor));
+
+    /*
+     * Saturate both the worker and its one queued slot. A Service request must
+     * not wait for capacity on the HTTP owner thread; it fails the already
+     * deferred terminal with 503 instead.
+     */
+    atomic_init(&gate.started, 0);
+    atomic_init(&gate.release, 0);
+    gate_task = (cflow_executor_task){
+        .run = chttp_service_executor_gate_run,
+        .user = &gate};
+    queued_task = (cflow_executor_task){
+        .run = chttp_service_executor_noop,
+        .user = NULL};
+    check_equal(
+        cflow_executor_try_post_task(&executor, &gate_task),
+        CFLOW_ADMISSION_ACCEPTED);
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(&gate.started, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(&gate.started, memory_order_acquire), 1);
+    check_equal(
+        cflow_executor_try_post_task(&executor, &queued_task),
+        CFLOW_ADMISSION_ACCEPTED);
+
+    response = (chttp_response){0};
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/add/3?right=4", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 503u);
+    check_equal(response.body, "Service Unavailable", 19u);
+    chttp_response_destroy(&response);
+
+    atomic_store_explicit(&gate.release, 1, memory_order_release);
+    check_true(cflow_executor_wait_idle(&executor));
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }

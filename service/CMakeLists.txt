@@ -19,7 +19,7 @@ target_include_directories(chttp_service
     $<INSTALL_INTERFACE:include>)
 
 target_link_libraries(chttp_service
-  PUBLIC CHttp::Server Salts::DataBind
+  PUBLIC CHttp::Server Salts::DataBind Salts::CFlow
   PRIVATE Salts::Core Salts::CSerde)
 
 install(TARGETS chttp_service EXPORT ChttpTargets)
