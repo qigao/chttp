@@ -534,6 +534,25 @@ int chttp_server_deferred_reply(chttp_server_deferred *deferred,
                                 const chttp_server_deferred_response *response);
 
 /**
+ * Thread-safe retained-buffer terminal completion for a deferred response.
+ *
+ * Headers are copied into configured CHTTP bounds. The Server retains one
+ * reference to body before returning SALTS_OK; the caller may immediately
+ * release its own reference after success. The retained bytes and used length
+ * must not be mutated until the transport terminal releases Server ownership.
+ *
+ * Failure restores the deferred handle to PENDING for explicit retry or cancel,
+ * and releases any retained body reference acquired by this attempt.
+ */
+int chttp_server_deferred_reply_buffer(
+    chttp_server_deferred *deferred,
+    unsigned int status_code,
+    const char *content_type,
+    const chttp_header *headers,
+    size_t header_count,
+    mem_buffer_t *body);
+
+/**
  * Cancels one pending deferred response without sending a replacement. Success
  * consumes the handle and aborts request state on the server owner. H1 closes
  * its exclusive connection because pipelined input cannot advance past the
