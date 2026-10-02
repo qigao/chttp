@@ -44,6 +44,42 @@ foreach(REQUIRED
   endif()
 endforeach()
 
+string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_direct_run(" PLUGIN_RUN_START)
+string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" PLUGIN_RUN_END)
+if(PLUGIN_RUN_START LESS 0 OR PLUGIN_RUN_END LESS 0 OR
+   PLUGIN_RUN_END LESS_EQUAL PLUGIN_RUN_START)
+  message(FATAL_ERROR "Could not isolate deferred direct/Plugin worker path")
+endif()
+math(EXPR PLUGIN_RUN_LENGTH "${PLUGIN_RUN_END} - ${PLUGIN_RUN_START}")
+string(SUBSTRING "${SERVICE_TEXT}" ${PLUGIN_RUN_START} ${PLUGIN_RUN_LENGTH}
+       PLUGIN_RUN_TEXT)
+
+foreach(FORBIDDEN_PLUGIN_HOT
+    "salts_plugin_registry_"
+    "salts_plugin_manifest_"
+    "data_bind_plugin_catalog_"
+    "data_bind_plugin_operation_execution_admit"
+    "FunctionMeta("
+    "FunctionAbi(")
+  string(FIND "${PLUGIN_RUN_TEXT}" "${FORBIDDEN_PLUGIN_HOT}" POS)
+  if(NOT POS EQUAL -1)
+    message(FATAL_ERROR
+      "Deferred Plugin worker must consume cached exact execution only: ${FORBIDDEN_PLUGIN_HOT}")
+  endif()
+endforeach()
+
+foreach(REQUIRED_PLUGIN_CONTROL
+    "salts_plugin_registry_acquire"
+    "DATA_BIND_PLUGIN_CATALOG_EXPORT_ID"
+    "data_bind_plugin_operation_execution_admit"
+    "salts_plugin_registry_release")
+  string(FIND "${SERVICE_TEXT}" "${REQUIRED_PLUGIN_CONTROL}" POS)
+  if(POS EQUAL -1)
+    message(FATAL_ERROR
+      "Plugin mount/release control plane is missing: ${REQUIRED_PLUGIN_CONTROL}")
+  endif()
+endforeach()
+
 string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" CFLOW_RUN_START)
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_execute_deferred(" CFLOW_RUN_END)
 if(CFLOW_RUN_START LESS 0 OR CFLOW_RUN_END LESS 0 OR
