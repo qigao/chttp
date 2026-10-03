@@ -72,6 +72,12 @@ spec("CHttp owner topology") {
       check_not_null(owner->websocket_commands);
       check_equal(owner->websocket_command_count, (size_t)0u);
       check_equal(chttp_server_owner_lease_count(owner), (size_t)0u);
+      check_equal(
+          atomic_load_explicit(&owner->runtime_state, memory_order_acquire),
+          CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+      check_equal(owner->terminal_status, SALTS_OK);
+      check(!owner->network_initialized);
+      check(!owner->thread_started);
       for (connection_index = 0u;
            connection_index < owner->connection_count; ++connection_index)
         check(chttp_server_owner_lease_try_acquire(owner));
