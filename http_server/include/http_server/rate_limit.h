@@ -29,7 +29,7 @@ typedef struct chttp_rate_limiter { void *impl; } chttp_rate_limiter;
  * Initializes a zeroed handle, copies config and reserves all group storage.
  * Returns SALTS_OK, SALTS_EINVAL for invalid config, SALTS_EALREADY for a live
  * handle, SALTS_ERANGE for storage overflow or SALTS_ENOMEM on allocation failure.
- * One owner thread only, including direct admit calls; never share between server owners.
+ * Admission calls are internally synchronized and may be shared by fixed server owners.
  */
 int chttp_rate_limiter_init(chttp_rate_limiter *limiter, const chttp_rate_limit_config *config);
 
