@@ -32,6 +32,8 @@ jobs:
           persist-credentials: false
       - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
+        with:
+          with-turbowasm: "true"
       - name: Configure exact Chttp head
         shell: bash
         run: |
