@@ -14,6 +14,8 @@ static_assert(std::is_standard_layout<chttp_response>::value, "owning response m
 static_assert(std::is_standard_layout<chttp_response_view>::value,
               "response view must be C ABI data");
 static_assert(std::is_standard_layout<chttp_server>::value, "server handle must be C ABI data");
+static_assert(std::is_standard_layout<chttp_server_execution_options>::value,
+              "server execution policy must remain versioned C ABI data");
 static_assert(std::is_standard_layout<chttp_server_request_view>::value,
               "server request view must be C ABI data");
 static_assert(std::is_standard_layout<chttp_server_response>::value,
@@ -50,6 +52,8 @@ int main() {
   chttp_client_config client_config{};
   chttp_server server{};
   chttp_server_config server_config{};
+  chttp_server_execution_options server_execution =
+      CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
   chttp_server_stats server_stats{};
   chttp_body_source body_source{};
   chttp_body_sink body_sink{};
@@ -72,6 +76,7 @@ int main() {
   auto *download_file = &chttp_download_file;
   (void)tls_profile;
   (void)server_stats;
+  (void)server_execution;
   (void)response_source;
   (void)response_file;
   (void)response_defer;
