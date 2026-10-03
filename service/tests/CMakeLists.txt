@@ -25,6 +25,72 @@ salts_idl_target(
 target_sources(chttp_service_plugin_fixture_native PRIVATE
   chttp_service_plugin_business.c)
 
+if(DEFINED ENV{TURBOWASM_ROOT} AND NOT "$ENV{TURBOWASM_ROOT}" STREQUAL "")
+  file(TO_CMAKE_PATH "$ENV{TURBOWASM_ROOT}" CHTTP_TURBOWASM_ROOT)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  find_package(TurboWasm CONFIG REQUIRED
+    PATHS "${CHTTP_TURBOWASM_ROOT}"
+    NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+  if(NOT TARGET TurboWasm::Component)
+    message(FATAL_ERROR
+      "released TurboWasm package is missing TurboWasm::Component")
+  endif()
+
+  set(CHTTP_SERVICE_WASM_CORE
+      "${CMAKE_CURRENT_BINARY_DIR}/chttp_service_wasm_core.wasm")
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_wasm_core.py"
+            "${CHTTP_SERVICE_WASM_CORE}"
+    RESULT_VARIABLE CHTTP_SERVICE_WASM_CORE_STATUS)
+  if(NOT CHTTP_SERVICE_WASM_CORE_STATUS EQUAL 0 OR
+     NOT EXISTS "${CHTTP_SERVICE_WASM_CORE}")
+    message(FATAL_ERROR "failed to generate CHTTP Service WASM Core fixture")
+  endif()
+
+  salts_idl_target(
+    TARGET chttp_service_wasm_fixture
+    IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_wasm.schema"
+    COMPONENT "CHttpWasm.CalcWasm"
+    VERSION "1.0.0"
+    ARTIFACT_NAME "chttp_service_wasm"
+    ARTIFACTS WASM
+    TRANSPORTS HTTP
+    PROJECTION_CONFIG
+      "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_wasm.projection.json"
+    WASM_CORE_MODULE "${CHTTP_SERVICE_WASM_CORE}")
+
+  file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/chttp_service_wasm_path.h"
+    CONTENT
+      "#define GENERATED_CHTTP_SERVICE_WASM_PATH \"${chttp_service_wasm_fixture_WASM_ARTIFACT}\"\n")
+
+  add_executable(chttp_service_wasm_http_test
+    chttp_service_wasm_http_test.c)
+
+  target_link_libraries(chttp_service_wasm_http_test PRIVATE
+    CHttp::Service
+    CHttp::Client
+    chttp_service_wasm_fixture_wasm
+    Salts::TinyTest)
+
+  target_include_directories(chttp_service_wasm_http_test PRIVATE
+    "${chttp_service_wasm_fixture_GENERATED_DIR}"
+    "${CMAKE_CURRENT_BINARY_DIR}")
+
+  add_dependencies(chttp_service_wasm_http_test
+    chttp_service_wasm_fixture_idl_codegen)
+
+  add_test(NAME chttp_service_wasm_http_test
+    COMMAND chttp_service_wasm_http_test)
+
+  set_target_properties(chttp_service_wasm_http_test PROPERTIES
+    FOLDER "service/tests"
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+endif()
+
 add_executable(chttp_service_http_test
   chttp_service_http_test.c)
 
@@ -81,5 +147,6 @@ add_test(
   NAME chttp_service_hot_path_boundary_contract
   COMMAND ${CMAKE_COMMAND}
     -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
+    -DSERVICE_HEADER=${PROJECT_SOURCE_DIR}/service/include/chttp_service/service.h
     -DSERVER_HEADER=${PROJECT_SOURCE_DIR}/http_server/include/http_server/http.h
     -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_hot_path_boundary_contract_test.cmake)
