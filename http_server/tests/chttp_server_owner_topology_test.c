@@ -153,4 +153,84 @@ spec("CHttp owner topology") {
 
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
+
+  it("publishes owner0 READY only after worker-thread network startup") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_impl *impl;
+    uint16_t port = 0u;
+
+    config.network.connection_capacity = 2u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(
+        chttp_server_owner_runtime_state_get(&impl->owner),
+        CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(
+        chttp_server_owner_runtime_state_get(&impl->owner),
+        CHTTP_SERVER_OWNER_RUNTIME_READY);
+    check(impl->network_initialized);
+    check(impl->owner.network_initialized);
+    check(impl->thread_started);
+    check(impl->owner.thread_started);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check(port != 0u);
+
+    check_equal(chttp_server_stop(&server, 0u), SALTS_OK);
+    check_equal(
+        chttp_server_owner_runtime_state_get(&impl->owner),
+        CHTTP_SERVER_OWNER_RUNTIME_DONE);
+    check(!impl->network_initialized);
+    check(!impl->owner.network_initialized);
+    check(!impl->listener_initialized);
+    check(!impl->thread_started);
+    check(!impl->owner.thread_started);
+
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("rolls failed worker startup back to IDLE and remains retryable") {
+    chttp_server first = {0};
+    chttp_server second = {0};
+    chttp_server_config first_config = owner_topology_config();
+    chttp_server_config second_config;
+    chttp_server_impl *second_impl;
+    uint16_t occupied_port = 0u;
+
+    first_config.network.connection_capacity = 2u;
+    check_equal(chttp_server_init(&first, &first_config), SALTS_OK);
+    check_equal(chttp_server_start(&first), SALTS_OK);
+    check_equal(chttp_server_port(&first, &occupied_port), SALTS_OK);
+    check(occupied_port != 0u);
+
+    second_config = owner_topology_config();
+    second_config.network.connection_capacity = 2u;
+    second_config.port = occupied_port;
+    check_equal(chttp_server_init(&second, &second_config), SALTS_OK);
+    second_impl = (chttp_server_impl *)second.impl;
+    check_not_null(second_impl);
+
+    check_equal(chttp_server_start(&second), SALTS_EADDRINUSE);
+    check_equal(
+        chttp_server_owner_runtime_state_get(&second_impl->owner),
+        CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+    check(!second_impl->network_initialized);
+    check(!second_impl->owner.network_initialized);
+    check(!second_impl->listener_initialized);
+    check(!second_impl->thread_started);
+    check(!second_impl->owner.thread_started);
+
+    check_equal(chttp_server_stop(&first, 0u), SALTS_OK);
+    check_equal(chttp_server_destroy(&first), SALTS_OK);
+
+    check_equal(chttp_server_start(&second), SALTS_OK);
+    check_equal(
+        chttp_server_owner_runtime_state_get(&second_impl->owner),
+        CHTTP_SERVER_OWNER_RUNTIME_READY);
+    check_equal(chttp_server_stop(&second, 0u), SALTS_OK);
+    check_equal(chttp_server_destroy(&second), SALTS_OK);
+  }
 }
