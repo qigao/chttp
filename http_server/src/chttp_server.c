@@ -2808,9 +2808,12 @@ int chttp_server_stop(chttp_server *server, uint32_t timeout_ms) {
   chttp_server_impl *impl;
   const uint64_t started_ms = salts_monotonic_ms();
   int terminal_status;
+  int join_status;
+
   if (server == NULL || server->impl == NULL) return SALTS_EINVAL;
   impl = (chttp_server_impl *)server->impl;
   if (chttp_active_callback_server == impl) return SALTS_EBUSY;
+
   salts_mutex_lock(&impl->mutex);
   if (!impl->start_called) {
     salts_mutex_unlock(&impl->mutex);
@@ -2818,9 +2821,15 @@ int chttp_server_stop(chttp_server *server, uint32_t timeout_ms) {
   }
   impl->stop_requested = true;
   if (!impl->worker_done) impl->stats.stopping = 1;
+  salts_cond_broadcast(&impl->changed);
+  salts_mutex_unlock(&impl->mutex);
+  chttp_server_wake_owners(impl);
+
+  salts_mutex_lock(&impl->mutex);
   while (!impl->worker_done) {
-    if (timeout_ms == 0u) salts_cond_wait(&impl->changed, &impl->mutex);
-    else {
+    if (timeout_ms == 0u) {
+      salts_cond_wait(&impl->changed, &impl->mutex);
+    } else {
       const uint64_t elapsed_ms = salts_monotonic_ms() - started_ms;
       uint64_t remaining_ns;
       if (elapsed_ms >= timeout_ms) {
@@ -2828,7 +2837,8 @@ int chttp_server_stop(chttp_server *server, uint32_t timeout_ms) {
         return SALTS_ETIMEDOUT;
       }
       remaining_ns = ((uint64_t)timeout_ms - elapsed_ms) * 1000000u;
-      if (salts_cond_timedwait(&impl->changed, &impl->mutex, remaining_ns) != SALTS_OK &&
+      if (salts_cond_timedwait(
+              &impl->changed, &impl->mutex, remaining_ns) != SALTS_OK &&
           !impl->worker_done) {
         salts_mutex_unlock(&impl->mutex);
         return SALTS_ETIMEDOUT;
@@ -2837,37 +2847,48 @@ int chttp_server_stop(chttp_server *server, uint32_t timeout_ms) {
   }
   terminal_status = impl->stats.terminal_status;
   salts_mutex_unlock(&impl->mutex);
-  if (impl->thread_started) {
-    if (salts_thread_join(&impl->thread) != SALTS_OK) return SALTS_EIO;
-    salts_thread_destroy(&impl->thread);
-    impl->thread_started = false;
-    impl->owner.thread_started = false;
-  }
+
+  join_status = chttp_server_join_owner_threads(impl);
+  if (terminal_status == SALTS_OK && join_status != SALTS_OK)
+    terminal_status = join_status;
   return terminal_status;
 }
 
 int chttp_server_destroy(chttp_server *server) {
   chttp_server_impl *impl;
+  size_t index;
+  int join_status;
+
   if (server == NULL) return SALTS_EINVAL;
   if (server->impl == NULL) return SALTS_OK;
   impl = (chttp_server_impl *)server->impl;
+
   salts_mutex_lock(&impl->mutex);
-  if (impl->stats.running || impl->stats.stopping || (impl->start_called && !impl->worker_done)) {
+  if (impl->stats.running || impl->stats.stopping ||
+      (impl->start_called && !impl->worker_done)) {
     salts_mutex_unlock(&impl->mutex);
     return SALTS_EBUSY;
   }
   salts_mutex_unlock(&impl->mutex);
-  if (impl->thread_started) {
-    if (salts_thread_join(&impl->thread) != SALTS_OK) return SALTS_EIO;
-    salts_thread_destroy(&impl->thread);
-    impl->thread_started = false;
-    impl->owner.thread_started = false;
+
+  join_status = chttp_server_join_owner_threads(impl);
+  if (join_status != SALTS_OK) return join_status;
+
+  for (index = 0u; index < impl->owner_count; ++index) {
+    chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
+    if (owner == NULL) return SALTS_EPROTO;
+    if (owner->file_runtime_initialized) {
+      const int cleanup_status = chttp_server_files_cleanup(impl, owner);
+      if (cleanup_status != SALTS_OK) return cleanup_status;
+    }
+    if (owner->network_initialized ||
+        chttp_server_owner_lease_count(owner) != 0u ||
+        owner->admission_count != 0u)
+      return SALTS_EBUSY;
   }
-  {
-    const int cleanup_status = chttp_server_files_cleanup(impl, &impl->owner);
-    if (cleanup_status != SALTS_OK) return cleanup_status;
-  }
-  if (impl->network_initialized || impl->listener_initialized) return SALTS_EBUSY;
+  if (impl->network_initialized || impl->listener_initialized)
+    return SALTS_EBUSY;
+
   chttp_server_impl_free(impl);
   server->impl = NULL;
   return SALTS_OK;
