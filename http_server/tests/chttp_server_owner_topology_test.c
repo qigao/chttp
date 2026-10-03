@@ -44,8 +44,8 @@ spec("CHttp owner topology") {
     chttp_server_execution_options options =
         (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
     chttp_server_impl *impl;
-    const size_t expected_begin[] = {0u, 1u, 3u};
-    const size_t expected_count[] = {1u, 2u, 2u};
+    const size_t expected_begin[] = {0u, 2u, 4u};
+    const size_t expected_count[] = {2u, 2u, 1u};
     size_t owner_index;
     size_t connection_index;
 
