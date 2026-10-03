@@ -285,6 +285,7 @@ struct chttp_server_owner_lane {
   cnet_client network;
   salts_thread_t thread;
   salts_mutex_t admission_mutex;
+  salts_mutex_t network_mutex;
   cnet_accepted_stream *admissions;
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
@@ -302,6 +303,7 @@ struct chttp_server_owner_lane {
   atomic_size_t active_connections;
   int terminal_status;
   bool admission_sync_initialized;
+  bool network_sync_initialized;
   bool file_runtime_initialized;
   bool network_initialized;
   bool thread_started;
@@ -316,6 +318,8 @@ static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *o
 static inline cnet_client *chttp_server_connection_network(chttp_server_connection *connection) {
   return connection != NULL ? chttp_server_owner_network(connection->owner) : NULL;
 }
+
+int chttp_server_owner_wake(chttp_server_owner_lane *owner);
 
 static inline size_t chttp_server_owner_connection_end(
     const chttp_server_owner_lane *owner) {
