@@ -225,8 +225,10 @@ typedef struct chttp_server_websocket_options {
  * accepted connections. When HTTP/2 is enabled, its stream, parser, output,
  * HPACK and SETTINGS limits are per connection. Routes are origin-form paths, may contain named
  * `:segment` parameters, and exclude the query string. The server invokes
- * handlers serially on its owner thread, so a handler must not block or call
- * stop/destroy. Session capacity zero disables Sessions; otherwise the Cookie
+ * handlers serially on its owner thread by default. Explicit execution options
+ * may enable multiple fixed owners; callbacks remain serial per connection but
+ * callbacks for different owners may run concurrently. A handler must not block
+ * or call stop/destroy. Session capacity zero disables Sessions; otherwise the Cookie
  * contains only a CSPRNG id and values stay in the bounded in-memory store.
  */
 typedef struct chttp_server_config {
@@ -280,6 +282,21 @@ typedef struct chttp_server_config {
   size_t buffer_capacity_bytes;
 } chttp_server_config;
 
+/**
+ * Explicit server execution policy. Zero/one owner preserves the historical
+ * single-owner callback contract. owner_count > 1 opts into connection-affine
+ * parallel execution: each connection, its H1/H2/WebSocket state, file I/O and
+ * callbacks remain on one fixed owner for life; callbacks for different
+ * connections may execute concurrently on different owner threads.
+ */
+typedef struct chttp_server_execution_options {
+  size_t size;
+  size_t owner_count;
+} chttp_server_execution_options;
+
+#define CHTTP_SERVER_EXECUTION_OPTIONS_INIT \
+  {sizeof(chttp_server_execution_options), 1u}
+
 /** Socket policy copied into a stopped HTTP/WebSocket server before start. */
 typedef struct chttp_server_socket_options {
   size_t size;
@@ -317,6 +334,13 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config);
 /** Replaces socket policy before listener/network start; later calls return `SALTS_EBUSY`. */
 int chttp_server_set_socket_options(chttp_server *server,
                                     const chttp_server_socket_options *options);
+
+/**
+ * Copies execution policy before start. owner_count must be 1..connection_capacity.
+ * Multi-owner execution is explicit; no CPU-count auto-selection is performed.
+ */
+int chttp_server_set_execution_options(
+    chttp_server *server, const chttp_server_execution_options *options);
 
 /** Optional absolute stage budgets in milliseconds. Zero disables the corresponding deadline. */
 typedef struct chttp_server_deadlines {
