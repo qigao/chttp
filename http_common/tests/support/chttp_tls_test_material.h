@@ -2,12 +2,91 @@
 #define CHTTP_TLS_TEST_MATERIAL_H
 
 /*
- * GmSSL validates trust anchors as CAs and its TLS 1.3 client-certificate
- * selection requires an EC issuer when matching signature_algorithms_cert.
- * Keep this fixture as a real P-256 chain: localhost leaf first, then root CA.
- * The leaf is valid for both serverAuth and clientAuth because mTLS tests reuse it.
+ * Test identities intentionally separate TLS server and mTLS client roles.
+ *
+ * Server identity: RSA leaf signed by an RSA root. This exercises the released
+ * GmSSL TLS 1.3 RSA server-signing path used by the general HTTPS/WSS/H2 tests.
+ *
+ * mTLS client identity: P-256 leaf signed by a P-256 root. GmSSL TLS 1.3
+ * CertificateRequest selection requires an EC issuer for
+ * signature_algorithms_cert. Both trust anchors are kept separate from the
+ * presented leaf chains.
  */
 static const char CHTTP_TLS_TEST_CERTIFICATE[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDVjCCAj6gAwIBAgIUXmMBcNfRv8UUbtIvZWH6mfyBcuAwDQYJKoZIhvcNAQEL\n"
+    "BQAwITEfMB0GA1UEAwwWQ0hUVFAgUlNBIFRlc3QgUm9vdCBDQTAeFw0yNjEwMDMy\n"
+    "MTA4MTdaFw0zNjA5MzAyMTA4MTdaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDCCASIw\n"
+    "DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALZZt4ryi/8X5tNLRNXqC2n9sTfM\n"
+    "lafqDNruY5acicUYRwrKSHO3igGXPIgWEeeL7dlT/pT4CiBc16OtP/IqMQxYMYGK\n"
+    "IwkQHQVTlHAlSs197Xml4mq6feFv12sxUvZNNk1jNM1eUlm3/4JIZ3LOD8GUlzRd\n"
+    "Sa79xRIo1IhqzJe6mmqpdbC0n7WQCaR6SPRBkQVuUIQdYIYqOkH3k1cTayY4wQSS\n"
+    "EHgcqVY7niWvP39Cbfk0J7Z2/0wbiwwU/CQCCCODCL8asV4C0whhCTk8RTBABoyB\n"
+    "5x7LkclLZ2oTYf5rQUfRB3Sv2zm2Wd/J1H0ndgkvHLmRU2GdzHAj1xGX4N0CAwEA\n"
+    "AaOBkjCBjzAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIFoDATBgNVHSUEDDAK\n"
+    "BggrBgEFBQcDATAaBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwHQYDVR0OBBYE\n"
+    "FKilzOfOpQ/xD6OcRnO1NemU/mf0MB8GA1UdIwQYMBaAFCIVNMoPCUzhJUhcThWQ\n"
+    "o76yN557MA0GCSqGSIb3DQEBCwUAA4IBAQCiOPLASKySWhwob0T6rSjJSHh2I/nn\n"
+    "Fx1NZEIqZafCmuGsuvvSaBWwQ72cuZOvyErZWng/8rxbrPR1CetZc8j8qoE+Rq6u\n"
+    "06131BIwxZyYVpO0FowJWWXhHlQemq1G0zxGRUA5WRRlLOtXTA12KkeHSG6S1+44\n"
+    "wW+iJweL1IsEH+s5duh9Y0Rz3vHDM8sixOfzcTQj8zdFBN7F5tZ+Qjb4HY3d2bVx\n"
+    "o2bCCIuXewLzvXWeSKn990X/IpBSWGj8W1pTG17JW0g+EnMJ5+rrg32NoUuyJdmr\n"
+    "KnJNFjxg9KfCp3htpIWrnSdtKYHRkV0s+ICel/Y9oEQSHXwDGReWukpy\n"
+    "-----END CERTIFICATE-----\n";
+
+static const char CHTTP_TLS_TEST_CA_CERTIFICATE[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDNjCCAh6gAwIBAgIUCwYd13pGVLQm0MfKu84XUDbdTkowDQYJKoZIhvcNAQEL\n"
+    "BQAwITEfMB0GA1UEAwwWQ0hUVFAgUlNBIFRlc3QgUm9vdCBDQTAeFw0yNjEwMDMy\n"
+    "MTA4MTdaFw0zNjA5MzAyMTA4MTdaMCExHzAdBgNVBAMMFkNIVFRQIFJTQSBUZXN0\n"
+    "IFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC94d5ObiCS\n"
+    "/yrpudSbnKaqnvf4viCmsw1L6mrE5v/RNf0r3GXfF3Kq7Zhf6X5qo1G40M3fzuD2\n"
+    "opV/EztClyaQVEeZFiut+jq0hi8qBr8fz+i/M/R8kwc94knFwFQMStjeCNZx4luH\n"
+    "56pl/DxAHN3oXStW/gwTZTNu5eUzFJB3S87XRSKNvJzrVWCtlA87urKA66LaXrL+\n"
+    "dCqMmwR7i/7p9uWVVM6Ndy1oEGlsXDcgLumSBCCXrOAfT407Uv+Do0oEl61Sg1M+\n"
+    "Av5VThM6ziomKEuogI9kFcQz6oZTUMsru5mOD0xnSJkERG9FQD6r2Ip97g34SCyD\n"
+    "PZysnTHsux1fAgMBAAGjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/\n"
+    "BAQDAgEGMB0GA1UdDgQWBBQiFTTKDwlM4SVIXE4VkKO+sjeeezAfBgNVHSMEGDAW\n"
+    "gBQiFTTKDwlM4SVIXE4VkKO+sjeeezANBgkqhkiG9w0BAQsFAAOCAQEAQkrmnKrL\n"
+    "mwh2v+pX7ohQYrnwDo5+ftCS0DEbWeHnnkS6pqdEOtCYu/UciPpgzWJ4f1snP+xB\n"
+    "KJfcTvsbFgHuN2/FkZDOIznDLxBQFLqKTZwsmHE9yCITUJ+nWBZFwGdh9Ev+S2xX\n"
+    "+tqmOA00lcjzWQ2EB5Gx+yGKvmDbg6E83ifyTV68m83UESFXkohB4Ipt4hWrWB+i\n"
+    "srkq+6V/BbJgvBwjoblC3L4uiNqzo5OPB5ylGBThVDOF3thH3eRZBPy0+1fnutWe\n"
+    "NIc7n3IGtBOZmadKmrYYlohg3wRZhoJMl2IFtQvjNrS5IcpDkAgJw5vKZod3Wgm3\n"
+    "XzvofX71hj/B9g==\n"
+    "-----END CERTIFICATE-----\n";
+
+static const char CHTTP_TLS_TEST_KEY[] =
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC2WbeK8ov/F+bT\n"
+    "S0TV6gtp/bE3zJWn6gza7mOWnInFGEcKykhzt4oBlzyIFhHni+3ZU/6U+AogXNej\n"
+    "rT/yKjEMWDGBiiMJEB0FU5RwJUrNfe15peJqun3hb9drMVL2TTZNYzTNXlJZt/+C\n"
+    "SGdyzg/BlJc0XUmu/cUSKNSIasyXuppqqXWwtJ+1kAmkekj0QZEFblCEHWCGKjpB\n"
+    "95NXE2smOMEEkhB4HKlWO54lrz9/Qm35NCe2dv9MG4sMFPwkAggjgwi/GrFeAtMI\n"
+    "YQk5PEUwQAaMgecey5HJS2dqE2H+a0FH0Qd0r9s5tlnfydR9J3YJLxy5kVNhncxw\n"
+    "I9cRl+DdAgMBAAECggEABLwmJ7G+IGDYwc5PyoUyCC3J+wKxNSO+8zVi+R919Vv4\n"
+    "xkcz4+tVZk6sx/TYwKwxwCWt8+TP8ICwqcOfKDTfwqwMlwpE+CCGvGNr9JCHVXgq\n"
+    "YTEFRNO0XpT2oUYt2w7stMw5bAbBuSottI6YPxMqNhLbbUTp26Ujx6GvSR6K0vq+\n"
+    "WWYpq6ocVeEAuJWKrIm2Sn8M0CfooLi1ouU1EAeT8hoMiER7xEljA+PBOKQt0Zpn\n"
+    "N0Vuhrh4r3Gr+Mq1okqye9iCkvBnaFsUNE9DkozrXr5J8dNPOybxwSBP5H13sMOT\n"
+    "b1HgLg/h4zmmUhd5MuFjtCnmvywExQqqtHzYD0e5uQKBgQD8ttem9IdcDIiLggQo\n"
+    "dCKpNDHMGrXGRvEwg5TcgFVmJDCgQR3KpwAeyNyVQDSGWyVmUZwB1JYDXQtwzw6Z\n"
+    "KqeRqAbqu1wESqikjt2/2HQZSwJXXXCIRYAbnNF9ZQM8TtTmrcJ3bgAL4Gb0t7Vf\n"
+    "Ni7tzapTbft1sTj4ZxF2jL6f6QKBgQC4uKtS4RDeuJX5xxvdnvBo5Tr3Yxc6ef3T\n"
+    "iMeWC9yZTudtGTLnfflU/nTeVuIwlJEKj9dcR1i0pCGHHrkTNOALN4cJJk9qgeKd\n"
+    "liM3DZfukcOd8Sn1NnY8gnBb2jXqmyA72pVtGOrc1YZfI/lWHzSeHNCBYIfsC93t\n"
+    "eRmD9wW01QKBgBpSSP/gtECIJaiyMBCul/WbtBwYJBq0xOZSriyRSVPMLSxj2+CB\n"
+    "qGeMcD0zZMUhtTGFCoS+SamsBUcIqfKWGMH5CE9mmFzyEcKiBsK2ntELmQDUgKYQ\n"
+    "5xj5KnCvFrkvVMl6C6k40dRq2Q5gHAoAsL6gDz+FUw2dGdv1kEISwsARAoGAVhoe\n"
+    "IZ+vEWHQ5oCcyIzRWtOezLlvll5Opk9XWOVmij9xODVKuQTLN4b0Sr8M58AYa2fo\n"
+    "5qaK/oiS6Dy13/IBjLjxRJ6K3gZ07yeQepTngNiI6hIDkL02F7ZlUStBfn2YZM3a\n"
+    "YOQAdbdBzw8hpbcd+6VKu0OXl7tgUtTjw9Nc4ZECgYBn+fciDdVIj+MB7KTQKIH+\n"
+    "b/b4u/ueilmFdh/CwOfEKDaDGKHGVBJ74sINDLFTHVnVZCyu+aWKUX2CK+mUrC86\n"
+    "UPRfH282y+mkwFv4Zuu5Y1DhTYtlhS2AzjYPnxT+xN7ix3M198BKzn4gHiI4qhAK\n"
+    "th8JxHVsF9AEP3GTrIh/sA==\n"
+    "-----END PRIVATE KEY-----\n";
+
+static const char CHTTP_TLS_TEST_CLIENT_CERTIFICATE[] =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIB0TCCAXagAwIBAgIUbrFOcwBbzF/EBOIrqLAADQev87IwCgYIKoZIzj0EAwIw\n"
     "HTEbMBkGA1UEAwwSQ0hUVFAgVGVzdCBSb290IENBMB4XDTI2MTAwMzIwNDg0MVoX\n"
@@ -21,7 +100,7 @@ static const char CHTTP_TLS_TEST_CERTIFICATE[] =
     "0IkCIQDJoniouPxN7h8PL0vcDdppMwFGv3kn0wKNnYVtBJe/4Q==\n"
     "-----END CERTIFICATE-----\n";
 
-static const char CHTTP_TLS_TEST_CA_CERTIFICATE[] =
+static const char CHTTP_TLS_TEST_CLIENT_CA_CERTIFICATE[] =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIBozCCAUigAwIBAgIUQTZIoHft+GDMregpujVjIpMKpuowCgYIKoZIzj0EAwIw\n"
     "HTEbMBkGA1UEAwwSQ0hUVFAgVGVzdCBSb290IENBMB4XDTI2MTAwMzIwNDg0MVoX\n"
@@ -34,7 +113,7 @@ static const char CHTTP_TLS_TEST_CA_CERTIFICATE[] =
     "i5osBgIhALgHAsFHBrVPYfYIjNnrJfVfYCs/oNAkxl4UlPpa2Wa3\n"
     "-----END CERTIFICATE-----\n";
 
-static const char CHTTP_TLS_TEST_KEY[] =
+static const char CHTTP_TLS_TEST_CLIENT_KEY[] =
     "-----BEGIN PRIVATE KEY-----\n"
     "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgzJT68YEt6tUw0WN1\n"
     "hMWrubaihY3bQKfXqVkmCXR6yNOhRANCAASGKFHl2D2BBpgIAjW9FsxTjMYhFr5r\n"
