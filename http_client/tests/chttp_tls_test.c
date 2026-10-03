@@ -301,7 +301,7 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
   }
 
-  it("serves HTTPS middleware and sessions while isolating pool profiles") {
+  it("serves HTTPS middleware and sessions across fixed owners") {
     static const char *h1[] = {"http/1.1"};
     chttp_server server = {0};
     chttp_client client = {0};
@@ -313,6 +313,8 @@ spec("CHTTP HTTPS adapter") {
     chttp_tls_async_probe async_probe = {0};
     chttp_server_config server_config = chttp_tls_test_server_config();
     chttp_client_config client_config = chttp_tls_test_client_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
     cnet_tls_server_config server_tls;
     cnet_tls_client_config client_tls;
     chttp_response response = {0};
@@ -352,6 +354,8 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_tls_profile_init(&second_profile, &client_tls), SALTS_OK);
     check_equal(chttp_tls_profile_init(&transient_profile, &client_tls), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
     check_equal(chttp_server_use(&server, chttp_tls_test_middleware, &probe), SALTS_OK);
     check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
