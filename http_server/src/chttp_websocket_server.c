@@ -475,7 +475,7 @@ static int chttp_server_websocket_command_submit(
                                               .kind = kind};
   ++owner->websocket_command_count;
   salts_mutex_unlock(&server->mutex);
-  (void)cnet_client_wake(network);
+  (void)chttp_server_owner_wake(owner);
   return SALTS_OK;
 }
 
