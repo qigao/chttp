@@ -230,6 +230,14 @@ typedef enum chttp_server_websocket_command_kind {
   CHTTP_SERVER_WEBSOCKET_COMMAND_CLOSE
 } chttp_server_websocket_command_kind;
 
+typedef enum chttp_server_owner_runtime_state {
+  CHTTP_SERVER_OWNER_RUNTIME_IDLE = 0,
+  CHTTP_SERVER_OWNER_RUNTIME_STARTING,
+  CHTTP_SERVER_OWNER_RUNTIME_READY,
+  CHTTP_SERVER_OWNER_RUNTIME_STOPPING,
+  CHTTP_SERVER_OWNER_RUNTIME_DONE
+} chttp_server_owner_runtime_state;
+
 typedef struct chttp_server_websocket_command {
   chttp_server_websocket_session session;
   unsigned char *data;
@@ -283,6 +291,8 @@ struct chttp_server_connection {
 struct chttp_server_owner_lane {
   chttp_server_impl *server;
   cnet_client *network;
+  cnet_client network_storage;
+  salts_thread_t thread;
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
@@ -294,6 +304,10 @@ struct chttp_server_owner_lane {
   size_t websocket_command_count;
   /* Pending admissions plus active connections; bounded by connection_count. */
   atomic_size_t connection_leases;
+  atomic_int runtime_state;
+  int terminal_status;
+  bool network_initialized;
+  bool thread_started;
   bool file_runtime_initialized;
 };
 
