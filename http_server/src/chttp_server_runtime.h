@@ -277,11 +277,15 @@ struct chttp_server_owner_lane {
   chttp_server_impl *server;
   cnet_client *network;
   chttp_server_websocket_command *websocket_commands;
+  cflow_io_file_runtime file_runtime;
+  chttp_file_transfer **file_transfers;
   size_t connection_begin;
   size_t connection_count;
+  size_t file_transfer_capacity;
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
+  bool file_runtime_initialized;
 };
 
 static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *owner) {
@@ -322,9 +326,6 @@ struct chttp_server_impl {
   chttp_server_owner_lane owner;
   cnet_listener listener;
   cnet_tls_server tls_server;
-  cflow_io_file_runtime file_runtime;
-  chttp_file_transfer **file_transfers;
-  size_t file_transfer_capacity;
   salts_mutex_t mutex;
   salts_cond_t changed;
   salts_thread_t thread;
@@ -340,7 +341,6 @@ struct chttp_server_impl {
   bool start_called;
   bool stop_requested;
   bool worker_done;
-  bool file_runtime_initialized;
 };
 
 int chttp_server_response_builder_init(chttp_server_response_builder *builder,
@@ -420,8 +420,11 @@ void chttp_server_stats_protocol_error(chttp_server_impl *server);
 void chttp_server_stats_handler_error(chttp_server_impl *server);
 
 int chttp_server_file_runtime_ensure(chttp_server_impl *server,
+                                     chttp_server_owner_lane *owner,
                                      cflow_io_file_runtime **out_runtime);
-int chttp_server_file_transfer_register(chttp_server_impl *server, chttp_file_transfer *transfer);
+int chttp_server_file_transfer_register(chttp_server_impl *server,
+                                        chttp_server_owner_lane *owner,
+                                        chttp_file_transfer *transfer);
 int chttp_server_send_pending(chttp_server_connection *connection);
 int chttp_server_buffer_grow(void *context, unsigned char **buffer, size_t *capacity,
                              size_t required, size_t limit, size_t preserve_size);
