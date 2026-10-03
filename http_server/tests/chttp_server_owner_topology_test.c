@@ -73,8 +73,38 @@ spec("CHttp owner topology") {
       check_equal(owner->websocket_command_count, (size_t)0u);
       check_equal(chttp_server_owner_lease_count(owner), (size_t)0u);
       check_equal(
-          atomic_load_explicit(&owner->runtime_state, memory_order_acquire),
+          chttp_server_owner_runtime_state_get(owner),
           CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_IDLE,
+              CHTTP_SERVER_OWNER_RUNTIME_READY),
+          SALTS_EINVAL);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_IDLE,
+              CHTTP_SERVER_OWNER_RUNTIME_STARTING),
+          SALTS_OK);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
+              CHTTP_SERVER_OWNER_RUNTIME_READY),
+          SALTS_OK);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_READY,
+              CHTTP_SERVER_OWNER_RUNTIME_STOPPING),
+          SALTS_OK);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_STOPPING,
+              CHTTP_SERVER_OWNER_RUNTIME_DONE),
+          SALTS_OK);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_DONE,
+              CHTTP_SERVER_OWNER_RUNTIME_READY),
+          SALTS_EINVAL);
       check_equal(owner->terminal_status, SALTS_OK);
       check(!owner->network_initialized);
       check(!owner->thread_started);
