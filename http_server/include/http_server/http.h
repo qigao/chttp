@@ -43,8 +43,9 @@ typedef struct chttp_websocket {
 
 /**
  * Generation-checked server WebSocket session captured from a callback-scoped
- * peer. The value does not keep the connection alive and must not outlive its
- * server.
+ * peer. connection_slot/generation identify a server-global connection record,
+ * not a transport-local CNet handle. The value does not keep the connection
+ * alive and must not outlive its server.
  */
 typedef struct chttp_server_websocket_session {
   void *impl;
