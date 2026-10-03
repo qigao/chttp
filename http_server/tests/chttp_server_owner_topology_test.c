@@ -77,6 +77,119 @@ static int owner_topology_wait_leases(
   }
 }
 
+typedef struct owner_topology_block_probe {
+  atomic_int entered;
+  atomic_int release;
+} owner_topology_block_probe;
+
+typedef struct owner_topology_request_thread_args {
+  chttp_client_config config;
+  char uri[64];
+  const char *target;
+  atomic_int completed;
+  int status;
+} owner_topology_request_thread_args;
+
+typedef struct owner_topology_stop_thread_args {
+  chttp_server *server;
+  atomic_int completed;
+  int status;
+} owner_topology_stop_thread_args;
+
+static int owner_topology_block(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  owner_topology_block_probe *probe = (owner_topology_block_probe *)user;
+  (void)request;
+  if (probe == NULL) return SALTS_EINVAL;
+  atomic_store_explicit(&probe->entered, 1, memory_order_release);
+  while (!atomic_load_explicit(&probe->release, memory_order_acquire))
+    salts_thread_yield();
+  return chttp_server_reply(response, 200u, "text/plain", "released", 8u);
+}
+
+static void owner_topology_request_thread(void *user) {
+  owner_topology_request_thread_args *args =
+      (owner_topology_request_thread_args *)user;
+  chttp_client client = {0};
+  chttp_response response = {0};
+  chttp_error error = {0};
+  chttp_options options;
+  int status;
+  if (args == NULL) return;
+  status = chttp_client_init(&client, &args->config);
+  if (status == SALTS_OK) {
+    options = (chttp_options){
+        .connection_uri = args->uri,
+        .authority = "127.0.0.1",
+        .target = args->target,
+        .timeout_ms = 5000u};
+    status = chttp_get(&client, &options, &response, &error);
+    chttp_response_destroy(&response);
+    {
+      const int destroy_status = chttp_client_destroy(&client, 5000u);
+      if (status == SALTS_OK && destroy_status != SALTS_OK)
+        status = destroy_status;
+    }
+  }
+  args->status = status;
+  atomic_store_explicit(&args->completed, 1, memory_order_release);
+}
+
+static void owner_topology_stop_thread(void *user) {
+  owner_topology_stop_thread_args *args =
+      (owner_topology_stop_thread_args *)user;
+  if (args == NULL || args->server == NULL) return;
+  args->status = chttp_server_stop(args->server, 5000u);
+  atomic_store_explicit(&args->completed, 1, memory_order_release);
+}
+
+static int owner_topology_wait_atomic(
+    const atomic_int *value, int expected, uint32_t timeout_ms) {
+  const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+  while (atomic_load_explicit(value, memory_order_acquire) != expected) {
+    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    salts_thread_yield();
+  }
+  return SALTS_OK;
+}
+
+static int owner_topology_wait_pending(
+    chttp_server_impl *impl, size_t owner_index, size_t admission_count,
+    size_t lease_count, uint32_t timeout_ms) {
+  const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+  chttp_server_owner_lane *owner;
+  if (impl == NULL) return SALTS_EINVAL;
+  owner = chttp_server_owner_at(impl, owner_index);
+  if (owner == NULL || !owner->admission_sync_initialized) return SALTS_EINVAL;
+  for (;;) {
+    size_t observed_admissions;
+    salts_mutex_lock(&owner->admission_mutex);
+    observed_admissions = owner->admission_count;
+    salts_mutex_unlock(&owner->admission_mutex);
+    if (observed_admissions == admission_count &&
+        chttp_server_owner_lease_count(owner) == lease_count)
+      return SALTS_OK;
+    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    salts_thread_yield();
+  }
+}
+
+static int owner_topology_wait_stop_requested(
+    chttp_server_impl *impl, uint32_t timeout_ms) {
+  const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+  if (impl == NULL) return SALTS_EINVAL;
+  for (;;) {
+    bool stop_requested;
+    salts_mutex_lock(&impl->mutex);
+    stop_requested = impl->stop_requested;
+    salts_mutex_unlock(&impl->mutex);
+    if (stop_requested) return SALTS_OK;
+    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    salts_thread_yield();
+  }
+}
+
 static chttp_server_config owner_topology_config(void) {
   chttp_server_config config = {
       .host = "127.0.0.1",
@@ -413,6 +526,125 @@ spec("CHttp owner topology") {
     check_equal(chttp_client_destroy(&second, 2000u), SALTS_OK);
     check_equal(owner_topology_wait_leases(impl, 0u, 0u, 2000u), SALTS_OK);
     check_equal(chttp_server_stop(&server, 2000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("cancels a pending detached admission during multi-owner stop") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_client first = {0};
+    chttp_client third = {0};
+    chttp_client_config client_config = owner_topology_client_config();
+    chttp_response response = {0};
+    chttp_server_impl *impl;
+    owner_topology_block_probe block = {0};
+    owner_topology_request_thread_args blocked_request = {0};
+    owner_topology_request_thread_args pending_request = {0};
+    owner_topology_stop_thread_args stop_args = {0};
+    salts_thread_t blocked_thread = NULL;
+    salts_thread_t pending_thread = NULL;
+    salts_thread_t stop_thread = NULL;
+    char uri[64];
+    uint16_t port = 0u;
+
+    atomic_init(&block.entered, 0);
+    atomic_init(&block.release, 0);
+    atomic_init(&blocked_request.completed, 0);
+    atomic_init(&pending_request.completed, 0);
+    atomic_init(&stop_args.completed, 0);
+
+    config.network.connection_capacity = 4u;
+    execution.owner_count = 2u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(
+        chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/ok", owner_topology_ok, NULL), SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/block", owner_topology_block, &block),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                   (unsigned int)port) > 0);
+
+    /* First physical connection -> owner0. Keep it alive. */
+    check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&first, uri, &response), SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(owner_topology_wait_leases(impl, 1u, 0u, 2000u), SALTS_OK);
+
+    /* Second physical connection -> owner1. Block inside its handler. */
+    blocked_request.config = client_config;
+    blocked_request.target = "/block";
+    check(snprintf(blocked_request.uri, sizeof(blocked_request.uri), "%s", uri) > 0);
+    check_equal(
+        salts_thread_create(
+            &blocked_thread, owner_topology_request_thread, &blocked_request),
+        SALTS_OK);
+    check_equal(owner_topology_wait_atomic(&block.entered, 1, 2000u), SALTS_OK);
+    check_equal(owner_topology_wait_leases(impl, 1u, 1u, 2000u), SALTS_OK);
+
+    /* Third physical connection -> owner0's second slot. */
+    check_equal(chttp_client_init(&third, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&third, uri, &response), SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(owner_topology_wait_leases(impl, 2u, 1u, 2000u), SALTS_OK);
+
+    /*
+     * Fourth physical connection -> owner1. owner1 is blocked in user code, so
+     * the detached stream must remain pending in owner1's bounded ring.
+     */
+    pending_request.config = client_config;
+    pending_request.target = "/ok";
+    check(snprintf(pending_request.uri, sizeof(pending_request.uri), "%s", uri) > 0);
+    check_equal(
+        salts_thread_create(
+            &pending_thread, owner_topology_request_thread, &pending_request),
+        SALTS_OK);
+    check_equal(owner_topology_wait_pending(impl, 1u, 1u, 2u, 2000u), SALTS_OK);
+
+    stop_args.server = &server;
+    check_equal(
+        salts_thread_create(&stop_thread, owner_topology_stop_thread, &stop_args),
+        SALTS_OK);
+    check_equal(owner_topology_wait_stop_requested(impl, 2000u), SALTS_OK);
+
+    /* Let owner1 leave the handler and enter its owner-local shutdown path. */
+    atomic_store_explicit(&block.release, 1, memory_order_release);
+    check_equal(owner_topology_wait_atomic(&stop_args.completed, 1, 5000u), SALTS_OK);
+    check_equal(salts_thread_join(&stop_thread), SALTS_OK);
+    salts_thread_destroy(&stop_thread);
+    check_equal(stop_args.status, SALTS_OK);
+
+    check_equal(owner_topology_wait_atomic(&blocked_request.completed, 1, 2000u), SALTS_OK);
+    check_equal(salts_thread_join(&blocked_thread), SALTS_OK);
+    salts_thread_destroy(&blocked_thread);
+    check_equal(owner_topology_wait_atomic(&pending_request.completed, 1, 2000u), SALTS_OK);
+    check_equal(salts_thread_join(&pending_thread), SALTS_OK);
+    salts_thread_destroy(&pending_thread);
+    check(pending_request.status != SALTS_OK);
+
+    check_equal(chttp_server_owner_lease_count(chttp_server_owner_at(impl, 0u)),
+                (size_t)0u);
+    check_equal(chttp_server_owner_lease_count(chttp_server_owner_at(impl, 1u)),
+                (size_t)0u);
+    check_equal(owner_topology_wait_pending(impl, 1u, 0u, 0u, 2000u), SALTS_OK);
+    check_equal(
+        chttp_server_owner_runtime_state_get(chttp_server_owner_at(impl, 0u)),
+        CHTTP_SERVER_OWNER_RUNTIME_DONE);
+    check_equal(
+        chttp_server_owner_runtime_state_get(chttp_server_owner_at(impl, 1u)),
+        CHTTP_SERVER_OWNER_RUNTIME_DONE);
+
+    check_equal(chttp_client_destroy(&first, 2000u), SALTS_OK);
+    check_equal(chttp_client_destroy(&third, 2000u), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
