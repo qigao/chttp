@@ -96,63 +96,76 @@ static cflow_io_native_backend_kind chttp_server_file_backend(void) {
 }
 
 static void chttp_server_file_wake(void *user) {
-  chttp_server_impl *server = (chttp_server_impl *)user;
-  if (server != NULL && server->network_initialized) (void)cnet_client_wake(&server->network);
+  chttp_server_owner_lane *owner = (chttp_server_owner_lane *)user;
+  cnet_client *network = chttp_server_owner_network(owner);
+  if (network != NULL) (void)cnet_client_wake(network);
 }
 
 int chttp_server_file_runtime_ensure(chttp_server_impl *server,
+                                     chttp_server_owner_lane *owner,
                                      cflow_io_file_runtime **out_runtime) {
   cflow_io_file_runtime_config config;
   size_t command_capacity;
   int status;
-  if (server == NULL || out_runtime == NULL || !server->network_initialized ||
-      server->file_transfer_capacity == 0u)
+  if (server == NULL || owner == NULL || owner->server != server ||
+      chttp_server_owner_network(owner) == NULL || out_runtime == NULL ||
+      owner->file_transfer_capacity == 0u)
     return SALTS_EINVAL;
   *out_runtime = NULL;
-  if (!server->file_runtime_initialized) {
-    command_capacity = server->file_transfer_capacity <= SIZE_MAX / 2u
-                           ? server->file_transfer_capacity * 2u
-                           : server->file_transfer_capacity;
+  if (!owner->file_runtime_initialized) {
+    command_capacity = owner->file_transfer_capacity <= SIZE_MAX / 2u
+                           ? owner->file_transfer_capacity * 2u
+                           : owner->file_transfer_capacity;
     config =
         (cflow_io_file_runtime_config){.backend_kind = chttp_server_file_backend(),
-                                       .file_capacity = server->file_transfer_capacity,
-                                       .request_capacity = server->file_transfer_capacity,
+                                       .file_capacity = owner->file_transfer_capacity,
+                                       .request_capacity = owner->file_transfer_capacity,
                                        .command_capacity = command_capacity,
-                                       .completion_batch_capacity = server->file_transfer_capacity,
+                                       .completion_batch_capacity = owner->file_transfer_capacity,
                                        .wake = chttp_server_file_wake,
-                                       .wake_user = server};
-    status = cflow_io_file_runtime_init(&server->file_runtime, &config);
+                                       .wake_user = owner};
+    status = cflow_io_file_runtime_init(&owner->file_runtime, &config);
     if (status != SALTS_OK) return status;
-    server->file_runtime_initialized = true;
+    owner->file_runtime_initialized = true;
   }
-  *out_runtime = &server->file_runtime;
+  *out_runtime = &owner->file_runtime;
   return SALTS_OK;
 }
 
-int chttp_server_file_transfer_register(chttp_server_impl *server, chttp_file_transfer *transfer) {
+int chttp_server_file_transfer_register(chttp_server_impl *server,
+                                        chttp_server_owner_lane *owner,
+                                        chttp_file_transfer *transfer) {
   size_t index;
-  if (server == NULL || transfer == NULL || transfer->file.impl == NULL) return SALTS_EINVAL;
-  for (index = 0u; index < server->file_transfer_capacity; ++index) {
-    if (server->file_transfers[index] == NULL) {
-      server->file_transfers[index] = transfer;
+  if (server == NULL || owner == NULL || owner->server != server ||
+      owner->file_transfers == NULL || transfer == NULL ||
+      transfer->file.impl == NULL)
+    return SALTS_EINVAL;
+  for (index = 0u; index < owner->file_transfer_capacity; ++index) {
+    if (owner->file_transfers[index] == NULL) {
+      owner->file_transfers[index] = transfer;
       return SALTS_OK;
     }
   }
   return SALTS_ENOBUFS;
 }
 
-static int chttp_server_file_progress(chttp_server_impl *server) {
+static int chttp_server_file_progress(chttp_server_impl *server,
+                                      chttp_server_owner_lane *owner) {
   size_t progressed = 0u;
   size_t max_steps;
   size_t index;
   int status;
-  if (server == NULL || !server->file_runtime_initialized) return SALTS_OK;
-  max_steps = server->file_transfer_capacity <= SIZE_MAX / 4u ? server->file_transfer_capacity * 4u
-                                                              : SIZE_MAX;
-  status = cflow_io_file_runtime_run_ready(&server->file_runtime, max_steps, &progressed);
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  if (!owner->file_runtime_initialized) return SALTS_OK;
+  max_steps = owner->file_transfer_capacity <= SIZE_MAX / 4u
+                  ? owner->file_transfer_capacity * 4u
+                  : SIZE_MAX;
+  status = cflow_io_file_runtime_run_ready(&owner->file_runtime, max_steps,
+                                           &progressed);
   if (status != SALTS_OK) return status;
-  for (index = 0u; index < server->file_transfer_capacity; ++index) {
-    chttp_file_transfer *transfer = server->file_transfers[index];
+  for (index = 0u; index < owner->file_transfer_capacity; ++index) {
+    chttp_file_transfer *transfer = owner->file_transfers[index];
     if (transfer == NULL) continue;
     if (transfer->owner_release_requested && !transfer->close_requested) {
       status = chttp_file_transfer_close(transfer);
@@ -163,43 +176,53 @@ static int chttp_server_file_progress(chttp_server_impl *server) {
     status = chttp_file_transfer_destroy(transfer);
     if (status != SALTS_OK) return status;
     free(transfer);
-    server->file_transfers[index] = NULL;
+    owner->file_transfers[index] = NULL;
   }
   return SALTS_OK;
 }
 
-static bool chttp_server_files_active(const chttp_server_impl *server) {
+static bool chttp_server_files_active(const chttp_server_owner_lane *owner) {
   size_t index;
-  if (server == NULL) return false;
-  for (index = 0u; index < server->file_transfer_capacity; ++index)
-    if (server->file_transfers[index] != NULL) return true;
+  if (owner == NULL || owner->file_transfers == NULL) return false;
+  for (index = 0u; index < owner->file_transfer_capacity; ++index)
+    if (owner->file_transfers[index] != NULL) return true;
   return false;
 }
 
-static int chttp_server_files_cleanup(chttp_server_impl *server) {
+static int chttp_server_files_cleanup(chttp_server_impl *server,
+                                      chttp_server_owner_lane *owner) {
   size_t index;
+  size_t end;
   int status;
-  if (server == NULL || !server->file_runtime_initialized) return SALTS_OK;
-  for (index = 0u; index < server->config.network.connection_capacity; ++index) {
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  if (!owner->file_runtime_initialized) return SALTS_OK;
+  end = chttp_server_owner_connection_end(owner);
+  if (owner->connection_begin > server->config.network.connection_capacity ||
+      end < owner->connection_begin ||
+      end > server->config.network.connection_capacity)
+    return SALTS_EINVAL;
+  for (index = owner->connection_begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
-    chttp_server_response_builder *builder = &connection->request_state.response_builder;
+    chttp_server_response_builder *builder =
+        &connection->request_state.response_builder;
     if (builder->file_transfer != NULL)
       chttp_server_response_builder_close_source(builder, SALTS_ECANCELED);
     chttp_h2_server_connection_cancel_file_sources(connection->h2);
   }
-  for (index = 0u; index < server->file_transfer_capacity; ++index) {
-    chttp_file_transfer *transfer = server->file_transfers[index];
+  for (index = 0u; index < owner->file_transfer_capacity; ++index) {
+    chttp_file_transfer *transfer = owner->file_transfers[index];
     if (transfer == NULL) continue;
     chttp_file_transfer_set_ready(transfer, NULL, NULL);
     transfer->owner_release_requested = true;
     status = chttp_file_transfer_close(transfer);
     if (status != SALTS_OK && status != SALTS_ENOBUFS) return status;
   }
-  while (chttp_server_files_active(server)) {
-    status = chttp_server_file_progress(server);
+  while (chttp_server_files_active(owner)) {
+    status = chttp_server_file_progress(server, owner);
     if (status != SALTS_OK) return status;
-    for (index = 0u; index < server->file_transfer_capacity; ++index) {
-      chttp_file_transfer *transfer = server->file_transfers[index];
+    for (index = 0u; index < owner->file_transfer_capacity; ++index) {
+      chttp_file_transfer *transfer = owner->file_transfers[index];
       if (transfer == NULL || transfer->close_requested) continue;
       transfer->owner_release_requested = true;
       status = chttp_file_transfer_close(transfer);
@@ -207,15 +230,15 @@ static int chttp_server_files_cleanup(chttp_server_impl *server) {
     }
     salts_thread_yield();
   }
-  status = cflow_io_file_runtime_close(&server->file_runtime);
+  status = cflow_io_file_runtime_close(&owner->file_runtime);
   if (status != SALTS_OK && status != SALTS_EALREADY) return status;
-  while (!cflow_io_file_runtime_is_quiescent(&server->file_runtime)) {
-    status = chttp_server_file_progress(server);
+  while (!cflow_io_file_runtime_is_quiescent(&owner->file_runtime)) {
+    status = chttp_server_file_progress(server, owner);
     if (status != SALTS_OK) return status;
     salts_thread_yield();
   }
-  status = cflow_io_file_runtime_destroy(&server->file_runtime);
-  if (status == SALTS_OK) server->file_runtime_initialized = false;
+  status = cflow_io_file_runtime_destroy(&owner->file_runtime);
+  if (status == SALTS_OK) owner->file_runtime_initialized = false;
   return status;
 }
 
@@ -353,9 +376,10 @@ static size_t chttp_server_default_buffer_capacity(const chttp_server_config *co
   return chttp_server_saturating_multiply(per_connection, config->network.connection_capacity);
 }
 
-static uint32_t chttp_server_poll_timeout(const chttp_server_impl *server) {
+static uint32_t chttp_server_poll_timeout(
+    const chttp_server_impl *server, const chttp_server_owner_lane *owner) {
   enum { CHTTP_SERVER_FILE_PROGRESS_POLL_MS = 1u };
-  if (server != NULL && chttp_server_files_active(server) &&
+  if (server != NULL && chttp_server_files_active(owner) &&
       server->config.poll_slice_ms > CHTTP_SERVER_FILE_PROGRESS_POLL_MS)
     return CHTTP_SERVER_FILE_PROGRESS_POLL_MS;
   if (server == NULL) return 0u;
@@ -608,7 +632,7 @@ static void chttp_server_impl_free(chttp_server_impl *impl) {
     for (index = 0u; index < impl->config.network.connection_capacity; ++index)
       chttp_server_connection_destroy(&impl->connections[index]);
   chttp_session_store_destroy(impl);
-  free(impl->file_transfers);
+  free(impl->owner.file_transfers);
   free(impl->owner.websocket_commands);
   free(impl->connections);
   free(impl->middleware);
@@ -705,9 +729,9 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       .server = impl,
       .network = &impl->network,
       .connection_begin = 0u,
-      .connection_count = config->network.connection_capacity};
+      .connection_count = config->network.connection_capacity,
+      .file_transfer_capacity = file_transfer_capacity};
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
-  impl->file_transfer_capacity = file_transfer_capacity;
   if (impl->config.stream_chunk_bytes == 0u) {
     const size_t transport_chunk_bytes = config->network.max_send_bytes -
                                          CHTTP_SERVER_CHUNK_PREFIX_RESERVE -
@@ -755,8 +779,9 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
         (chttp_server_middleware *)calloc(config->middleware_capacity, sizeof(*impl->middleware));
   impl->connections = (chttp_server_connection *)calloc(config->network.connection_capacity,
                                                         sizeof(*impl->connections));
-  impl->file_transfers =
-      (chttp_file_transfer **)calloc(file_transfer_capacity, sizeof(*impl->file_transfers));
+  impl->owner.file_transfers =
+      (chttp_file_transfer **)calloc(file_transfer_capacity,
+                                     sizeof(*impl->owner.file_transfers));
   impl->owner.websocket_commands =
       (chttp_server_websocket_command *)calloc(
           config->network.command_capacity,
@@ -765,7 +790,7 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       impl->route_paths == NULL ||
       (route_middleware_count != 0u && impl->route_middleware == NULL) ||
       (config->middleware_capacity != 0u && impl->middleware == NULL) ||
-      impl->connections == NULL || impl->file_transfers == NULL ||
+      impl->connections == NULL || impl->owner.file_transfers == NULL ||
       impl->owner.websocket_commands == NULL) {
     chttp_server_impl_free(impl);
     return SALTS_ENOMEM;
@@ -2035,7 +2060,7 @@ static void chttp_server_worker(void *user) {
   while (!chttp_server_should_stop(server)) {
     int ready = 0;
     size_t events = 0u;
-    status = chttp_server_file_progress(server);
+    status = chttp_server_file_progress(server, owner);
     if (status != SALTS_OK) break;
     status = chttp_server_deferred_progress(server, owner);
     if (status != SALTS_OK) break;
@@ -2049,9 +2074,9 @@ static void chttp_server_worker(void *user) {
       status = chttp_server_accept_ready(server, &server->owner);
       if (status != SALTS_OK) break;
     }
-    status = cnet_client_poll(network, chttp_server_poll_timeout(server), &events);
+    status = cnet_client_poll(network, chttp_server_poll_timeout(server, owner), &events);
     if (status != SALTS_OK) break;
-    status = chttp_server_file_progress(server);
+    status = chttp_server_file_progress(server, owner);
     if (status != SALTS_OK) break;
     status = chttp_server_deferred_progress(server, owner);
     if (status != SALTS_OK) break;
@@ -2064,15 +2089,15 @@ static void chttp_server_worker(void *user) {
     status = chttp_server_begin_shutdown(server, owner);
     while (status == SALTS_OK && chttp_server_connections_active(server, owner)) {
       size_t events = 0u;
-      status = chttp_server_file_progress(server);
+      status = chttp_server_file_progress(server, owner);
       if (status != SALTS_OK) break;
       status = chttp_server_deferred_progress(server, owner);
       if (status != SALTS_OK) break;
       status = chttp_server_retry_pending(server, owner);
       if (status != SALTS_OK) break;
-      status = cnet_client_poll(network, chttp_server_poll_timeout(server), &events);
+      status = cnet_client_poll(network, chttp_server_poll_timeout(server, owner), &events);
       if (status != SALTS_OK) break;
-      status = chttp_server_file_progress(server);
+      status = chttp_server_file_progress(server, owner);
       if (status != SALTS_OK) break;
       status = chttp_server_deferred_progress(server, owner);
       if (status != SALTS_OK) break;
@@ -2081,7 +2106,7 @@ static void chttp_server_worker(void *user) {
     }
   }
   {
-    const int file_status = chttp_server_files_cleanup(server);
+    const int file_status = chttp_server_files_cleanup(server, owner);
     if (status == SALTS_OK && file_status != SALTS_OK) status = file_status;
   }
   {
@@ -2224,7 +2249,7 @@ int chttp_server_destroy(chttp_server *server) {
     if (cleanup_status != SALTS_OK) return cleanup_status;
   }
   {
-    const int cleanup_status = chttp_server_files_cleanup(impl);
+    const int cleanup_status = chttp_server_files_cleanup(impl, &impl->owner);
     if (cleanup_status != SALTS_OK) return cleanup_status;
   }
   if (impl->network_initialized || impl->listener_initialized) return SALTS_EBUSY;
