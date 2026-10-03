@@ -25,6 +25,70 @@ salts_idl_target(
 target_sources(chttp_service_plugin_fixture_native PRIVATE
   chttp_service_plugin_business.c)
 
+salts_idl_target(
+  TARGET chttp_service_cflow_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow.schema"
+  ARTIFACT_NAME "chttp_service_cflow"
+  ARTIFACTS NATIVE
+  TRANSPORTS HTTP
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow.projection.json")
+
+target_sources(chttp_service_cflow_fixture_native PRIVATE
+  chttp_service_cflow_business.c)
+
+get_target_property(CHTTP_SERVICE_CFLOW_LINKS
+  chttp_service_cflow_fixture_native INTERFACE_LINK_LIBRARIES)
+if(NOT CHTTP_SERVICE_CFLOW_LINKS)
+  message(FATAL_ERROR
+    "generated CFlow native target has no public dependency contract")
+endif()
+list(FIND CHTTP_SERVICE_CFLOW_LINKS "Salts::DataBind"
+  CHTTP_SERVICE_CFLOW_DATABIND_INDEX)
+list(FIND CHTTP_SERVICE_CFLOW_LINKS "Salts::CFlow"
+  CHTTP_SERVICE_CFLOW_CFLOW_INDEX)
+if(CHTTP_SERVICE_CFLOW_DATABIND_INDEX LESS 0 OR
+   CHTTP_SERVICE_CFLOW_CFLOW_INDEX LESS 0)
+  message(FATAL_ERROR
+    "generated NATIVE target must publicly expose Salts::DataBind + Salts::CFlow")
+endif()
+
+salts_idl_target(
+  TARGET chttp_service_cflow_unsupported_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow_unsupported.schema"
+  ARTIFACT_NAME "chttp_service_cflow_unsupported"
+  ARTIFACTS NATIVE)
+
+target_sources(chttp_service_cflow_unsupported_fixture_native PRIVATE
+  chttp_service_cflow_unsupported_business.c)
+
+add_executable(chttp_service_generated_cflow_http_test
+  chttp_service_generated_cflow_http_test.c)
+
+target_link_libraries(chttp_service_generated_cflow_http_test PRIVATE
+  CHttp::Service
+  CHttp::Client
+  chttp_service_cflow_fixture_native
+  chttp_service_cflow_unsupported_fixture_native
+  Salts::TinyTest)
+
+target_include_directories(chttp_service_generated_cflow_http_test PRIVATE
+  "${chttp_service_cflow_fixture_GENERATED_DIR}"
+  "${chttp_service_cflow_unsupported_fixture_GENERATED_DIR}")
+
+add_dependencies(chttp_service_generated_cflow_http_test
+  chttp_service_cflow_fixture_idl_codegen
+  chttp_service_cflow_unsupported_fixture_idl_codegen)
+
+add_test(NAME chttp_service_generated_cflow_http_test
+  COMMAND chttp_service_generated_cflow_http_test)
+
+set_target_properties(chttp_service_generated_cflow_http_test PROPERTIES
+  FOLDER "service/tests"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
 if(DEFINED ENV{TURBOWASM_ROOT} AND NOT "$ENV{TURBOWASM_ROOT}" STREQUAL "")
   file(TO_CMAKE_PATH "$ENV{TURBOWASM_ROOT}" CHTTP_TURBOWASM_ROOT)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)

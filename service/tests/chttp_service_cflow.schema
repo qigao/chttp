@@ -1,0 +1,14 @@
+schema CFlowGen [version(1)];
+
+message AddRequest {
+  @Min(1) uint32 left;
+  uint32 right;
+}
+
+message AddResponse {
+  uint32 sum;
+}
+
+service Calc {
+  Add: AddRequest -> AddResponse;
+}
