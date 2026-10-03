@@ -645,6 +645,7 @@ static int chttp_server_connection_init(chttp_server_impl *server,
       .user = connection};
   int status;
   connection->server = server;
+  connection->owner = &server->owner;
   status = chttp_server_request_state_init(&connection->request_state, server);
   if (status != SALTS_OK) return status;
   connection->request_state.response_builder.connection = connection;
@@ -700,6 +701,11 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   impl = (chttp_server_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
   impl->config = *config;
+  impl->owner = (chttp_server_owner_lane){
+      .server = impl,
+      .network = &impl->network,
+      .connection_begin = 0u,
+      .connection_count = config->network.connection_capacity};
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   impl->file_transfer_capacity = file_transfer_capacity;
   if (impl->config.stream_chunk_bytes == 0u) {
@@ -872,7 +878,7 @@ static int chttp_server_connection_retry(chttp_server_connection *connection) {
   action = connection->pending_action;
   if (action == CHTTP_SERVER_PENDING_NONE) return SALTS_OK;
   if (action == CHTTP_SERVER_PENDING_RECEIVE)
-    status = cnet_receive(&connection->server->network, connection->handle, 1u);
+    status = cnet_receive(chttp_server_connection_network(connection), connection->handle, 1u);
   else if (action == CHTTP_SERVER_PENDING_SEND) {
     if (connection->retained_response_sg) {
       chttp_server_response_builder *builder =
@@ -882,18 +888,18 @@ static int chttp_server_connection_retry(chttp_server_connection *connection) {
               connection->retained_response_sg_body_size)
         return SALTS_EPROTO;
       status = chttp_cnet_retained_send_pair(
-          &connection->server->network, connection->handle,
+          chttp_server_connection_network(connection), connection->handle,
           connection->outbound_retained, connection->outbound,
           connection->outbound_capacity, connection->outbound_size,
           builder->retained_body, connection->close_after_write ? 1 : 0);
     } else {
       status = chttp_cnet_retained_send(
-          &connection->server->network, connection->handle,
+          chttp_server_connection_network(connection), connection->handle,
           connection->outbound_retained, connection->outbound,
           connection->outbound_capacity, connection->outbound_size,
           connection->close_after_write ? 1 : 0);
     }
-  } else status = cnet_close(&connection->server->network, connection->handle);
+  } else status = cnet_close(chttp_server_connection_network(connection), connection->handle);
   if (status == SALTS_OK) {
     connection->pending_action = CHTTP_SERVER_PENDING_NONE;
     if (action == CHTTP_SERVER_PENDING_SEND) connection->writing = true;
@@ -941,7 +947,7 @@ static int chttp_server_select_tls_protocol(chttp_server_connection *connection)
     connection->wire_protocol = CHTTP_SERVER_WIRE_HTTP_1_1;
     return SALTS_OK;
   }
-  status = cnet_tls_negotiated_alpn(&connection->server->network, connection->handle, alpn,
+  status = cnet_tls_negotiated_alpn(chttp_server_connection_network(connection), connection->handle, alpn,
                                     sizeof(alpn), &alpn_size);
   if (status == SALTS_ENOENT) {
     connection->wire_protocol = CHTTP_SERVER_WIRE_HTTP_1_1;
@@ -976,7 +982,7 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     int status = chttp_server_select_tls_protocol(connection);
     connection->peer_certificate_sha256[0] = '\0';
     if (status == SALTS_OK && connection->server->tls_initialized) {
-      status = cnet_tls_peer_certificate_sha256(&connection->server->network, connection->handle,
+      status = cnet_tls_peer_certificate_sha256(chttp_server_connection_network(connection), connection->handle,
                                                 connection->peer_certificate_sha256);
       if (status == SALTS_ENOENT) status = SALTS_OK;
     }
