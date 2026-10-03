@@ -1430,15 +1430,20 @@ spec("CHTTP HTTP/2 client") {
     chttp_options options;
     char *cert_path = tt_make_temp_file("chttp-h2-cert", ".pem");
     char *key_path = tt_make_temp_file("chttp-h2-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-test-ca", ".pem");
     char uri[64];
     uint16_t port = 0u;
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
     check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
                               sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
                 0);
     check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+                0);
     client_config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
     client_config.network.tls_handshake_timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS;
     server_network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
@@ -1452,7 +1457,7 @@ spec("CHTTP HTTP/2 client") {
                                           .alpn_protocols = h2,
                                           .alpn_protocol_count = 1u};
     client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = cert_path,
+                                          .ca_file = ca_path,
                                           .server_name = "localhost",
                                           .alpn_protocols = h2,
                                           .alpn_protocol_count = 1u};
@@ -1487,8 +1492,10 @@ spec("CHTTP HTTP/2 client") {
     check_equal(server.response_submitted, 1);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
   }
 
   it("rejects a response whose content-length disagrees with DATA") {
