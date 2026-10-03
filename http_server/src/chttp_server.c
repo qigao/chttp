@@ -1841,10 +1841,15 @@ static int chttp_server_owner_admissions_progress(
 static bool chttp_server_owner_admission_available(
     chttp_server_owner_lane *owner) {
   size_t active;
+  bool network_ready;
   bool available;
   if (owner == NULL || owner->connection_count == 0u ||
-      !owner->network_initialized)
+      !owner->network_sync_initialized)
     return false;
+  salts_mutex_lock(&owner->network_mutex);
+  network_ready = owner->network_initialized;
+  salts_mutex_unlock(&owner->network_mutex);
+  if (!network_ready) return false;
   active = atomic_load_explicit(&owner->active_connections,
                                 memory_order_acquire);
   salts_mutex_lock(&owner->admission_mutex);
