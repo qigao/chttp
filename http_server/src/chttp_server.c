@@ -1240,6 +1240,10 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     } else {
       connection->deferred_disconnected = true;
     }
+    if (connection->owner_lease_held) {
+      (void)chttp_server_owner_lease_release(connection->owner);
+      connection->owner_lease_held = false;
+    }
     chttp_server_stats_connection_close(connection->server);
   }
 }
@@ -2277,10 +2281,11 @@ static int chttp_server_begin_shutdown(
   if (owner->connection_begin > server->config.network.connection_capacity ||
       end < owner->connection_begin || end > server->config.network.connection_capacity)
     return SALTS_EINVAL;
-  if (server->listener_initialized) {
+  if (owner == &server->owner && server->listener_initialized) {
     status = cnet_listener_close(&server->listener);
     if (status != SALTS_OK && status != SALTS_EALREADY) return status;
   }
+  chttp_server_owner_admission_cancel(owner);
   for (index = owner->connection_begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
     if (!connection->active) continue;
