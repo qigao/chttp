@@ -292,6 +292,7 @@ struct chttp_server_owner_lane {
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
+  /* Pending admissions plus active connections; bounded by connection_count. */
   atomic_size_t connection_leases;
   bool file_runtime_initialized;
 };
