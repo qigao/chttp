@@ -459,20 +459,20 @@ static int chttp_server_websocket_command_submit(
     free(copy);
     return SALTS_ESHUTDOWN;
   }
-  if (server->websocket_command_count == server->config.network.command_capacity) {
+  if (owner->websocket_command_count == server->config.network.command_capacity) {
     salts_mutex_unlock(&server->mutex);
     free(copy);
     return SALTS_ENOBUFS;
   }
-  tail = (server->websocket_command_head + server->websocket_command_count) %
+  tail = (owner->websocket_command_head + owner->websocket_command_count) %
          server->config.network.command_capacity;
-  command = &server->websocket_commands[tail];
+  command = &owner->websocket_commands[tail];
   *command = (chttp_server_websocket_command){.session = *session,
                                               .data = copy,
                                               .size = size,
                                               .close_code = close_code,
                                               .kind = kind};
-  ++server->websocket_command_count;
+  ++owner->websocket_command_count;
   salts_mutex_unlock(&server->mutex);
   (void)cnet_client_wake(network);
   return SALTS_OK;
@@ -527,20 +527,26 @@ static chttp_server_websocket_peer *chttp_server_websocket_command_peer(
   return chttp_h2_server_websocket_peer_find(connection->h2, session->stream_id);
 }
 
-int chttp_server_websocket_commands_progress(chttp_server_impl *server) {
+int chttp_server_websocket_commands_progress(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
+  if (server == NULL || owner == NULL || owner->server != server ||
+      owner->websocket_commands == NULL)
+    return SALTS_EINVAL;
   for (;;) {
     chttp_server_websocket_command *command;
     chttp_server_websocket_peer *peer;
     chttp_server_connection *connection = NULL;
     int status;
     salts_mutex_lock(&server->mutex);
-    if (server->websocket_command_count == 0u) {
+    if (owner->websocket_command_count == 0u) {
       salts_mutex_unlock(&server->mutex);
       return SALTS_OK;
     }
-    command = &server->websocket_commands[server->websocket_command_head];
+    command = &owner->websocket_commands[owner->websocket_command_head];
     salts_mutex_unlock(&server->mutex);
     peer = chttp_server_websocket_command_peer(server, &command->session, &connection);
+    if (peer != NULL && (connection == NULL || connection->owner != owner))
+      peer = NULL;
     if (peer == NULL)
       status = SALTS_ENOENT;
     else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_TEXT)
@@ -562,9 +568,9 @@ int chttp_server_websocket_commands_progress(chttp_server_impl *server) {
     salts_mutex_lock(&server->mutex);
     free(command->data);
     *command = (chttp_server_websocket_command){0};
-    server->websocket_command_head =
-        (server->websocket_command_head + 1u) % server->config.network.command_capacity;
-    --server->websocket_command_count;
+    owner->websocket_command_head =
+        (owner->websocket_command_head + 1u) % server->config.network.command_capacity;
+    --owner->websocket_command_count;
     salts_mutex_unlock(&server->mutex);
   }
 }

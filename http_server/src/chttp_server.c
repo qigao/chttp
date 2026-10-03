@@ -601,15 +601,15 @@ static void chttp_server_connection_destroy(chttp_server_connection *connection)
 static void chttp_server_impl_free(chttp_server_impl *impl) {
   size_t index;
   if (impl == NULL) return;
-  if (impl->websocket_commands != NULL)
+  if (impl->owner.websocket_commands != NULL)
     for (index = 0u; index < impl->config.network.command_capacity; ++index)
-      free(impl->websocket_commands[index].data);
+      free(impl->owner.websocket_commands[index].data);
   if (impl->connections != NULL)
     for (index = 0u; index < impl->config.network.connection_capacity; ++index)
       chttp_server_connection_destroy(&impl->connections[index]);
   chttp_session_store_destroy(impl);
   free(impl->file_transfers);
-  free(impl->websocket_commands);
+  free(impl->owner.websocket_commands);
   free(impl->connections);
   free(impl->middleware);
   free(impl->route_middleware);
@@ -757,14 +757,16 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
                                                         sizeof(*impl->connections));
   impl->file_transfers =
       (chttp_file_transfer **)calloc(file_transfer_capacity, sizeof(*impl->file_transfers));
-  impl->websocket_commands = (chttp_server_websocket_command *)calloc(
-      config->network.command_capacity, sizeof(*impl->websocket_commands));
+  impl->owner.websocket_commands =
+      (chttp_server_websocket_command *)calloc(
+          config->network.command_capacity,
+          sizeof(*impl->owner.websocket_commands));
   if (impl->host == NULL || impl->session_cookie_name == NULL || impl->routes == NULL ||
       impl->route_paths == NULL ||
       (route_middleware_count != 0u && impl->route_middleware == NULL) ||
       (config->middleware_capacity != 0u && impl->middleware == NULL) ||
       impl->connections == NULL || impl->file_transfers == NULL ||
-      impl->websocket_commands == NULL) {
+      impl->owner.websocket_commands == NULL) {
     chttp_server_impl_free(impl);
     return SALTS_ENOMEM;
   }
@@ -2037,7 +2039,7 @@ static void chttp_server_worker(void *user) {
     if (status != SALTS_OK) break;
     status = chttp_server_deferred_progress(server, owner);
     if (status != SALTS_OK) break;
-    status = chttp_server_websocket_commands_progress(server);
+    status = chttp_server_websocket_commands_progress(server, owner);
     if (status != SALTS_OK) break;
     status = chttp_server_retry_pending(server, owner);
     if (status != SALTS_OK) break;
@@ -2053,7 +2055,7 @@ static void chttp_server_worker(void *user) {
     if (status != SALTS_OK) break;
     status = chttp_server_deferred_progress(server, owner);
     if (status != SALTS_OK) break;
-    status = chttp_server_websocket_commands_progress(server);
+    status = chttp_server_websocket_commands_progress(server, owner);
     if (status != SALTS_OK) break;
     status = chttp_server_retry_pending(server, owner);
     if (status != SALTS_OK) break;

@@ -276,9 +276,12 @@ struct chttp_server_connection {
 struct chttp_server_owner_lane {
   chttp_server_impl *server;
   cnet_client *network;
+  chttp_server_websocket_command *websocket_commands;
   size_t connection_begin;
   size_t connection_count;
   size_t pending_retry_cursor;
+  size_t websocket_command_head;
+  size_t websocket_command_count;
 };
 
 static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *owner) {
@@ -322,9 +325,6 @@ struct chttp_server_impl {
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
   size_t file_transfer_capacity;
-  chttp_server_websocket_command *websocket_commands;
-  size_t websocket_command_head;
-  size_t websocket_command_count;
   salts_mutex_t mutex;
   salts_cond_t changed;
   salts_thread_t thread;
@@ -402,7 +402,8 @@ int chttp_server_websocket_input(chttp_server_connection *connection, const void
 int chttp_server_websocket_send_complete(chttp_server_connection *connection);
 void chttp_server_websocket_transport_closed(chttp_server_connection *connection);
 void chttp_server_websocket_reset(chttp_server_connection *connection);
-int chttp_server_websocket_commands_progress(chttp_server_impl *server);
+int chttp_server_websocket_commands_progress(chttp_server_impl *server,
+                                             chttp_server_owner_lane *owner);
 
 int chttp_session_store_init(chttp_server_impl *server);
 void chttp_session_store_destroy(chttp_server_impl *server);
