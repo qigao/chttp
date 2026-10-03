@@ -5,10 +5,10 @@
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageId>CHttp.Native</PackageId>
-    <PackageVersion Condition="'$(PackageVersion)' == ''">1.1.9</PackageVersion>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">1.1.10</PackageVersion>
     <Authors>qigao</Authors>
     <Description>Prebuilt CHttp C/C++ SDK install trees for native consumers.</Description>
-    <PackageTags>chttp;http;native;c;cpp;cmake;android</PackageTags>
+    <PackageTags>chttp;http;native;c;cpp;cmake;android;ios</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/qigao/chttp</RepositoryUrl>
