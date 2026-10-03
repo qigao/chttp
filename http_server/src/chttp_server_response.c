@@ -462,7 +462,7 @@ int chttp_server_deferred_reply(chttp_server_deferred *deferred,
       target->token, chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_READY),
       memory_order_release);
   *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
-  (void)cnet_client_wake(&target->server->network);
+  (void)cnet_client_wake(chttp_server_connection_network(target->connection));
   return SALTS_OK;
 }
 
@@ -526,7 +526,7 @@ int chttp_server_deferred_reply_buffer(
           deferred->generation, CHTTP_SERVER_DEFERRED_READY),
       memory_order_release);
   *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
-  (void)cnet_client_wake(&target->server->network);
+  (void)cnet_client_wake(chttp_server_connection_network(target->connection));
   return SALTS_OK;
 }
 
@@ -543,7 +543,7 @@ int chttp_server_deferred_cancel(chttp_server_deferred *deferred) {
       chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_CANCELED),
       memory_order_release);
   *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
-  (void)cnet_client_wake(&target->server->network);
+  (void)cnet_client_wake(chttp_server_connection_network(target->connection));
   return SALTS_OK;
 }
 
