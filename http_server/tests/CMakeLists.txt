@@ -20,6 +20,18 @@ set_target_properties(chttp_server_test PROPERTIES
   C_EXTENSIONS OFF)
 
 
+add_executable(chttp_session_shard_test chttp_session_shard_test.c)
+target_link_libraries(chttp_session_shard_test PRIVATE CHttp::Server Salts::TinyTest)
+target_include_directories(chttp_session_shard_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_server/src)
+add_test(NAME chttp_session_shard_test COMMAND chttp_session_shard_test)
+set_target_properties(chttp_session_shard_test PROPERTIES
+  FOLDER "http_server/tests"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
+
 add_executable(chttp_server_deferred_token_test chttp_server_deferred_token_test.c)
 target_link_libraries(chttp_server_deferred_token_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_deferred_token_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
