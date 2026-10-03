@@ -395,7 +395,12 @@ spec("CHTTP WebSocket client/server") {
     check_equal(atomic_load_explicit(&probe.captured, memory_order_acquire), 1);
     check_equal(probe.session.connection_slot, stale.connection_slot);
     check_not_equal(probe.session.connection_generation, stale.connection_generation);
-    check_equal(chttp_server_websocket_send_text(&stale, "stale", 5u), SALTS_ENOENT);
+    /*
+     * Submission only promises bounded queue admission. The owner validates the
+     * captured generation when it drains the command; a stale command must be
+     * discarded rather than delivered to the connection that reused this slot.
+     */
+    check_equal(chttp_server_websocket_send_text(&stale, "stale", 5u), SALTS_OK);
     check_equal(chttp_server_websocket_send_text(&probe.session, "fresh", 5u), SALTS_OK);
     check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
                 SALTS_OK);
