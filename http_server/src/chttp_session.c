@@ -775,7 +775,8 @@ int chttp_session_regenerate(chttp_session *session) {
       return SALTS_ENOENT;
     }
 
-    chttp_session_shard_expire_locked(server, target_shard, now_ms);
+    if (source_shard != target_shard)
+      chttp_session_shard_expire_locked(server, target_shard, now_ms);
     if (chttp_session_record_find_locked(server, target_shard, id) != NULL) {
       chttp_session_unlock_pair(server, source_index, target_index);
       continue;
