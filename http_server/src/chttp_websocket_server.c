@@ -412,11 +412,23 @@ int chttp_server_websocket_session_capture(const chttp_websocket *websocket,
   return SALTS_OK;
 }
 
+static chttp_server_owner_lane *chttp_server_websocket_command_owner(
+    chttp_server_impl *server, const chttp_server_websocket_session *session) {
+  size_t index;
+  if (server == NULL || session == NULL || session->connection_slot == 0u)
+    return NULL;
+  index = (size_t)session->connection_slot - 1u;
+  if (index >= server->config.network.connection_capacity) return NULL;
+  return server->connections[index].owner;
+}
+
 static int chttp_server_websocket_command_submit(
     const chttp_server_websocket_session *session, chttp_server_websocket_command_kind kind,
     uint16_t close_code, const void *data, size_t size) {
   chttp_server_impl *server;
   chttp_server_websocket_command *command;
+  chttp_server_owner_lane *owner;
+  cnet_client *network;
   unsigned char *copy = NULL;
   size_t tail;
   if (session == NULL || session->impl == NULL || session->connection_slot == 0u ||
@@ -424,6 +436,10 @@ static int chttp_server_websocket_command_submit(
       (data == NULL && size != 0u))
     return SALTS_EINVAL;
   server = (chttp_server_impl *)session->impl;
+  owner = chttp_server_websocket_command_owner(server, session);
+  network = chttp_server_owner_network(owner);
+  if (owner == NULL || owner->server != server || network == NULL)
+    return SALTS_EINVAL;
   if (size > server->config.network.max_send_bytes) return SALTS_EMSGSIZE;
   if ((kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PING ||
        kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PONG) &&
@@ -458,7 +474,7 @@ static int chttp_server_websocket_command_submit(
                                               .kind = kind};
   ++server->websocket_command_count;
   salts_mutex_unlock(&server->mutex);
-  (void)cnet_client_wake(&server->network);
+  (void)cnet_client_wake(network);
   return SALTS_OK;
 }
 
