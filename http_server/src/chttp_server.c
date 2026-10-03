@@ -628,18 +628,41 @@ static void chttp_server_connection_destroy(chttp_server_connection *connection)
   *connection = (chttp_server_connection){0};
 }
 
+static void chttp_server_owner_storage_destroy(chttp_server_owner_lane *owner) {
+  size_t index;
+  if (owner == NULL) return;
+  if (owner->websocket_commands != NULL) {
+    for (index = 0u; index < owner->server->config.network.command_capacity; ++index)
+      free(owner->websocket_commands[index].data);
+  }
+  if (owner->admissions != NULL) {
+    for (index = 0u; index < owner->admission_capacity; ++index)
+      if (owner->admissions[index].internal_active != 0u)
+        (void)cnet_accepted_stream_close(&owner->admissions[index]);
+  }
+  free(owner->admissions);
+  free(owner->file_transfers);
+  free(owner->websocket_commands);
+  owner->admissions = NULL;
+  owner->file_transfers = NULL;
+  owner->websocket_commands = NULL;
+  if (owner->admission_sync_initialized) {
+    salts_mutex_destroy(&owner->admission_mutex);
+    owner->admission_sync_initialized = false;
+  }
+}
+
 static void chttp_server_impl_free(chttp_server_impl *impl) {
   size_t index;
   if (impl == NULL) return;
-  if (impl->owner.websocket_commands != NULL)
-    for (index = 0u; index < impl->config.network.command_capacity; ++index)
-      free(impl->owner.websocket_commands[index].data);
+  if (impl->owners != NULL)
+    for (index = 0u; index < impl->owner_count; ++index)
+      chttp_server_owner_storage_destroy(&impl->owners[index]);
   if (impl->connections != NULL)
     for (index = 0u; index < impl->config.network.connection_capacity; ++index)
       chttp_server_connection_destroy(&impl->connections[index]);
   chttp_session_store_destroy(impl);
-  free(impl->owner.file_transfers);
-  free(impl->owner.websocket_commands);
+  free(impl->owners);
   free(impl->connections);
   free(impl->middleware);
   free(impl->route_middleware);
@@ -675,7 +698,7 @@ static int chttp_server_connection_init(chttp_server_impl *server,
       .user = connection};
   int status;
   connection->server = server;
-  connection->owner = &server->owner;
+  connection->owner = NULL;
   status = chttp_server_request_state_init(&connection->request_state, server);
   if (status != SALTS_OK) return status;
   connection->request_state.response_builder.connection = connection;
@@ -706,7 +729,6 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   size_t route_path_stride;
   size_t route_path_bytes;
   size_t route_middleware_count;
-  size_t file_transfer_capacity;
   size_t index;
   int status;
   if (server == NULL) return SALTS_EINVAL;
@@ -714,29 +736,18 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   status = chttp_server_config_validate(config);
   if (status != SALTS_OK) return status;
   route_path_stride = config->max_target_bytes + 1u;
-  file_transfer_capacity = config->network.connection_capacity;
-  if (config->enable_http2 &&
-      (!chttp_server_multiply(config->network.connection_capacity, config->h2_stream_capacity,
-                              &file_transfer_capacity) ||
-       file_transfer_capacity == 0u))
-    return SALTS_ERANGE;
   if (route_path_stride == 0u ||
       !chttp_server_multiply(config->route_capacity, route_path_stride, &route_path_bytes) ||
       !chttp_server_multiply(config->route_capacity, config->max_route_middleware_count,
                              &route_middleware_count) ||
       (route_middleware_count != 0u &&
-       route_middleware_count > SIZE_MAX / sizeof(chttp_server_middleware)) ||
-      file_transfer_capacity > SIZE_MAX / sizeof(chttp_file_transfer *))
+       route_middleware_count > SIZE_MAX / sizeof(chttp_server_middleware)))
     return SALTS_ERANGE;
   impl = (chttp_server_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
   impl->config = *config;
-  impl->owner = (chttp_server_owner_lane){
-      .server = impl,
-      .network = &impl->network,
-      .connection_begin = 0u,
-      .connection_count = config->network.connection_capacity,
-      .file_transfer_capacity = file_transfer_capacity};
+  impl->execution =
+      (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {
     const size_t transport_chunk_bytes = config->network.max_send_bytes -
@@ -783,21 +794,13 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   if (config->middleware_capacity != 0u)
     impl->middleware =
         (chttp_server_middleware *)calloc(config->middleware_capacity, sizeof(*impl->middleware));
-  impl->connections = (chttp_server_connection *)calloc(config->network.connection_capacity,
-                                                        sizeof(*impl->connections));
-  impl->owner.file_transfers =
-      (chttp_file_transfer **)calloc(file_transfer_capacity,
-                                     sizeof(*impl->owner.file_transfers));
-  impl->owner.websocket_commands =
-      (chttp_server_websocket_command *)calloc(
-          config->network.command_capacity,
-          sizeof(*impl->owner.websocket_commands));
+  impl->connections = (chttp_server_connection *)calloc(
+      config->network.connection_capacity, sizeof(*impl->connections));
   if (impl->host == NULL || impl->session_cookie_name == NULL || impl->routes == NULL ||
       impl->route_paths == NULL ||
       (route_middleware_count != 0u && impl->route_middleware == NULL) ||
       (config->middleware_capacity != 0u && impl->middleware == NULL) ||
-      impl->connections == NULL || impl->owner.file_transfers == NULL ||
-      impl->owner.websocket_commands == NULL) {
+      impl->connections == NULL) {
     chttp_server_impl_free(impl);
     return SALTS_ENOMEM;
   }
@@ -843,10 +846,24 @@ int chttp_server_set_socket_options(chttp_server *server,
   status = cnet_listener_options_validate(&options->listener);
   if (status != SALTS_OK) return status;
   impl = (chttp_server_impl *)server->impl;
-  if (impl->start_called || impl->thread_started || impl->network_initialized ||
-      impl->listener_initialized)
+  if (impl->start_called || impl->listener_initialized || impl->owners != NULL)
     return SALTS_EBUSY;
   impl->socket_options = *options;
+  return SALTS_OK;
+}
+
+int chttp_server_set_execution_options(
+    chttp_server *server, const chttp_server_execution_options *options) {
+  chttp_server_impl *impl;
+  if (server == NULL || server->impl == NULL || options == NULL ||
+      options->size != sizeof(*options) || options->owner_count == 0u)
+    return SALTS_EINVAL;
+  impl = (chttp_server_impl *)server->impl;
+  if (options->owner_count > impl->config.network.connection_capacity)
+    return SALTS_ERANGE;
+  if (impl->start_called || impl->listener_initialized || impl->owners != NULL)
+    return SALTS_EBUSY;
+  impl->execution = *options;
   return SALTS_OK;
 }
 
