@@ -34,6 +34,7 @@ static int chttp_server_on_body_open(void *user, const chttp_server_request_view
 static void chttp_server_on_body_close(void *user, chttp_body_sink *sink, int status);
 static int chttp_server_response_stream_next(chttp_server_connection *connection);
 static void chttp_server_h1_file_ready(void *user);
+static bool chttp_server_should_stop(chttp_server_impl *server);
 
 void chttp_server_deadline_start(chttp_server_request_state *state, uint32_t budget_ms) {
   if (budget_ms == 0) {
