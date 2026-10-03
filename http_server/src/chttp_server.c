@@ -97,8 +97,7 @@ static cflow_io_native_backend_kind chttp_server_file_backend(void) {
 
 static void chttp_server_file_wake(void *user) {
   chttp_server_owner_lane *owner = (chttp_server_owner_lane *)user;
-  cnet_client *network = chttp_server_owner_network(owner);
-  if (network != NULL) (void)cnet_client_wake(network);
+  if (owner != NULL) (void)chttp_server_owner_wake(owner);
 }
 
 int chttp_server_file_runtime_ensure(chttp_server_impl *server,
@@ -649,6 +648,10 @@ static void chttp_server_owner_storage_destroy(chttp_server_owner_lane *owner) {
   if (owner->admission_sync_initialized) {
     salts_mutex_destroy(&owner->admission_mutex);
     owner->admission_sync_initialized = false;
+  }
+  if (owner->network_sync_initialized) {
+    salts_mutex_destroy(&owner->network_mutex);
+    owner->network_sync_initialized = false;
   }
 }
 
@@ -1900,7 +1903,7 @@ static int chttp_server_accept_ready(chttp_server_impl *server) {
     salts_mutex_unlock(&owner->admission_mutex);
     if (status == SALTS_ETIMEDOUT) return SALTS_OK;
     if (status != SALTS_OK) return status;
-    (void)cnet_client_wake(&owner->network);
+    (void)chttp_server_owner_wake(owner);
   }
 }
 
@@ -2177,6 +2180,8 @@ static int chttp_server_owner_storage_init(
   }
   salts_mutex_init(&owner->admission_mutex);
   owner->admission_sync_initialized = true;
+  salts_mutex_init(&owner->network_mutex);
+  owner->network_sync_initialized = true;
   atomic_init(&owner->active_connections, 0u);
   for (index = connection_begin;
        index < connection_begin + connection_count; ++index)
@@ -2201,6 +2206,19 @@ static void chttp_server_owner_reject_pending(
   salts_mutex_unlock(&owner->admission_mutex);
 }
 
+int chttp_server_owner_wake(chttp_server_owner_lane *owner) {
+  int status;
+  if (owner == NULL || !owner->network_sync_initialized)
+    return SALTS_EINVAL;
+  salts_mutex_lock(&owner->network_mutex);
+  if (!owner->network_initialized)
+    status = SALTS_ESHUTDOWN;
+  else
+    status = cnet_client_wake(&owner->network);
+  salts_mutex_unlock(&owner->network_mutex);
+  return status;
+}
+
 static int chttp_server_owner_cleanup_network(
     chttp_server_owner_lane *owner, bool retry_timeouts) {
   int first_status = SALTS_OK;
@@ -2215,10 +2233,13 @@ static int chttp_server_owner_cleanup_network(
     if (first_status == SALTS_OK && stop_status != SALTS_OK)
       first_status = stop_status;
     if (stop_status != SALTS_ETIMEDOUT && stop_status != SALTS_EBUSY) {
-      const int destroy_status = cnet_client_destroy(&owner->network);
+      int destroy_status;
+      salts_mutex_lock(&owner->network_mutex);
+      destroy_status = cnet_client_destroy(&owner->network);
+      if (destroy_status == SALTS_OK) owner->network_initialized = false;
+      salts_mutex_unlock(&owner->network_mutex);
       if (first_status == SALTS_OK && destroy_status != SALTS_OK)
         first_status = destroy_status;
-      if (destroy_status == SALTS_OK) owner->network_initialized = false;
     }
   }
   return first_status;
@@ -2410,7 +2431,7 @@ static void chttp_server_wake_owners(chttp_server_impl *server) {
   if (server == NULL || server->owners == NULL) return;
   for (index = 0u; index < server->owner_count; ++index)
     if (server->owners[index].network_initialized)
-      (void)cnet_client_wake(&server->owners[index].network);
+      (void)chttp_server_owner_wake(&server->owners[index]);
 }
 
 static int chttp_server_join_owners(chttp_server_impl *server) {
