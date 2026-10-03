@@ -71,6 +71,20 @@ spec("CHttp owner topology") {
       check_not_null(owner->file_transfers);
       check_not_null(owner->websocket_commands);
       check_equal(owner->websocket_command_count, (size_t)0u);
+      check_equal(chttp_server_owner_lease_count(owner), (size_t)0u);
+      for (connection_index = 0u;
+           connection_index < owner->connection_count; ++connection_index)
+        check(chttp_server_owner_lease_try_acquire(owner));
+      check(!chttp_server_owner_lease_try_acquire(owner));
+      check_equal(chttp_server_owner_lease_count(owner),
+                  owner->connection_count);
+      check_equal(chttp_server_owner_lease_release(owner), SALTS_OK);
+      check_equal(chttp_server_owner_lease_count(owner),
+                  owner->connection_count - 1u);
+      check(chttp_server_owner_lease_try_acquire(owner));
+      while (chttp_server_owner_lease_count(owner) != 0u)
+        check_equal(chttp_server_owner_lease_release(owner), SALTS_OK);
+      check_equal(chttp_server_owner_lease_release(owner), SALTS_EALREADY);
       check(owner_index == 0u ? owner->network == &impl->network
                               : owner->network == NULL);
       for (connection_index = expected_begin[owner_index];
