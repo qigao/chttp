@@ -234,6 +234,8 @@ typedef struct chttp_server_websocket_command {
 struct chttp_server_connection {
   chttp_server_impl *server;
   chttp_server_owner_lane *owner;
+  uint32_t server_slot;
+  uint32_t server_generation;
   cnet_connection handle;
   chttp_server_parser parser;
   chttp_server_request_state request_state;
