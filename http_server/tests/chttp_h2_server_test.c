@@ -1507,6 +1507,7 @@ spec("CHTTP background HTTP/2 server") {
     static const char *alpn[] = {"h2"};
     char *cert_path = tt_make_temp_file("chttp-h2-deferred-cert", ".pem");
     char *key_path = tt_make_temp_file("chttp-h2-deferred-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-test-ca", ".pem");
     chttp_server server = {0};
     chttp_async_client client = {0};
     chttp_tls_profile profile = {0};
@@ -1530,10 +1531,14 @@ spec("CHTTP background HTTP/2 server") {
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
     check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
                               sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
                 0);
     check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+                0);
     atomic_init(&deferred.admitted, 0);
     server_config.session_capacity = 0u;
     server_config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
@@ -1547,7 +1552,7 @@ spec("CHTTP background HTTP/2 server") {
                                           .alpn_protocols = alpn,
                                           .alpn_protocol_count = 1u};
     client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = cert_path,
+                                          .ca_file = ca_path,
                                           .server_name = "localhost",
                                           .alpn_protocols = alpn,
                                           .alpn_protocol_count = 1u};
@@ -1589,8 +1594,10 @@ spec("CHTTP background HTTP/2 server") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
   }
 
   it("bounds deferred response copies and rejects a stale H2 generation") {
@@ -3475,6 +3482,7 @@ spec("CHTTP background HTTP/2 server") {
     static const char *h1_alpn[] = {"http/1.1"};
     char *cert_path = tt_make_temp_file("chttp-h2-server-cert", ".pem");
     char *key_path = tt_make_temp_file("chttp-h2-server-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-test-ca", ".pem");
     chttp_server server = {0};
     chttp_client h2_client = {0};
     chttp_client h1_client = {0};
@@ -3493,10 +3501,14 @@ spec("CHTTP background HTTP/2 server") {
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
     check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
                               sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
                 0);
     check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+                0);
     server_config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
     server_config.network.tls_handshake_timeout_ms = CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
     client_config.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
@@ -3508,7 +3520,7 @@ spec("CHTTP background HTTP/2 server") {
                                           .alpn_protocols = server_alpn,
                                           .alpn_protocol_count = 2u};
     h2_tls = (cnet_tls_client_config){.size = sizeof(h2_tls),
-                                      .ca_file = cert_path,
+                                      .ca_file = ca_path,
                                       .server_name = "localhost",
                                       .alpn_protocols = h2_alpn,
                                       .alpn_protocol_count = 1u};
@@ -3554,7 +3566,9 @@ spec("CHTTP background HTTP/2 server") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
   }
 }
