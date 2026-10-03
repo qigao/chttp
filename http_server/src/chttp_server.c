@@ -1754,6 +1754,15 @@ static int chttp_server_owner_adopt_one(chttp_server_owner_lane *owner,
   connection = chttp_server_free_connection(owner);
   if (connection == NULL) return SALTS_ENOBUFS;
   peer = accepted->peer;
+  if (server->config.enable_http2) {
+    status = chttp_h2_server_connection_prepare(connection->h2);
+    if (status != SALTS_OK) return status;
+  }
+  chttp_server_websocket_reset(connection);
+  chttp_server_request_state_reset(&connection->request_state);
+  status = chttp_server_parser_reset(&connection->parser);
+  if (status != SALTS_OK) return status;
+
   observer = (cnet_observer){.on_state = chttp_server_on_state,
                              .on_receive = chttp_server_on_receive,
                              .on_send = chttp_server_on_send,
@@ -1765,13 +1774,6 @@ static int chttp_server_owner_adopt_one(chttp_server_owner_lane *owner,
                : cnet_client_adopt_accepted(&owner->network, accepted,
                                             &observer, &handle);
   if (status != SALTS_OK) return status;
-  if (server->config.enable_http2) {
-    status = chttp_h2_server_connection_prepare(connection->h2);
-    if (status != SALTS_OK) {
-      (void)cnet_close(&owner->network, handle);
-      return status;
-    }
-  }
   connection->owner = owner;
   ++connection->server_generation;
   if (connection->server_generation == 0u) connection->server_generation = 1u;
@@ -1797,13 +1799,6 @@ static int chttp_server_owner_adopt_one(chttp_server_owner_lane *owner,
   connection->wire_protocol =
       server->config.enable_http2 ? CHTTP_SERVER_WIRE_UNKNOWN
                                   : CHTTP_SERVER_WIRE_HTTP_1_1;
-  chttp_server_websocket_reset(connection);
-  chttp_server_request_state_reset(&connection->request_state);
-  status = chttp_server_parser_reset(&connection->parser);
-  if (status != SALTS_OK) {
-    (void)cnet_close(&owner->network, handle);
-    return status;
-  }
   atomic_fetch_add_explicit(&owner->active_connections, 1u,
                             memory_order_acq_rel);
   chttp_server_stats_connection_open(server);
@@ -1826,6 +1821,8 @@ static int chttp_server_owner_admissions_progress(
     }
     accepted = &owner->admissions[owner->admission_head];
     status = chttp_server_owner_adopt_one(owner, accepted);
+    if (status != SALTS_OK && accepted->internal_active != 0u)
+      (void)cnet_accepted_stream_close(accepted);
     owner->admission_head =
         (owner->admission_head + 1u) % owner->admission_capacity;
     --owner->admission_count;
@@ -1849,7 +1846,8 @@ static bool chttp_server_owner_admission_available(
                                 memory_order_acquire);
   salts_mutex_lock(&owner->admission_mutex);
   available = owner->admission_count < owner->admission_capacity &&
-              active + owner->admission_count < owner->connection_count;
+              owner->admission_count < owner->connection_count &&
+              active < owner->connection_count - owner->admission_count;
   salts_mutex_unlock(&owner->admission_mutex);
   return available;
 }
