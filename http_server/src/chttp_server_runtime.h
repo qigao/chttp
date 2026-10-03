@@ -361,12 +361,6 @@ static inline chttp_server_owner_lane *chttp_server_owner_at(
   return index == 0u ? &server->owner : &server->additional_owners[index - 1u];
 }
 
-static inline const chttp_server_owner_lane *chttp_server_owner_at_const(
-    const chttp_server_impl *server, size_t index) {
-  if (server == NULL || index >= server->owner_count) return NULL;
-  return index == 0u ? &server->owner : &server->additional_owners[index - 1u];
-}
-
 int chttp_server_response_builder_init(chttp_server_response_builder *builder,
                                        const chttp_server_config *config);
 int chttp_server_response_date(const chttp_server_response_builder *builder,
