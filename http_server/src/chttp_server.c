@@ -1750,8 +1750,8 @@ static int chttp_server_accept_ready(chttp_server_impl *server,
   }
 }
 
-static int chttp_server_deadlines_progress(chttp_server_impl *server,
-                                                chttp_server_owner_lane *owner) {
+static int chttp_server_deadlines_progress(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t begin;
   size_t end;
   if (server == NULL || owner == NULL || owner->server != server)
@@ -1790,8 +1790,8 @@ static int chttp_server_deadlines_progress(chttp_server_impl *server,
   return SALTS_OK;
 }
 
-static int chttp_server_deferred_progress(chttp_server_impl *server,
-                                               chttp_server_owner_lane *owner) {
+static int chttp_server_deferred_progress(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t index;
   size_t begin;
   size_t end;
@@ -1879,8 +1879,8 @@ static int chttp_server_deferred_progress(chttp_server_impl *server,
   return SALTS_OK;
 }
 
-static int chttp_server_retry_pending(chttp_server_impl *server,
-                                           chttp_server_owner_lane *owner) {
+static int chttp_server_retry_pending(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t offset;
   size_t begin;
   size_t count;
@@ -1933,8 +1933,8 @@ static bool chttp_server_connections_active(const chttp_server_impl *server,
   return false;
 }
 
-static int chttp_server_begin_shutdown(chttp_server_impl *server,
-                                           chttp_server_owner_lane *owner) {
+static int chttp_server_begin_shutdown(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t index;
   size_t end;
   int status;
@@ -1963,8 +1963,8 @@ static int chttp_server_begin_shutdown(chttp_server_impl *server,
   return SALTS_OK;
 }
 
-static void chttp_server_progress_shutdown(chttp_server_impl *server,
-                                               chttp_server_owner_lane *owner) {
+static void chttp_server_progress_shutdown(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   const uint64_t now_ms = salts_monotonic_ms();
   size_t index;
   size_t end;
