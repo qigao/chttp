@@ -416,6 +416,125 @@ spec("CHTTP WebSocket client/server") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
+  it("routes copied WebSocket commands through two fixed server owners") {
+    chttp_websocket_test_server_session_probe first_probe;
+    chttp_websocket_test_server_session_probe second_probe;
+    chttp_server server = {0};
+    chttp_server_config server_config = chttp_websocket_test_server_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_server_websocket_options first_route = {
+        .size = sizeof(first_route),
+        .path = "/owner-a",
+        .on_open = chttp_websocket_test_capture_open,
+        .on_event = chttp_websocket_test_capture_event,
+        .user = &first_probe};
+    chttp_server_websocket_options second_route = {
+        .size = sizeof(second_route),
+        .path = "/owner-b",
+        .on_open = chttp_websocket_test_capture_open,
+        .on_event = chttp_websocket_test_capture_event,
+        .user = &second_probe};
+    chttp_websocket_client first = {0};
+    chttp_websocket_client second = {0};
+    chttp_websocket_client_config client_config =
+        chttp_websocket_test_client_config();
+    chttp_websocket_connect_options options = {.size = sizeof(options)};
+    chttp_websocket_event event = {0};
+    unsigned int http_status = 0u;
+    uint16_t port = 0u;
+    char first_uri[128];
+    char second_uri[128];
+
+    memset(&first_probe, 0, sizeof(first_probe));
+    memset(&second_probe, 0, sizeof(second_probe));
+    atomic_init(&first_probe.captured, 0);
+    atomic_init(&first_probe.peer_present, 0);
+    atomic_init(&second_probe.captured, 0);
+    atomic_init(&second_probe.peer_present, 0);
+
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution),
+                SALTS_OK);
+    check_equal(chttp_server_websocket_with(&server, &first_route), SALTS_OK);
+    check_equal(chttp_server_websocket_with(&server, &second_route), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(snprintf(first_uri, sizeof(first_uri),
+                        "ws://127.0.0.1:%u/owner-a",
+                        (unsigned int)port) > 0);
+    check_true(snprintf(second_uri, sizeof(second_uri),
+                        "ws://127.0.0.1:%u/owner-b",
+                        (unsigned int)port) > 0);
+
+    check_equal(chttp_websocket_client_init(&first, &client_config), SALTS_OK);
+    options.uri = first_uri;
+    options.timeout_ms = CHTTP_WEBSOCKET_TEST_TIMEOUT_MS;
+    check_equal(chttp_websocket_client_connect(&first, &options, &http_status),
+                SALTS_OK);
+    check_equal(http_status, 101u);
+    check_equal(atomic_load_explicit(&first_probe.captured,
+                                     memory_order_acquire),
+                1);
+
+    check_equal(chttp_websocket_client_init(&second, &client_config), SALTS_OK);
+    http_status = 0u;
+    options.uri = second_uri;
+    check_equal(chttp_websocket_client_connect(&second, &options, &http_status),
+                SALTS_OK);
+    check_equal(http_status, 101u);
+    check_equal(atomic_load_explicit(&second_probe.captured,
+                                     memory_order_acquire),
+                1);
+
+    check_equal(chttp_server_websocket_send_text(
+                    &first_probe.session, "owner-a", 7u),
+                SALTS_OK);
+    check_equal(chttp_server_websocket_send_text(
+                    &second_probe.session, "owner-b", 7u),
+                SALTS_OK);
+
+    check_equal(chttp_websocket_client_receive(
+                    &first, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
+                SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+    check_equal(event.size, 7u);
+    check_equal(memcmp(event.data, "owner-a", 7u), 0);
+
+    check_equal(chttp_websocket_client_receive(
+                    &second, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
+                SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+    check_equal(event.size, 7u);
+    check_equal(memcmp(event.data, "owner-b", 7u), 0);
+
+    check_equal(chttp_server_websocket_close(
+                    &first_probe.session, 1000u, NULL, 0u),
+                SALTS_OK);
+    check_equal(chttp_server_websocket_close(
+                    &second_probe.session, 1000u, NULL, 0u),
+                SALTS_OK);
+    check_equal(chttp_websocket_client_receive(
+                    &first, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
+                SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+    check_equal(chttp_websocket_client_receive(
+                    &second, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
+                SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+
+    check_equal(chttp_websocket_client_destroy(
+                    &first, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(chttp_websocket_client_destroy(
+                    &second, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("keeps H1 input admitted while an asynchronous WebSocket output is pending") {
     static const char outbound[] = "server-output";
     static const char ping[] = "peer-ping";
