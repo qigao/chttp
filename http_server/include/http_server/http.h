@@ -283,11 +283,17 @@ typedef struct chttp_server_config {
 } chttp_server_config;
 
 /**
- * Explicit server execution policy. Zero/one owner preserves the historical
+ * Explicit server execution policy. One owner preserves the historical
  * single-owner callback contract. owner_count > 1 opts into connection-affine
  * parallel execution: each connection, its H1/H2/WebSocket state, file I/O and
  * callbacks remain on one fixed owner for life; callbacks for different
  * connections may execute concurrently on different owner threads.
+ *
+ * network.connection_capacity remains the server-wide active-connection bound
+ * and is partitioned across owners. The remaining CNet command/request/event
+ * capacities are owner-local bounds because each owner has one independent
+ * CNet client/backend. Aggregate queue storage therefore scales linearly with
+ * explicit owner_count; no capacity is auto-derived from CPU count.
  */
 typedef struct chttp_server_execution_options {
   size_t size;
