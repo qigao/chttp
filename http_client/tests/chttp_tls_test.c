@@ -312,6 +312,8 @@ spec("CHTTP HTTPS adapter") {
     chttp_tls_test_probe probe = {0};
     chttp_tls_async_probe async_probe = {0};
     chttp_server_config server_config = chttp_tls_test_server_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
     chttp_client_config client_config = chttp_tls_test_client_config();
     cnet_tls_server_config server_tls;
     cnet_tls_client_config client_tls;
@@ -352,6 +354,8 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_tls_profile_init(&second_profile, &client_tls), SALTS_OK);
     check_equal(chttp_tls_profile_init(&transient_profile, &client_tls), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
     check_equal(chttp_server_use(&server, chttp_tls_test_middleware, &probe), SALTS_OK);
     check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
