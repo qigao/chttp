@@ -680,8 +680,10 @@ static int chttp_server_owner_storage_prepare(
       .network = primary ? &server->network : NULL,
       .connection_begin = begin,
       .connection_count = connection_count,
-      .file_transfer_capacity = file_transfer_capacity};
+      .file_transfer_capacity = file_transfer_capacity,
+      .terminal_status = SALTS_OK};
   atomic_init(&owner->connection_leases, 0u);
+  atomic_init(&owner->runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
   owner->file_transfers = (chttp_file_transfer **)calloc(
       file_transfer_capacity, sizeof(*owner->file_transfers));
   owner->websocket_commands = (chttp_server_websocket_command *)calloc(
@@ -860,8 +862,10 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       .network = &impl->network,
       .connection_begin = 0u,
       .connection_count = config->network.connection_capacity,
-      .file_transfer_capacity = file_transfer_capacity};
+      .file_transfer_capacity = file_transfer_capacity,
+      .terminal_status = SALTS_OK};
   atomic_init(&impl->owner.connection_leases, 0u);
+  atomic_init(&impl->owner.runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
   impl->owner_count = 1u;
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {

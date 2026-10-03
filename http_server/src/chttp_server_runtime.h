@@ -230,6 +230,14 @@ typedef enum chttp_server_websocket_command_kind {
   CHTTP_SERVER_WEBSOCKET_COMMAND_CLOSE
 } chttp_server_websocket_command_kind;
 
+typedef enum chttp_server_owner_runtime_state {
+  CHTTP_SERVER_OWNER_RUNTIME_IDLE = 0,
+  CHTTP_SERVER_OWNER_RUNTIME_STARTING,
+  CHTTP_SERVER_OWNER_RUNTIME_READY,
+  CHTTP_SERVER_OWNER_RUNTIME_STOPPING,
+  CHTTP_SERVER_OWNER_RUNTIME_DONE
+} chttp_server_owner_runtime_state;
+
 typedef struct chttp_server_websocket_command {
   chttp_server_websocket_session session;
   unsigned char *data;
@@ -283,6 +291,8 @@ struct chttp_server_connection {
 struct chttp_server_owner_lane {
   chttp_server_impl *server;
   cnet_client *network;
+  cnet_client network_storage;
+  salts_thread_t thread;
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
@@ -294,11 +304,52 @@ struct chttp_server_owner_lane {
   size_t websocket_command_count;
   /* Pending admissions plus active connections; bounded by connection_count. */
   atomic_size_t connection_leases;
+  atomic_int runtime_state;
+  int terminal_status;
+  bool network_initialized;
+  bool thread_started;
   bool file_runtime_initialized;
 };
 
 static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *owner) {
   return owner != NULL ? owner->network : NULL;
+}
+
+static inline chttp_server_owner_runtime_state chttp_server_owner_runtime_state_get(
+    const chttp_server_owner_lane *owner) {
+  return owner != NULL
+             ? (chttp_server_owner_runtime_state)atomic_load_explicit(
+                   &owner->runtime_state, memory_order_acquire)
+             : CHTTP_SERVER_OWNER_RUNTIME_DONE;
+}
+
+static inline bool chttp_server_owner_runtime_transition_valid(
+    chttp_server_owner_runtime_state from,
+    chttp_server_owner_runtime_state to) {
+  return (from == CHTTP_SERVER_OWNER_RUNTIME_IDLE &&
+          to == CHTTP_SERVER_OWNER_RUNTIME_STARTING) ||
+         (from == CHTTP_SERVER_OWNER_RUNTIME_STARTING &&
+          (to == CHTTP_SERVER_OWNER_RUNTIME_IDLE ||
+           to == CHTTP_SERVER_OWNER_RUNTIME_READY)) ||
+         (from == CHTTP_SERVER_OWNER_RUNTIME_READY &&
+          to == CHTTP_SERVER_OWNER_RUNTIME_STOPPING) ||
+         (from == CHTTP_SERVER_OWNER_RUNTIME_STOPPING &&
+          to == CHTTP_SERVER_OWNER_RUNTIME_DONE);
+}
+
+static inline int chttp_server_owner_runtime_transition(
+    chttp_server_owner_lane *owner,
+    chttp_server_owner_runtime_state from,
+    chttp_server_owner_runtime_state to) {
+  int expected;
+  if (owner == NULL || !chttp_server_owner_runtime_transition_valid(from, to))
+    return SALTS_EINVAL;
+  expected = (int)from;
+  return atomic_compare_exchange_strong_explicit(
+             &owner->runtime_state, &expected, (int)to,
+             memory_order_acq_rel, memory_order_acquire)
+             ? SALTS_OK
+             : SALTS_EBUSY;
 }
 
 static inline cnet_client *chttp_server_connection_network(chttp_server_connection *connection) {
