@@ -337,7 +337,7 @@ spec("CHTTP WebSocket client/server") {
     chttp_jwt_token_destroy(token);
   }
 
-  it("admits a copied server WebSocket send from outside the callback thread") {
+  it("uses server-global generation checks for copied WebSocket sends") {
     chttp_websocket_test_server_session_probe probe;
     chttp_server server = {0};
     chttp_server_config server_config = chttp_websocket_test_server_config();
@@ -349,11 +349,14 @@ spec("CHTTP WebSocket client/server") {
     chttp_websocket_client client = {0};
     chttp_websocket_client_config client_config = chttp_websocket_test_client_config();
     chttp_websocket_connect_options connect_options = {.size = sizeof(connect_options)};
+    chttp_server_websocket_session stale = {0};
     chttp_websocket_event event;
     unsigned int http_status = 0u;
     uint16_t port = 0u;
     char uri[128];
 
+    /* Force reconnect to reuse the same server-global connection record. */
+    server_config.network.connection_capacity = 1u;
     memset(&probe, 0, sizeof(probe));
     atomic_init(&probe.captured, 0);
     atomic_init(&probe.peer_present, 0);
@@ -369,6 +372,7 @@ spec("CHTTP WebSocket client/server") {
     check_equal(http_status, 101u);
     check_equal(atomic_load_explicit(&probe.captured, memory_order_acquire), 1);
     check_equal(atomic_load_explicit(&probe.peer_present, memory_order_acquire), 1);
+    stale = probe.session;
     check_equal(chttp_server_websocket_send_binary(&probe.session, "mqtt", 4u), SALTS_OK);
     check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
                 SALTS_OK);
@@ -376,6 +380,28 @@ spec("CHTTP WebSocket client/server") {
     check_equal(event.message_type, CHTTP_WEBSOCKET_MESSAGE_BINARY);
     check_equal(event.size, 4u);
     check_equal(memcmp(event.data, "mqtt", 4u), 0);
+    check_equal(chttp_server_websocket_close(&probe.session, 1000u, NULL, 0u), SALTS_OK);
+    check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
+                SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+    check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+
+    client = (chttp_websocket_client){0};
+    http_status = 0u;
+    atomic_store_explicit(&probe.captured, 0, memory_order_release);
+    check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
+    check_equal(chttp_websocket_client_connect(&client, &connect_options, &http_status), SALTS_OK);
+    check_equal(http_status, 101u);
+    check_equal(atomic_load_explicit(&probe.captured, memory_order_acquire), 1);
+    check_equal(probe.session.connection_slot, stale.connection_slot);
+    check_not_equal(probe.session.connection_generation, stale.connection_generation);
+    check_equal(chttp_server_websocket_send_text(&stale, "stale", 5u), SALTS_ENOENT);
+    check_equal(chttp_server_websocket_send_text(&probe.session, "fresh", 5u), SALTS_OK);
+    check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
+                SALTS_OK);
+    check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+    check_equal(event.size, 5u);
+    check_equal(memcmp(event.data, "fresh", 5u), 0);
     check_equal(chttp_server_websocket_close(&probe.session, 1000u, NULL, 0u), SALTS_OK);
     check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS, &event),
                 SALTS_OK);
