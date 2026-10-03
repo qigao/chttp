@@ -2046,17 +2046,21 @@ static int chttp_server_admission_progress(
     cnet_stream_peer peer;
     int status;
     if (connection == NULL) return SALTS_OK;
-    chttp_server_websocket_reset(connection);
-    chttp_server_request_state_reset(&connection->request_state);
-    status = chttp_server_parser_reset(&connection->parser);
-    if (status != SALTS_OK) return status;
-    if (server->config.enable_http2) {
-      status = chttp_h2_server_connection_prepare(connection->h2);
-      if (status != SALTS_OK) return status;
-    }
     status = chttp_server_owner_admission_dequeue(owner, &accepted);
     if (status == SALTS_ENOENT) return SALTS_OK;
     if (status != SALTS_OK) return status;
+
+    chttp_server_websocket_reset(connection);
+    chttp_server_request_state_reset(&connection->request_state);
+    status = chttp_server_parser_reset(&connection->parser);
+    if (status == SALTS_OK && server->config.enable_http2)
+      status = chttp_h2_server_connection_prepare(connection->h2);
+    if (status != SALTS_OK) {
+      (void)cnet_accepted_stream_close(&accepted);
+      (void)chttp_server_owner_lease_release(owner);
+      chttp_server_stats_rejected_connection(server);
+      return status;
+    }
 
     peer = accepted.peer;
     observer = (cnet_observer){.on_state = chttp_server_on_state,
