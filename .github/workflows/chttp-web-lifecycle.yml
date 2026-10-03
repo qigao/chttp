@@ -77,9 +77,9 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-debug --target \
-            chttp_service_http_test chttp_service_wasm_http_test chttp_service_header_cpp_test -j2
+            chttp_service_http_test chttp_service_generated_cflow_http_test chttp_service_wasm_http_test chttp_service_header_cpp_test -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_service_(http_test|wasm_http_test|header_cpp_test|single_materialization_contract|hot_path_boundary_contract)$' \
+            -R '^chttp_service_(http_test|generated_cflow_http_test|wasm_http_test|header_cpp_test|single_materialization_contract|hot_path_boundary_contract)$' \
             --no-tests=error --output-on-failure
       - name: Run RpcService MethodPlan tests
         shell: bash
@@ -128,9 +128,9 @@ jobs:
             -R '^(chttp_web_(renderer_test|context_test|form_test|form_plan_test|form_plan_boundary_contract|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
           cmake --build build/linux-gcc-debug --target \
-            chttp_service_http_test chttp_service_wasm_http_test chttp_service_header_cpp_test -j2
+            chttp_service_http_test chttp_service_generated_cflow_http_test chttp_service_wasm_http_test chttp_service_header_cpp_test -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_service_(http_test|wasm_http_test|header_cpp_test)$' \
+            -R '^chttp_service_(http_test|generated_cflow_http_test|wasm_http_test|header_cpp_test)$' \
             --no-tests=error --output-on-failure
           cmake --build build/linux-gcc-debug --target \
             chttp_rpc_service_test chttp_rpc_service_header_cpp_test -j2
@@ -161,9 +161,9 @@ jobs:
             -R '^(chttp_web_(renderer_test|context_test|form_test|form_plan_test|form_plan_boundary_contract|validation_test|multipart_test|upload_test|upload_http_test|auth_http_test|assets_http_test|authenticated_app_test|deferred_test|sse_test|lifecycle_test)|openapi_ui_(renderer|fragments))$' \
             --no-tests=error --output-on-failure
           cmake --build build/linux-gcc-debug --target \
-            chttp_service_http_test chttp_service_wasm_http_test chttp_service_header_cpp_test -j2
+            chttp_service_http_test chttp_service_generated_cflow_http_test chttp_service_wasm_http_test chttp_service_header_cpp_test -j2
           ctest --test-dir build/linux-gcc-debug \
-            -R '^chttp_service_(http_test|wasm_http_test|header_cpp_test)$' \
+            -R '^chttp_service_(http_test|generated_cflow_http_test|wasm_http_test|header_cpp_test)$' \
             --no-tests=error --output-on-failure
           cmake --build build/linux-gcc-debug --target \
             chttp_rpc_service_test chttp_rpc_service_header_cpp_test -j2
