@@ -890,6 +890,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       .terminal_status = SALTS_OK};
   atomic_init(&impl->owner.connection_leases, 0u);
   atomic_init(&impl->owner.runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+  salts_mutex_init(&impl->owner.admission_mutex);
+  impl->owner.admission_sync_initialized = true;
   impl->owner_count = 1u;
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {
@@ -939,6 +941,10 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
         (chttp_server_middleware *)calloc(config->middleware_capacity, sizeof(*impl->middleware));
   impl->connections = (chttp_server_connection *)calloc(config->network.connection_capacity,
                                                         sizeof(*impl->connections));
+  impl->owner.admissions =
+      (cnet_accepted_stream *)calloc(
+          config->network.connection_capacity,
+          sizeof(*impl->owner.admissions));
   impl->owner.file_transfers =
       (chttp_file_transfer **)calloc(file_transfer_capacity,
                                      sizeof(*impl->owner.file_transfers));
@@ -950,7 +956,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       impl->route_paths == NULL ||
       (route_middleware_count != 0u && impl->route_middleware == NULL) ||
       (config->middleware_capacity != 0u && impl->middleware == NULL) ||
-      impl->connections == NULL || impl->owner.file_transfers == NULL ||
+      impl->connections == NULL || impl->owner.admissions == NULL ||
+      impl->owner.file_transfers == NULL ||
       impl->owner.websocket_commands == NULL) {
     chttp_server_impl_free(impl);
     return SALTS_ENOMEM;
