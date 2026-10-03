@@ -339,6 +339,10 @@ int chttp_session_store_init(chttp_server_impl *server) {
     shard->record_begin = begin;
     shard->record_count = end - begin;
     salts_mutex_init(&shard->mutex);
+    if (shard->mutex == NULL) {
+      chttp_session_store_destroy(server);
+      return SALTS_ENOMEM;
+    }
     shard->initialized = true;
   }
 
