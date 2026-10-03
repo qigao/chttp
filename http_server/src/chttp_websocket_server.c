@@ -428,7 +428,6 @@ static int chttp_server_websocket_command_submit(
   chttp_server_impl *server;
   chttp_server_websocket_command *command;
   chttp_server_owner_lane *owner;
-  cnet_client *network;
   unsigned char *copy = NULL;
   size_t tail;
   if (session == NULL || session->impl == NULL || session->connection_slot == 0u ||
@@ -437,8 +436,7 @@ static int chttp_server_websocket_command_submit(
     return SALTS_EINVAL;
   server = (chttp_server_impl *)session->impl;
   owner = chttp_server_websocket_command_owner(server, session);
-  network = chttp_server_owner_network(owner);
-  if (owner == NULL || owner->server != server || network == NULL)
+  if (owner == NULL || owner->server != server)
     return SALTS_EINVAL;
   if (size > server->config.network.max_send_bytes) return SALTS_EMSGSIZE;
   if ((kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PING ||
