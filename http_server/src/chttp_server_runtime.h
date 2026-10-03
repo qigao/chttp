@@ -303,6 +303,7 @@ struct chttp_server_owner_lane {
   atomic_size_t active_connections;
   int terminal_status;
   bool admission_sync_initialized;
+  bool admission_open;
   bool network_sync_initialized;
   bool file_runtime_initialized;
   bool network_initialized;
