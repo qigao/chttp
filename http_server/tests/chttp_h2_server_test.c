@@ -1039,6 +1039,61 @@ static int chttp_h2_test_admission(void *user, const chttp_server_request_view *
 }
 
 spec("CHTTP background HTTP/2 server") {
+  it("keeps h2c connections fixed across two owners") {
+    const chttp_h2_hpack_header normal[] = {
+      {":method", 7, "GET", 3}, {":scheme", 7, "http", 4},
+      {":authority", 10, "localhost", 9}, {":path", 5, "/ok", 3}};
+    chttp_server server = {0};
+    chttp_server_config config = chttp_h2_server_test_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_h2_server_test_peer first_peer = {0};
+    chttp_h2_server_test_peer second_peer = {0};
+    chttp_h2_server_test_socket first_socket = CHTTP_H2_SERVER_TEST_INVALID_SOCKET;
+    chttp_h2_server_test_socket second_socket = CHTTP_H2_SERVER_TEST_INVALID_SOCKET;
+    chttp_server_impl *impl;
+    uint16_t port = 0u;
+
+    execution.owner_count = 2u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/ok", chttp_h2_server_test_version_handler, NULL),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+
+    check_equal(chttp_h2_server_test_socket_connect(port, &first_socket), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_init(&first_peer), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_submit(&first_peer, normal, 4), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_pump(&first_peer, first_socket, 1), SALTS_OK);
+    check_equal(first_peer.results[0].status, 200u);
+
+    check_equal(chttp_h2_server_test_socket_connect(port, &second_socket), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_init(&second_peer), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_submit(&second_peer, normal, 4), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_pump(&second_peer, second_socket, 1), SALTS_OK);
+    check_equal(second_peer.results[0].status, 200u);
+
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(chttp_server_owner_lease_count(chttp_server_owner_at(impl, 0u)), (size_t)1u);
+    check_equal(chttp_server_owner_lease_count(chttp_server_owner_at(impl, 1u)), (size_t)1u);
+
+    chttp_h2_server_test_peer_destroy(&first_peer);
+    chttp_h2_server_test_peer_destroy(&second_peer);
+    chttp_h2_server_test_socket_close(first_socket);
+    chttp_h2_server_test_socket_close(second_socket);
+    check_equal(chttp_server_stop(&server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(
+        chttp_server_owner_runtime_state_get(chttp_server_owner_at(impl, 0u)),
+        CHTTP_SERVER_OWNER_RUNTIME_DONE);
+    check_equal(
+        chttp_server_owner_runtime_state_get(chttp_server_owner_at(impl, 1u)),
+        CHTTP_SERVER_OWNER_RUNTIME_DONE);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("shares rate quota across H2 streams and rejects DATA before opening the body sink") {
     const chttp_h2_hpack_header normal[] = {
       {":method", 7, "GET", 3}, {":scheme", 7, "http", 4},
