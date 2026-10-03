@@ -96,16 +96,31 @@ typedef struct chttp_session_entry {
   bool used;
 } chttp_session_entry;
 
+typedef struct chttp_session_shard {
+  salts_mutex_t mutex;
+  size_t record_begin;
+  size_t record_count;
+  size_t expiry_cursor;
+  bool initialized;
+} chttp_session_shard;
+
 typedef struct chttp_session_record {
   char id[33];
   chttp_session_entry *entries;
   uint64_t expires_at_ms;
+  uint32_t generation;
   bool used;
 } chttp_session_record;
 
 typedef struct chttp_session_context {
   chttp_server_impl *server;
+  chttp_session_shard *shard;
   chttp_session_record *record;
+  chttp_session_entry *snapshot_entries;
+  char *snapshot_keys;
+  char *snapshot_values;
+  char id[33];
+  uint32_t record_generation;
   bool presented;
   bool created;
   bool invalidated;
@@ -322,6 +337,8 @@ struct chttp_server_impl {
   chttp_session_entry *session_entries;
   char *session_keys;
   char *session_values;
+  chttp_session_shard *session_shards;
+  size_t session_shard_count;
   cnet_client network;
   chttp_server_owner_lane owner;
   cnet_listener listener;
@@ -407,6 +424,10 @@ int chttp_server_websocket_commands_progress(chttp_server_impl *server,
 
 int chttp_session_store_init(chttp_server_impl *server);
 void chttp_session_store_destroy(chttp_server_impl *server);
+int chttp_session_context_init(
+    chttp_session_context *context, chttp_server_impl *server);
+void chttp_session_context_reset(chttp_session_context *context);
+void chttp_session_context_destroy(chttp_session_context *context);
 void chttp_session_request_begin(chttp_server_request_state *state,
                                  const chttp_server_request_view *request);
 int chttp_session_request_finish(chttp_server_request_state *state);
