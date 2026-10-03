@@ -299,6 +299,7 @@ struct chttp_server_owner_lane {
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
+  atomic_size_t active_connections;
   int terminal_status;
   bool admission_sync_initialized;
   bool file_runtime_initialized;
