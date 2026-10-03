@@ -2227,7 +2227,12 @@ int chttp_server_owner_wake(chttp_server_owner_lane *owner) {
 static int chttp_server_owner_cleanup_network(
     chttp_server_owner_lane *owner, bool retry_timeouts) {
   int first_status = SALTS_OK;
-  if (owner == NULL || !owner->network_initialized) return SALTS_OK;
+  bool initialized;
+  if (owner == NULL || !owner->network_sync_initialized) return SALTS_OK;
+  salts_mutex_lock(&owner->network_mutex);
+  initialized = owner->network_initialized;
+  salts_mutex_unlock(&owner->network_mutex);
+  if (!initialized) return SALTS_OK;
   {
     int stop_status;
     do {
@@ -2297,18 +2302,23 @@ static void chttp_server_owner_finish(chttp_server_owner_lane *owner,
 static int chttp_server_owner_initialize(chttp_server_owner_lane *owner) {
   cnet_client_config network_config;
   int status;
-  if (owner == NULL || owner->server == NULL) return SALTS_EINVAL;
+  if (owner == NULL || owner->server == NULL ||
+      !owner->network_sync_initialized)
+    return SALTS_EINVAL;
   network_config = owner->server->config.network;
   network_config.connection_capacity = owner->connection_count;
   status = cnet_client_init(&owner->network, &network_config);
   if (status != SALTS_OK) return status;
-  owner->network_initialized = true;
   status = cnet_client_set_stream_socket_options(
       &owner->network, &owner->server->socket_options.stream);
   if (status != SALTS_OK) {
-    (void)chttp_server_owner_cleanup_network(owner, false);
+    (void)cnet_client_stop(&owner->network, 0u);
+    (void)cnet_client_destroy(&owner->network);
     return status;
   }
+  salts_mutex_lock(&owner->network_mutex);
+  owner->network_initialized = true;
+  salts_mutex_unlock(&owner->network_mutex);
   return SALTS_OK;
 }
 
@@ -2435,8 +2445,7 @@ static void chttp_server_wake_owners(chttp_server_impl *server) {
   size_t index;
   if (server == NULL || server->owners == NULL) return;
   for (index = 0u; index < server->owner_count; ++index)
-    if (server->owners[index].network_initialized)
-      (void)chttp_server_owner_wake(&server->owners[index]);
+    (void)chttp_server_owner_wake(&server->owners[index]);
 }
 
 static int chttp_server_join_owners(chttp_server_impl *server) {
