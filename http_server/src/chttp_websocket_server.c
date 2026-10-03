@@ -454,7 +454,8 @@ static int chttp_server_websocket_command_submit(
     memcpy(copy, data, size);
   }
   salts_mutex_lock(&server->mutex);
-  if (!server->stats.running || server->stats.stopping || server->worker_done) {
+  if (!server->stats.running || server->stats.stopping ||
+      (server->owner_count != 0u && server->workers_done == server->owner_count)) {
     salts_mutex_unlock(&server->mutex);
     free(copy);
     return SALTS_ESHUTDOWN;
