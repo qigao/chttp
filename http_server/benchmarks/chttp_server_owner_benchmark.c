@@ -231,15 +231,15 @@ static size_t bench_content_length(const char *buffer, size_t header_size) {
 }
 
 static int bench_receive_response(bench_socket socket_value) {
-  char buffer[BENCH_RESPONSE_BYTES];
+  char buffer[BENCH_RESPONSE_BYTES + 1u];
   size_t used = 0u;
   size_t header_size = 0u;
   size_t content_length = SIZE_MAX;
   for (;;) {
-    if (used == sizeof(buffer)) return -1;
+    if (used == BENCH_RESPONSE_BYTES) return -1;
     {
       int received = recv(socket_value, buffer + used,
-                          (int)(sizeof(buffer) - used), 0);
+                          (int)(BENCH_RESPONSE_BYTES - used), 0);
       if (received <= 0) {
 #if !defined(_WIN32)
         if (received < 0 && errno == EINTR) continue;
@@ -250,7 +250,7 @@ static int bench_receive_response(bench_socket socket_value) {
     }
     if (header_size == 0u) {
       const char *end;
-      buffer[used < sizeof(buffer) ? used : sizeof(buffer) - 1u] = '\0';
+      buffer[used] = '\0';
       end = strstr(buffer, "\r\n\r\n");
       if (end != NULL) {
         header_size = (size_t)(end - buffer) + 4u;
@@ -283,11 +283,13 @@ static void bench_client_main(void *user) {
   bench_socket socket_value = BENCH_INVALID_SOCKET;
   size_t index;
   uint64_t ignored = 0u;
+  bool announced = false;
   client->status = -1;
   if (bench_connect(client->port, &socket_value) != 0) goto cleanup;
   for (index = 0u; index < client->warmup; ++index)
     if (bench_one_request(socket_value, &ignored) != 0) goto cleanup;
   atomic_fetch_add_explicit(&client->barrier->ready, 1, memory_order_acq_rel);
+  announced = true;
   while (atomic_load_explicit(&client->barrier->start,
                               memory_order_acquire) == 0)
     salts_thread_yield();
@@ -297,6 +299,8 @@ static void bench_client_main(void *user) {
   client->status = 0;
 
 cleanup:
+  if (!announced)
+    atomic_fetch_add_explicit(&client->barrier->ready, 1, memory_order_acq_rel);
   if (socket_value != BENCH_INVALID_SOCKET)
     bench_close_socket(socket_value);
 }
