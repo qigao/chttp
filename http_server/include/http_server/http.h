@@ -363,8 +363,10 @@ typedef struct chttp_server_admission_result {
 } chttp_server_admission_result;
 
 /**
- * Runs once after JWT on the owner thread, before body_open/100 Continue. Request params and
- * jwt_claims are available; body and Session are not. Views expire at callback return.
+ * Runs once after JWT on the connection's fixed owner, before body_open/100 Continue.
+ * Request params and jwt_claims are available; body and Session are not. Views expire at
+ * callback return. With owner_count > 1, admission callbacks for different connections may
+ * execute concurrently.
  * Return SALTS_OK with a decision; an error or invalid decision produces 500.
  * Must not block, reenter the server, or retain request pointers.
  */
@@ -499,15 +501,15 @@ int chttp_server_use_cors(chttp_server *server, const chttp_server_cors_options 
 int chttp_server_next_call(chttp_server_next *next);
 
 /**
- * Starts the listener and background CNet owner thread. Port zero selects an
- * ephemeral port. Bind/backend/thread failures are returned before success.
+ * Starts the listener and configured fixed CNet owner lanes. Port zero selects
+ * an ephemeral port. Bind/backend/thread failures are returned before success.
  */
 int chttp_server_start(chttp_server *server);
 
 /** Returns the bound port after a successful start. */
 int chttp_server_port(const chttp_server *server, uint16_t *out_port);
 
-/** Stops admission and joins the owner thread. Timeout zero waits without a deadline. */
+/** Stops admission and joins every configured owner lane. Timeout zero waits without a deadline. */
 int chttp_server_stop(chttp_server *server, uint32_t timeout_ms);
 
 /** Releases a stopped server; a zero server is already destroyed. */
@@ -552,8 +554,8 @@ int chttp_server_response_defer(chttp_server_response *response,
  * Thread-safe terminal completion for a deferred response. Headers and body
  * are copied into configured CHTTP bounds before success; failure leaves the
  * handle pending for an explicit retry or cancel. A successful call clears the
- * handle and wakes the server owner. Server stop waits for every admitted
- * handle to complete.
+ * handle and wakes the connection's fixed server owner. Server stop waits for every
+ * admitted handle to complete.
  */
 int chttp_server_deferred_reply(chttp_server_deferred *deferred,
                                 const chttp_server_deferred_response *response);
@@ -579,7 +581,7 @@ int chttp_server_deferred_reply_buffer(
 
 /**
  * Cancels one pending deferred response without sending a replacement. Success
- * consumes the handle and aborts request state on the server owner. H1 closes
+ * consumes the handle and aborts request state on the connection's fixed owner. H1 closes
  * its exclusive connection because pipelined input cannot advance past the
  * missing response; H2 sends RST_STREAM(CANCEL) without failing sibling streams.
  *
@@ -632,7 +634,7 @@ int chttp_server_response_source(chttp_server_response *response, unsigned int s
 /**
  * Source-response variant with one exactly-once terminal callback.
  *
- * cleanup runs on the server owner thread with SALTS_OK after normal EOF/HEAD
+ * cleanup runs on the connection's fixed owner thread with SALTS_OK after normal EOF/HEAD
  * completion, or the transport/source cancellation/error status otherwise.
  * source->user and cleanup_user must remain valid until cleanup returns.
  * The callback must not block or re-enter the server.
