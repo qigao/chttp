@@ -39,3 +39,7 @@ install(DIRECTORY include/http_server DESTINATION include)
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
+
+if(BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
