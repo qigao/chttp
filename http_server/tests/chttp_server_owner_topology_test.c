@@ -340,6 +340,82 @@ spec("CHttp owner topology") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
+  it("rejects exactly once when all owner leases are full and reuses released capacity") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_client first = {0};
+    chttp_client second = {0};
+    chttp_client overflow = {0};
+    chttp_client replacement = {0};
+    chttp_client_config client_config = owner_topology_client_config();
+    chttp_response response = {0};
+    chttp_server_stats stats = {0};
+    chttp_server_impl *impl;
+    char uri[64];
+    uint16_t port = 0u;
+    int status;
+
+    config.network.connection_capacity = 2u;
+    execution.owner_count = 2u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(
+        chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/ok", owner_topology_ok, NULL), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                   (unsigned int)port) > 0);
+
+    check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&first, uri, &response), SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(owner_topology_wait_leases(impl, 1u, 0u, 2000u), SALTS_OK);
+
+    check_equal(chttp_client_init(&second, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&second, uri, &response), SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(owner_topology_wait_leases(impl, 1u, 1u, 2000u), SALTS_OK);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)2u);
+    check_equal(stats.rejected_connections, (uint64_t)0u);
+
+    check_equal(chttp_client_init(&overflow, &client_config), SALTS_OK);
+    status = owner_topology_get(&overflow, uri, &response);
+    check(status != SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(chttp_client_destroy(&overflow, 2000u), SALTS_OK);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)2u);
+    check_equal(stats.rejected_connections, (uint64_t)1u);
+    check_equal(owner_topology_wait_leases(impl, 1u, 1u, 2000u), SALTS_OK);
+
+    check_equal(chttp_client_destroy(&first, 2000u), SALTS_OK);
+    check_equal(owner_topology_wait_leases(impl, 0u, 1u, 2000u), SALTS_OK);
+
+    check_equal(chttp_client_init(&replacement, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&replacement, uri, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    chttp_response_destroy(&response);
+    check_equal(owner_topology_wait_leases(impl, 1u, 1u, 2000u), SALTS_OK);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)3u);
+    check_equal(stats.rejected_connections, (uint64_t)1u);
+
+    check_equal(chttp_client_destroy(&replacement, 2000u), SALTS_OK);
+    check_equal(chttp_client_destroy(&second, 2000u), SALTS_OK);
+    check_equal(owner_topology_wait_leases(impl, 0u, 0u, 2000u), SALTS_OK);
+    check_equal(chttp_server_stop(&server, 2000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("rolls failed worker startup back to IDLE and remains retryable") {
     chttp_server first = {0};
     chttp_server second = {0};
