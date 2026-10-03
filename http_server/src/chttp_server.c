@@ -1048,6 +1048,9 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     const chttp_server_deferred_state deferred_state = chttp_server_deferred_token_state(
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire));
     chttp_server_websocket_transport_closed(connection);
+    if (connection->owner != NULL)
+      atomic_fetch_sub_explicit(&connection->owner->active_connections, 1u,
+                                memory_order_acq_rel);
     connection->active = false;
     connection->connected = false;
     connection->writing = false;
@@ -2097,7 +2100,7 @@ static int chttp_server_begin_shutdown(
   if (owner->connection_begin > server->config.network.connection_capacity ||
       end < owner->connection_begin || end > server->config.network.connection_capacity)
     return SALTS_EINVAL;
-  if (server->listener_initialized) {
+  if (owner->owner_index == 0u && server->listener_initialized) {
     status = cnet_listener_close(&server->listener);
     if (status != SALTS_OK && status != SALTS_EALREADY) return status;
   }
