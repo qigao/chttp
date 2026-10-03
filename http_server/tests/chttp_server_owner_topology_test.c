@@ -88,6 +88,16 @@ spec("CHttp owner topology") {
       check_equal(
           chttp_server_owner_runtime_transition(
               owner, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
+              CHTTP_SERVER_OWNER_RUNTIME_IDLE),
+          SALTS_OK);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_IDLE,
+              CHTTP_SERVER_OWNER_RUNTIME_STARTING),
+          SALTS_OK);
+      check_equal(
+          chttp_server_owner_runtime_transition(
+              owner, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
               CHTTP_SERVER_OWNER_RUNTIME_READY),
           SALTS_OK);
       check_equal(
