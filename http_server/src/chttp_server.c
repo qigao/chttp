@@ -1655,9 +1655,20 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
   return status;
 }
 
-static chttp_server_connection *chttp_server_free_connection(chttp_server_impl *server) {
+static chttp_server_connection *chttp_server_free_connection(
+    chttp_server_owner_lane *owner) {
+  chttp_server_impl *server;
   size_t index;
-  for (index = 0u; index < server->config.network.connection_capacity; ++index)
+  size_t end;
+  if (owner == NULL || owner->server == NULL || owner->network == NULL)
+    return NULL;
+  server = owner->server;
+  end = chttp_server_owner_connection_end(owner);
+  if (owner->connection_begin > server->config.network.connection_capacity ||
+      end < owner->connection_begin ||
+      end > server->config.network.connection_capacity)
+    return NULL;
+  for (index = owner->connection_begin; index < end; ++index)
     if (!server->connections[index].active &&
         chttp_server_deferred_token_state(atomic_load_explicit(
             &server->connections[index].deferred_token, memory_order_acquire)) ==
@@ -1667,9 +1678,15 @@ static chttp_server_connection *chttp_server_free_connection(chttp_server_impl *
   return NULL;
 }
 
-static int chttp_server_accept_ready(chttp_server_impl *server) {
+static int chttp_server_accept_ready(chttp_server_impl *server,
+                                     chttp_server_owner_lane *owner) {
+  cnet_client *network;
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  network = chttp_server_owner_network(owner);
+  if (network == NULL) return SALTS_EINVAL;
   for (;;) {
-    chttp_server_connection *connection = chttp_server_free_connection(server);
+    chttp_server_connection *connection = chttp_server_free_connection(owner);
     cnet_observer observer;
     cnet_connection handle = {0};
     cnet_stream_peer peer = {0};
@@ -1680,9 +1697,9 @@ static int chttp_server_accept_ready(chttp_server_impl *server) {
                                .on_send = chttp_server_on_send,
                                .user = connection};
     status = server->tls_initialized
-                 ? cnet_listener_accept_tls_peer(&server->listener, &server->network,
+                 ? cnet_listener_accept_tls_peer(&server->listener, network,
                                                  &server->tls_server, &observer, &handle, &peer)
-                 : cnet_listener_accept_peer(&server->listener, &server->network, &observer,
+                 : cnet_listener_accept_peer(&server->listener, network, &observer,
                                              &handle, &peer);
     if (status == SALTS_ETIMEDOUT) return SALTS_OK;
     if (status == SALTS_ENOBUFS) {
@@ -1695,10 +1712,11 @@ static int chttp_server_accept_ready(chttp_server_impl *server) {
     if (server->config.enable_http2) {
       status = chttp_h2_server_connection_prepare(connection->h2);
       if (status != SALTS_OK) {
-        (void)cnet_close(&server->network, handle);
+        (void)cnet_close(network, handle);
         return status;
       }
     }
+    connection->owner = owner;
     connection->handle = handle;
     connection->peer = peer;
     connection->peer_certificate_sha256[0] = '\0';
@@ -1961,7 +1979,7 @@ static void chttp_server_worker(void *user) {
     status = cnet_listener_wait(&server->listener, 0u, &ready);
     if (status != SALTS_OK) break;
     if (ready) {
-      status = chttp_server_accept_ready(server);
+      status = chttp_server_accept_ready(server, &server->owner);
       if (status != SALTS_OK) break;
     }
     status = cnet_client_poll(&server->network, chttp_server_poll_timeout(server), &events);
