@@ -22,7 +22,12 @@ set_target_properties(chttp_server_test PROPERTIES
 
 add_executable(chttp_session_snapshot_test chttp_session_snapshot_test.c)
 target_link_libraries(chttp_session_snapshot_test PRIVATE CHttp::Server Salts::TinyTest)
-target_include_directories(chttp_session_snapshot_test PRIVATE ${PROJECT_SOURCE_DIR}/http_server/src)
+target_include_directories(
+  chttp_session_snapshot_test
+  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
+          ${PROJECT_SOURCE_DIR}/http_common/rpc
+          ${PROJECT_SOURCE_DIR}/http_server/src
+          ${PROJECT_SOURCE_DIR}/http_server/rpc)
 add_test(NAME chttp_session_snapshot_test COMMAND chttp_session_snapshot_test)
 set_target_properties(chttp_session_snapshot_test PROPERTIES FOLDER "http_server/tests")
 set_target_properties(chttp_session_snapshot_test PROPERTIES
