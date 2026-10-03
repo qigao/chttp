@@ -333,6 +333,8 @@ struct chttp_server_impl {
   salts_mutex_t session_mutex;
   cnet_client network;
   chttp_server_owner_lane owner;
+  chttp_server_owner_lane *additional_owners;
+  size_t owner_count;
   cnet_listener listener;
   cnet_tls_server tls_server;
   salts_mutex_t mutex;
@@ -352,6 +354,18 @@ struct chttp_server_impl {
   bool stop_requested;
   bool worker_done;
 };
+
+static inline chttp_server_owner_lane *chttp_server_owner_at(
+    chttp_server_impl *server, size_t index) {
+  if (server == NULL || index >= server->owner_count) return NULL;
+  return index == 0u ? &server->owner : &server->additional_owners[index - 1u];
+}
+
+static inline const chttp_server_owner_lane *chttp_server_owner_at_const(
+    const chttp_server_impl *server, size_t index) {
+  if (server == NULL || index >= server->owner_count) return NULL;
+  return index == 0u ? &server->owner : &server->additional_owners[index - 1u];
+}
 
 int chttp_server_response_builder_init(chttp_server_response_builder *builder,
                                        const chttp_server_config *config);
