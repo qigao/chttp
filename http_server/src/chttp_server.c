@@ -2261,8 +2261,7 @@ static void chttp_server_worker(void *user) {
 
   status = chttp_server_worker_startup(server, owner, &port);
   if (status != SALTS_OK) {
-    const int cleanup_status = chttp_server_cleanup_network(server, true);
-    if (status == SALTS_OK && cleanup_status != SALTS_OK) status = cleanup_status;
+    (void)chttp_server_cleanup_network(server, true);
     owner->terminal_status = status;
     (void)chttp_server_owner_runtime_transition(
         owner, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
