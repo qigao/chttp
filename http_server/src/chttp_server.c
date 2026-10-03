@@ -2451,6 +2451,11 @@ static void chttp_server_request_global_stop(
   if (terminal_status != SALTS_OK &&
       server->stats.terminal_status == SALTS_OK)
     server->stats.terminal_status = terminal_status;
+  if (!server->start_called && terminal_status != SALTS_OK) {
+    if (server->startup_status == SALTS_OK)
+      server->startup_status = terminal_status;
+    server->startup_abort = true;
+  }
   server->stop_requested = true;
   if (server->start_called && !server->worker_done)
     server->stats.stopping = 1;
