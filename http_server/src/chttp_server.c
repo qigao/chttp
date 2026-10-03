@@ -481,6 +481,11 @@ int chttp_server_request_state_init(chttp_server_request_state *state, chttp_ser
     chttp_server_request_state_destroy(state);
     return SALTS_ENOMEM;
   }
+  status = chttp_session_context_init(&state->session_context, server);
+  if (status != SALTS_OK) {
+    chttp_server_request_state_destroy(state);
+    return status;
+  }
   state->response_builder.server = server;
   status = chttp_server_response_builder_init(&state->response_builder, &server->config);
   if (status != SALTS_OK) {
@@ -568,7 +573,7 @@ void chttp_server_request_state_reset(chttp_server_request_state *state) {
   state->param_storage_used = 0u;
   state->param_count = 0u;
   state->session.impl = NULL;
-  state->session_context = (chttp_session_context){0};
+  chttp_session_context_reset(&state->session_context);
   state->body_route = NULL;
   state->body_sink = (chttp_body_sink){0};
   state->body_sink_user = NULL;
@@ -579,6 +584,7 @@ void chttp_server_request_state_destroy(chttp_server_request_state *state) {
   if (state == NULL) return;
   chttp_server_request_body_close(state, SALTS_ECANCELED);
   chttp_jwt_request_state_reset(state);
+  chttp_session_context_destroy(&state->session_context);
   chttp_server_response_builder_destroy(&state->response_builder);
   free(state->param_storage);
   free(state->params);
