@@ -1853,7 +1853,8 @@ static bool chttp_server_owner_admission_available(
   active = atomic_load_explicit(&owner->active_connections,
                                 memory_order_acquire);
   salts_mutex_lock(&owner->admission_mutex);
-  available = owner->admission_count < owner->admission_capacity &&
+  available = owner->admission_open &&
+              owner->admission_count < owner->admission_capacity &&
               owner->admission_count < owner->connection_count &&
               active < owner->connection_count - owner->admission_count;
   salts_mutex_unlock(&owner->admission_mutex);
@@ -1893,6 +1894,11 @@ static int chttp_server_accept_ready(chttp_server_impl *server) {
     }
 
     salts_mutex_lock(&owner->admission_mutex);
+    if (!owner->admission_open ||
+        owner->admission_count >= owner->admission_capacity) {
+      salts_mutex_unlock(&owner->admission_mutex);
+      continue;
+    }
     {
       const size_t tail =
           (owner->admission_head + owner->admission_count) %
@@ -2185,6 +2191,7 @@ static int chttp_server_owner_storage_init(
   }
   salts_mutex_init(&owner->admission_mutex);
   owner->admission_sync_initialized = true;
+  owner->admission_open = true;
   salts_mutex_init(&owner->network_mutex);
   owner->network_sync_initialized = true;
   atomic_init(&owner->active_connections, 0u);
@@ -2198,6 +2205,7 @@ static void chttp_server_owner_reject_pending(
     chttp_server_owner_lane *owner) {
   if (owner == NULL || !owner->admission_sync_initialized) return;
   salts_mutex_lock(&owner->admission_mutex);
+  owner->admission_open = false;
   while (owner->admission_count != 0u) {
     cnet_accepted_stream *accepted =
         &owner->admissions[owner->admission_head];
