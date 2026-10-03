@@ -278,6 +278,7 @@ struct chttp_server_owner_lane {
   cnet_client *network;
   size_t connection_begin;
   size_t connection_count;
+  size_t pending_retry_cursor;
 };
 
 static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *owner) {
@@ -309,7 +310,6 @@ struct chttp_server_impl {
   size_t route_count;
   size_t middleware_count;
   size_t max_response_wire_bytes;
-  size_t pending_retry_cursor;
   chttp_server_connection *connections;
   chttp_session_record *sessions;
   chttp_session_entry *session_entries;

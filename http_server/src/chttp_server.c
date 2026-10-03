@@ -1750,11 +1750,21 @@ static int chttp_server_accept_ready(chttp_server_impl *server,
   }
 }
 
-static void chttp_server_deadlines_progress(chttp_server_impl *server) {
+static int chttp_server_deadlines_progress(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
+  size_t begin;
+  size_t end;
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  begin = owner->connection_begin;
+  end = chttp_server_owner_connection_end(owner);
+  if (begin > server->config.network.connection_capacity || end < begin ||
+      end > server->config.network.connection_capacity)
+    return SALTS_EINVAL;
   /* O(connections + active H2 stream slots); timers use existing owner-held request storage. */
   if (server->deadlines.headers_ms == 0 && server->deadlines.body_ms == 0 &&
-      server->deadlines.handler_ms == 0) return;
-  for (size_t index = 0; index < server->config.network.connection_capacity; ++index) {
+      server->deadlines.handler_ms == 0) return SALTS_OK;
+  for (size_t index = begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
     if (!connection->active || connection->close_after_write) continue;
     if (connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_NONE) {
@@ -1777,19 +1787,31 @@ static void chttp_server_deadlines_progress(chttp_server_impl *server) {
     connection->pending_action = CHTTP_SERVER_PENDING_CLOSE;
     chttp_server_connection_close(connection);
   }
+  return SALTS_OK;
 }
 
-static int chttp_server_deferred_progress(chttp_server_impl *server) {
+static int chttp_server_deferred_progress(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t index;
-  chttp_server_deadlines_progress(server);
-  for (index = 0u; index < server->config.network.connection_capacity; ++index) {
+  size_t begin;
+  size_t end;
+  int status;
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  begin = owner->connection_begin;
+  end = chttp_server_owner_connection_end(owner);
+  if (begin > server->config.network.connection_capacity || end < begin ||
+      end > server->config.network.connection_capacity)
+    return SALTS_EINVAL;
+  status = chttp_server_deadlines_progress(server, owner);
+  if (status != SALTS_OK) return status;
+  for (index = begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
     chttp_server_response_builder *builder = &connection->deferred_builder;
     const uint_fast64_t deferred_token =
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire);
     const chttp_server_deferred_state deferred_state =
         chttp_server_deferred_token_state(deferred_token);
-    int status;
     status = chttp_h2_server_connection_deferred_progress(connection->h2);
     if (status != SALTS_OK) return status;
     if (deferred_state == CHTTP_SERVER_DEFERRED_CANCELED) {
@@ -1857,16 +1879,27 @@ static int chttp_server_deferred_progress(chttp_server_impl *server) {
   return SALTS_OK;
 }
 
-static int chttp_server_retry_pending(chttp_server_impl *server) {
-  const size_t capacity = server->config.network.connection_capacity;
+static int chttp_server_retry_pending(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t offset;
-  for (offset = 0u; offset < capacity; ++offset) {
-    const size_t index = (server->pending_retry_cursor + offset) % capacity;
+  size_t begin;
+  size_t count;
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  begin = owner->connection_begin;
+  count = owner->connection_count;
+  if (count == 0u || begin > server->config.network.connection_capacity ||
+      count > server->config.network.connection_capacity - begin)
+    return SALTS_EINVAL;
+  if (owner->pending_retry_cursor >= count) owner->pending_retry_cursor = 0u;
+  for (offset = 0u; offset < count; ++offset) {
+    const size_t local = (owner->pending_retry_cursor + offset) % count;
+    const size_t index = begin + local;
     chttp_server_connection *connection = &server->connections[index];
     int status;
     if (!connection->active || connection->pending_action == CHTTP_SERVER_PENDING_NONE) continue;
     status = chttp_server_connection_retry(connection);
-    server->pending_retry_cursor = (index + 1u) % capacity;
+    owner->pending_retry_cursor = (local + 1u) % count;
     if (status == SALTS_ENOBUFS) return SALTS_OK;
     if (status != SALTS_OK && status != SALTS_EBUSY) return status;
   }
@@ -1881,9 +1914,16 @@ static bool chttp_server_should_stop(chttp_server_impl *server) {
   return stop;
 }
 
-static bool chttp_server_connections_active(const chttp_server_impl *server) {
+static bool chttp_server_connections_active(const chttp_server_impl *server,
+                                            const chttp_server_owner_lane *owner) {
   size_t index;
-  for (index = 0u; index < server->config.network.connection_capacity; ++index)
+  size_t end;
+  if (server == NULL || owner == NULL || owner->server != server) return false;
+  end = chttp_server_owner_connection_end(owner);
+  if (owner->connection_begin > server->config.network.connection_capacity ||
+      end < owner->connection_begin || end > server->config.network.connection_capacity)
+    return false;
+  for (index = owner->connection_begin; index < end; ++index)
     if (server->connections[index].active ||
         chttp_server_deferred_token_state(atomic_load_explicit(
             &server->connections[index].deferred_token, memory_order_acquire)) !=
@@ -1893,14 +1933,22 @@ static bool chttp_server_connections_active(const chttp_server_impl *server) {
   return false;
 }
 
-static int chttp_server_begin_shutdown(chttp_server_impl *server) {
+static int chttp_server_begin_shutdown(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t index;
+  size_t end;
   int status;
+  if (server == NULL || owner == NULL || owner->server != server)
+    return SALTS_EINVAL;
+  end = chttp_server_owner_connection_end(owner);
+  if (owner->connection_begin > server->config.network.connection_capacity ||
+      end < owner->connection_begin || end > server->config.network.connection_capacity)
+    return SALTS_EINVAL;
   if (server->listener_initialized) {
     status = cnet_listener_close(&server->listener);
     if (status != SALTS_OK && status != SALTS_EALREADY) return status;
   }
-  for (index = 0u; index < server->config.network.connection_capacity; ++index) {
+  for (index = owner->connection_begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
     if (!connection->active) continue;
     if (connection->wire_protocol == CHTTP_SERVER_WIRE_HTTP_2) {
@@ -1915,10 +1963,17 @@ static int chttp_server_begin_shutdown(chttp_server_impl *server) {
   return SALTS_OK;
 }
 
-static void chttp_server_progress_shutdown(chttp_server_impl *server) {
+static void chttp_server_progress_shutdown(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   const uint64_t now_ms = salts_monotonic_ms();
   size_t index;
-  for (index = 0u; index < server->config.network.connection_capacity; ++index) {
+  size_t end;
+  if (server == NULL || owner == NULL || owner->server != server) return;
+  end = chttp_server_owner_connection_end(owner);
+  if (owner->connection_begin > server->config.network.connection_capacity ||
+      end < owner->connection_begin || end > server->config.network.connection_capacity)
+    return;
+  for (index = owner->connection_begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
     if (!connection->active || connection->wire_protocol != CHTTP_SERVER_WIRE_HTTP_2 ||
         connection->h2_close_after_ms == 0u || now_ms < connection->h2_close_after_ms ||
@@ -1968,17 +2023,23 @@ static int chttp_server_cleanup_network(chttp_server_impl *server, bool retry_ti
 
 static void chttp_server_worker(void *user) {
   chttp_server_impl *server = (chttp_server_impl *)user;
+  chttp_server_owner_lane *owner = &server->owner;
+  cnet_client *network = chttp_server_owner_network(owner);
   int status = SALTS_OK;
+  if (network == NULL) {
+    chttp_server_worker_finish(server, SALTS_EINVAL);
+    return;
+  }
   while (!chttp_server_should_stop(server)) {
     int ready = 0;
     size_t events = 0u;
     status = chttp_server_file_progress(server);
     if (status != SALTS_OK) break;
-    status = chttp_server_deferred_progress(server);
+    status = chttp_server_deferred_progress(server, owner);
     if (status != SALTS_OK) break;
     status = chttp_server_websocket_commands_progress(server);
     if (status != SALTS_OK) break;
-    status = chttp_server_retry_pending(server);
+    status = chttp_server_retry_pending(server, owner);
     if (status != SALTS_OK) break;
     status = cnet_listener_wait(&server->listener, 0u, &ready);
     if (status != SALTS_OK) break;
@@ -1986,35 +2047,35 @@ static void chttp_server_worker(void *user) {
       status = chttp_server_accept_ready(server, &server->owner);
       if (status != SALTS_OK) break;
     }
-    status = cnet_client_poll(&server->network, chttp_server_poll_timeout(server), &events);
+    status = cnet_client_poll(network, chttp_server_poll_timeout(server), &events);
     if (status != SALTS_OK) break;
     status = chttp_server_file_progress(server);
     if (status != SALTS_OK) break;
-    status = chttp_server_deferred_progress(server);
+    status = chttp_server_deferred_progress(server, owner);
     if (status != SALTS_OK) break;
     status = chttp_server_websocket_commands_progress(server);
     if (status != SALTS_OK) break;
-    status = chttp_server_retry_pending(server);
+    status = chttp_server_retry_pending(server, owner);
     if (status != SALTS_OK) break;
   }
   if (status == SALTS_OK) {
-    status = chttp_server_begin_shutdown(server);
-    while (status == SALTS_OK && chttp_server_connections_active(server)) {
+    status = chttp_server_begin_shutdown(server, owner);
+    while (status == SALTS_OK && chttp_server_connections_active(server, owner)) {
       size_t events = 0u;
       status = chttp_server_file_progress(server);
       if (status != SALTS_OK) break;
-      status = chttp_server_deferred_progress(server);
+      status = chttp_server_deferred_progress(server, owner);
       if (status != SALTS_OK) break;
-      status = chttp_server_retry_pending(server);
+      status = chttp_server_retry_pending(server, owner);
       if (status != SALTS_OK) break;
-      status = cnet_client_poll(&server->network, chttp_server_poll_timeout(server), &events);
+      status = cnet_client_poll(network, chttp_server_poll_timeout(server), &events);
       if (status != SALTS_OK) break;
       status = chttp_server_file_progress(server);
       if (status != SALTS_OK) break;
-      status = chttp_server_deferred_progress(server);
+      status = chttp_server_deferred_progress(server, owner);
       if (status != SALTS_OK) break;
-      status = chttp_server_retry_pending(server);
-      if (status == SALTS_OK) chttp_server_progress_shutdown(server);
+      status = chttp_server_retry_pending(server, owner);
+      if (status == SALTS_OK) chttp_server_progress_shutdown(server, owner);
     }
   }
   {
