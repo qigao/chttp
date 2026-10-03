@@ -38,7 +38,7 @@ static chttp_server_config execution_options_config(void) {
 }
 
 spec("CHttp server execution options") {
-  it("validates the versioned pre-start contract and fails closed for unavailable multi-owner") {
+  it("validates the versioned pre-start contract and enables explicit multi-owner") {
     chttp_server server = {0};
     chttp_server_config config = execution_options_config();
     chttp_server_execution_options options =
@@ -65,10 +65,8 @@ spec("CHttp server execution options") {
 
     options.owner_count = 2u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
-    check_equal(chttp_server_start(&server), SALTS_ENOTSUP);
-
-    options.owner_count = 1u;
-    check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_stop(&server, 2000u), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 }
