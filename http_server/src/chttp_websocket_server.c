@@ -70,12 +70,14 @@ static void chttp_server_websocket_event(void *user, cnet_websocket *websocket,
 
 int chttp_server_websocket_peer_init(chttp_server_websocket_peer *peer, chttp_server_impl *server,
                                      chttp_server_route_record *route, cnet_connection connection,
+                                     uint32_t server_slot, uint32_t server_generation,
                                      int32_t stream_id,
                                      chttp_server_websocket_write_fn write, void *transport) {
   cnet_websocket_config config;
   int status;
   if (peer == NULL || server == NULL || route == NULL || connection.slot == 0u ||
-      connection.generation == 0u || stream_id < 0 || write == NULL || transport == NULL)
+      connection.generation == 0u || server_slot == 0u || server_generation == 0u ||
+      stream_id < 0 || write == NULL || transport == NULL)
     return SALTS_EINVAL;
   if (peer->engine.impl != NULL || peer->phase != CHTTP_SERVER_WEBSOCKET_NONE) return SALTS_EBUSY;
   config =
@@ -93,6 +95,8 @@ int chttp_server_websocket_peer_init(chttp_server_websocket_peer *peer, chttp_se
   peer->server = server;
   peer->route = route;
   peer->connection = connection;
+  peer->server_slot = server_slot;
+  peer->server_generation = server_generation;
   peer->stream_id = stream_id;
   peer->write = write;
   peer->transport = transport;
@@ -267,7 +271,8 @@ int chttp_server_websocket_upgrade(void *user, const chttp_server_request_view *
       connection, connection->outbound_size + connection->server->max_response_wire_bytes);
   if (status != SALTS_OK) return status;
   status = chttp_server_websocket_peer_init(&connection->websocket_peer, connection->server, route,
-                                            connection->handle, 0,
+                                            connection->handle, connection->server_slot,
+                                            connection->server_generation, 0,
                                             chttp_server_websocket_h1_write, connection);
   if (status != SALTS_OK) return status;
   status = chttp_server_websocket_route_open(&connection->websocket_peer, state, route, request);
@@ -400,9 +405,9 @@ int chttp_server_websocket_session_capture(const chttp_websocket *websocket,
   peer = chttp_websocket_peer(websocket);
   if (peer == NULL || chttp_active_callback_server != peer->server) return SALTS_EINVAL;
   *out_session = (chttp_server_websocket_session){.impl = peer->server,
-                                                  .connection_slot = peer->connection.slot,
+                                                  .connection_slot = peer->server_slot,
                                                   .connection_generation =
-                                                      peer->connection.generation,
+                                                      peer->server_generation,
                                                   .stream_id = peer->stream_id};
   return SALTS_OK;
 }
@@ -495,8 +500,8 @@ static chttp_server_websocket_peer *chttp_server_websocket_command_peer(
   if (out_connection != NULL) *out_connection = NULL;
   if (index >= server->config.network.connection_capacity) return NULL;
   connection = &server->connections[index];
-  if (!connection->active || connection->handle.slot != session->connection_slot ||
-      connection->handle.generation != session->connection_generation)
+  if (!connection->active || connection->server_slot != session->connection_slot ||
+      connection->server_generation != session->connection_generation)
     return NULL;
   if (out_connection != NULL) *out_connection = connection;
   if (session->stream_id == 0)

@@ -26,6 +26,8 @@ typedef struct chttp_server_websocket_peer {
   chttp_server_impl *server;
   chttp_server_route_record *route;
   cnet_connection connection;
+  uint32_t server_slot;
+  uint32_t server_generation;
   int32_t stream_id;
   chttp_server_websocket_write_fn write;
   void *transport;
@@ -34,6 +36,7 @@ typedef struct chttp_server_websocket_peer {
 
 int chttp_server_websocket_peer_init(chttp_server_websocket_peer *peer, chttp_server_impl *server,
                                      chttp_server_route_record *route, cnet_connection connection,
+                                     uint32_t server_slot, uint32_t server_generation,
                                      int32_t stream_id,
                                      chttp_server_websocket_write_fn write, void *transport);
 void chttp_server_websocket_peer_reset(chttp_server_websocket_peer *peer);

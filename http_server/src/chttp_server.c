@@ -782,6 +782,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
     return status;
   }
   for (index = 0u; index < config->network.connection_capacity; ++index) {
+    impl->connections[index].server_slot = (uint32_t)(index + 1u);
+    impl->connections[index].server_generation = 0u;
     status = chttp_server_connection_init(impl, &impl->connections[index]);
     if (status != SALTS_OK) {
       chttp_server_impl_free(impl);
@@ -1717,6 +1719,8 @@ static int chttp_server_accept_ready(chttp_server_impl *server,
       }
     }
     connection->owner = owner;
+    ++connection->server_generation;
+    if (connection->server_generation == 0u) connection->server_generation = 1u;
     connection->handle = handle;
     connection->peer = peer;
     connection->peer_certificate_sha256[0] = '\0';
