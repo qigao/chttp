@@ -648,15 +648,24 @@ static int chttp_server_owner_storage_prepare(
     chttp_server_impl *server, chttp_server_owner_lane *owner,
     size_t owner_index, size_t owner_count, bool primary) {
   size_t begin;
-  size_t end;
+  size_t connection_count;
   size_t file_transfer_capacity;
+  const size_t capacity =
+      server != NULL ? server->config.network.connection_capacity : 0u;
   if (server == NULL || owner == NULL || owner_count == 0u ||
       owner_index >= owner_count)
     return SALTS_EINVAL;
-  begin = server->config.network.connection_capacity * owner_index / owner_count;
-  end = server->config.network.connection_capacity * (owner_index + 1u) / owner_count;
-  if (end <= begin) return SALTS_EINVAL;
-  file_transfer_capacity = end - begin;
+  {
+    const size_t base = capacity / owner_count;
+    const size_t remainder = capacity % owner_count;
+    connection_count = base + (owner_index < remainder ? 1u : 0u);
+    begin = base * owner_index +
+            (owner_index < remainder ? owner_index : remainder);
+  }
+  if (connection_count == 0u || begin > capacity ||
+      connection_count > capacity - begin)
+    return SALTS_EINVAL;
+  file_transfer_capacity = connection_count;
   if (server->config.enable_http2 &&
       !chttp_server_multiply(file_transfer_capacity,
                              server->config.h2_stream_capacity,
@@ -670,7 +679,7 @@ static int chttp_server_owner_storage_prepare(
       .server = server,
       .network = primary ? &server->network : NULL,
       .connection_begin = begin,
-      .connection_count = end - begin,
+      .connection_count = connection_count,
       .file_transfer_capacity = file_transfer_capacity};
   owner->file_transfers = (chttp_file_transfer **)calloc(
       file_transfer_capacity, sizeof(*owner->file_transfers));
