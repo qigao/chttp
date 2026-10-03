@@ -1,0 +1,19 @@
+schema CHttpWasm [version(1)];
+
+component CalcWasm {
+  service Calc;
+}
+
+message AddRequest {
+  @Min(1) uint32 left;
+  uint32 right;
+  uint32 scale;
+}
+
+message AddResponse {
+  uint32 sum;
+}
+
+service Calc {
+  Add: AddRequest -> AddResponse;
+}
