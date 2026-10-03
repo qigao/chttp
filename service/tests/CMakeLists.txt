@@ -52,7 +52,6 @@ if(DEFINED ENV{TURBOWASM_ROOT} AND NOT "$ENV{TURBOWASM_ROOT}" STREQUAL "")
     TARGET chttp_service_wasm_fixture
     IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_wasm.schema"
     COMPONENT "CHttpWasm.CalcWasm"
-    VERSION "1.0.0"
     ARTIFACT_NAME "chttp_service_wasm"
     ARTIFACTS WASM
     TRANSPORTS HTTP
