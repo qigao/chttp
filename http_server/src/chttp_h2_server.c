@@ -871,7 +871,10 @@ static int chttp_h2_server_websocket_dispatch(chttp_h2_server_stream *stream) {
   if (route == NULL || !route->websocket) return chttp_h2_server_websocket_status(stream, 404u);
   status =
       chttp_server_websocket_peer_init(&stream->websocket_peer, stream->owner->connection->server,
-                                       route, stream->owner->connection->handle, stream->stream_id,
+                                       route, stream->owner->connection->handle,
+                                       stream->owner->connection->server_slot,
+                                       stream->owner->connection->server_generation,
+                                       stream->stream_id,
                                        chttp_h2_server_websocket_write, stream);
   if (status != SALTS_OK) return status;
   status = chttp_server_websocket_route_open(&stream->websocket_peer, &stream->request_state, route,
