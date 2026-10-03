@@ -33,8 +33,11 @@ int chttp_server_send_file(chttp_server_response *response, unsigned int status_
   if (response == NULL || response->impl == NULL || path == NULL || path[0] == '\0')
     return SALTS_EINVAL;
   builder = (chttp_server_response_builder *)response->impl;
-  if (builder->server == NULL) return SALTS_EINVAL;
-  status = chttp_server_file_runtime_ensure(builder->server, &runtime);
+  if (builder->server == NULL || builder->connection == NULL ||
+      builder->connection->owner == NULL)
+    return SALTS_EINVAL;
+  status = chttp_server_file_runtime_ensure(
+      builder->server, builder->connection->owner, &runtime);
   if (status != SALTS_OK) return status;
   transfer = (chttp_file_transfer *)calloc(1u, sizeof(*transfer));
   if (transfer == NULL) return SALTS_ENOMEM;
@@ -47,7 +50,8 @@ int chttp_server_send_file(chttp_server_response *response, unsigned int status_
     free(transfer);
     return status;
   }
-  status = chttp_server_file_transfer_register(builder->server, transfer);
+  status = chttp_server_file_transfer_register(
+      builder->server, builder->connection->owner, transfer);
   if (status != SALTS_OK) {
     cleanup_status = chttp_file_transfer_drain_destroy(transfer, runtime);
     free(transfer);
