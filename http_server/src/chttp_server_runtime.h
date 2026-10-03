@@ -285,6 +285,7 @@ struct chttp_server_connection {
   bool deferred_response_writing;
   bool retained_response_paused;
   bool retained_response_sg;
+  bool owner_lease_held;
   chttp_server_pending_action pending_action;
 };
 
