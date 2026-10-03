@@ -1976,8 +1976,11 @@ static chttp_server_owner_lane *chttp_server_admission_owner(
 }
 
 static int chttp_server_listener_progress(chttp_server_impl *server) {
+  size_t attempts;
   if (server == NULL || !server->listener_initialized) return SALTS_EINVAL;
-  for (;;) {
+  for (attempts = 0u;
+       attempts < server->config.network.connection_capacity;
+       ++attempts) {
     cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
     chttp_server_owner_lane *owner;
     cnet_client *network;
@@ -2011,6 +2014,7 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
     network = chttp_server_owner_network(owner);
     if (network != NULL) (void)cnet_client_wake(network);
   }
+  return SALTS_OK;
 }
 
 static void chttp_server_connection_activate(
