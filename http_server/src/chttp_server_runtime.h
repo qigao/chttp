@@ -286,6 +286,11 @@ static inline cnet_client *chttp_server_connection_network(chttp_server_connecti
   return connection != NULL ? chttp_server_owner_network(connection->owner) : NULL;
 }
 
+static inline size_t chttp_server_owner_connection_end(
+    const chttp_server_owner_lane *owner) {
+  return owner != NULL ? owner->connection_begin + owner->connection_count : 0u;
+}
+
 struct chttp_server_impl {
   chttp_server_deadlines deadlines;
   chttp_server_admission_fn admission;
