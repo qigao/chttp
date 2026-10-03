@@ -134,14 +134,17 @@ asctime 格式，复用 `Salts::DateTimeParser` 并在 HTTP 层转换旧格式�
 `chttp_server_set_deadlines()` 设置请求头、正文和执行阶段的绝对时间预算。
 两者默认关闭，生命周期和 H1/H2 超时结果见 [Admission 与 Deadline](../http_server/README.md#正文前-admission-与阶段-deadline)。
 
-普通服务端用户只注册 handler/middleware，然后调用 `chttp_server_start()`；后台线程独占 CNet
-poller，业务代码不调用 `cnet_client_poll()`。路由 path 不含 query，可包含完整 segment 参数，
+普通服务端用户只注册 handler/middleware，然后调用 `chttp_server_start()`；配置的固定 owner
+线程各自独占自己的 CNet poller，业务代码不调用 `cnet_client_poll()`。默认
+`owner_count=1` 保持原有串行模型；显式配置多个 owner 后，每条连接永久固定到一个 owner，
+不同连接上的 callback 可以并发执行。路由 path 不含 query，可包含完整 segment 参数，
 例如 `/users/:user/posts/:post`。静态路由优先于参数路由，HEAD 在没有显式 HEAD route 时回退
 GET handler，但只发送 headers。
 
 `enable_http2 = 1` 后，同一个 listener 同时接受 H1 与 H2。明文 H2 使用 h2c prior knowledge，
 不支持 `Upgrade: h2c`；TLS 通过 ALPN 在 `h2` 与 `http/1.1` 间选择。H2 stream 可以在一条连接上
-交错收发，但 handler 仍由 server owner thread 串行执行。停服先关闭 listener admission、发送
+交错收发；同一 H2 connection 的 stream 始终由其固定 owner 推进，不跨 owner 迁移。多个 owner
+启用时，不同 connection 的 handler 可以并发执行。停服先关闭 listener admission、发送
 GOAWAY，再排空已经接纳的 stream；新 stream 不再进入 handler。最后通过 drain PING/ACK
 确认此前帧已按序到达后关闭 transport；不响应 PING 的 peer 使用有界 grace 后关闭。
 
@@ -307,8 +310,10 @@ int main(void) {
 }
 ```
 
-非 Windows 平台应把 backend 换成实际支持的 EPOLL 或 KQUEUE。handler 在单一 owner thread 上
-串行执行，不能做阻塞数据库 I/O，也不能从 handler 调用 stop/destroy。Castle 风格的预加载
+非 Windows 平台应把 backend 换成实际支持的 EPOLL 或 KQUEUE。默认 owner_count=1 时 handler
+仍在单一 owner thread 上串行执行；显式多 owner 时，不同固定连接上的 handler 可能并发，因此
+应用共享状态必须自行同步。无论哪种模式，handler 都不能做无界阻塞数据库 I/O，也不能从 handler
+调用 stop/destroy。Castle 风格的预加载
 模板/静态资源可以直接 reply；`chttp_server_response_file()` 在 handler 返回后通过 server 共享的
 CFlow file runtime 按有界 chunk 异步读取文件，完成事件唤醒 owner，并且只恢复对应的 H1 connection
 或 H2 stream。阻塞业务工作使用上述 deferred handle，不把 borrowed request view 交给 worker。

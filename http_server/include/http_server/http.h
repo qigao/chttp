@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-/** Background HTTP/1.1 and optional HTTP/2 server owner; callers never drive a poller. */
+/** Background HTTP/1.1 and optional HTTP/2 server; callers never drive owner pollers. */
 typedef struct chttp_server {
   void *impl;
 } chttp_server;
@@ -200,7 +200,10 @@ typedef int (*chttp_websocket_open_fn)(void *user, chttp_websocket *websocket,
                                        const chttp_server_request_view *request,
                                        chttp_server_response *response);
 
-/** Runs serially on the server owner thread; event and peer are callback-scoped. */
+/**
+ * Runs on the connection's fixed owner thread; event and peer are callback-scoped.
+ * With owner_count > 1, callbacks for different connections may run concurrently.
+ */
 typedef void (*chttp_websocket_event_fn)(void *user, chttp_websocket *websocket,
                                          const chttp_websocket_event *event);
 
@@ -225,8 +228,10 @@ typedef struct chttp_server_websocket_options {
  * accepted connections. When HTTP/2 is enabled, its stream, parser, output,
  * HPACK and SETTINGS limits are per connection. Routes are origin-form paths, may contain named
  * `:segment` parameters, and exclude the query string. The server invokes
- * handlers serially on its owner thread, so a handler must not block or call
- * stop/destroy. Session capacity zero disables Sessions; otherwise the Cookie
+ * handlers serially when owner_count=1. With explicit owner_count>1, handlers
+ * for different fixed-owner connections may run concurrently; one connection
+ * and one HTTP/2 connection remain owner-affine. A handler must not block or
+ * call stop/destroy. Session capacity zero disables Sessions; otherwise the Cookie
  * contains only a CSPRNG id and values stay in the bounded in-memory store.
  */
 typedef struct chttp_server_config {
@@ -500,8 +505,9 @@ int chttp_server_use_cors(chttp_server *server, const chttp_server_cors_options 
 int chttp_server_next_call(chttp_server_next *next);
 
 /**
- * Starts the listener and background CNet owner thread. Port zero selects an
- * ephemeral port. Bind/backend/thread failures are returned before success.
+ * Starts the listener and configured fixed CNet owner threads. Port zero
+ * selects an ephemeral port. Bind/backend/thread failures from any owner are
+ * returned before success.
  */
 int chttp_server_start(chttp_server *server);
 

@@ -1,5 +1,7 @@
 #include "chttp_rate_limit_internal.h"
 #include "tinytest.h"
+#include <salts/thread.h>
+#include <stdatomic.h>
 #include <string.h>
 
 static chttp_rate_limit_config rate_config(chttp_rate_limit_scope scope) {
@@ -7,7 +9,72 @@ static chttp_rate_limit_config rate_config(chttp_rate_limit_scope scope) {
   return config;
 }
 
+typedef struct rate_concurrent_probe {
+  chttp_rate_limiter *limiter;
+  atomic_int ready;
+  atomic_bool go;
+  atomic_int allowed;
+  atomic_int limited;
+  atomic_int errors;
+} rate_concurrent_probe;
+
+static void rate_concurrent_worker(void *user) {
+  rate_concurrent_probe *probe = (rate_concurrent_probe *)user;
+  chttp_server_request_view request = {0};
+  atomic_fetch_add_explicit(&probe->ready, 1, memory_order_release);
+  while (!atomic_load_explicit(&probe->go, memory_order_acquire))
+    salts_thread_yield();
+  for (size_t i = 0u; i < 64u; ++i) {
+    chttp_server_admission_result result = {0};
+    const int status =
+        chttp_rate_limiter_admit_at(probe->limiter, &request, &result, 0u);
+    if (status != SALTS_OK) {
+      atomic_fetch_add_explicit(&probe->errors, 1, memory_order_relaxed);
+    } else if (result.status_code == 0u) {
+      atomic_fetch_add_explicit(&probe->allowed, 1, memory_order_relaxed);
+    } else if (result.status_code == 429u) {
+      atomic_fetch_add_explicit(&probe->limited, 1, memory_order_relaxed);
+    } else {
+      atomic_fetch_add_explicit(&probe->errors, 1, memory_order_relaxed);
+    }
+  }
+}
+
 spec("CHTTP bounded rate limiter") {
+  it("serializes a shared global bucket across concurrent owners") {
+    chttp_rate_limiter limiter = {0};
+    chttp_rate_limit_config config = rate_config(CHTTP_RATE_LIMIT_GLOBAL);
+    rate_concurrent_probe probe = {.limiter = &limiter};
+    salts_thread_t first = NULL;
+    salts_thread_t second = NULL;
+
+    config.burst = 17u;
+    config.refill_tokens = 1u;
+    config.refill_period_ms = 1000000u;
+    atomic_init(&probe.ready, 0);
+    atomic_init(&probe.go, false);
+    atomic_init(&probe.allowed, 0);
+    atomic_init(&probe.limited, 0);
+    atomic_init(&probe.errors, 0);
+
+    check_equal(chttp_rate_limiter_init(&limiter, &config), SALTS_OK);
+    check_equal(salts_thread_create(&first, rate_concurrent_worker, &probe), SALTS_OK);
+    check_equal(salts_thread_create(&second, rate_concurrent_worker, &probe), SALTS_OK);
+    while (atomic_load_explicit(&probe.ready, memory_order_acquire) != 2)
+      salts_thread_yield();
+    atomic_store_explicit(&probe.go, true, memory_order_release);
+
+    check_equal(salts_thread_join(&first), SALTS_OK);
+    check_equal(salts_thread_join(&second), SALTS_OK);
+    salts_thread_destroy(&first);
+    salts_thread_destroy(&second);
+
+    check_equal(atomic_load_explicit(&probe.allowed, memory_order_relaxed), 17);
+    check_equal(atomic_load_explicit(&probe.limited, memory_order_relaxed), 111);
+    check_equal(atomic_load_explicit(&probe.errors, memory_order_relaxed), 0);
+    chttp_rate_limiter_destroy(&limiter);
+  }
+
   it("preserves fractional credit, rounds Retry-After up and rejects backward clocks") {
     chttp_rate_limiter limiter = {0};
     chttp_rate_limit_config config = rate_config(CHTTP_RATE_LIMIT_GLOBAL);

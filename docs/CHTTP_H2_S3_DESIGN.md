@@ -130,8 +130,9 @@ ABI 与 handler API 无需随之改变。
 - 连接状态为 `UNKNOWN -> H1 | H2 -> DRAINING -> CLOSED`；stream 状态为
   `FREE -> HEADERS -> BODY -> DISPATCHED -> RESPONDING -> CLOSED`，异常可进入
   `RESET`。一条 stream 的请求语义错误只发 RST_STREAM，HPACK/连接帧错误才终止物理连接。
-- handler 只在收到 END_STREAM 后运行，且仍由唯一 owner thread 串行调用。
-  wire 层允许多流交错，但不声明 handler 并行或可重入。
+- handler 只在收到 END_STREAM 后运行，并始终由该 H2 connection 的固定 owner thread 调用。
+  同一 H2 connection 内不跨 owner 迁移；显式配置多个 server owner 时，不同 connection 的
+  handler 可以并发，因此应用共享状态必须自行同步。
 - stop 先停止 listener admission，对 H2 连接发送 GOAWAY，将已接收的响应输出
   flush；应用层排空后发送 drain PING，匹配的 ACK 证明此前响应和控制帧已经按序到达，
   server 在该 receive callback 边界关闭 transport。对不响应 PING 的 peer 保留 64 个

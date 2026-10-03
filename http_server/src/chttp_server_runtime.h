@@ -285,6 +285,7 @@ struct chttp_server_connection {
   bool deferred_response_writing;
   bool retained_response_paused;
   bool retained_response_sg;
+  bool owner_lease_held;
   chttp_server_pending_action pending_action;
 };
 
@@ -296,16 +297,21 @@ struct chttp_server_owner_lane {
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
+  cnet_accepted_stream *admissions;
+  salts_mutex_t admission_mutex;
   size_t connection_begin;
   size_t connection_count;
   size_t file_transfer_capacity;
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
+  size_t admission_head;
+  size_t admission_count;
   /* Pending admissions plus active connections; bounded by connection_count. */
   atomic_size_t connection_leases;
   atomic_int runtime_state;
   int terminal_status;
+  bool admission_sync_initialized;
   bool network_initialized;
   bool thread_started;
   bool file_runtime_initialized;
@@ -430,9 +436,18 @@ struct chttp_server_impl {
   salts_cond_t changed;
   salts_thread_t thread;
   chttp_server_stats stats;
+  size_t admission_cursor;
+  size_t started_owner_count;
+  size_t startup_reported_count;
+  size_t ready_owner_count;
+  size_t finished_owner_count;
+  uint16_t startup_port;
+  int startup_status;
   atomic_size_t buffer_bytes;
   atomic_size_t peak_buffer_bytes;
   _Atomic uint64_t rejected_buffer_allocations;
+  bool startup_go;
+  bool startup_abort;
   bool sync_initialized;
   bool session_sync_initialized;
   bool network_initialized;

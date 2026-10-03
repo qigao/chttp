@@ -301,7 +301,7 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
   }
 
-  it("serves HTTPS middleware and sessions while isolating pool profiles") {
+  it("serves HTTPS middleware and sessions across fixed owners") {
     static const char *h1[] = {"http/1.1"};
     chttp_server server = {0};
     chttp_client client = {0};
@@ -313,6 +313,8 @@ spec("CHTTP HTTPS adapter") {
     chttp_tls_async_probe async_probe = {0};
     chttp_server_config server_config = chttp_tls_test_server_config();
     chttp_client_config client_config = chttp_tls_test_client_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
     cnet_tls_server_config server_tls;
     cnet_tls_client_config client_tls;
     chttp_response response = {0};
@@ -322,42 +324,82 @@ spec("CHTTP HTTPS adapter") {
     chttp_request_options async_options;
     char cookie[128];
     char uri[64];
-    char *cert_path = tt_make_temp_file("chttp-cert", ".pem");
-    char *key_path = tt_make_temp_file("chttp-key", ".pem");
+    char *server_cert_path = tt_make_temp_file("chttp-server-cert", ".pem");
+    char *server_key_path = tt_make_temp_file("chttp-server-key", ".pem");
+    char *server_ca_path = tt_make_temp_file("chttp-client-ca", ".pem");
+    char *client_cert_path = tt_make_temp_file("chttp-client-cert", ".pem");
+    char *client_key_path = tt_make_temp_file("chttp-client-key", ".pem");
+    char *client_ca_path = tt_make_temp_file("chttp-server-ca", ".pem");
     uint16_t port = 0u;
 
-    check_not_null(cert_path);
-    check_not_null(key_path);
-    check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
-                              sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
-                0);
-    check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
-    server_tls = (cnet_tls_server_config){.size = sizeof(server_tls),
-                                          .cert_file = cert_path,
-                                          .key_file = key_path,
-                                          .ca_file = cert_path,
-                                          .client_auth = CNET_TLS_CLIENT_AUTH_REQUIRED,
-                                          .alpn_protocols = h1,
-                                          .alpn_protocol_count = 1u};
-    client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = cert_path,
-                                          .cert_file = cert_path,
-                                          .key_file = key_path,
-                                          .server_name = "localhost",
-                                          .alpn_protocols = h1,
-                                          .alpn_protocol_count = 1u};
+    check_not_null(server_cert_path);
+    check_not_null(server_key_path);
+    check_not_null(server_ca_path);
+    check_not_null(client_cert_path);
+    check_not_null(client_key_path);
+    check_not_null(client_ca_path);
+    check_equal(
+        tt_write_file(server_cert_path, CHTTP_TLS_TEST_CERTIFICATE,
+                      sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
+        0);
+    check_equal(
+        tt_write_file(server_key_path, CHTTP_TLS_TEST_KEY,
+                      sizeof(CHTTP_TLS_TEST_KEY) - 1u),
+        0);
+    check_equal(
+        tt_write_file(server_ca_path, CHTTP_TLS_TEST_CLIENT_CA_CERTIFICATE,
+                      sizeof(CHTTP_TLS_TEST_CLIENT_CA_CERTIFICATE) - 1u),
+        0);
+    check_equal(
+        tt_write_file(client_cert_path, CHTTP_TLS_TEST_CLIENT_CERTIFICATE,
+                      sizeof(CHTTP_TLS_TEST_CLIENT_CERTIFICATE) - 1u),
+        0);
+    check_equal(
+        tt_write_file(client_key_path, CHTTP_TLS_TEST_CLIENT_KEY,
+                      sizeof(CHTTP_TLS_TEST_CLIENT_KEY) - 1u),
+        0);
+    check_equal(
+        tt_write_file(client_ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                      sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+        0);
+    server_tls = (cnet_tls_server_config){
+        .size = sizeof(server_tls),
+        .cert_file = server_cert_path,
+        .key_file = server_key_path,
+        .ca_file = server_ca_path,
+        .client_auth = CNET_TLS_CLIENT_AUTH_REQUIRED,
+        .alpn_protocols = h1,
+        .alpn_protocol_count = 1u};
+    client_tls = (cnet_tls_client_config){
+        .size = sizeof(client_tls),
+        .ca_file = client_ca_path,
+        .cert_file = client_cert_path,
+        .key_file = client_key_path,
+        .server_name = "localhost",
+        .alpn_protocols = h1,
+        .alpn_protocol_count = 1u};
     server_config.tls = &server_tls;
 
     check_equal(chttp_tls_profile_init(&first_profile, &client_tls), SALTS_OK);
     check_equal(chttp_tls_profile_init(&second_profile, &client_tls), SALTS_OK);
     check_equal(chttp_tls_profile_init(&transient_profile, &client_tls), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
     check_equal(chttp_server_use(&server, chttp_tls_test_middleware, &probe), SALTS_OK);
     check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
-    check_equal(tt_remove_file(cert_path), 0);
-    check_equal(tt_remove_file(key_path), 0);
-    free(cert_path);
-    free(key_path);
+    check_equal(tt_remove_file(server_cert_path), 0);
+    check_equal(tt_remove_file(server_key_path), 0);
+    check_equal(tt_remove_file(server_ca_path), 0);
+    check_equal(tt_remove_file(client_cert_path), 0);
+    check_equal(tt_remove_file(client_key_path), 0);
+    check_equal(tt_remove_file(client_ca_path), 0);
+    free(server_cert_path);
+    free(server_key_path);
+    free(server_ca_path);
+    free(client_cert_path);
+    free(client_key_path);
+    free(client_ca_path);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);

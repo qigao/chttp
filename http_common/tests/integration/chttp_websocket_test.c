@@ -734,13 +734,18 @@ spec("CHTTP WebSocket client/server") {
     char uri[128];
     char *cert_path = tt_make_temp_file("chttp-websocket-cert", ".pem");
     char *key_path = tt_make_temp_file("chttp-websocket-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-test-ca", ".pem");
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
     check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
                               sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
                 0);
     check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+                0);
     atomic_init(&probe.global_middleware, 0);
     atomic_init(&probe.route_middleware, 0);
     atomic_init(&probe.opened, 0);
@@ -759,7 +764,7 @@ spec("CHTTP WebSocket client/server") {
                                           .alpn_protocols = h1_alpn,
                                           .alpn_protocol_count = 1u};
     client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = cert_path,
+                                          .ca_file = ca_path,
                                           .server_name = "localhost",
                                           .alpn_protocols = h1_alpn,
                                           .alpn_protocol_count = 1u};
@@ -803,8 +808,10 @@ spec("CHTTP WebSocket client/server") {
     check_equal(atomic_load_explicit(&probe.closes, memory_order_relaxed), 1);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
   }
 
   it("uses the blocking API over an RFC 8441 h2c stream") {
@@ -1183,13 +1190,18 @@ spec("CHTTP WebSocket client/server") {
     char second_uri[128];
     char *cert_path = tt_make_temp_file("chttp-h2-websocket-cert", ".pem");
     char *key_path = tt_make_temp_file("chttp-h2-websocket-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-test-ca", ".pem");
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
     check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
                               sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
                 0);
     check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+                0);
     atomic_init(&probe.global_middleware, 0);
     atomic_init(&probe.route_middleware, 0);
     atomic_init(&probe.opened, 0);
@@ -1209,7 +1221,7 @@ spec("CHTTP WebSocket client/server") {
                                           .alpn_protocols = h2_alpn,
                                           .alpn_protocol_count = 1u};
     client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = cert_path,
+                                          .ca_file = ca_path,
                                           .server_name = "localhost",
                                           .alpn_protocols = h2_alpn,
                                           .alpn_protocol_count = 1u};
@@ -1275,8 +1287,10 @@ spec("CHTTP WebSocket client/server") {
     check_equal(atomic_load_explicit(&probe.closes, memory_order_relaxed), 3);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
   }
 
   it("rejects an HTTP/2 TLS profile instead of downgrading WSS") {
