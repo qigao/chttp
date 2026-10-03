@@ -2,81 +2,41 @@
 #define CHTTP_TLS_TEST_MATERIAL_H
 
 /*
- * Keep CHTTP TLS tests aligned with the GmSSL-qualified fixtures shipped in
- * Salts v1.8.13 cnet/tests/fixtures. The endpoint cert is CA-signed, valid for
- * localhost/127.0.0.1 and both serverAuth/clientAuth; trust uses the root only.
+ * GmSSL validates trust anchors as CAs and its TLS 1.3 client-certificate
+ * selection requires an EC issuer when matching signature_algorithms_cert.
+ * Keep this fixture as a real P-256 chain: localhost leaf first, then root CA.
+ * The leaf is valid for both serverAuth and clientAuth because mTLS tests reuse it.
  */
 static const char CHTTP_TLS_TEST_CERTIFICATE[] =
     "-----BEGIN CERTIFICATE-----\n"
-    "MIIDWzCCAkOgAwIBAgIULT340QTVR8PXhG15tQl5O/hCHcYwDQYJKoZIhvcNAQEL\n"
-    "BQAwHDEaMBgGA1UEAwwRQ05ldCBJUCBUZXN0IFJvb3QwHhcNMjYxMDAzMDUwNDQ1\n"
-    "WhcNMzYwOTMwMDUwNDQ1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqG\n"
-    "SIb3DQEBAQUAA4IBDwAwggEKAoIBAQCtA9boOmrDwhqh4QPgVt3PMZvh/CC3HBfm\n"
-    "KWwj2yMeA/vosHIXb6qGi8zg2Hy6Ms+C3tDjKvjXo8Bo3JBBPR/M1fwsx7nhQl3n\n"
-    "VaaDqjgkTMfUUgRs9hY6YgC2RmiQOhaykWJdoy+kE0p/E91XUBtXybx8fImwVyS0\n"
-    "xGtBZ9Zfcepgtls+ttDkSCIqRj440XtPY1veXrvdaxBLavayAgYsPXd1Ln2p8nGW\n"
-    "ZcT8bmOX4HUff4ko4RADp8Qy95/o5RNqDmRMmjV6yV0iouMSpIHfjyvLpqMH58ta\n"
-    "40eKEWQNPnJCb7ilSfC1Dw1jXeu1DhndbqrFyb+LzMM1rPbxz5BzAgMBAAGjgZww\n"
-    "gZkwGgYDVR0RBBMwEYIJbG9jYWxob3N0hwR/AAABMAwGA1UdEwEB/wQCMAAwDgYD\n"
-    "VR0PAQH/BAQDAgWgMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAdBgNV\n"
-    "HQ4EFgQUl0nTNrFwNZnKAwSDJ+yeA6yIcm0wHwYDVR0jBBgwFoAUArAn7CVnerf8\n"
-    "+A3ok15Epy7p7HYwDQYJKoZIhvcNAQELBQADggEBAC3rQccqUIJvJ1vh0qzWl7zL\n"
-    "dpZpCXQHl62VJ2euOC8Aac+cCqb7Xft8RVD1WaROgVAPeJn+DcgchHh7/15r9QQW\n"
-    "rtkDEydJRU/9I3N2+AA518Y4+/KMJqL6RDaQ8VH2L9OHRpZISpOz1o+8y5rHuS9y\n"
-    "Jq872FuTKkKvxfp1GrYp7YvlmqyYR0xCyuV9H4cyKtgaw6ZOcRcHWYnfMC/XvO52\n"
-    "5hWvtxn/wwvZZsBNpOS9kOsD1FMoo/9+RDu/SK5vMzKl3MC1PbybZsGS1PxKYIiV\n"
-    "zUrHXHV/dJe/w5bVvO8QFInrg+ULTVFxgwIitGwytT8ZCpgbl5CsQ7W42wwxedo=\n"
-    "-----END CERTIFICATE-----\n";
-
-static const char CHTTP_TLS_TEST_CA_CERTIFICATE[] =
+    "MIIB0TCCAXagAwIBAgIUbrFOcwBbzF/EBOIrqLAADQev87IwCgYIKoZIzj0EAwIw\n"
+    "HTEbMBkGA1UEAwwSQ0hUVFAgVGVzdCBSb290IENBMB4XDTI2MTAwMzIwNDg0MVoX\n"
+    "DTM2MDkzMDIwNDg0MVowFDESMBAGA1UEAwwJbG9jYWxob3N0MFkwEwYHKoZIzj0C\n"
+    "AQYIKoZIzj0DAQcDQgAEhihR5dg9gQaYCAI1vRbMU4zGIRa+a9x1xYYGUrnH/jR6\n"
+    "jczoxKwMO3lJV6nwWjTNOUlajzjUt6SNxeFqPJUCqaOBnDCBmTAMBgNVHRMBAf8E\n"
+    "AjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUH\n"
+    "AwIwGgYDVR0RBBMwEYIJbG9jYWxob3N0hwR/AAABMB0GA1UdDgQWBBRjaI1dPRQL\n"
+    "VRjJxwFzutP0mjll8jAfBgNVHSMEGDAWgBRiBirofviDvO9rY9RNU+aMOSizVDAK\n"
+    "BggqhkjOPQQDAgNJADBGAiEA1/a2JOM5HpaRDD8xAnZ84csKvSHn9SwB6SF+fg77\n"
+    "0IkCIQDJoniouPxN7h8PL0vcDdppMwFGv3kn0wKNnYVtBJe/4Q==\n"
+    "-----END CERTIFICATE-----\n"
     "-----BEGIN CERTIFICATE-----\n"
-    "MIIDKTCCAhGgAwIBAgIUbs1diwVI1Gd8OIjlSLWeKPtZ3KEwDQYJKoZIhvcNAQEL\n"
-    "BQAwHDEaMBgGA1UEAwwRQ05ldCBJUCBUZXN0IFJvb3QwHhcNMjYxMDAzMDUwNDQ1\n"
-    "WhcNMzYwOTMwMDUwNDQ1WjAcMRowGAYDVQQDDBFDTmV0IElQIFRlc3QgUm9vdDCC\n"
-    "ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAKU8GXrunfaN/5lQYfcniVTb\n"
-    "/U2AKnU8k8gogv3PClxkQ32j1mk0zDcZv9dXbdIUmHbLdkrAIjFD/bAUETMveOaA\n"
-    "SAYkltnYfza/VAggMJ15oB3ZDk62k/2+t47fU/v+QDW5Dkk2gLk5hfJAqzQwaOuR\n"
-    "cxu+9qMjFWDFl4nFba1BhN9S2WtC1M086ZSvnnDS71nNzmGv/RoWGsa5QKFulMI8\n"
-    "KSR7qEoFTeLbmVt5RhvP5yOxGU7XZTki1XuwOimgECoj9c6sjmIrM9W+G6vTd9G8\n"
-    "JdWmQGsuI4luS9rZzvJmMp/c7HnJfowBmG0Ziu3na7QnosgotobnuNwj8v/+RfkC\n"
-    "AwEAAaNjMGEwHQYDVR0OBBYEFAKwJ+wlZ3q3/PgN6JNeRKcu6ex2MB8GA1UdIwQY\n"
-    "MBaAFAKwJ+wlZ3q3/PgN6JNeRKcu6ex2MA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0P\n"
-    "AQH/BAQDAgEGMA0GCSqGSIb3DQEBCwUAA4IBAQBk6LMBVQ+AtkZEPQlaJgjLvN39\n"
-    "QQLyqqBrpP9K/d0YDp6pqspmcOTzAxjOv+gdVGBgUidDsqvIZovsMtf86asVRtFE\n"
-    "hz1Qa4QOHC9yBv+63GmJJNfKMDfcdxXWNetimoFK6oiCI8POb5HiI0eHbyuwIgx9\n"
-    "X/U2uH+psZzxKbWOfztW8hbAlYepIBE6rEQyButpKxsY/DonCdHKfOfCOevr4ccX\n"
-    "ShHME644fBeXxPtljrRgYVVd5rGvORnu3swPeowBjTfROCNOHoJaXYRTvwyTCTns\n"
-    "xxbzMjKpTOjsxsa/WKpqnjZOJfCbQJQmg2JEEPHC+MEP5v2SeMZVPk/qii9l\n"
+    "MIIBozCCAUigAwIBAgIUQTZIoHft+GDMregpujVjIpMKpuowCgYIKoZIzj0EAwIw\n"
+    "HTEbMBkGA1UEAwwSQ0hUVFAgVGVzdCBSb290IENBMB4XDTI2MTAwMzIwNDg0MVoX\n"
+    "DTM2MDkzMDIwNDg0MVowHTEbMBkGA1UEAwwSQ0hUVFAgVGVzdCBSb290IENBMFkw\n"
+    "EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEANF/KhU1SA5czzk8K/SnWvyXuk/snIWC\n"
+    "TQHuxX7gJ/4KjuQT3xVezErVYnuOLeRYCzmw6KKveT1VZN267yGZiqNmMGQwEgYD\n"
+    "VR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFGIGKuh+\n"
+    "+IO872tj1E1T5ow5KLNUMB8GA1UdIwQYMBaAFGIGKuh++IO872tj1E1T5ow5KLNU\n"
+    "MAoGCCqGSM49BAMCA0kAMEYCIQCQqYWEVxX1P94Yaer6JBGHM5kN1gmWrtjR7mVx\n"
+    "i5osBgIhALgHAsFHBrVPYfYIjNnrJfVfYCs/oNAkxl4UlPpa2Wa3\n"
     "-----END CERTIFICATE-----\n";
 
 static const char CHTTP_TLS_TEST_KEY[] =
     "-----BEGIN PRIVATE KEY-----\n"
-    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCtA9boOmrDwhqh\n"
-    "4QPgVt3PMZvh/CC3HBfmKWwj2yMeA/vosHIXb6qGi8zg2Hy6Ms+C3tDjKvjXo8Bo\n"
-    "3JBBPR/M1fwsx7nhQl3nVaaDqjgkTMfUUgRs9hY6YgC2RmiQOhaykWJdoy+kE0p/\n"
-    "E91XUBtXybx8fImwVyS0xGtBZ9Zfcepgtls+ttDkSCIqRj440XtPY1veXrvdaxBL\n"
-    "avayAgYsPXd1Ln2p8nGWZcT8bmOX4HUff4ko4RADp8Qy95/o5RNqDmRMmjV6yV0i\n"
-    "ouMSpIHfjyvLpqMH58ta40eKEWQNPnJCb7ilSfC1Dw1jXeu1DhndbqrFyb+LzMM1\n"
-    "rPbxz5BzAgMBAAECggEAIuEPRingtC5BaDkQqv1YIhkCMADAJ6oGN2RKZMAcyERN\n"
-    "WI+ZsJfWbOFqIDoEixULOHrq6aEUIYTlmT495qkH7CeHew+YrYzPmX9u3kRGpSrF\n"
-    "bkxKkBzcRlDTi+uN0OWlBcLBbdckF5O8BPpgOOXxXTVSRlZk+6PVxouCg+EHGp5r\n"
-    "oO8LeIYrk9S/HLzZxhfJHFJT6PLh8qPKBv4EImrVLkwPeXr5fS1jbY3t8WLc+0qq\n"
-    "7UcoX62VuucxWuewvUuUYzF6Vn0CFGb6pN+ZkmwFmGS6fHcN5exxdvXXUKEuA72M\n"
-    "jY8koc7HJXexhbk0NF2NCkgaTwXTSQXKDUs0FiiSYQKBgQDVG+Inw/rsIvNc+rdf\n"
-    "aoxN5AJgomsF2tLUXw6d6JWPlmTpDE8K9J4j24VKOtBOI3tDzDkUUOFyt/d+Xppf\n"
-    "EtX1uyiLp00dRWjSchhnWASTG+x56rJNZ/44HiewbHO9Dq19cV7YqH4YGsszAWLi\n"
-    "x94WleB8SmtASDthnbYmobYaXwKBgQDP1i1TCE3pXeKz82opYuUp7fxz2LDsO/4Q\n"
-    "KAn5wcVKxeAKO7ehXRKRQfE6+5NrcZyku1MOyrUG7QlmG83MP8UkrrTpJ62ACcxy\n"
-    "lpxW88ryoaSneErcsou6Y5ONsI5o+OqzpuivS7VGCQrn/wfw3pUhRv2fbJAiH/je\n"
-    "ZRioI4VqbQKBgQClw3+hkNbAENudykMSjA1AlQeoZQ28Sx7NJHd5Kq4TN1ec0v80\n"
-    "tVvA5oMCX0ciUIUUEmmfvN3wXtq7SBjptPwKnR8HqgXYq+HCOA91a0h7qS/DEWTJ\n"
-    "wwdCXWpf16wbNayLM8Ej48PZOhYuwXhKkE7W4JPx+ez83nKaFpPV7tl4HwKBgHtk\n"
-    "QAKE8qSzXc3SnVu24DFVnsU0iE2ojH0RGGMUvMpY0lug+rOtq0FcMhj/lZV7nTFc\n"
-    "GcK1bGaRQjxCE5vI3IWbx8KJEQPsTVpWurkRApOsjjHzRBblVfmx9r9vbA08gzNn\n"
-    "y8uPGi9bXQNBsXg63bUlDZyh+qyX6Mw4nzvr4uC9AoGATdKR/xoaU0WcbY6iu2mz\n"
-    "l2C80162KGKtu6h44kNQ6jjfvu6VKnXIJaK2F/DtDU/CHG4kTeTk56AnlkEXap5O\n"
-    "NuNtjEj4cwvkGN8pYNOUIQGNRWPEtQ4gul04xFq+JyN58E1qqpM6QmfgTONkt40u\n"
-    "W9gs2BDdZkU8rOaNaziJxgw=\n"
+    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgzJT68YEt6tUw0WN1\n"
+    "hMWrubaihY3bQKfXqVkmCXR6yNOhRANCAASGKFHl2D2BBpgIAjW9FsxTjMYhFr5r\n"
+    "3HXFhgZSucf+NHqNzOjErAw7eUlXqfBaNM05SVqPONS3pI3F4Wo8lQKp\n"
     "-----END PRIVATE KEY-----\n";
 
 #endif /* CHTTP_TLS_TEST_MATERIAL_H */
