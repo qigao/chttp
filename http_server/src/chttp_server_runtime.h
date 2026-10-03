@@ -15,6 +15,7 @@
 #include <time.h>
 
 typedef struct chttp_server_impl chttp_server_impl;
+typedef struct chttp_server_owner_lane chttp_server_owner_lane;
 
 enum { CHTTP_SERVER_DATE_BYTES = 29, CHTTP_SERVER_DATE_CAPACITY = CHTTP_SERVER_DATE_BYTES + 1,
        CHTTP_SERVER_GENERATED_HEADER_COUNT = 3 };
@@ -232,6 +233,7 @@ typedef struct chttp_server_websocket_command {
 
 struct chttp_server_connection {
   chttp_server_impl *server;
+  chttp_server_owner_lane *owner;
   cnet_connection handle;
   chttp_server_parser parser;
   chttp_server_request_state request_state;
@@ -269,6 +271,21 @@ struct chttp_server_connection {
   chttp_server_pending_action pending_action;
 };
 
+struct chttp_server_owner_lane {
+  chttp_server_impl *server;
+  cnet_client *network;
+  size_t connection_begin;
+  size_t connection_count;
+};
+
+static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *owner) {
+  return owner != NULL ? owner->network : NULL;
+}
+
+static inline cnet_client *chttp_server_connection_network(chttp_server_connection *connection) {
+  return connection != NULL ? chttp_server_owner_network(connection->owner) : NULL;
+}
+
 struct chttp_server_impl {
   chttp_server_deadlines deadlines;
   chttp_server_admission_fn admission;
@@ -292,6 +309,7 @@ struct chttp_server_impl {
   char *session_keys;
   char *session_values;
   cnet_client network;
+  chttp_server_owner_lane owner;
   cnet_listener listener;
   cnet_tls_server tls_server;
   cflow_io_file_runtime file_runtime;
