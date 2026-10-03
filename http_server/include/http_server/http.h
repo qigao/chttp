@@ -200,7 +200,7 @@ typedef int (*chttp_websocket_open_fn)(void *user, chttp_websocket *websocket,
                                        const chttp_server_request_view *request,
                                        chttp_server_response *response);
 
-/** Runs serially on the server owner thread; event and peer are callback-scoped. */
+/** Runs serially for one WebSocket peer on its fixed owner; different owners may run concurrently. Event and peer are callback-scoped. */
 typedef void (*chttp_websocket_event_fn)(void *user, chttp_websocket *websocket,
                                          const chttp_websocket_event *event);
 
