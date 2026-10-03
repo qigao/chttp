@@ -2549,6 +2549,17 @@ static void chttp_server_owner_worker(void *user) {
     return;
   }
 
+  salts_mutex_lock(&server->mutex);
+  while (!server->start_called && !server->startup_abort)
+    salts_cond_wait(&server->changed, &server->mutex);
+  startup_abort = server->startup_abort;
+  salts_mutex_unlock(&server->mutex);
+  if (startup_abort) {
+    (void)chttp_server_owner_runtime_transition(
+        owner, CHTTP_SERVER_OWNER_RUNTIME_READY,
+        CHTTP_SERVER_OWNER_RUNTIME_STOPPING);
+  }
+
   network = chttp_server_owner_network(owner);
   while (status == SALTS_OK && !chttp_server_should_stop(server)) {
     size_t events = 0u;
@@ -2817,6 +2828,7 @@ int chttp_server_start(chttp_server *server) {
   }
 
   impl->start_called = true;
+  salts_cond_broadcast(&impl->changed);
   salts_mutex_unlock(&impl->mutex);
   return SALTS_OK;
 }
