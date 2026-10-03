@@ -1,5 +1,10 @@
 name: Set up Salts SDKs
 description: Restore the current Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
+inputs:
+  with-turbowasm:
+    description: Restore the latest released TurboWasm Component SDK for WASM qualification.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -53,10 +58,13 @@ runs:
           <PropertyGroup>
             <TargetFramework>net8.0</TargetFramework>
             <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+            <WithTurboWasm>${{ inputs.with-turbowasm }}</WithTurboWasm>
           </PropertyGroup>
           <ItemGroup>
             <PackageReference Include="Salts.Native" Version="*" />
             <PackageReference Include="SaltsUtils.Native" Version="*" />
+            <PackageReference Include="TurboWasm.Native" Version="*"
+                              Condition="'$(WithTurboWasm)' == 'true'" />
           </ItemGroup>
         </Project>
         EOF
@@ -83,6 +91,10 @@ runs:
         }
         salts_root="$(sdk_root salts.native linux-x64)"
         salts_utils_root="$(sdk_root saltsutils.native linux-x64)"
+        turbowasm_root=""
+        if [ "${{ inputs.with-turbowasm }}" = "true" ]; then
+          turbowasm_root="$(sdk_root turbowasm.native linux-x64)"
+        fi
         test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
         test -f "$salts_root/include/cmeta/function.h"
         test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
@@ -91,10 +103,22 @@ runs:
         test -f "$salts_utils_root/include/data_bind_native_binding.h"
         grep -q "DataBindNativeExecution" "$salts_utils_root/include/data_bind_native_binding.h"
 
+        if [ -n "$turbowasm_root" ]; then
+          test -f "$turbowasm_root/lib/cmake/TurboWasm/TurboWasmConfig.cmake"
+          test -f "$turbowasm_root/include/turbowasm/component.h"
+          grep -q "TurboWasm::Component"             "$turbowasm_root/lib/cmake/TurboWasm/TurboWasmTargets.cmake"
+          echo "TURBOWASM_ROOT=$turbowasm_root" >> "$GITHUB_ENV"
+          printf 'restored TurboWasm.Native %s\n'             "$(basename "$(dirname "$(dirname "$turbowasm_root")")")"
+        fi
+
         {
           echo "SALTS_ROOT=$salts_root"
           echo "SALTS_UTILS_ROOT=$salts_utils_root"
-          echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib"
+          if [ -n "$turbowasm_root" ]; then
+            echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib:$turbowasm_root/lib"
+          else
+            echo "LD_LIBRARY_PATH=$salts_utils_root/lib:$salts_utils_root/bin:$salts_root/lib"
+          fi
         } >> "$GITHUB_ENV"
 
     - name: Prepare CHttp toolchain
