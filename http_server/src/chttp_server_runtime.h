@@ -282,21 +282,34 @@ struct chttp_server_connection {
 
 struct chttp_server_owner_lane {
   chttp_server_impl *server;
-  cnet_client *network;
+  cnet_client network;
+  salts_thread_t thread;
+  salts_mutex_t admission_mutex;
+  cnet_accepted_stream *admissions;
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
+  size_t owner_index;
   size_t connection_begin;
   size_t connection_count;
   size_t file_transfer_capacity;
+  size_t admission_capacity;
+  size_t admission_head;
+  size_t admission_count;
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
+  int terminal_status;
+  bool admission_sync_initialized;
   bool file_runtime_initialized;
+  bool network_initialized;
+  bool thread_started;
+  bool ready;
+  bool done;
 };
 
 static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *owner) {
-  return owner != NULL ? owner->network : NULL;
+  return owner != NULL ? &owner->network : NULL;
 }
 
 static inline cnet_client *chttp_server_connection_network(chttp_server_connection *connection) {
@@ -330,26 +343,26 @@ struct chttp_server_impl {
   char *session_keys;
   char *session_values;
   salts_mutex_t session_mutex;
-  cnet_client network;
-  chttp_server_owner_lane owner;
+  chttp_server_execution_options execution;
+  chttp_server_owner_lane *owners;
+  size_t owner_count;
+  size_t next_admission_owner;
+  size_t workers_ready;
+  size_t workers_done;
   cnet_listener listener;
   cnet_tls_server tls_server;
   salts_mutex_t mutex;
   salts_cond_t changed;
-  salts_thread_t thread;
   chttp_server_stats stats;
   atomic_size_t buffer_bytes;
   atomic_size_t peak_buffer_bytes;
   _Atomic uint64_t rejected_buffer_allocations;
   bool sync_initialized;
   bool session_sync_initialized;
-  bool network_initialized;
   bool listener_initialized;
   bool tls_initialized;
-  bool thread_started;
   bool start_called;
   bool stop_requested;
-  bool worker_done;
 };
 
 int chttp_server_response_builder_init(chttp_server_response_builder *builder,
