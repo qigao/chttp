@@ -1975,7 +1975,9 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
     cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
     chttp_server_owner_lane *owner;
     cnet_client *network;
-    int status = cnet_listener_accept_detached(&server->listener, &accepted);
+    int status;
+    if (chttp_server_should_stop(server)) return SALTS_OK;
+    status = cnet_listener_accept_detached(&server->listener, &accepted);
     if (status == SALTS_ETIMEDOUT) return SALTS_OK;
     if (status != SALTS_OK) return status;
 
@@ -2509,7 +2511,13 @@ static void chttp_server_owner_worker(void *user) {
   salts_cond_broadcast(&server->changed);
   salts_mutex_unlock(&server->mutex);
   if (status != SALTS_OK) {
+    (void)chttp_server_owner_cleanup_network(server, owner, true);
+    (void)chttp_server_owner_runtime_transition(
+        owner, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
+        CHTTP_SERVER_OWNER_RUNTIME_IDLE);
     chttp_server_request_global_stop(server, status);
+    chttp_server_owner_worker_finish(server, owner, status);
+    return;
   }
 
   network = chttp_server_owner_network(owner);
