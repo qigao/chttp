@@ -1998,13 +1998,10 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
   }
 }
 
-static int chttp_server_connection_activate(
+static void chttp_server_connection_activate(
     chttp_server_impl *server, chttp_server_owner_lane *owner,
     chttp_server_connection *connection, cnet_connection handle,
     const cnet_stream_peer *peer) {
-  int status;
-  if (server == NULL || owner == NULL || connection == NULL || peer == NULL)
-    return SALTS_EINVAL;
   connection->owner = owner;
   ++connection->server_generation;
   if (connection->server_generation == 0u) connection->server_generation = 1u;
@@ -2031,15 +2028,7 @@ static int chttp_server_connection_activate(
   connection->wire_protocol =
       server->config.enable_http2 ? CHTTP_SERVER_WIRE_UNKNOWN
                                   : CHTTP_SERVER_WIRE_HTTP_1_1;
-  chttp_server_websocket_reset(connection);
-  chttp_server_request_state_reset(&connection->request_state);
-  status = chttp_server_parser_reset(&connection->parser);
-  if (status != SALTS_OK) {
-    chttp_server_connection_close(connection);
-    return status;
-  }
   chttp_server_stats_connection_open(server);
-  return SALTS_OK;
 }
 
 static int chttp_server_admission_progress(
@@ -2057,6 +2046,10 @@ static int chttp_server_admission_progress(
     cnet_stream_peer peer;
     int status;
     if (connection == NULL) return SALTS_OK;
+    chttp_server_websocket_reset(connection);
+    chttp_server_request_state_reset(&connection->request_state);
+    status = chttp_server_parser_reset(&connection->parser);
+    if (status != SALTS_OK) return status;
     if (server->config.enable_http2) {
       status = chttp_h2_server_connection_prepare(connection->h2);
       if (status != SALTS_OK) return status;
@@ -2081,9 +2074,8 @@ static int chttp_server_admission_progress(
       if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) continue;
       return status;
     }
-    status = chttp_server_connection_activate(
+    chttp_server_connection_activate(
         server, owner, connection, handle, &peer);
-    if (status != SALTS_OK) return status;
   }
 }
 
