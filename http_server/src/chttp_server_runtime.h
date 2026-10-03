@@ -329,8 +329,8 @@ static inline bool chttp_server_owner_runtime_transition_valid(
   return (from == CHTTP_SERVER_OWNER_RUNTIME_IDLE &&
           to == CHTTP_SERVER_OWNER_RUNTIME_STARTING) ||
          (from == CHTTP_SERVER_OWNER_RUNTIME_STARTING &&
-          (to == CHTTP_SERVER_OWNER_RUNTIME_READY ||
-           to == CHTTP_SERVER_OWNER_RUNTIME_DONE)) ||
+          (to == CHTTP_SERVER_OWNER_RUNTIME_IDLE ||
+           to == CHTTP_SERVER_OWNER_RUNTIME_READY)) ||
          (from == CHTTP_SERVER_OWNER_RUNTIME_READY &&
           to == CHTTP_SERVER_OWNER_RUNTIME_STOPPING) ||
          (from == CHTTP_SERVER_OWNER_RUNTIME_STOPPING &&
