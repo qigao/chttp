@@ -54,6 +54,13 @@ typedef struct chttp_server_test_blocking_probe {
   atomic_int release;
 } chttp_server_test_blocking_probe;
 
+typedef struct chttp_server_test_owner_probe {
+  atomic_int next_slot;
+  atomic_uint seen_mask;
+} chttp_server_test_owner_probe;
+
+static SALTS_THREAD_LOCAL int chttp_server_test_owner_slot = -1;
+
 typedef struct chttp_server_test_raw_client {
   uint16_t port;
   const char *request;
@@ -767,6 +774,30 @@ static int chttp_test_authenticated_admission(void *user, const chttp_server_req
   return SALTS_OK;
 }
 
+static int chttp_server_test_owner_handler(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  chttp_server_test_owner_probe *probe =
+      (chttp_server_test_owner_probe *)user;
+  int slot = chttp_server_test_owner_slot;
+  char body[16];
+  int body_size;
+  (void)request;
+  if (slot < 0) {
+    slot = atomic_fetch_add_explicit(&probe->next_slot, 1,
+                                     memory_order_acq_rel);
+    chttp_server_test_owner_slot = slot;
+  }
+  if (slot < 0 || slot >= 31) return SALTS_ERANGE;
+  atomic_fetch_or_explicit(&probe->seen_mask, 1u << (unsigned int)slot,
+                           memory_order_acq_rel);
+  body_size = snprintf(body, sizeof(body), "owner-%d", slot);
+  if (body_size <= 0 || (size_t)body_size >= sizeof(body))
+    return SALTS_EIO;
+  return chttp_server_reply(response, 200u, "text/plain", body,
+                            (size_t)body_size);
+}
+
 static int chttp_test_slow_handler(void *user, const chttp_server_request_view *request,
                                    chttp_server_response *response) {
   const uint64_t until = salts_monotonic_ms() + CHTTP_TEST_DEADLINE_MS * 2u;
@@ -775,6 +806,66 @@ static int chttp_test_slow_handler(void *user, const chttp_server_request_view *
 }
 
 spec("CHTTP background HTTP/1.1 server") {
+  it("runs explicit two-owner connections on distinct fixed owner threads") {
+    chttp_server server = {0};
+    chttp_server_config config = chttp_server_test_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_server_test_owner_probe probe;
+    uint16_t port = 0u;
+    char first[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
+    char second[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
+    size_t first_size = 0u;
+    size_t second_size = 0u;
+    static const char request[] =
+        "GET /owner HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n\r\n";
+
+    atomic_init(&probe.next_slot, 0);
+    atomic_init(&probe.seen_mask, 0u);
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+
+    execution.size = 0u;
+    check_equal(chttp_server_set_execution_options(&server, &execution),
+                SALTS_EINVAL);
+    execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    execution.owner_count = 0u;
+    check_equal(chttp_server_set_execution_options(&server, &execution),
+                SALTS_EINVAL);
+    execution.owner_count = config.network.connection_capacity + 1u;
+    check_equal(chttp_server_set_execution_options(&server, &execution),
+                SALTS_ERANGE);
+
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution),
+                SALTS_OK);
+    check_equal(chttp_server_get(&server, "/owner",
+                                 chttp_server_test_owner_handler, &probe),
+                SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_set_execution_options(&server, &execution),
+                SALTS_EBUSY);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+
+    check_equal(chttp_server_test_raw_exchange(
+                    port, request, first, sizeof(first), &first_size),
+                SALTS_OK);
+    check_equal(chttp_server_test_raw_exchange(
+                    port, request, second, sizeof(second), &second_size),
+                SALTS_OK);
+    check_not_null(strstr(first, "HTTP/1.1 200 OK"));
+    check_not_null(strstr(second, "HTTP/1.1 200 OK"));
+    check_equal(atomic_load_explicit(&probe.next_slot, memory_order_acquire), 2);
+    check_equal(atomic_load_explicit(&probe.seen_mask, memory_order_acquire),
+                (unsigned int)3u);
+
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("holds retained response bodies through H1 send terminal and resumes pipelining") {
     chttp_server server = {0};
     chttp_server_config config = chttp_server_test_config();
