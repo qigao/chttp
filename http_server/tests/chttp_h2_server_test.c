@@ -3426,6 +3426,8 @@ spec("CHTTP background HTTP/2 server") {
     chttp_tls_profile h2_profile = {0};
     chttp_tls_profile h1_profile = {0};
     chttp_server_config server_config = chttp_h2_server_test_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
     chttp_client_config client_config = chttp_h2_server_test_client_config();
     cnet_tls_server_config server_tls;
     cnet_tls_client_config h2_tls;
@@ -3462,6 +3464,8 @@ spec("CHTTP background HTTP/2 server") {
     server_config.tls = &server_tls;
 
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
     check_equal(chttp_server_get(&server, "/version", chttp_h2_server_test_version_handler, NULL),
                 SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
