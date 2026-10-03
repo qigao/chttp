@@ -1736,7 +1736,7 @@ spec("CHTTP background HTTP/2 server") {
         target->token,
         chttp_server_deferred_token(stale.generation, CHTTP_SERVER_DEFERRED_CANCELED),
         memory_order_release);
-    check_equal(cnet_client_wake(chttp_server_connection_network(target->connection)), SALTS_OK);
+    check_equal(chttp_server_owner_wake(target->connection->owner), SALTS_OK);
     deadline = salts_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
     while (chttp_server_deferred_token_state(atomic_load_explicit(
                target->token, memory_order_acquire)) != CHTTP_SERVER_DEFERRED_IDLE &&
