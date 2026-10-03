@@ -628,18 +628,130 @@ static void chttp_server_connection_destroy(chttp_server_connection *connection)
   *connection = (chttp_server_connection){0};
 }
 
+static void chttp_server_owner_storage_release(
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
+  size_t index;
+  if (server == NULL || owner == NULL) return;
+  if (owner->websocket_commands != NULL)
+    for (index = 0u; index < server->config.network.command_capacity; ++index)
+      free(owner->websocket_commands[index].data);
+  free(owner->file_transfers);
+  free(owner->websocket_commands);
+  owner->file_transfers = NULL;
+  owner->websocket_commands = NULL;
+  owner->file_transfer_capacity = 0u;
+  owner->websocket_command_head = 0u;
+  owner->websocket_command_count = 0u;
+}
+
+static int chttp_server_owner_storage_prepare(
+    chttp_server_impl *server, chttp_server_owner_lane *owner,
+    size_t owner_index, size_t owner_count, bool primary) {
+  size_t begin;
+  size_t end;
+  size_t file_transfer_capacity;
+  if (server == NULL || owner == NULL || owner_count == 0u ||
+      owner_index >= owner_count)
+    return SALTS_EINVAL;
+  begin = server->config.network.connection_capacity * owner_index / owner_count;
+  end = server->config.network.connection_capacity * (owner_index + 1u) / owner_count;
+  if (end <= begin) return SALTS_EINVAL;
+  file_transfer_capacity = end - begin;
+  if (server->config.enable_http2 &&
+      !chttp_server_multiply(file_transfer_capacity,
+                             server->config.h2_stream_capacity,
+                             &file_transfer_capacity))
+    return SALTS_ERANGE;
+  if (file_transfer_capacity == 0u ||
+      file_transfer_capacity > SIZE_MAX / sizeof(chttp_file_transfer *))
+    return SALTS_ERANGE;
+
+  *owner = (chttp_server_owner_lane){
+      .server = server,
+      .network = primary ? &server->network : NULL,
+      .connection_begin = begin,
+      .connection_count = end - begin,
+      .file_transfer_capacity = file_transfer_capacity};
+  owner->file_transfers = (chttp_file_transfer **)calloc(
+      file_transfer_capacity, sizeof(*owner->file_transfers));
+  owner->websocket_commands = (chttp_server_websocket_command *)calloc(
+      server->config.network.command_capacity, sizeof(*owner->websocket_commands));
+  if (owner->file_transfers == NULL || owner->websocket_commands == NULL) {
+    chttp_server_owner_storage_release(server, owner);
+    return SALTS_ENOMEM;
+  }
+  return SALTS_OK;
+}
+
+static int chttp_server_owner_topology_configure(
+    chttp_server_impl *server, size_t owner_count) {
+  chttp_server_owner_lane primary = {0};
+  chttp_server_owner_lane *additional = NULL;
+  size_t owner_index;
+  size_t connection_index;
+  int status;
+
+  if (server == NULL || owner_count == 0u ||
+      owner_count > server->config.network.connection_capacity)
+    return SALTS_EINVAL;
+  if (owner_count > 1u) {
+    if (owner_count - 1u > SIZE_MAX / sizeof(*additional))
+      return SALTS_ERANGE;
+    additional = (chttp_server_owner_lane *)calloc(
+        owner_count - 1u, sizeof(*additional));
+    if (additional == NULL) return SALTS_ENOMEM;
+  }
+
+  status = chttp_server_owner_storage_prepare(
+      server, &primary, 0u, owner_count, true);
+  if (status != SALTS_OK) goto fail;
+  for (owner_index = 1u; owner_index < owner_count; ++owner_index) {
+    status = chttp_server_owner_storage_prepare(
+        server, &additional[owner_index - 1u], owner_index, owner_count, false);
+    if (status != SALTS_OK) goto fail;
+  }
+
+  for (owner_index = 0u; owner_index < server->owner_count; ++owner_index)
+    chttp_server_owner_storage_release(
+        server, chttp_server_owner_at(server, owner_index));
+  free(server->additional_owners);
+
+  server->owner = primary;
+  server->additional_owners = additional;
+  server->owner_count = owner_count;
+
+  if (server->connections != NULL) {
+    for (owner_index = 0u; owner_index < owner_count; ++owner_index) {
+      chttp_server_owner_lane *owner = chttp_server_owner_at(server, owner_index);
+      const size_t end = chttp_server_owner_connection_end(owner);
+      for (connection_index = owner->connection_begin;
+           connection_index < end; ++connection_index)
+        server->connections[connection_index].owner = owner;
+    }
+  }
+  return SALTS_OK;
+
+fail:
+  chttp_server_owner_storage_release(server, &primary);
+  if (additional != NULL) {
+    for (owner_index = 1u; owner_index < owner_count; ++owner_index)
+      chttp_server_owner_storage_release(
+          server, &additional[owner_index - 1u]);
+  }
+  free(additional);
+  return status;
+}
+
 static void chttp_server_impl_free(chttp_server_impl *impl) {
   size_t index;
   if (impl == NULL) return;
-  if (impl->owner.websocket_commands != NULL)
-    for (index = 0u; index < impl->config.network.command_capacity; ++index)
-      free(impl->owner.websocket_commands[index].data);
   if (impl->connections != NULL)
     for (index = 0u; index < impl->config.network.connection_capacity; ++index)
       chttp_server_connection_destroy(&impl->connections[index]);
   chttp_session_store_destroy(impl);
-  free(impl->owner.file_transfers);
-  free(impl->owner.websocket_commands);
+  for (index = 0u; index < impl->owner_count; ++index)
+    chttp_server_owner_storage_release(impl, chttp_server_owner_at(impl, index));
+  free(impl->additional_owners);
   free(impl->connections);
   free(impl->middleware);
   free(impl->route_middleware);
@@ -739,6 +851,7 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       .connection_begin = 0u,
       .connection_count = config->network.connection_capacity,
       .file_transfer_capacity = file_transfer_capacity};
+  impl->owner_count = 1u;
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {
     const size_t transport_chunk_bytes = config->network.max_send_bytes -
@@ -866,6 +979,11 @@ int chttp_server_set_execution_options(
   if (impl->start_called || impl->thread_started || impl->network_initialized ||
       impl->listener_initialized)
     return SALTS_EBUSY;
+  if (options->owner_count != impl->owner_count) {
+    const int status =
+        chttp_server_owner_topology_configure(impl, options->owner_count);
+    if (status != SALTS_OK) return status;
+  }
   impl->execution_options = *options;
   return SALTS_OK;
 }
