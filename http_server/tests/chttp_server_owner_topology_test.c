@@ -556,6 +556,7 @@ spec("CHttp owner topology") {
     atomic_init(&stop_args.completed, 0);
 
     config.network.connection_capacity = 4u;
+    config.route_capacity = 2u;
     execution.owner_count = 2u;
     check_equal(chttp_server_init(&server, &config), SALTS_OK);
     check_equal(
