@@ -130,6 +130,9 @@ spec("CHttp owner topology") {
     check_not_null(impl);
     check_equal(impl->owner_count, (size_t)1u);
     check(impl->additional_owners == NULL);
+    check_not_null(impl->owner.admissions);
+    check(impl->owner.admission_sync_initialized);
+    check_equal(impl->owner.admission_count, (size_t)0u);
 
     options.owner_count = 3u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
@@ -144,6 +147,9 @@ spec("CHttp owner topology") {
       check_equal(owner->connection_begin, expected_begin[owner_index]);
       check_equal(owner->connection_count, expected_count[owner_index]);
       check_equal(owner->file_transfer_capacity, expected_count[owner_index]);
+      check_not_null(owner->admissions);
+      check(owner->admission_sync_initialized);
+      check_equal(owner->admission_count, (size_t)0u);
       check_not_null(owner->file_transfers);
       check_not_null(owner->websocket_commands);
       check_equal(owner->websocket_command_count, (size_t)0u);
