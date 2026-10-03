@@ -1901,6 +1901,11 @@ static int chttp_server_owner_admission_enqueue(
       !owner->admission_sync_initialized || owner->connection_count == 0u)
     return SALTS_EINVAL;
   salts_mutex_lock(&owner->admission_mutex);
+  if (chttp_server_owner_runtime_state_get(owner) !=
+      CHTTP_SERVER_OWNER_RUNTIME_READY) {
+    salts_mutex_unlock(&owner->admission_mutex);
+    return SALTS_ESHUTDOWN;
+  }
   if (owner->admission_count >= owner->connection_count) {
     salts_mutex_unlock(&owner->admission_mutex);
     return SALTS_ENOBUFS;
@@ -1992,8 +1997,11 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
     if (status != SALTS_OK) {
       (void)cnet_accepted_stream_close(&accepted);
       (void)chttp_server_owner_lease_release(owner);
-      chttp_server_stats_rejected_connection(server);
+      if (status != SALTS_ESHUTDOWN)
+        chttp_server_stats_rejected_connection(server);
       if (status == SALTS_ENOBUFS) continue;
+      if (status == SALTS_ESHUTDOWN && chttp_server_should_stop(server))
+        return SALTS_OK;
       return status;
     }
     network = chttp_server_owner_network(owner);
