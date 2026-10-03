@@ -20,6 +20,16 @@ set_target_properties(chttp_server_test PROPERTIES
   C_EXTENSIONS OFF)
 
 
+add_executable(chttp_server_execution_options_test chttp_server_execution_options_test.c)
+target_link_libraries(chttp_server_execution_options_test PRIVATE CHttp::Server Salts::TinyTest)
+add_test(NAME chttp_server_execution_options_test COMMAND chttp_server_execution_options_test)
+set_target_properties(chttp_server_execution_options_test PROPERTIES
+  FOLDER "http_server/tests"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
+
 add_executable(chttp_session_snapshot_test chttp_session_snapshot_test.c)
 target_link_libraries(chttp_session_snapshot_test PRIVATE CHttp::Server Salts::TinyTest)
 target_include_directories(

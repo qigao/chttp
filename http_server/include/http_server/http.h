@@ -290,6 +290,22 @@ typedef struct chttp_server_socket_options {
 #define CHTTP_SERVER_SOCKET_OPTIONS_INIT                                                           \
   {sizeof(chttp_server_socket_options), CNET_STREAM_SOCKET_OPTIONS_INIT, CNET_LISTENER_OPTIONS_INIT}
 
+/**
+ * Versioned pre-start execution policy. owner_count=1 preserves the existing
+ * serialized callback/runtime model. owner_count>1 opts into fixed owner-affine
+ * connection execution once supported by the configured runtime; connections
+ * never migrate between owners.
+ */
+typedef struct chttp_server_execution_options {
+  size_t size;
+  uint32_t version;
+  size_t owner_count;
+} chttp_server_execution_options;
+
+#define CHTTP_SERVER_EXECUTION_OPTIONS_VERSION 1u
+#define CHTTP_SERVER_EXECUTION_OPTIONS_INIT                                                    \
+  {sizeof(chttp_server_execution_options), CHTTP_SERVER_EXECUTION_OPTIONS_VERSION, 1u}
+
 /** Thread-safe snapshot of server lifecycle and bounded admission counters. */
 typedef struct chttp_server_stats {
   uint16_t port;
@@ -317,6 +333,15 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config);
 /** Replaces socket policy before listener/network start; later calls return `SALTS_EBUSY`. */
 int chttp_server_set_socket_options(chttp_server *server,
                                     const chttp_server_socket_options *options);
+
+/**
+ * Replaces the versioned execution policy before start.
+ * owner_count must be in [1, network.connection_capacity]. The current runtime
+ * fails closed with SALTS_ENOTSUP at start when owner_count>1 until the
+ * multi-owner transport path is enabled; it never silently falls back to one owner.
+ */
+int chttp_server_set_execution_options(
+    chttp_server *server, const chttp_server_execution_options *options);
 
 /** Optional absolute stage budgets in milliseconds. Zero disables the corresponding deadline. */
 typedef struct chttp_server_deadlines {

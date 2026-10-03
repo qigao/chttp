@@ -731,6 +731,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   impl = (chttp_server_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
   impl->config = *config;
+  impl->execution_options =
+      (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
   impl->owner = (chttp_server_owner_lane){
       .server = impl,
       .network = &impl->network,
@@ -847,6 +849,24 @@ int chttp_server_set_socket_options(chttp_server *server,
       impl->listener_initialized)
     return SALTS_EBUSY;
   impl->socket_options = *options;
+  return SALTS_OK;
+}
+
+int chttp_server_set_execution_options(
+    chttp_server *server, const chttp_server_execution_options *options) {
+  chttp_server_impl *impl;
+  if (server == NULL || server->impl == NULL || options == NULL ||
+      options->size != sizeof(*options) ||
+      options->version != CHTTP_SERVER_EXECUTION_OPTIONS_VERSION)
+    return SALTS_EINVAL;
+  impl = (chttp_server_impl *)server->impl;
+  if (options->owner_count == 0u ||
+      options->owner_count > impl->config.network.connection_capacity)
+    return SALTS_EINVAL;
+  if (impl->start_called || impl->thread_started || impl->network_initialized ||
+      impl->listener_initialized)
+    return SALTS_EBUSY;
+  impl->execution_options = *options;
   return SALTS_OK;
 }
 
@@ -2130,6 +2150,7 @@ int chttp_server_start(chttp_server *server) {
   if (server == NULL || server->impl == NULL) return SALTS_EINVAL;
   impl = (chttp_server_impl *)server->impl;
   if (impl->start_called || impl->thread_started) return SALTS_EALREADY;
+  if (impl->execution_options.owner_count != 1u) return SALTS_ENOTSUP;
   status = cnet_client_init(&impl->network, &impl->config.network);
   if (status != SALTS_OK) return status;
   impl->network_initialized = true;

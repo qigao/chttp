@@ -314,6 +314,7 @@ struct chttp_server_impl {
   void *admission_user;
   chttp_server_config config;
   chttp_server_socket_options socket_options;
+  chttp_server_execution_options execution_options;
   char *host;
   char *session_cookie_name;
   chttp_server_route_record *routes;
