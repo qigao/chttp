@@ -11,16 +11,8 @@ on:
       - ".github/workflows/native-sdk-release.yml"
       - ".github/actions/setup-salts-sdk/**"
   push:
-    branches: [master]
     tags:
       - "v*"
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "packaging/nuget/**"
-      - "vcpkg.json"
-      - ".github/workflows/native-sdk-release.yml"
-      - ".github/actions/setup-salts-sdk/**"
 
 permissions:
   contents: read
@@ -47,10 +39,8 @@ jobs:
           tag="v$version"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
-          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            :
           else
-            test "$GITHUB_REF_NAME" = "master"
+            test "${{ github.event_name }}" = "pull_request"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -351,9 +341,92 @@ jobs:
           if-no-files-found: error
           compression-level: 9
 
+  ios:
+    name: iOS SDK / ${{ matrix.name }}
+    needs: metadata
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: device arm64, triplet: arm64-ios, rid: ios-arm64}
+          - {name: simulator arm64, triplet: arm64-ios-simulator, rid: ios-simulator-arm64}
+    env:
+      X_VCPKG_NUGET_ID_PREFIX: vcpkg-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare iOS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          brew install ninja nasm
+          test -n "${VCPKG_ROOT:-}"
+          test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
+
+      - name: Restore target SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash cmake/ci/restore-native-sdks.sh "${{ matrix.rid }}"
+
+      - name: Configure, build and install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          build="$GITHUB_WORKSPACE/build/${{ matrix.rid }}"
+          prefix="$GITHUB_WORKSPACE/stage/sdk/${{ matrix.rid }}"
+          cmake -S . -B "$build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed-${{ matrix.triplet }}" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build "$build" --parallel 2
+          cmake --install "$build"
+
+          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+          test -f "$prefix/include/chttp_service/service.h"
+          test -f "$prefix/include/chttp_rpc_service/service.h"
+          grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+          grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+
+          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=$GITHUB_SHA
+          os=ios
+          rid=${{ matrix.rid }}
+          triplet=${{ matrix.triplet }}
+          profile=release
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chttp-sdk-${{ matrix.rid }}
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
   pack:
     name: Pack CHttp.Native
-    needs: [metadata, linux, macos, windows, android]
+    needs: [metadata, linux, macos, windows, android, ios]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -369,15 +442,23 @@ jobs:
           test -f package/sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake
           test -f package/sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake
           test -f package/sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/ios-arm64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/ios-simulator-arm64/lib/cmake/Chttp/ChttpConfig.cmake
           test -f package/sdk/linux-x64/include/chttp_service/service.h
           test -f package/sdk/windows-x64/include/chttp_service/service.h
           test -f package/sdk/android-arm64-v8a/include/chttp_service/service.h
           test -f package/sdk/linux-x64/include/chttp_rpc_service/service.h
           test -f package/sdk/windows-x64/include/chttp_rpc_service/service.h
           test -f package/sdk/android-arm64-v8a/include/chttp_rpc_service/service.h
+          for rid in ios-arm64 ios-simulator-arm64; do
+            test -f "package/sdk/$rid/include/chttp_service/service.h"
+            test -f "package/sdk/$rid/include/chttp_rpc_service/service.h"
+            grep -q 'CHttp::Service' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::RpcService' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+          done
           grep -q 'CHttp::Service' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
           grep -q 'CHttp::RpcService' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
-          test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 4
+          test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 6
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -409,6 +490,8 @@ jobs:
           grep -Fx "sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
           grep -Fx "sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/ios-arm64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/ios-simulator-arm64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: chttp-native-nuget
