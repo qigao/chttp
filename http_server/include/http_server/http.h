@@ -290,6 +290,28 @@ typedef struct chttp_server_socket_options {
 #define CHTTP_SERVER_SOCKET_OPTIONS_INIT                                                           \
   {sizeof(chttp_server_socket_options), CNET_STREAM_SOCKET_OPTIONS_INIT, CNET_LISTENER_OPTIONS_INIT}
 
+enum { CHTTP_SERVER_EXECUTION_OPTIONS_VERSION = 1u };
+
+/**
+ * Explicit server execution policy copied after init and before start.
+ *
+ * owner_count == 1 preserves the canonical serialized owner-thread contract.
+ * owner_count > 1 opts into fixed owner-affine execution: one connection never
+ * migrates, while callbacks on different owner lanes may run concurrently.
+ */
+typedef struct chttp_server_execution_options {
+  size_t size;
+  uint32_t version;
+  size_t owner_count;
+} chttp_server_execution_options;
+
+#define CHTTP_SERVER_EXECUTION_OPTIONS_INIT                                                       \
+  {sizeof(chttp_server_execution_options), CHTTP_SERVER_EXECUTION_OPTIONS_VERSION, 1u}
+
+/** Copies explicit owner execution policy before start; later calls return SALTS_EBUSY. */
+int chttp_server_set_execution_options(
+    chttp_server *server, const chttp_server_execution_options *options);
+
 /** Thread-safe snapshot of server lifecycle and bounded admission counters. */
 typedef struct chttp_server_stats {
   uint16_t port;
