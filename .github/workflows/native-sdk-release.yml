@@ -349,8 +349,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: device arm64, triplet: arm64-ios, rid: ios-arm64}
-          - {name: simulator arm64, triplet: arm64-ios-simulator, rid: ios-simulator-arm64}
+          - {name: device arm64, triplet: arm64-ios, rid: ios-arm64, sysroot: iphoneos}
+          - {name: simulator arm64, triplet: arm64-ios-simulator, rid: ios-simulator-arm64, sysroot: iphonesimulator}
     env:
       X_VCPKG_NUGET_ID_PREFIX: vcpkg-cache
     steps:
@@ -392,6 +392,7 @@ jobs:
           cmake -S . -B "$build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="${{ matrix.sysroot }}" \
             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
             -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed-${{ matrix.triplet }}" \
