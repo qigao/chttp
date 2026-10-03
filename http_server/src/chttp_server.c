@@ -632,16 +632,34 @@ static void chttp_server_owner_storage_release(
     chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t index;
   if (server == NULL || owner == NULL) return;
+  if (owner->admission_sync_initialized) {
+    salts_mutex_lock(&owner->admission_mutex);
+    while (owner->admission_count != 0u && owner->admissions != NULL) {
+      cnet_accepted_stream *accepted =
+          &owner->admissions[owner->admission_head];
+      (void)cnet_accepted_stream_close(accepted);
+      owner->admission_head =
+          (owner->admission_head + 1u) % owner->connection_count;
+      --owner->admission_count;
+    }
+    salts_mutex_unlock(&owner->admission_mutex);
+    salts_mutex_destroy(&owner->admission_mutex);
+    owner->admission_sync_initialized = false;
+  }
   if (owner->websocket_commands != NULL)
     for (index = 0u; index < server->config.network.command_capacity; ++index)
       free(owner->websocket_commands[index].data);
+  free(owner->admissions);
   free(owner->file_transfers);
   free(owner->websocket_commands);
+  owner->admissions = NULL;
   owner->file_transfers = NULL;
   owner->websocket_commands = NULL;
   owner->file_transfer_capacity = 0u;
   owner->websocket_command_head = 0u;
   owner->websocket_command_count = 0u;
+  owner->admission_head = 0u;
+  owner->admission_count = 0u;
 }
 
 static int chttp_server_owner_storage_prepare(
@@ -684,11 +702,16 @@ static int chttp_server_owner_storage_prepare(
       .terminal_status = SALTS_OK};
   atomic_init(&owner->connection_leases, 0u);
   atomic_init(&owner->runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+  salts_mutex_init(&owner->admission_mutex);
+  owner->admission_sync_initialized = true;
+  owner->admissions =
+      (cnet_accepted_stream *)calloc(connection_count, sizeof(*owner->admissions));
   owner->file_transfers = (chttp_file_transfer **)calloc(
       file_transfer_capacity, sizeof(*owner->file_transfers));
   owner->websocket_commands = (chttp_server_websocket_command *)calloc(
       server->config.network.command_capacity, sizeof(*owner->websocket_commands));
-  if (owner->file_transfers == NULL || owner->websocket_commands == NULL) {
+  if (owner->admissions == NULL || owner->file_transfers == NULL ||
+      owner->websocket_commands == NULL) {
     chttp_server_owner_storage_release(server, owner);
     return SALTS_ENOMEM;
   }
