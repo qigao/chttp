@@ -292,6 +292,7 @@ struct chttp_server_owner_lane {
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
+  atomic_size_t connection_leases;
   bool file_runtime_initialized;
 };
 
@@ -306,6 +307,42 @@ static inline cnet_client *chttp_server_connection_network(chttp_server_connecti
 static inline size_t chttp_server_owner_connection_end(
     const chttp_server_owner_lane *owner) {
   return owner != NULL ? owner->connection_begin + owner->connection_count : 0u;
+}
+
+static inline size_t chttp_server_owner_lease_count(
+    const chttp_server_owner_lane *owner) {
+  return owner != NULL
+             ? atomic_load_explicit(&owner->connection_leases,
+                                    memory_order_acquire)
+             : 0u;
+}
+
+static inline bool chttp_server_owner_lease_try_acquire(
+    chttp_server_owner_lane *owner) {
+  size_t observed;
+  if (owner == NULL || owner->connection_count == 0u) return false;
+  observed = atomic_load_explicit(&owner->connection_leases, memory_order_relaxed);
+  for (;;) {
+    if (observed >= owner->connection_count) return false;
+    if (atomic_compare_exchange_weak_explicit(
+            &owner->connection_leases, &observed, observed + 1u,
+            memory_order_acq_rel, memory_order_relaxed))
+      return true;
+  }
+}
+
+static inline int chttp_server_owner_lease_release(
+    chttp_server_owner_lane *owner) {
+  size_t observed;
+  if (owner == NULL) return SALTS_EINVAL;
+  observed = atomic_load_explicit(&owner->connection_leases, memory_order_relaxed);
+  for (;;) {
+    if (observed == 0u) return SALTS_EALREADY;
+    if (atomic_compare_exchange_weak_explicit(
+            &owner->connection_leases, &observed, observed - 1u,
+            memory_order_acq_rel, memory_order_relaxed))
+      return SALTS_OK;
+  }
 }
 
 struct chttp_server_impl {
