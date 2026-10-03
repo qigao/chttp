@@ -1712,7 +1712,7 @@ static chttp_server_connection *chttp_server_free_connection(
   chttp_server_impl *server;
   size_t index;
   size_t end;
-  if (owner == NULL || owner->server == NULL || owner->network == NULL)
+  if (owner == NULL || owner->server == NULL || !owner->network_initialized)
     return NULL;
   server = owner->server;
   end = chttp_server_owner_connection_end(owner);
@@ -1730,73 +1730,176 @@ static chttp_server_connection *chttp_server_free_connection(
   return NULL;
 }
 
-static int chttp_server_accept_ready(chttp_server_impl *server,
-                                     chttp_server_owner_lane *owner) {
-  cnet_client *network;
-  if (server == NULL || owner == NULL || owner->server != server)
+static void chttp_server_reject_connection(chttp_server_impl *server) {
+  salts_mutex_lock(&server->mutex);
+  ++server->stats.rejected_connections;
+  salts_mutex_unlock(&server->mutex);
+}
+
+static int chttp_server_owner_adopt_one(chttp_server_owner_lane *owner,
+                                        cnet_accepted_stream *accepted) {
+  chttp_server_impl *server;
+  chttp_server_connection *connection;
+  cnet_observer observer;
+  cnet_connection handle = {0};
+  cnet_stream_peer peer;
+  int status;
+  if (owner == NULL || accepted == NULL || accepted->internal_active == 0u ||
+      owner->server == NULL || !owner->network_initialized)
     return SALTS_EINVAL;
-  network = chttp_server_owner_network(owner);
-  if (network == NULL) return SALTS_EINVAL;
+  server = owner->server;
+  connection = chttp_server_free_connection(owner);
+  if (connection == NULL) return SALTS_ENOBUFS;
+  peer = accepted->peer;
+  observer = (cnet_observer){.on_state = chttp_server_on_state,
+                             .on_receive = chttp_server_on_receive,
+                             .on_send = chttp_server_on_send,
+                             .user = connection};
+  status = server->tls_initialized
+               ? cnet_client_adopt_accepted_tls(&owner->network, accepted,
+                                                &server->tls_server, &observer,
+                                                &handle)
+               : cnet_client_adopt_accepted(&owner->network, accepted,
+                                            &observer, &handle);
+  if (status != SALTS_OK) return status;
+  if (server->config.enable_http2) {
+    status = chttp_h2_server_connection_prepare(connection->h2);
+    if (status != SALTS_OK) {
+      (void)cnet_close(&owner->network, handle);
+      return status;
+    }
+  }
+  connection->owner = owner;
+  ++connection->server_generation;
+  if (connection->server_generation == 0u) connection->server_generation = 1u;
+  connection->handle = handle;
+  connection->peer = peer;
+  connection->peer_certificate_sha256[0] = '\0';
+  connection->active = true;
+  connection->connected = false;
+  connection->writing = false;
+  connection->close_after_write = false;
+  connection->response_streaming = false;
+  connection->response_source_chunked = false;
+  connection->response_close_after_stream = false;
+  connection->deferred_disconnected = false;
+  connection->deferred_response_writing = false;
+  connection->retained_response_paused = false;
+  connection->retained_response_sg = false;
+  connection->retained_response_sg_body_size = 0u;
+  connection->pending_action = CHTTP_SERVER_PENDING_NONE;
+  connection->outbound_size = 0u;
+  connection->h2_close_after_ms = 0u;
+  connection->protocol_prefix_size = 0u;
+  connection->wire_protocol =
+      server->config.enable_http2 ? CHTTP_SERVER_WIRE_UNKNOWN
+                                  : CHTTP_SERVER_WIRE_HTTP_1_1;
+  chttp_server_websocket_reset(connection);
+  chttp_server_request_state_reset(&connection->request_state);
+  status = chttp_server_parser_reset(&connection->parser);
+  if (status != SALTS_OK) {
+    (void)cnet_close(&owner->network, handle);
+    return status;
+  }
+  atomic_fetch_add_explicit(&owner->active_connections, 1u,
+                            memory_order_acq_rel);
+  chttp_server_stats_connection_open(server);
+  return SALTS_OK;
+}
+
+static int chttp_server_owner_admissions_progress(
+    chttp_server_owner_lane *owner) {
+  chttp_server_impl *server;
+  int status = SALTS_OK;
+  if (owner == NULL || owner->server == NULL) return SALTS_EINVAL;
+  server = owner->server;
   for (;;) {
-    chttp_server_connection *connection = chttp_server_free_connection(owner);
-    cnet_observer observer;
-    cnet_connection handle = {0};
-    cnet_stream_peer peer = {0};
-    int status;
-    if (connection == NULL) return SALTS_OK;
-    observer = (cnet_observer){.on_state = chttp_server_on_state,
-                               .on_receive = chttp_server_on_receive,
-                               .on_send = chttp_server_on_send,
-                               .user = connection};
-    status = server->tls_initialized
-                 ? cnet_listener_accept_tls_peer(&server->listener, network,
-                                                 &server->tls_server, &observer, &handle, &peer)
-                 : cnet_listener_accept_peer(&server->listener, network, &observer,
-                                             &handle, &peer);
-    if (status == SALTS_ETIMEDOUT) return SALTS_OK;
-    if (status == SALTS_ENOBUFS) {
-      salts_mutex_lock(&server->mutex);
-      ++server->stats.rejected_connections;
-      salts_mutex_unlock(&server->mutex);
+    cnet_accepted_stream *accepted;
+    salts_mutex_lock(&owner->admission_mutex);
+    if (owner->admission_count == 0u ||
+        chttp_server_free_connection(owner) == NULL) {
+      salts_mutex_unlock(&owner->admission_mutex);
       return SALTS_OK;
     }
-    if (status != SALTS_OK) return status;
-    if (server->config.enable_http2) {
-      status = chttp_h2_server_connection_prepare(connection->h2);
-      if (status != SALTS_OK) {
-        (void)cnet_close(network, handle);
+    accepted = &owner->admissions[owner->admission_head];
+    status = chttp_server_owner_adopt_one(owner, accepted);
+    owner->admission_head =
+        (owner->admission_head + 1u) % owner->admission_capacity;
+    --owner->admission_count;
+    salts_mutex_unlock(&owner->admission_mutex);
+    if (status != SALTS_OK) {
+      chttp_server_reject_connection(server);
+      if (status != SALTS_ENOBUFS && status != SALTS_EBUSY)
         return status;
-      }
     }
-    connection->owner = owner;
-    ++connection->server_generation;
-    if (connection->server_generation == 0u) connection->server_generation = 1u;
-    connection->handle = handle;
-    connection->peer = peer;
-    connection->peer_certificate_sha256[0] = '\0';
-    connection->active = true;
-    connection->connected = false;
-    connection->writing = false;
-    connection->close_after_write = false;
-    connection->response_streaming = false;
-    connection->response_source_chunked = false;
-    connection->response_close_after_stream = false;
-    connection->deferred_disconnected = false;
-    connection->deferred_response_writing = false;
-    connection->retained_response_paused = false;
-    connection->retained_response_sg = false;
-    connection->retained_response_sg_body_size = 0u;
-    connection->pending_action = CHTTP_SERVER_PENDING_NONE;
-    connection->outbound_size = 0u;
-    connection->h2_close_after_ms = 0u;
-    connection->protocol_prefix_size = 0u;
-    connection->wire_protocol =
-        server->config.enable_http2 ? CHTTP_SERVER_WIRE_UNKNOWN : CHTTP_SERVER_WIRE_HTTP_1_1;
-    chttp_server_websocket_reset(connection);
-    chttp_server_request_state_reset(&connection->request_state);
-    status = chttp_server_parser_reset(&connection->parser);
+  }
+}
+
+static bool chttp_server_owner_admission_available(
+    chttp_server_owner_lane *owner) {
+  size_t active;
+  bool available;
+  if (owner == NULL || owner->connection_count == 0u ||
+      !owner->network_initialized)
+    return false;
+  active = atomic_load_explicit(&owner->active_connections,
+                                memory_order_acquire);
+  salts_mutex_lock(&owner->admission_mutex);
+  available = owner->admission_count < owner->admission_capacity &&
+              active + owner->admission_count < owner->connection_count;
+  salts_mutex_unlock(&owner->admission_mutex);
+  return available;
+}
+
+static chttp_server_owner_lane *chttp_server_select_admission_owner(
+    chttp_server_impl *server) {
+  size_t offset;
+  if (server == NULL || server->owner_count == 0u) return NULL;
+  for (offset = 0u; offset < server->owner_count; ++offset) {
+    const size_t index =
+        (server->next_admission_owner + offset) % server->owner_count;
+    chttp_server_owner_lane *owner = &server->owners[index];
+    if (chttp_server_owner_admission_available(owner)) {
+      server->next_admission_owner = (index + 1u) % server->owner_count;
+      return owner;
+    }
+  }
+  return NULL;
+}
+
+static int chttp_server_accept_ready(chttp_server_impl *server) {
+  if (server == NULL || server->owner_count == 0u) return SALTS_EINVAL;
+  for (;;) {
+    chttp_server_owner_lane *owner =
+        chttp_server_select_admission_owner(server);
+    int status;
+    if (owner == NULL) {
+      cnet_accepted_stream rejected = CNET_ACCEPTED_STREAM_INIT;
+      status = cnet_listener_accept_detached(&server->listener, &rejected);
+      if (status == SALTS_ETIMEDOUT) return SALTS_OK;
+      if (status != SALTS_OK) return status;
+      (void)cnet_accepted_stream_close(&rejected);
+      chttp_server_reject_connection(server);
+      continue;
+    }
+
+    salts_mutex_lock(&owner->admission_mutex);
+    {
+      const size_t tail =
+          (owner->admission_head + owner->admission_count) %
+          owner->admission_capacity;
+      cnet_accepted_stream *slot = &owner->admissions[tail];
+      if (slot->internal_active != 0u) {
+        salts_mutex_unlock(&owner->admission_mutex);
+        return SALTS_EPROTO;
+      }
+      status = cnet_listener_accept_detached(&server->listener, slot);
+      if (status == SALTS_OK) ++owner->admission_count;
+    }
+    salts_mutex_unlock(&owner->admission_mutex);
+    if (status == SALTS_ETIMEDOUT) return SALTS_OK;
     if (status != SALTS_OK) return status;
-    chttp_server_stats_connection_open(server);
+    (void)cnet_client_wake(&owner->network);
   }
 }
 
