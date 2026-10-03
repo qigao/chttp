@@ -1985,6 +1985,10 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
     if (chttp_server_should_stop(server)) return SALTS_OK;
     status = cnet_listener_accept_detached(&server->listener, &accepted);
     if (status == SALTS_ETIMEDOUT) return SALTS_OK;
+    if (status == SALTS_ENOBUFS) {
+      chttp_server_stats_rejected_connection(server);
+      return SALTS_OK;
+    }
     if (status != SALTS_OK) return status;
 
     owner = chttp_server_admission_owner(server);
