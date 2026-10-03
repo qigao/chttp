@@ -2240,6 +2240,8 @@ static int chttp_server_cleanup_listener(chttp_server_impl *server) {
   return first_status;
 }
 
+static void chttp_server_wake_owners(chttp_server_impl *server);
+
 static void chttp_server_owner_finish(chttp_server_owner_lane *owner,
                                       int terminal_status) {
   chttp_server_impl *server;
@@ -2251,15 +2253,19 @@ static void chttp_server_owner_finish(chttp_server_owner_lane *owner,
     owner->done = true;
     ++server->workers_done;
   }
-  if (terminal_status != SALTS_OK &&
-      server->stats.terminal_status == SALTS_OK)
-    server->stats.terminal_status = terminal_status;
+  if (terminal_status != SALTS_OK) {
+    if (server->stats.terminal_status == SALTS_OK)
+      server->stats.terminal_status = terminal_status;
+    server->stop_requested = true;
+    server->stats.stopping = 1;
+  }
   if (server->workers_done == server->owner_count) {
     server->stats.running = 0;
     server->stats.stopping = 0;
   }
   salts_cond_broadcast(&server->changed);
   salts_mutex_unlock(&server->mutex);
+  if (terminal_status != SALTS_OK) chttp_server_wake_owners(server);
 }
 
 static int chttp_server_owner_initialize(chttp_server_owner_lane *owner) {
@@ -2427,6 +2433,8 @@ static void chttp_server_release_owner_topology(
     chttp_server_impl *server) {
   size_t index;
   if (server == NULL || server->owners == NULL) return;
+  for (index = 0u; index < server->config.network.connection_capacity; ++index)
+    server->connections[index].owner = NULL;
   for (index = 0u; index < server->owner_count; ++index)
     chttp_server_owner_storage_destroy(&server->owners[index]);
   free(server->owners);
