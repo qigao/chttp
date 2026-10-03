@@ -326,23 +326,28 @@ spec("CHTTP HTTPS adapter") {
     char uri[64];
     char *cert_path = tt_make_temp_file("chttp-cert", ".pem");
     char *key_path = tt_make_temp_file("chttp-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-test-ca", ".pem");
     uint16_t port = 0u;
 
     check_not_null(cert_path);
     check_not_null(key_path);
+    check_not_null(ca_path);
     check_equal(tt_write_file(cert_path, CHTTP_TLS_TEST_CERTIFICATE,
                               sizeof(CHTTP_TLS_TEST_CERTIFICATE) - 1u),
                 0);
     check_equal(tt_write_file(key_path, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY) - 1u), 0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE) - 1u),
+                0);
     server_tls = (cnet_tls_server_config){.size = sizeof(server_tls),
                                           .cert_file = cert_path,
                                           .key_file = key_path,
-                                          .ca_file = cert_path,
+                                          .ca_file = ca_path,
                                           .client_auth = CNET_TLS_CLIENT_AUTH_REQUIRED,
                                           .alpn_protocols = h1,
                                           .alpn_protocol_count = 1u};
     client_tls = (cnet_tls_client_config){.size = sizeof(client_tls),
-                                          .ca_file = cert_path,
+                                          .ca_file = ca_path,
                                           .cert_file = cert_path,
                                           .key_file = key_path,
                                           .server_name = "localhost",
@@ -360,8 +365,10 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
     free(cert_path);
     free(key_path);
+    free(ca_path);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);
