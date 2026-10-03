@@ -315,6 +315,43 @@ static inline cnet_client *chttp_server_owner_network(chttp_server_owner_lane *o
   return owner != NULL ? owner->network : NULL;
 }
 
+static inline chttp_server_owner_runtime_state chttp_server_owner_runtime_state_get(
+    const chttp_server_owner_lane *owner) {
+  return owner != NULL
+             ? (chttp_server_owner_runtime_state)atomic_load_explicit(
+                   &owner->runtime_state, memory_order_acquire)
+             : CHTTP_SERVER_OWNER_RUNTIME_DONE;
+}
+
+static inline bool chttp_server_owner_runtime_transition_valid(
+    chttp_server_owner_runtime_state from,
+    chttp_server_owner_runtime_state to) {
+  return (from == CHTTP_SERVER_OWNER_RUNTIME_IDLE &&
+          to == CHTTP_SERVER_OWNER_RUNTIME_STARTING) ||
+         (from == CHTTP_SERVER_OWNER_RUNTIME_STARTING &&
+          (to == CHTTP_SERVER_OWNER_RUNTIME_READY ||
+           to == CHTTP_SERVER_OWNER_RUNTIME_DONE)) ||
+         (from == CHTTP_SERVER_OWNER_RUNTIME_READY &&
+          to == CHTTP_SERVER_OWNER_RUNTIME_STOPPING) ||
+         (from == CHTTP_SERVER_OWNER_RUNTIME_STOPPING &&
+          to == CHTTP_SERVER_OWNER_RUNTIME_DONE);
+}
+
+static inline int chttp_server_owner_runtime_transition(
+    chttp_server_owner_lane *owner,
+    chttp_server_owner_runtime_state from,
+    chttp_server_owner_runtime_state to) {
+  int expected;
+  if (owner == NULL || !chttp_server_owner_runtime_transition_valid(from, to))
+    return SALTS_EINVAL;
+  expected = (int)from;
+  return atomic_compare_exchange_strong_explicit(
+             &owner->runtime_state, &expected, (int)to,
+             memory_order_acq_rel, memory_order_acquire)
+             ? SALTS_OK
+             : SALTS_EBUSY;
+}
+
 static inline cnet_client *chttp_server_connection_network(chttp_server_connection *connection) {
   return connection != NULL ? chttp_server_owner_network(connection->owner) : NULL;
 }
