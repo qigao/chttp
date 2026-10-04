@@ -20,7 +20,9 @@ typedef struct chttp_requests_probe {
 typedef struct chttp_blocking_client_impl {
   chttp_async_client async;
   chttp_client_config config;
+  cnet_stream_socket_options socket_options;
   chttp_requests_probe probe;
+  bool socket_options_set;
   bool operation_active;
   bool usable;
 } chttp_blocking_client_impl;
@@ -137,6 +139,9 @@ static int chttp_requests_recover(chttp_blocking_client_impl *impl, uint32_t tim
   chttp_response_destroy(&impl->probe.response);
   impl->probe = (chttp_requests_probe){0};
   status = chttp_async_client_init(&impl->async, &impl->config);
+  if (status == SALTS_OK && impl->socket_options_set)
+    status = chttp_async_client_set_socket_options(
+        &impl->async, &impl->socket_options);
   if (status == SALTS_OK) impl->usable = true;
   return status;
 }
@@ -180,7 +185,14 @@ int chttp_client_set_socket_options(
     return SALTS_EINVAL;
   if (!impl->usable) return SALTS_ESHUTDOWN;
   if (impl->operation_active) return SALTS_EBUSY;
-  return chttp_async_client_set_socket_options(&impl->async, options);
+  {
+    const int status =
+        chttp_async_client_set_socket_options(&impl->async, options);
+    if (status != SALTS_OK) return status;
+  }
+  impl->socket_options = *options;
+  impl->socket_options_set = true;
+  return SALTS_OK;
 }
 
 static int chttp_requests_perform(chttp_client *client, chttp_method method,
