@@ -1,6 +1,8 @@
 #ifndef CHTTP_CLIENT_INTERNAL_H
 #define CHTTP_CLIENT_INTERNAL_H
 
+#include <stdint.h>
+
 #include "chttp_file_sink.h"
 #include "chttp_file_transfer.h"
 
