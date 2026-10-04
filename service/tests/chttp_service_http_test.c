@@ -128,9 +128,9 @@ static const DataBindNativeTypeBinding ADD_REQUEST_CFLOW_NATIVE = {
     .data = &ADD_REQUEST_DATA};
 
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_service_test_add,
+    CMETA_RESULT_VALUE, chttp_service_test_add,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
@@ -193,9 +193,9 @@ chttp_service_test_cflow_projection(
 }
 
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_service_test_other,
+    CMETA_RESULT_VALUE, chttp_service_test_other,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
@@ -410,9 +410,9 @@ static const cmeta_type_desc CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_PTR_TYPE = {
     NULL,
     NULL};
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_service_test_owned_error,
+    CMETA_RESULT_VALUE, chttp_service_test_owned_error,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
