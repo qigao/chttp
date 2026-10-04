@@ -73,8 +73,10 @@ typedef enum chttp_service_execution_mode {
  *   DataBindNativeExecution while holding its own DSO lease.
  *
  * Mount validates the selected execution capability against MethodPlan/native
- * identity before publishing the route. Request execution performs no
- * FunctionDesc/FunctionAbi lookup.
+ * identity and the canonical generated Service ownership shape: VALUE status
+ * result, IN|BORROWED request, and OUT|BORROWED response/error storage.
+ * UNKNOWN or alternate ownership semantics fail closed before route publication.
+ * Request execution performs no FunctionDesc/FunctionAbi lookup.
  */
 typedef struct chttp_service_http_mount {
   size_t size;

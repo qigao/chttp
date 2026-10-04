@@ -355,6 +355,26 @@ static int chttp_rpc_service_add_size(
   return *total <= limit;
 }
 
+static int chttp_rpc_service_function_semantics_admit(
+    const cmeta_function_desc *function, size_t expected_params) {
+  const cmeta_param_flags request_flags =
+      (cmeta_param_flags)(CMETA_PARAM_IN | CMETA_PARAM_BORROWED);
+  const cmeta_param_flags output_flags =
+      (cmeta_param_flags)(CMETA_PARAM_OUT | CMETA_PARAM_BORROWED);
+
+  if (!cmeta_function_desc_valid(function) ||
+      function->result_flags != (cmeta_result_flags)CMETA_RESULT_VALUE ||
+      function->param_count != expected_params ||
+      function->params == NULL ||
+      function->params[0].flags != request_flags ||
+      function->params[1].flags != output_flags)
+    return 0;
+
+  if (expected_params == 3u)
+    return function->params[2].flags == output_flags;
+  return expected_params == 2u;
+}
+
 static int chttp_rpc_service_execution_admit(
     const DataBindRpcMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
@@ -440,8 +460,9 @@ static int chttp_rpc_service_execution_admit(
   }
 
   expected_params = native->error_count == 0u ? 2u : 3u;
-  if (function->param_count != expected_params ||
-      execution->abi->param_count != expected_params ||
+  if (!chttp_rpc_service_function_semantics_admit(function, expected_params))
+    return SALTS_ENOTSUP;
+  if (execution->abi->param_count != expected_params ||
       execution->abi->return_carrier != CMETA_ABI_SCALAR ||
       cmeta_function_param_abi(execution->abi, 0u) !=
           CMETA_ABI_OBJECT_POINTER ||

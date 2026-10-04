@@ -210,6 +210,7 @@ add_test(
   NAME chttp_service_hot_path_boundary_contract
   COMMAND ${CMAKE_COMMAND}
     -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
+    -DRPC_SERVICE_SOURCE=${PROJECT_SOURCE_DIR}/rpc_service/src/chttp_rpc_service.c
     -DSERVICE_HEADER=${PROJECT_SOURCE_DIR}/service/include/chttp_service/service.h
     -DSERVER_HEADER=${PROJECT_SOURCE_DIR}/http_server/include/http_server/http.h
     -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_hot_path_boundary_contract_test.cmake)

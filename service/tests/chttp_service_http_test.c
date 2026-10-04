@@ -128,9 +128,9 @@ static const DataBindNativeTypeBinding ADD_REQUEST_CFLOW_NATIVE = {
     .data = &ADD_REQUEST_DATA};
 
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_service_test_add,
+    CMETA_RESULT_VALUE, chttp_service_test_add,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
@@ -193,9 +193,9 @@ chttp_service_test_cflow_projection(
 }
 
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_service_test_other,
+    CMETA_RESULT_VALUE, chttp_service_test_other,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
@@ -410,9 +410,9 @@ static const cmeta_type_desc CHTTP_SERVICE_OWNED_ERROR_ENVELOPE_PTR_TYPE = {
     NULL,
     NULL};
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_service_test_owned_error,
+    CMETA_RESULT_VALUE, chttp_service_test_owned_error,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
@@ -629,6 +629,23 @@ spec("CHttp::Service generated HTTP MethodPlan") {
             &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
     const DataBindHttpProjectionConfig *projection;
     DataBindHttpMethodPlan *method_plan = NULL;
+    DataBindHttpMethodPlan *unknown_result_plan = NULL;
+    DataBindHttpMethodPlan *unborrowed_request_plan = NULL;
+    cmeta_function_desc unknown_result_function = {0};
+    cmeta_function_abi_desc unknown_result_abi = {0};
+    DataBindServiceNativeBinding unknown_result_native = {0};
+    DataBindNativeExecution unknown_result_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    chttp_service_http_mount unknown_result_mount =
+        CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    cmeta_param_desc unborrowed_request_params[2];
+    cmeta_function_desc unborrowed_request_function = {0};
+    cmeta_function_abi_desc unborrowed_request_abi = {0};
+    DataBindServiceNativeBinding unborrowed_request_native = {0};
+    DataBindNativeExecution unborrowed_request_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    chttp_service_http_mount unborrowed_request_mount =
+        CHTTP_SERVICE_HTTP_MOUNT_INIT;
     chttp_service service = {0};
     chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
     chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
@@ -659,6 +676,31 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     invalid_execution = execution;
     invalid_execution.invoke = NULL;
 
+    unknown_result_function = *FunctionMeta(chttp_service_test_add);
+    unknown_result_function.result_flags = CMETA_RESULT_UNKNOWN;
+    unknown_result_abi = *FunctionAbi(chttp_service_test_add);
+    unknown_result_abi.function = &unknown_result_function;
+    unknown_result_native = native;
+    unknown_result_native.function = &unknown_result_function;
+    unknown_result_execution = execution;
+    unknown_result_execution.function = &unknown_result_function;
+    unknown_result_execution.abi = &unknown_result_abi;
+
+    unborrowed_request_params[0] =
+        FunctionMeta(chttp_service_test_add)->params[0];
+    unborrowed_request_params[1] =
+        FunctionMeta(chttp_service_test_add)->params[1];
+    unborrowed_request_params[0].flags = CMETA_PARAM_IN;
+    unborrowed_request_function = *FunctionMeta(chttp_service_test_add);
+    unborrowed_request_function.params = unborrowed_request_params;
+    unborrowed_request_abi = *FunctionAbi(chttp_service_test_add);
+    unborrowed_request_abi.function = &unborrowed_request_function;
+    unborrowed_request_native = native;
+    unborrowed_request_native.function = &unborrowed_request_function;
+    unborrowed_request_execution = execution;
+    unborrowed_request_execution.function = &unborrowed_request_function;
+    unborrowed_request_execution.abi = &unborrowed_request_abi;
+
     projection = data_bind_http_projection_artifact_find(
         &databind_chttp_service_http_projection, "Calc", "Add");
     check_not_null(projection);
@@ -677,6 +719,19 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         DATA_BIND_OK);
     check_not_null(method_plan);
     check_equal(data_bind_http_method_plan_route(method_plan), "/add/{left}");
+
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &unknown_result_native,
+            &unknown_result_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(unknown_result_plan);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &unborrowed_request_native,
+            &unborrowed_request_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(unborrowed_request_plan);
 
     service_config.method_capacity = 1u;
     service_config.max_binding_value_bytes = 64u;
@@ -701,6 +756,22 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     invalid.execution = &invalid_execution;
     check_equal(
         chttp_service_mount_http(&service, &server, &invalid), SALTS_EINVAL);
+
+    unknown_result_mount.method_plan = unknown_result_plan;
+    unknown_result_mount.native_binding = &unknown_result_native;
+    unknown_result_mount.execution = &unknown_result_execution;
+    check_equal(
+        chttp_service_mount_http(
+            &service, &server, &unknown_result_mount),
+        SALTS_ENOTSUP);
+
+    unborrowed_request_mount.method_plan = unborrowed_request_plan;
+    unborrowed_request_mount.native_binding = &unborrowed_request_native;
+    unborrowed_request_mount.execution = &unborrowed_request_execution;
+    check_equal(
+        chttp_service_mount_http(
+            &service, &server, &unborrowed_request_mount),
+        SALTS_ENOTSUP);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
@@ -820,6 +891,8 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(chttp_service_destroy(&service), SALTS_OK);
+    data_bind_http_method_plan_free(unborrowed_request_plan);
+    data_bind_http_method_plan_free(unknown_result_plan);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }

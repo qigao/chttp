@@ -146,9 +146,9 @@ static const DataBindNativeTypeBinding WEB_FORM_PLAN_RESPONSE_NATIVE = {
     .idl_type_name = "FormResponse",
     .data = &WEB_FORM_PLAN_RESPONSE_DATA};
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_web_form_plan_test_operation,
+    CMETA_RESULT_VALUE, chttp_web_form_plan_test_operation,
     (const WebFormPlanRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &WEB_FORM_PLAN_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
