@@ -1,0 +1,132 @@
+name: CHttp server owner scaling
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "http_server/src/**"
+      - "http_server/include/**"
+      - "http_server/benchmarks/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/chttp-server-owner-scaling.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "http_server/src/**"
+      - "http_server/include/**"
+      - "http_server/benchmarks/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/chttp-server-owner-scaling.yml"
+
+env:
+  CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-owner-scaling-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  h1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact Chttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Salts SDKs
+        uses: ./.github/actions/setup-salts-sdk
+
+      - name: Configure release benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-release-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_BENCHMARKS=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+
+      - name: Build owner benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-release \
+            --target chttp_server_owner_benchmark -j2
+
+      - name: Verify admission-only owner handoff boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_handoff_boundary.py
+
+      - name: Run repeated H1 owner matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          jsonl=benchmark-results/owner-scaling.jsonl
+          : > "$jsonl"
+
+          cores="$(nproc)"
+          {
+            echo "exact_head=$CHTTP_HEAD_SHA"
+            echo "logical_cores=$cores"
+            uname -a
+            cc --version | head -n 1
+          } > benchmark-results/environment.txt
+
+          for repeat in 1 2 3; do
+            echo "benchmark repeat=$repeat"
+            GITHUB_SHA="$CHTTP_HEAD_SHA" \
+            CHTTP_OWNER_BENCH_SMALL_REQUESTS=300 \
+            CHTTP_OWNER_BENCH_RETAINED_REQUESTS=60 \
+            CHTTP_OWNER_BENCH_WARMUP=20 \
+              build/linux-gcc-release/bin/chttp_server_owner_benchmark \
+              | tee -a "$jsonl"
+          done
+
+      - name: Verify and summarize owner evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_benchmark.py \
+            benchmark-results/owner-scaling.jsonl \
+            | tee benchmark-results/summary.md
+
+          cores="$(nproc)"
+          {
+            echo "## CHttp fixed-owner H1 scaling"
+            echo
+            cat benchmark-results/environment.txt
+            echo
+            if [ "$cores" -lt 4 ]; then
+              echo "> Runner exposes fewer than four logical cores; 4-owner rows are correctness evidence only and do not satisfy the distinct-core scaling acceptance."
+              echo
+            fi
+            cat benchmark-results/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-owner-scaling-${{ env.CHTTP_HEAD_SHA }}
+          path: benchmark-results/
+          if-no-files-found: error
+
+      - name: Verify exact head and clean tracked source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
