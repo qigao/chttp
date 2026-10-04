@@ -37,15 +37,19 @@ expected = {
     "h2-tcp-1k-copy-client-nodelay": ("h2", "tcp", 4),
     "h2-tcp-1k-copy-both-nodelay": ("h2", "tcp", 4),
     "h2-tcp-64k-retained": ("h2", "tcp", 4),
+    "h2-tcp-64k-retained-client-nodelay": ("h2", "tcp", 4),
     "h1-tls-1k-copy": ("h1", "tls", 1),
     "h1-tls-64k-retained": ("h1", "tls", 1),
     "h2-tls-1k-copy": ("h2", "tls", 4),
+    "h2-tls-1k-copy-client-nodelay": ("h2", "tls", 4),
     "h2-tls-16383-copy-single": ("h2", "tls", 1),
     "h2-tls-64k-copy-single": ("h2", "tls", 1),
     "h2-tls-16383-copy": ("h2", "tls", 4),
     "h2-tls-16384-copy": ("h2", "tls", 4),
     "h2-tls-64k-copy": ("h2", "tls", 4),
+    "h2-tls-64k-copy-client-nodelay": ("h2", "tls", 4),
     "h2-tls-64k-retained": ("h2", "tls", 4),
+    "h2-tls-64k-retained-client-nodelay": ("h2", "tls", 4),
 }
 
 groups = {}
