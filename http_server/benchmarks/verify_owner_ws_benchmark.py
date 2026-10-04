@@ -4,8 +4,11 @@ import statistics
 import sys
 from pathlib import Path
 
-if len(sys.argv) != 2:
-    raise SystemExit("usage: verify_owner_ws_benchmark.py <jsonl>")
+if len(sys.argv) not in (2, 3):
+    raise SystemExit(
+        "usage: verify_owner_ws_benchmark.py <jsonl> [workload]"
+    )
+selected_workload = sys.argv[2] if len(sys.argv) == 3 else None
 
 environments = []
 rows = []
@@ -45,6 +48,11 @@ expected = {
     "wss-echo-64k": ("tls", "callback-echo", 64 * 1024),
     "wss-push-64k": ("tls", "captured-push", 64 * 1024),
 }
+
+if selected_workload is not None:
+    if selected_workload not in expected:
+        raise SystemExit(f"unknown workload: {selected_workload}")
+    expected = {selected_workload: expected[selected_workload]}
 
 groups = {}
 for row in rows:
@@ -92,8 +100,6 @@ for workload in expected:
                 raise SystemExit(f"{workload}/{owners}: rejected connections")
             if int(row.get("errors", -1)) != 0:
                 raise SystemExit(f"{workload}/{owners}: errors={row.get('errors')}")
-            if int(row.get("cross_owner_data_plane_hops", -1)) != 0:
-                raise SystemExit(f"{workload}/{owners}: cross-owner data-plane hop")
             if int(row["samples"]) != int(row["operations"]):
                 raise SystemExit(f"{workload}/{owners}: sample/operation mismatch")
             if operations is None:
@@ -172,9 +178,13 @@ for workload in expected:
     print()
 
 print(
-    "Correctness gate: fixed equal work, verified WS/WSS setup, zero errors/rejections, "
-    "balanced leases, exact connection-admission handoffs, and zero server-owner "
-    "data-plane handoffs."
+    "Correctness gate: fixed equal work, verified WS/WSS setup, zero "
+    "errors/rejections, balanced leases, exact connection-admission "
+    "handoffs, and exact captured-command admission accounting."
+)
+print(
+    "The emitted zero owner data-plane handoff field is a structural contract, "
+    "not a runtime counter, and is not used as measured evidence."
 )
 print(
     "callback-echo measures callback-local sends; captured-push measures the bounded "
