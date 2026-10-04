@@ -1,0 +1,132 @@
+name: CHttp server H2 and TLS owner scaling
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "http_server/benchmarks/**"
+      - ".github/workflows/chttp-server-owner-h2-tls.yml"
+  workflow_dispatch:
+
+env:
+  CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-server-owner-h2-tls-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  h2-tls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact Chttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Salts SDKs
+        uses: ./.github/actions/setup-salts-sdk
+
+      - name: Verify fixed Salts TLS baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_file="$SALTS_ROOT/lib/cmake/Salts/SaltsConfigVersion.cmake"
+          test -f "$version_file"
+          version="$(sed -n 's/^[[:space:]]*set(PACKAGE_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' "$version_file" | head -n 1)"
+          test -n "$version"
+          python3 - "$version" <<'PY'
+          import sys
+          got = tuple(int(x) for x in sys.argv[1].split(".")[:3])
+          minimum = (1, 8, 18)
+          if got < minimum:
+              raise SystemExit(f"Salts.Native {sys.argv[1]} is too old; need >= 1.8.18 for GmSSL full-duplex TLS fix")
+          print(f"Salts.Native baseline: {sys.argv[1]} (>= 1.8.18)")
+          PY
+
+      - name: Configure release benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-release-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=ON
+
+      - name: Build H2 TLS owner benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-release \
+            --target chttp_server_h2_tls_owner_benchmark -j2
+
+      - name: Verify admission-only owner handoff boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_handoff_boundary.py
+
+      - name: Run repeated H2 TLS owner matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          jsonl=benchmark-results/owner-h2-tls.jsonl
+          : > "$jsonl"
+          cores="$(nproc)"
+          {
+            echo "exact_head=$CHTTP_HEAD_SHA"
+            echo "logical_cores=$cores"
+            echo "build_type=Release"
+            uname -a
+            cc --version | head -n 1
+            lscpu | grep -E '^(Model name|CPU\(s\)|Core\(s\) per socket|Socket\(s\)):' || true
+          } > benchmark-results/environment-h2-tls.txt
+
+          for repeat in 1 2 3; do
+            echo "benchmark repeat=$repeat"
+            GITHUB_SHA="$CHTTP_HEAD_SHA" \
+            CHTTP_OWNER_PROTO_SMALL_ROUNDS=80 \
+            CHTTP_OWNER_PROTO_RETAINED_ROUNDS=16 \
+            CHTTP_OWNER_PROTO_WARMUP_ROUNDS=2 \
+              build/linux-gcc-release/bin/chttp_server_h2_tls_owner_benchmark \
+              | tee -a "$jsonl"
+          done
+
+      - name: Verify and summarize H2 TLS evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_protocol_benchmark.py \
+            benchmark-results/owner-h2-tls.jsonl \
+            | tee benchmark-results/owner-h2-tls-summary.md
+          {
+            echo "## CHttp H2/TLS fixed-owner scaling"
+            echo
+            cat benchmark-results/environment-h2-tls.txt
+            echo
+            cat benchmark-results/owner-h2-tls-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw H2 TLS benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-server-owner-h2-tls-linux-x64
+          path: benchmark-results/
+          if-no-files-found: error
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
