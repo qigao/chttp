@@ -364,9 +364,9 @@ static void owner_ws_sample_pressure(chttp_server_impl *impl,
     salts_mutex_lock(&owner->admission_mutex);
     ring = owner->admission_count;
     salts_mutex_unlock(&owner->admission_mutex);
-    salts_mutex_lock(&impl->mutex);
+    salts_mutex_lock(&owner->websocket_command_mutex);
     commands = owner->websocket_command_count;
-    salts_mutex_unlock(&impl->mutex);
+    salts_mutex_unlock(&owner->websocket_command_mutex);
     if (ring > pressure->peak_admission_ring[index])
       pressure->peak_admission_ring[index] = ring;
     if (commands > pressure->peak_command_queue[index])
@@ -379,16 +379,16 @@ static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
                                              size_t owner_count) {
   size_t index;
   if (impl == NULL || pressure == NULL) return;
-  salts_mutex_lock(&impl->mutex);
   for (index = 0u; index < owner_count && index < 4u; ++index) {
     chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
     size_t commands;
     if (owner == NULL) continue;
+    salts_mutex_lock(&owner->websocket_command_mutex);
     commands = owner->websocket_command_count;
+    salts_mutex_unlock(&owner->websocket_command_mutex);
     if (commands > pressure->peak_command_queue[index])
       pressure->peak_command_queue[index] = commands;
   }
-  salts_mutex_unlock(&impl->mutex);
 }
 
 static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
