@@ -646,6 +646,8 @@ static int owner_proto_run(const owner_proto_case *test_case,
       "\"cross_owner_admission_handoffs\":%zu,"
       "\"stream_receive_window\":%u,"
       "\"connection_receive_window\":%u,"
+      "\"client_nodelay\":%s,"
+      "\"server_nodelay\":%s,"
       "\"cross_owner_data_plane_hops\":0,"
       "\"errors\":0}\n",
       test_case->benchmark_name != NULL
@@ -679,7 +681,9 @@ static int owner_proto_run(const owner_proto_case *test_case,
           : UINT32_C(65535),
       test_case->connection_receive_window != 0u
           ? test_case->connection_receive_window
-          : UINT32_C(65535));
+          : UINT32_C(65535),
+      test_case->client_nodelay ? "true" : "false",
+      test_case->server_nodelay ? "true" : "false");
   fflush(stdout);
   result = 0;
 
