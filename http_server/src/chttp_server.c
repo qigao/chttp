@@ -647,9 +647,22 @@ static void chttp_server_owner_storage_release(
     salts_mutex_destroy(&owner->admission_mutex);
     owner->admission_sync_initialized = false;
   }
-  if (owner->websocket_commands != NULL)
+  if (owner->websocket_command_sync_initialized) {
+    salts_mutex_lock(&owner->websocket_command_mutex);
+    if (owner->websocket_commands != NULL)
+      for (index = 0u; index < server->config.network.command_capacity; ++index) {
+        free(owner->websocket_commands[index].data);
+        owner->websocket_commands[index].data = NULL;
+      }
+    owner->websocket_command_head = 0u;
+    owner->websocket_command_count = 0u;
+    salts_mutex_unlock(&owner->websocket_command_mutex);
+    salts_mutex_destroy(&owner->websocket_command_mutex);
+    owner->websocket_command_sync_initialized = false;
+  } else if (owner->websocket_commands != NULL) {
     for (index = 0u; index < server->config.network.command_capacity; ++index)
       free(owner->websocket_commands[index].data);
+  }
   free(owner->admissions);
   free(owner->file_transfers);
   free(owner->websocket_commands);
@@ -705,6 +718,8 @@ static int chttp_server_owner_storage_prepare(
   atomic_init(&owner->runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
   salts_mutex_init(&owner->admission_mutex);
   owner->admission_sync_initialized = true;
+  salts_mutex_init(&owner->websocket_command_mutex);
+  owner->websocket_command_sync_initialized = true;
   owner->admissions =
       (cnet_accepted_stream *)calloc(connection_count, sizeof(*owner->admissions));
   owner->file_transfers = (chttp_file_transfer **)calloc(
