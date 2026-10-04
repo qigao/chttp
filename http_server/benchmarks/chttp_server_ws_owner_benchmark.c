@@ -372,6 +372,23 @@ static void owner_ws_sample_pressure(chttp_server_impl *impl,
   }
 }
 
+static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
+                                             owner_ws_pressure *pressure,
+                                             size_t owner_count) {
+  size_t index;
+  if (impl == NULL || pressure == NULL) return;
+  salts_mutex_lock(&impl->mutex);
+  for (index = 0u; index < owner_count && index < 4u; ++index) {
+    chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
+    size_t commands;
+    if (owner == NULL) continue;
+    commands = owner->websocket_command_count;
+    if (commands > pressure->peak_command_queue[index])
+      pressure->peak_command_queue[index] = commands;
+  }
+  salts_mutex_unlock(&impl->mutex);
+}
+
 static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
                         size_t messages, size_t warmup,
                         const char *cert_path, const char *key_path,
@@ -485,8 +502,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   while (atomic_load_explicit(&barrier.done, memory_order_acquire) !=
          OWNER_WS_CONNECTIONS) {
-    owner_ws_sample_pressure(impl, &pressure, owner_count, false);
-    salts_thread_yield();
+    owner_ws_sample_command_pressure(impl, &pressure, owner_count);
+    salts_sleep_ms(1u);
   }
   wall_ns = salts_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
