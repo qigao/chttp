@@ -939,7 +939,7 @@ static int chttp_service_capability_admit(
   expected_params = native->error_count == 0u ? 2u : 3u;
   if (!chttp_service_function_semantics_admit(function, expected_params))
     return SALTS_ENOTSUP;
-  if (      capability_abi->param_count != expected_params ||
+  if (capability_abi->param_count != expected_params ||
       capability_abi->return_carrier != CMETA_ABI_SCALAR ||
       cmeta_function_param_abi(capability_abi, 0u) !=
           CMETA_ABI_OBJECT_POINTER ||
