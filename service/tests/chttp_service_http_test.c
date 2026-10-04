@@ -629,6 +629,8 @@ spec("CHttp::Service generated HTTP MethodPlan") {
             &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
     const DataBindHttpProjectionConfig *projection;
     DataBindHttpMethodPlan *method_plan = NULL;
+    const DataBindBindingPlan *binding = NULL;
+    DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
     DataBindHttpMethodPlan *unknown_result_plan = NULL;
     DataBindHttpMethodPlan *unborrowed_request_plan = NULL;
     cmeta_function_desc unknown_result_function = {0};
@@ -719,6 +721,50 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         DATA_BIND_OK);
     check_not_null(method_plan);
     check_equal(data_bind_http_method_plan_route(method_plan), "/add/{left}");
+
+    /*
+     * One compiled MethodPlan joins three independent semantic authorities:
+     * IDL/Schema owns required/default/constraint facts, the HTTP projection
+     * owns wire locations, and CMeta owns native function/ownership semantics.
+     */
+    binding = data_bind_http_method_plan_binding(method_plan);
+    check_not_null(binding);
+    check_true(cmeta_function_desc_equal(
+        data_bind_binding_plan_function(binding),
+        FunctionMeta(chttp_service_test_add)));
+    check_equal(
+        FunctionMeta(chttp_service_test_add)->result_flags,
+        (cmeta_result_flags)CMETA_RESULT_VALUE);
+    check_equal(
+        FunctionMeta(chttp_service_test_add)->params[0].flags,
+        (cmeta_param_flags)(CMETA_PARAM_IN | CMETA_PARAM_BORROWED));
+    check_equal(
+        FunctionMeta(chttp_service_test_add)->params[1].flags,
+        (cmeta_param_flags)(CMETA_PARAM_OUT | CMETA_PARAM_BORROWED));
+
+    check_equal(data_bind_binding_plan_ingress_count(binding), (size_t)3u);
+    check_true(data_bind_binding_plan_ingress_at(binding, 0u, &entry));
+    check_equal(entry.schema_field, "left");
+    check_equal(entry.address.space, "http.path");
+    check_equal(entry.address.name, "left");
+    check_true(entry.required);
+    check_false(entry.has_default);
+
+    entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+    check_true(data_bind_binding_plan_ingress_at(binding, 2u, &entry));
+    check_equal(entry.schema_field, "scale");
+    check_equal(entry.address.space, "http.query");
+    check_equal(entry.address.name, "scale");
+    check_false(entry.required);
+    check_true(entry.has_default);
+    check_equal(entry.default_value, "1");
+    check_true(entry.has_presence);
+
+    check_equal(data_bind_binding_plan_egress_count(binding), (size_t)1u);
+    entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+    check_true(data_bind_binding_plan_egress_at(binding, 0u, &entry));
+    check_equal(entry.schema_field, "sum");
+    check_equal(entry.address.space, "http.response.body");
 
     check_equal(
         data_bind_http_method_plan_compile_service(
