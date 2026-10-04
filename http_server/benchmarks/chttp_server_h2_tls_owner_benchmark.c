@@ -739,6 +739,120 @@ int main(void) {
        OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
       {"h2-tls-64k-retained-client-nodelay", CHTTP_HTTP_2, true, true, false, true,
        OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH}};
+  static const owner_proto_case FLOW_CASES[] = {
+#define FLOW_COPY_CASE(name_, tls_, nodelay_, bytes_, stream_, conn_) \
+      {.name = name_, .protocol = CHTTP_HTTP_2, .tls = tls_,            \
+       .retained = false, .server_nodelay = false,                     \
+       .client_nodelay = nodelay_, .payload_bytes = bytes_,            \
+       .streams_per_connection = OWNER_PROTO_H2_DEPTH,                 \
+       .stream_receive_window = stream_,                               \
+       .connection_receive_window = conn_,                             \
+       .benchmark_name = "chttp_h2_flow_window"}
+#define FLOW_RETAINED_CASE(name_, tls_, bytes_, stream_, conn_) \
+      {.name = name_, .protocol = CHTTP_HTTP_2, .tls = tls_,    \
+       .retained = true, .server_nodelay = false,               \
+       .client_nodelay = true, .payload_bytes = bytes_,         \
+       .streams_per_connection = OWNER_PROTO_H2_DEPTH,          \
+       .stream_receive_window = stream_,                        \
+       .connection_receive_window = conn_,                      \
+       .benchmark_name = "chttp_h2_flow_window"}
+
+      FLOW_COPY_CASE("tcp-copy-16383-default", false, true,
+                     OWNER_PROTO_BELOW_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-16383-wide", false, true,
+                     OWNER_PROTO_BELOW_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tcp-copy-16384-default", false, true,
+                     OWNER_PROTO_CROSS_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-16384-wide", false, true,
+                     OWNER_PROTO_CROSS_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tcp-copy-32768-default", false, true,
+                     OWNER_PROTO_32K_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-32768-wide", false, true,
+                     OWNER_PROTO_32K_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tcp-copy-65535-default", false, true,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-65535-wide", false, true,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tcp-copy-65536-default", false, true,
+                     OWNER_PROTO_RETAINED_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-65536-wide", false, true,
+                     OWNER_PROTO_RETAINED_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tcp-copy-131072-default", false, true,
+                     OWNER_PROTO_128K_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-131072-wide", false, true,
+                     OWNER_PROTO_128K_BYTES, 131072u, 131072u),
+
+      FLOW_COPY_CASE("tls-copy-16383-default", true, true,
+                     OWNER_PROTO_BELOW_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-16383-wide", true, true,
+                     OWNER_PROTO_BELOW_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-16384-default", true, true,
+                     OWNER_PROTO_CROSS_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-16384-wide", true, true,
+                     OWNER_PROTO_CROSS_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-32768-default", true, true,
+                     OWNER_PROTO_32K_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-32768-wide", true, true,
+                     OWNER_PROTO_32K_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-65535-default", true, true,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-65535-wide", true, true,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-65536-default", true, true,
+                     OWNER_PROTO_RETAINED_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-65536-wide", true, true,
+                     OWNER_PROTO_RETAINED_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-131072-default", true, true,
+                     OWNER_PROTO_128K_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-131072-wide", true, true,
+                     OWNER_PROTO_128K_BYTES, 131072u, 131072u),
+
+      FLOW_RETAINED_CASE("tcp-retained-65535-default", false,
+                         OWNER_PROTO_DEFAULT_WINDOW_BYTES, 0u, 0u),
+      FLOW_RETAINED_CASE("tcp-retained-65535-wide", false,
+                         OWNER_PROTO_DEFAULT_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_RETAINED_CASE("tcp-retained-65536-default", false,
+                         OWNER_PROTO_RETAINED_BYTES, 0u, 0u),
+      FLOW_RETAINED_CASE("tcp-retained-65536-wide", false,
+                         OWNER_PROTO_RETAINED_BYTES, 131072u, 131072u),
+      FLOW_RETAINED_CASE("tcp-retained-131072-default", false,
+                         OWNER_PROTO_128K_BYTES, 0u, 0u),
+      FLOW_RETAINED_CASE("tcp-retained-131072-wide", false,
+                         OWNER_PROTO_128K_BYTES, 131072u, 131072u),
+      FLOW_RETAINED_CASE("tls-retained-65535-default", true,
+                         OWNER_PROTO_DEFAULT_WINDOW_BYTES, 0u, 0u),
+      FLOW_RETAINED_CASE("tls-retained-65535-wide", true,
+                         OWNER_PROTO_DEFAULT_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_RETAINED_CASE("tls-retained-65536-default", true,
+                         OWNER_PROTO_RETAINED_BYTES, 0u, 0u),
+      FLOW_RETAINED_CASE("tls-retained-65536-wide", true,
+                         OWNER_PROTO_RETAINED_BYTES, 131072u, 131072u),
+      FLOW_RETAINED_CASE("tls-retained-131072-default", true,
+                         OWNER_PROTO_128K_BYTES, 0u, 0u),
+      FLOW_RETAINED_CASE("tls-retained-131072-wide", true,
+                         OWNER_PROTO_128K_BYTES, 131072u, 131072u),
+
+      /* Nagle/delayed-ACK attribution controls around the RFC window edge. */
+      FLOW_COPY_CASE("tcp-copy-65535-default-nagle", false, false,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-65536-default-nagle", false, false,
+                     OWNER_PROTO_RETAINED_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tcp-copy-65535-wide-nagle", false, false,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tcp-copy-65536-wide-nagle", false, false,
+                     OWNER_PROTO_RETAINED_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-65535-default-nagle", true, false,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-65536-default-nagle", true, false,
+                     OWNER_PROTO_RETAINED_BYTES, 0u, 0u),
+      FLOW_COPY_CASE("tls-copy-65535-wide-nagle", true, false,
+                     OWNER_PROTO_DEFAULT_WINDOW_BYTES, 131072u, 131072u),
+      FLOW_COPY_CASE("tls-copy-65536-wide-nagle", true, false,
+                     OWNER_PROTO_RETAINED_BYTES, 131072u, 131072u)
+#undef FLOW_RETAINED_CASE
+#undef FLOW_COPY_CASE
+  };
+
   static const size_t OWNERS[] = {1u, 2u, 4u};
   const size_t small_rounds =
       owner_proto_env_count("CHTTP_OWNER_PROTO_SMALL_ROUNDS",
@@ -749,11 +863,17 @@ int main(void) {
   const size_t warmup_rounds =
       owner_proto_env_count("CHTTP_OWNER_PROTO_WARMUP_ROUNDS",
                             OWNER_PROTO_WARMUP_ROUNDS);
+  const size_t flow_rounds =
+      owner_proto_env_count("CHTTP_H2_FLOW_WINDOW_ROUNDS", 4u);
+  const char *flow_mode_env = getenv("CHTTP_H2_FLOW_WINDOW_MODE");
+  const bool flow_mode =
+      flow_mode_env != NULL && strcmp(flow_mode_env, "0") != 0;
   owner_proto_route small_route;
   owner_proto_route below_window_copy_route;
   owner_proto_route cross_window_copy_route;
   owner_proto_route large_copy_route;
   owner_proto_route retained_route;
+  owner_proto_route flow_copy_route;
   mem_buffer_t *retained = NULL;
   char *cert_path = NULL;
   char *key_path = NULL;
@@ -803,10 +923,14 @@ int main(void) {
   retained_route = (owner_proto_route){
       .retained_body = retained,
       .retained = true};
+  flow_copy_route = (owner_proto_route){
+      .small_body = OWNER_PROTO_LARGE_COPY_BODY,
+      .small_size = OWNER_PROTO_SMALL_BYTES,
+      .retained = false};
 
   printf(
       "{\"kind\":\"environment\","
-      "\"benchmark\":\"chttp_server_owner_protocol_scaling\","
+      "\"benchmark\":\"%s\","
       "\"commit\":\"%s\","
       "\"backend\":\"%s\","
       "\"connections\":%u,"
@@ -815,6 +939,8 @@ int main(void) {
       "\"retained_rounds\":%zu,"
       "\"warmup_rounds\":%zu,"
       "\"note\":\"TLS profile and handshake are completed in warmup; H2 submits four streams before polling completions\"}\n",
+      flow_mode ? "chttp_h2_flow_window"
+                : "chttp_server_owner_protocol_scaling",
       getenv("GITHUB_SHA") != NULL ? getenv("GITHUB_SHA") : "unknown",
 #if defined(_WIN32)
       "iocp",
@@ -827,23 +953,41 @@ int main(void) {
       small_rounds, retained_rounds, warmup_rounds);
   fflush(stdout);
 
-  for (case_index = 0u;
-       case_index < sizeof(CASES) / sizeof(CASES[0]); ++case_index) {
-    const owner_proto_case *test_case = &CASES[case_index];
-    owner_proto_route *route =
-        test_case->retained
-            ? &retained_route
-            : (test_case->payload_bytes == OWNER_PROTO_BELOW_WINDOW_BYTES
-                   ? &below_window_copy_route
-                   : (test_case->payload_bytes == OWNER_PROTO_CROSS_WINDOW_BYTES
-                          ? &cross_window_copy_route
-                          : (test_case->payload_bytes == OWNER_PROTO_RETAINED_BYTES
-                                 ? &large_copy_route
-                                 : &small_route)));
-    const size_t rounds =
-        test_case->payload_bytes == OWNER_PROTO_SMALL_BYTES
-            ? small_rounds
-            : retained_rounds;
+  {
+    const owner_proto_case *selected_cases =
+        flow_mode ? FLOW_CASES : CASES;
+    const size_t selected_count =
+        flow_mode ? sizeof(FLOW_CASES) / sizeof(FLOW_CASES[0])
+                  : sizeof(CASES) / sizeof(CASES[0]);
+    for (case_index = 0u; case_index < selected_count; ++case_index) {
+      const owner_proto_case *test_case = &selected_cases[case_index];
+      owner_proto_route *route;
+      size_t rounds;
+      if (flow_mode) {
+        if (test_case->retained) {
+          mem_set_used(retained, test_case->payload_bytes);
+          route = &retained_route;
+        } else {
+          flow_copy_route.small_size = test_case->payload_bytes;
+          route = &flow_copy_route;
+        }
+        rounds = flow_rounds;
+      } else {
+        route =
+            test_case->retained
+                ? &retained_route
+                : (test_case->payload_bytes == OWNER_PROTO_BELOW_WINDOW_BYTES
+                       ? &below_window_copy_route
+                       : (test_case->payload_bytes == OWNER_PROTO_CROSS_WINDOW_BYTES
+                              ? &cross_window_copy_route
+                              : (test_case->payload_bytes == OWNER_PROTO_RETAINED_BYTES
+                                     ? &large_copy_route
+                                     : &small_route)));
+        rounds =
+            test_case->payload_bytes == OWNER_PROTO_SMALL_BYTES
+                ? small_rounds
+                : retained_rounds;
+      }
     for (owner_index = 0u;
          owner_index < sizeof(OWNERS) / sizeof(OWNERS[0]); ++owner_index) {
       if (owner_proto_run(test_case, OWNERS[owner_index], rounds,
