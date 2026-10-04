@@ -907,6 +907,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   atomic_init(&impl->owner.runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
   salts_mutex_init(&impl->owner.admission_mutex);
   impl->owner.admission_sync_initialized = true;
+  salts_mutex_init(&impl->owner.websocket_command_mutex);
+  impl->owner.websocket_command_sync_initialized = true;
   impl->owner_count = 1u;
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {
