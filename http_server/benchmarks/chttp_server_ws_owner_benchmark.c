@@ -38,7 +38,7 @@ typedef struct ws_bench_shared {
   const ws_bench_case *test_case;
   chttp_server_websocket_session sessions[WS_BENCH_CONNECTIONS];
   const unsigned char *payload;
-  uint64_t *push_started_ns;
+  atomic_uint_fast64_t *push_started_ns;
   atomic_int captured;
   atomic_int connected;
   atomic_int ready;
@@ -345,7 +345,9 @@ static void ws_bench_worker_main(void *user) {
           &client, shared->test_case, shared->payload);
       if (status != SALTS_OK) goto cleanup;
       worker->latencies[round] =
-          salts_hrtime() - shared->push_started_ns[sample];
+          salts_hrtime() -
+          atomic_load_explicit(&shared->push_started_ns[sample],
+                               memory_order_acquire);
       atomic_fetch_add_explicit(
           &shared->received, 1u, memory_order_acq_rel);
     }
@@ -434,7 +436,8 @@ static int ws_bench_send_copy_round(ws_bench_shared *shared,
     const size_t sample =
         index * shared->test_case->rounds + round;
     int status;
-    shared->push_started_ns[sample] = salts_hrtime();
+    atomic_store_explicit(&shared->push_started_ns[sample],
+                          salts_hrtime(), memory_order_release);
     status = chttp_server_websocket_send_binary(
         &shared->sessions[index], shared->payload,
         shared->test_case->payload_bytes);
@@ -481,7 +484,7 @@ static int ws_bench_run(const ws_bench_case *test_case,
   bool thread_started[WS_BENCH_CONNECTIONS] = {false};
   ws_bench_pressure pressure = {0};
   uint64_t *latencies = NULL;
-  uint64_t *push_started_ns = NULL;
+  atomic_uint_fast64_t *push_started_ns = NULL;
   uint16_t port = 0u;
   uint64_t started_ns;
   uint64_t wall_ns;
@@ -500,7 +503,8 @@ static int ws_bench_run(const ws_bench_case *test_case,
   if (latencies == NULL) return 1;
   if (test_case->copied_command) {
     push_started_ns =
-        (uint64_t *)calloc(total_ops, sizeof(*push_started_ns));
+        (atomic_uint_fast64_t *)calloc(
+            total_ops, sizeof(*push_started_ns));
     if (push_started_ns == NULL) goto cleanup;
   }
 
