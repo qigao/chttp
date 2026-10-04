@@ -299,6 +299,7 @@ struct chttp_server_owner_lane {
   chttp_file_transfer **file_transfers;
   cnet_accepted_stream *admissions;
   salts_mutex_t admission_mutex;
+  salts_mutex_t websocket_command_mutex;
   size_t connection_begin;
   size_t connection_count;
   size_t file_transfer_capacity;
@@ -312,6 +313,7 @@ struct chttp_server_owner_lane {
   atomic_int runtime_state;
   int terminal_status;
   bool admission_sync_initialized;
+  bool websocket_command_sync_initialized;
   bool network_initialized;
   bool thread_started;
   bool file_runtime_initialized;
