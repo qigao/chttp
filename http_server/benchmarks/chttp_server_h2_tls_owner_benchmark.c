@@ -691,6 +691,7 @@ cleanup_threads:
       salts_thread_destroy(&threads[index]);
     }
   }
+  }
 
 cleanup:
   if (server.impl != NULL) {
@@ -938,6 +939,8 @@ int main(void) {
       "\"small_rounds\":%zu,"
       "\"retained_rounds\":%zu,"
       "\"warmup_rounds\":%zu,"
+      "\"flow_rounds\":%zu,"
+      "\"flow_mode\":%s,"
       "\"note\":\"TLS profile and handshake are completed in warmup; H2 submits four streams before polling completions\"}\n",
       flow_mode ? "chttp_h2_flow_window"
                 : "chttp_server_owner_protocol_scaling",
@@ -950,7 +953,8 @@ int main(void) {
       "kqueue",
 #endif
       OWNER_PROTO_CONNECTIONS, OWNER_PROTO_H2_DEPTH,
-      small_rounds, retained_rounds, warmup_rounds);
+      small_rounds, retained_rounds, warmup_rounds, flow_rounds,
+      flow_mode ? "true" : "false");
   fflush(stdout);
 
   {
