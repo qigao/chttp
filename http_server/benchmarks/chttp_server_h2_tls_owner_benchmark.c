@@ -696,6 +696,7 @@ cleanup_threads:
       salts_thread_destroy(&threads[index]);
     }
   }
+  }
 
 cleanup:
   if (server.impl != NULL) {
