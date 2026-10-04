@@ -171,6 +171,18 @@ int chttp_client_init(chttp_client *client, const chttp_client_config *config) {
   return SALTS_OK;
 }
 
+int chttp_client_set_socket_options(
+    chttp_client *client,
+    const cnet_stream_socket_options *options) {
+  chttp_blocking_client_impl *impl = chttp_client_get_impl(client);
+  if (impl == NULL || options == NULL ||
+      options->size != sizeof(*options))
+    return SALTS_EINVAL;
+  if (!impl->usable) return SALTS_ESHUTDOWN;
+  if (impl->operation_active) return SALTS_EBUSY;
+  return chttp_async_client_set_socket_options(&impl->async, options);
+}
+
 static int chttp_requests_perform(chttp_client *client, chttp_method method,
                                   const chttp_options *options, chttp_response *out_response,
                                   chttp_error *out_error, chttp_file_transfer *file_transfer,
