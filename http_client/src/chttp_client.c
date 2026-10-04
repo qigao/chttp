@@ -965,8 +965,9 @@ int chttp_async_client_set_h2_receive_window_policy(
     uint32_t connection_window) {
   chttp_client_impl *impl = chttp_client_get(client);
   size_t index;
-  if (impl == NULL ||
-      stream_window > INT32_MAX || connection_window > INT32_MAX)
+  if (impl == NULL || stream_window > INT32_MAX ||
+      connection_window > INT32_MAX ||
+      (connection_window != 0u && connection_window < UINT32_C(65535)))
     return SALTS_EINVAL;
   if (impl->poll_active || impl->callback_active || impl->stop_active ||
       impl->stopped)
