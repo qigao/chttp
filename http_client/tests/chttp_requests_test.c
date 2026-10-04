@@ -386,6 +386,27 @@ static void chttp_requests_test_round_trip(chttp_client *client,
 }
 
 spec("CHTTP requests-style client") {
+  it("applies explicit stream socket policy to future blocking connections") {
+    chttp_client client = {0};
+    chttp_client_config config = chttp_requests_test_config();
+    cnet_stream_socket_options options =
+        (cnet_stream_socket_options)CNET_STREAM_SOCKET_OPTIONS_INIT;
+
+    options.nodelay = 1;
+    check_equal(chttp_client_set_socket_options(&client, &options),
+                SALTS_EINVAL);
+    check_equal(chttp_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_client_set_socket_options(&client, &options),
+                SALTS_OK);
+
+    options.size = 0u;
+    check_equal(chttp_client_set_socket_options(&client, &options),
+                SALTS_EINVAL);
+
+    check_equal(chttp_client_destroy(&client, CHTTP_REQUESTS_TEST_TIMEOUT_MS),
+                SALTS_OK);
+  }
+
   it("reuses one same-origin connection for sequential targets") {
     chttp_client client = {0};
     chttp_client_config config = chttp_requests_test_config();
