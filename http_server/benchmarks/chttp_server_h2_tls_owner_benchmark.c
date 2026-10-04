@@ -687,11 +687,15 @@ int main(void) {
        OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
       {"h2-tcp-64k-retained", CHTTP_HTTP_2, false, true, false, false,
        OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+      {"h2-tcp-64k-retained-client-nodelay", CHTTP_HTTP_2, false, true, false, true,
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
       {"h1-tls-1k-copy", CHTTP_HTTP_1_1, true, false, false, false,
        OWNER_PROTO_SMALL_BYTES, 1u},
       {"h1-tls-64k-retained", CHTTP_HTTP_1_1, true, true, false, false,
        OWNER_PROTO_RETAINED_BYTES, 1u},
       {"h2-tls-1k-copy", CHTTP_HTTP_2, true, false, false, false,
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+      {"h2-tls-1k-copy-client-nodelay", CHTTP_HTTP_2, true, false, false, true,
        OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
       {"h2-tls-16383-copy-single", CHTTP_HTTP_2, true, false, false, false,
        OWNER_PROTO_BELOW_WINDOW_BYTES, 1u},
@@ -703,7 +707,11 @@ int main(void) {
        OWNER_PROTO_CROSS_WINDOW_BYTES, OWNER_PROTO_H2_DEPTH},
       {"h2-tls-64k-copy", CHTTP_HTTP_2, true, false, false, false,
        OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+      {"h2-tls-64k-copy-client-nodelay", CHTTP_HTTP_2, true, false, false, true,
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
       {"h2-tls-64k-retained", CHTTP_HTTP_2, true, true, false, false,
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+      {"h2-tls-64k-retained-client-nodelay", CHTTP_HTTP_2, true, true, false, true,
        OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH}};
   static const size_t OWNERS[] = {1u, 2u, 4u};
   const size_t small_rounds =
