@@ -348,7 +348,8 @@ cleanup:
 
 static void owner_ws_sample_pressure(chttp_server_impl *impl,
                                      owner_ws_pressure *pressure,
-                                     size_t owner_count) {
+                                     size_t owner_count,
+                                     bool capture_leases) {
   size_t index;
   if (impl == NULL || pressure == NULL) return;
   for (index = 0u; index < owner_count && index < 4u; ++index) {
@@ -356,7 +357,8 @@ static void owner_ws_sample_pressure(chttp_server_impl *impl,
     size_t ring;
     size_t commands;
     if (owner == NULL) continue;
-    pressure->owner_leases[index] = chttp_server_owner_lease_count(owner);
+    if (capture_leases)
+      pressure->owner_leases[index] = chttp_server_owner_lease_count(owner);
     salts_mutex_lock(&owner->admission_mutex);
     ring = owner->admission_count;
     salts_mutex_unlock(&owner->admission_mutex);
@@ -465,10 +467,10 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
 
   while (atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
          OWNER_WS_CONNECTIONS) {
-    owner_ws_sample_pressure(impl, &pressure, owner_count);
+    owner_ws_sample_pressure(impl, &pressure, owner_count, true);
     salts_thread_yield();
   }
-  owner_ws_sample_pressure(impl, &pressure, owner_count);
+  owner_ws_sample_pressure(impl, &pressure, owner_count, true);
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index)
     if (atomic_load_explicit(&workers[index].status,
                              memory_order_acquire) != SALTS_OK)
@@ -483,7 +485,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   while (atomic_load_explicit(&barrier.done, memory_order_acquire) !=
          OWNER_WS_CONNECTIONS) {
-    owner_ws_sample_pressure(impl, &pressure, owner_count);
+    owner_ws_sample_pressure(impl, &pressure, owner_count, false);
     salts_thread_yield();
   }
   wall_ns = salts_hrtime() - started_ns;
