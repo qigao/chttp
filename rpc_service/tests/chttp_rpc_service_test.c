@@ -108,9 +108,9 @@ static const DataBindNativeTypeBinding ADD_RESPONSE_NATIVE = {
     .idl_type_name = "AddResponse",
     .data = &ADD_RESPONSE_DATA};
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_rpc_service_test_add,
+    CMETA_RESULT_VALUE, chttp_rpc_service_test_add,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
@@ -140,9 +140,9 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_invoke(
   return true;
 }
 
-FunctionDeclAsAbi(
+FunctionDeclAsAbiResult(
     value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
-    chttp_rpc_service_test_other,
+    CMETA_RESULT_VALUE, chttp_rpc_service_test_other,
     (const AddRequest *, request,
      CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
      &ADD_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
