@@ -370,9 +370,13 @@ static void owner_proto_worker_main(void *user) {
   if (worker->test_case->protocol == CHTTP_HTTP_2 &&
       (worker->test_case->stream_receive_window != 0u ||
        worker->test_case->connection_receive_window != 0u)) {
+    chttp_h2_receive_window_policy policy =
+        (chttp_h2_receive_window_policy)CHTTP_H2_RECEIVE_WINDOW_POLICY_INIT;
+    policy.stream_window = worker->test_case->stream_receive_window;
+    policy.connection_window =
+        worker->test_case->connection_receive_window;
     status = chttp_async_client_set_h2_receive_window_policy(
-        &client, worker->test_case->stream_receive_window,
-        worker->test_case->connection_receive_window);
+        &client, &policy);
     if (status != SALTS_OK) goto cleanup;
   }
   if (worker->test_case->client_nodelay) {
