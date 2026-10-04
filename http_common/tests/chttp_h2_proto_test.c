@@ -278,7 +278,7 @@ spec("CHTTP HTTP/2 protocol engine") {
         .max_hpack_string_bytes = 4096u,
         .max_settings_count = 16u,
         .local_initial_window_size = 131072u,
-        .connection_receive_window_size = 131072u};
+        .connection_receive_window_size = 1024u * 1024u};
     static const uint8_t ping[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
     e2e_t e;
     e2e_init_with_config(&e, &config);
@@ -288,7 +288,8 @@ spec("CHTTP HTTP/2 protocol engine") {
     pump(&e);
     check_equal(e.server_recv_error, 0);
     check_equal(e.peer_initial_window, (uint32_t)131072u);
-    check_equal(e.connection_window_increment, (uint32_t)(131072u - 65535u));
+    check_equal(e.connection_window_increment,
+                (uint32_t)(1024u * 1024u - 65535u));
     chttp_h2_proto_destroy(e.client);
     chttp_h2_proto_destroy(e.server);
   }
