@@ -20,6 +20,8 @@ enum {
   OWNER_WS_CONNECTIONS = 8,
   OWNER_WS_TIMEOUT_MS = 10000,
   OWNER_WS_SMALL_BYTES = 64,
+  OWNER_WS_16K_BYTES = 16 * 1024,
+  OWNER_WS_32K_BYTES = 32 * 1024,
   OWNER_WS_LARGE_BYTES = 64 * 1024,
   OWNER_WS_SMALL_MESSAGES = 240,
   OWNER_WS_LARGE_MESSAGES = 24,
@@ -263,9 +265,9 @@ static void owner_ws_worker_main(void *user) {
       .timeout_ms = OWNER_WS_TIMEOUT_MS,
       .protocol = CHTTP_HTTP_1_1};
   const unsigned char *payload =
-      worker->test_case->payload_bytes == OWNER_WS_LARGE_BYTES
-          ? OWNER_WS_LARGE_PAYLOAD
-          : OWNER_WS_SMALL_PAYLOAD;
+      worker->test_case->payload_bytes == OWNER_WS_SMALL_BYTES
+          ? OWNER_WS_SMALL_PAYLOAD
+          : OWNER_WS_LARGE_PAYLOAD;
   char uri[160];
   unsigned int http_status = 0u;
   uint64_t ignored = 0u;
@@ -612,12 +614,16 @@ cleanup:
 
 int main(void) {
   static const owner_ws_case CASES[] = {
-      {"ws-echo-64", false, OWNER_WS_CALLBACK_ECHO, OWNER_WS_SMALL_BYTES},
-      {"ws-push-64", false, OWNER_WS_CAPTURED_PUSH, OWNER_WS_SMALL_BYTES},
+      {"ws-echo-16k", false, OWNER_WS_CALLBACK_ECHO, OWNER_WS_16K_BYTES},
+      {"ws-push-16k", false, OWNER_WS_CAPTURED_PUSH, OWNER_WS_16K_BYTES},
+      {"ws-echo-32k", false, OWNER_WS_CALLBACK_ECHO, OWNER_WS_32K_BYTES},
+      {"ws-push-32k", false, OWNER_WS_CAPTURED_PUSH, OWNER_WS_32K_BYTES},
       {"ws-echo-64k", false, OWNER_WS_CALLBACK_ECHO, OWNER_WS_LARGE_BYTES},
       {"ws-push-64k", false, OWNER_WS_CAPTURED_PUSH, OWNER_WS_LARGE_BYTES},
-      {"wss-echo-64", true, OWNER_WS_CALLBACK_ECHO, OWNER_WS_SMALL_BYTES},
-      {"wss-push-64", true, OWNER_WS_CAPTURED_PUSH, OWNER_WS_SMALL_BYTES},
+      {"wss-echo-16k", true, OWNER_WS_CALLBACK_ECHO, OWNER_WS_16K_BYTES},
+      {"wss-push-16k", true, OWNER_WS_CAPTURED_PUSH, OWNER_WS_16K_BYTES},
+      {"wss-echo-32k", true, OWNER_WS_CALLBACK_ECHO, OWNER_WS_32K_BYTES},
+      {"wss-push-32k", true, OWNER_WS_CAPTURED_PUSH, OWNER_WS_32K_BYTES},
       {"wss-echo-64k", true, OWNER_WS_CALLBACK_ECHO, OWNER_WS_LARGE_BYTES},
       {"wss-push-64k", true, OWNER_WS_CAPTURED_PUSH, OWNER_WS_LARGE_BYTES}};
   static const size_t OWNERS[] = {1u, 2u, 4u};
@@ -662,7 +668,7 @@ int main(void) {
       "\"small_messages\":%zu,"
       "\"large_messages\":%zu,"
       "\"warmup\":%zu,"
-      "\"note\":\"WS/WSS connections and TLS handshakes complete before timing; captured-push measures bounded server session command admission into the fixed owner queue\"}\n",
+      "\"note\":\"post-fix 16/32/64-KiB WS/WSS matrix; connections and TLS handshakes complete before timing; captured-push measures bounded server session command admission into the fixed owner queue\"}\n",
       getenv("GITHUB_SHA") != NULL ? getenv("GITHUB_SHA") : "unknown",
 #if defined(_WIN32)
       "iocp",
@@ -678,9 +684,9 @@ int main(void) {
        case_index < sizeof(CASES) / sizeof(CASES[0]); ++case_index) {
     const owner_ws_case *test_case = &CASES[case_index];
     const size_t messages =
-        test_case->payload_bytes == OWNER_WS_LARGE_BYTES
-            ? large_messages
-            : small_messages;
+        test_case->payload_bytes == OWNER_WS_SMALL_BYTES
+            ? small_messages
+            : large_messages;
     for (owner_index = 0u;
          owner_index < sizeof(OWNERS) / sizeof(OWNERS[0]); ++owner_index) {
       if (owner_ws_run(test_case, OWNERS[owner_index], messages, warmup,
