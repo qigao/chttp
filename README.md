@@ -16,7 +16,7 @@ That gives the library a shared foundation:
 - **CMeta / CFlow** for typed metadata and execution boundaries where required.
 - **SaltsUtils parsers and DataBind** for JSON, related higher-level formats, and typed data binding through `Salts::DataBind`.
 - **SaltsUtils crypto helpers** where explicitly required by protocol features.
-- **BoringSSL/OpenSSL-compatible package dependencies** for the low-level cryptographic provider selected by the build.
+- **Salts provider-neutral crypto APIs** for protocol hashing, HMAC, legacy compatibility digests, constant-time comparison, and secret wiping; CHTTP does not select or link a crypto provider directly.
 
 CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
 
