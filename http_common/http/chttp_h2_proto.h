@@ -99,6 +99,9 @@ typedef struct chttp_h2_proto_config {
   size_t hpack_dynamic_table_bytes;
   size_t max_hpack_string_bytes;
   size_t max_settings_count;
+  /* Internal receive-flow controls. Zero preserves RFC default 65,535. */
+  uint32_t local_initial_window_size;
+  uint32_t connection_receive_window_size;
 } chttp_h2_proto_config;
 
 int chttp_h2_proto_config_valid(const chttp_h2_proto_config *config);

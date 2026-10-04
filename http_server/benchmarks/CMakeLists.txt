@@ -60,6 +60,7 @@ target_include_directories(
   PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
           ${PROJECT_SOURCE_DIR}/http_common/rpc
           ${PROJECT_SOURCE_DIR}/http_common/tests/support
+          ${PROJECT_SOURCE_DIR}/http_client/src
           ${PROJECT_SOURCE_DIR}/http_server/src
           ${PROJECT_SOURCE_DIR}/http_server/rpc)
 

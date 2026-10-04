@@ -1,0 +1,119 @@
+name: CHttp H2 flow-window attribution
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "http_common/http/chttp_h2_proto.*"
+      - "http_client/src/chttp_client.c"
+      - "http_client/src/chttp_client_internal.h"
+      - "http_common/tests/chttp_h2_proto_test.c"
+      - "http_server/benchmarks/**"
+      - ".github/workflows/chttp-h2-flow-window.yml"
+  workflow_dispatch:
+
+env:
+  CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-h2-flow-window-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flow-window:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact CHttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Salts SDKs
+        uses: ./.github/actions/setup-salts-sdk
+
+      - name: Configure release benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset linux-release-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DBUILD_BENCHMARKS=ON
+
+      - name: Build H2 flow-window benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-release \
+            --target chttp_server_h2_tls_owner_benchmark -j2
+
+      - name: Verify admission-only owner handoff boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_handoff_boundary.py
+
+      - name: Run repeated flow-window matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          jsonl=benchmark-results/h2-flow-window.jsonl
+          : > "$jsonl"
+          {
+            echo "exact_head=$CHTTP_HEAD_SHA"
+            echo "salts_root=$SALTS_ROOT"
+            echo "logical_cores=$(nproc)"
+            echo "build_type=Release"
+            uname -a
+            cc --version | head -n 1
+            lscpu | grep -E '^(Model name|CPU\(s\)|Core\(s\) per socket|Socket\(s\)):' || true
+          } > benchmark-results/environment-h2-flow-window.txt
+
+          for repeat in 1 2 3; do
+            echo "flow-window repeat=$repeat"
+            GITHUB_SHA="$CHTTP_HEAD_SHA" \
+            CHTTP_H2_FLOW_WINDOW_MODE=1 \
+            CHTTP_H2_FLOW_WINDOW_ROUNDS=4 \
+            CHTTP_OWNER_PROTO_WARMUP_ROUNDS=1 \
+              build/linux-gcc-release/bin/chttp_server_h2_tls_owner_benchmark \
+              | tee -a "$jsonl"
+          done
+
+      - name: Verify and summarize flow-window evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_h2_flow_window_benchmark.py \
+            benchmark-results/h2-flow-window.jsonl \
+            | tee benchmark-results/h2-flow-window-summary.md
+          {
+            echo "## CHttp H2 flow-window attribution"
+            echo
+            cat benchmark-results/environment-h2-flow-window.txt
+            echo
+            cat benchmark-results/h2-flow-window-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw flow-window evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-h2-flow-window-linux-x64
+          path: benchmark-results/
+          if-no-files-found: error
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"

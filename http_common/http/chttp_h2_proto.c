@@ -233,7 +233,9 @@ static chttp_h2_proto_config proto_default_config(void) {
                                  .max_header_list_bytes = CHTTP_H2_DEFAULT_HEADER_LIST_BYTES,
                                  .hpack_dynamic_table_bytes = CHTTP_H2_DEFAULT_HPACK_TABLE_BYTES,
                                  .max_hpack_string_bytes = CHTTP_H2_DEFAULT_HPACK_STRING_BYTES,
-                                 .max_settings_count = CHTTP_H2_DEFAULT_MAX_SETTINGS_COUNT};
+                                 .max_settings_count = CHTTP_H2_DEFAULT_MAX_SETTINGS_COUNT,
+                                 .local_initial_window_size = CHTTP_H2_DEFAULT_WINDOW,
+                                 .connection_receive_window_size = CHTTP_H2_DEFAULT_WINDOW};
 }
 
 int chttp_h2_proto_config_valid(const chttp_h2_proto_config *config) {
@@ -249,7 +251,14 @@ int chttp_h2_proto_config_valid(const chttp_h2_proto_config *config) {
          config->max_header_list_bytes != 0u && config->max_header_list_bytes <= UINT32_MAX &&
          config->hpack_dynamic_table_bytes <= UINT32_MAX && config->max_hpack_string_bytes != 0u &&
          config->max_settings_count != 0u &&
-         config->max_settings_count <= SIZE_MAX / sizeof(uint32_t);
+         config->max_settings_count <= SIZE_MAX / sizeof(uint32_t) &&
+         (config->local_initial_window_size == 0u ||
+          config->local_initial_window_size <= (uint32_t)CHTTP_H2_MAX_WINDOW) &&
+         (config->connection_receive_window_size == 0u ||
+          (config->connection_receive_window_size >=
+               (uint32_t)CHTTP_H2_DEFAULT_WINDOW &&
+           config->connection_receive_window_size <=
+               (uint32_t)CHTTP_H2_MAX_WINDOW));
 }
 
 static size_t proto_initial_capacity(size_t maximum, size_t preferred) {
@@ -262,9 +271,19 @@ chttp_h2_proto *chttp_h2_proto_create(chttp_h2_proto_mode mode, const chttp_h2_p
   const chttp_h2_proto_config *selected = config != NULL ? config : &defaults;
   chttp_h2_hpack_config hpack_config;
   chttp_h2_proto *p;
+  uint32_t local_initial_window;
+  uint32_t connection_receive_window;
   if ((mode != CHTTP_H2_PROTO_CLIENT && mode != CHTTP_H2_PROTO_SERVER) ||
       !chttp_h2_proto_config_valid(selected))
     return NULL;
+  local_initial_window =
+      selected->local_initial_window_size != 0u
+          ? selected->local_initial_window_size
+          : (uint32_t)CHTTP_H2_DEFAULT_WINDOW;
+  connection_receive_window =
+      selected->connection_receive_window_size != 0u
+          ? selected->connection_receive_window_size
+          : (uint32_t)CHTTP_H2_DEFAULT_WINDOW;
   p = (chttp_h2_proto *)calloc(1, sizeof(*p));
   if (!p) return NULL;
   p->mode = mode;
@@ -304,7 +323,7 @@ chttp_h2_proto *chttp_h2_proto_create(chttp_h2_proto_mode mode, const chttp_h2_p
   p->local.enable_push = 0;
   p->local.max_concurrent_streams =
       selected->stream_capacity > UINT32_MAX ? UINT32_MAX : (uint32_t)selected->stream_capacity;
-  p->local.initial_window_size = 65535;
+  p->local.initial_window_size = local_initial_window;
   p->local.max_frame_size = 16384;
   p->local.max_header_list_size = (uint32_t)selected->max_header_list_bytes;
   p->local.enable_connect_protocol = 0;
@@ -318,8 +337,10 @@ chttp_h2_proto *chttp_h2_proto_create(chttp_h2_proto_mode mode, const chttp_h2_p
   p->peer.enable_connect_protocol = 0;
 
   p->conn_send_window = CHTTP_H2_DEFAULT_WINDOW;
+  /* RFC connection credit starts at 65,535. An explicit larger local target
+   * is advertised once with WINDOW_UPDATE in the connection preface. */
   p->conn_recv_window = CHTTP_H2_DEFAULT_WINDOW;
-  p->conn_local_window = CHTTP_H2_DEFAULT_WINDOW;
+  p->conn_local_window = (int32_t)connection_receive_window;
   p->next_stream_id = (mode == CHTTP_H2_PROTO_CLIENT) ? 1 : 2;
   p->goaway_received_last = -1;
   if (chttp_h2_hpack_buffer_init(&p->out,
@@ -1127,19 +1148,30 @@ static void proto_emit_data(chttp_h2_proto *p, chttp_h2_proto_stream *s) {
  * outbound frame.  The client writes the preface once, the server responds
  * with SETTINGS after it has seen the client preface. */
 static int proto_ensure_preface(chttp_h2_proto *p) {
+  int status;
   if (!p) return -1;
   if (p->mode == CHTTP_H2_PROTO_CLIENT && !p->client_preface_done) {
-    if (chttp_h2_hpack_buffer_reserve(&p->out, CHTTP_H2_PREFACE_LEN + CHTTP_H2_FRAME_HEADER_SIZE +
-                                                   42u) != 0) {
+    if (chttp_h2_hpack_buffer_reserve(
+            &p->out, CHTTP_H2_PREFACE_LEN + 2u * CHTTP_H2_FRAME_HEADER_SIZE +
+                         42u + 4u) != 0) {
       return -1;
     }
     memcpy(p->out.data + p->out.size, CHTTP_H2_PREFACE, CHTTP_H2_PREFACE_LEN);
     p->out.size += CHTTP_H2_PREFACE_LEN;
     p->client_preface_done = 1;
-    return chttp_h2_proto_submit_settings(p);
+    status = chttp_h2_proto_submit_settings(p);
+    if (status != 0) return status;
+    if (p->conn_local_window > CHTTP_H2_DEFAULT_WINDOW)
+      return chttp_h2_proto_submit_window_update(
+          p, 0, (uint32_t)(p->conn_local_window - CHTTP_H2_DEFAULT_WINDOW));
+    return 0;
   }
   if (p->mode == CHTTP_H2_PROTO_SERVER && p->server_preface_seen && !p->settings_sent) {
-    return chttp_h2_proto_submit_settings(p);
+    status = chttp_h2_proto_submit_settings(p);
+    if (status != 0) return status;
+    if (p->conn_local_window > CHTTP_H2_DEFAULT_WINDOW)
+      return chttp_h2_proto_submit_window_update(
+          p, 0, (uint32_t)(p->conn_local_window - CHTTP_H2_DEFAULT_WINDOW));
   }
   return 0;
 }
