@@ -255,7 +255,10 @@ int chttp_h2_proto_config_valid(const chttp_h2_proto_config *config) {
          (config->local_initial_window_size == 0u ||
           config->local_initial_window_size <= (uint32_t)CHTTP_H2_MAX_WINDOW) &&
          (config->connection_receive_window_size == 0u ||
-          config->connection_receive_window_size <= (uint32_t)CHTTP_H2_MAX_WINDOW);
+          (config->connection_receive_window_size >=
+               (uint32_t)CHTTP_H2_DEFAULT_WINDOW &&
+           config->connection_receive_window_size <=
+               (uint32_t)CHTTP_H2_MAX_WINDOW));
 }
 
 static size_t proto_initial_capacity(size_t maximum, size_t preferred) {
