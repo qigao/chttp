@@ -48,6 +48,8 @@ int main() {
   chttp_request_options async_options{};
   chttp_options options{};
   chttp_client_config client_config{};
+  chttp_h2_receive_window_policy h2_window_policy =
+      CHTTP_H2_RECEIVE_WINDOW_POLICY_INIT;
   chttp_server server{};
   chttp_server_config server_config{};
   chttp_server_stats server_stats{};
@@ -69,6 +71,8 @@ int main() {
   auto *deferred_cancel = &chttp_server_deferred_cancel;
   auto *async_socket_options = &chttp_async_client_set_socket_options;
   auto *client_socket_options = &chttp_client_set_socket_options;
+  auto *async_h2_window = &chttp_async_client_set_h2_receive_window_policy;
+  auto *client_h2_window = &chttp_client_set_h2_receive_window_policy;
   auto *post_file = &chttp_post_file;
   auto *put_file = &chttp_put_file;
   auto *download_file = &chttp_download_file;
@@ -82,6 +86,8 @@ int main() {
   (void)deferred_cancel;
   (void)async_socket_options;
   (void)client_socket_options;
+  (void)async_h2_window;
+  (void)client_h2_window;
   (void)post_file;
   (void)put_file;
   (void)download_file;
@@ -104,7 +110,11 @@ int main() {
                  options.protocol == CHTTP_HTTP_1_1 &&
                  client_config.h2_input_buffer_bytes == 64u * 1024u &&
                  client_config.h2_hpack_dynamic_table_bytes == 2048u &&
-                 client_config.h2_max_settings_count == 16u && server_config.enable_http2 == 1 &&
+                 client_config.h2_max_settings_count == 16u &&
+                 h2_window_policy.size == sizeof(chttp_h2_receive_window_policy) &&
+                 h2_window_policy.stream_window == 0u &&
+                 h2_window_policy.connection_window == 0u &&
+                 server_config.enable_http2 == 1 &&
                  server_config.h2_stream_capacity == 32u &&
                  server_config.h2_output_buffer_bytes == 64u * 1024u &&
                  body_source.read == nullptr && body_sink.write == nullptr &&

@@ -675,6 +675,41 @@ static void chttp_h2_test_on_complete(void *user, chttp_request request,
 }
 
 spec("CHTTP HTTP/2 client") {
+  it("validates explicit H2 receive-window policy before session creation") {
+    chttp_async_client async = {0};
+    chttp_client blocking = {0};
+    chttp_client_config config = chttp_h2_test_config();
+    chttp_h2_receive_window_policy policy =
+        (chttp_h2_receive_window_policy)CHTTP_H2_RECEIVE_WINDOW_POLICY_INIT;
+
+    check_equal(chttp_async_client_init(&async, &config), SALTS_OK);
+    policy.size = 0u;
+    check_equal(chttp_async_client_set_h2_receive_window_policy(
+                    &async, &policy),
+                SALTS_EINVAL);
+    policy =
+        (chttp_h2_receive_window_policy)CHTTP_H2_RECEIVE_WINDOW_POLICY_INIT;
+    policy.connection_window = UINT32_C(65534);
+    check_equal(chttp_async_client_set_h2_receive_window_policy(
+                    &async, &policy),
+                SALTS_EINVAL);
+    policy.connection_window = UINT32_C(131072);
+    policy.stream_window = UINT32_C(131072);
+    check_equal(chttp_async_client_set_h2_receive_window_policy(
+                    &async, &policy),
+                SALTS_OK);
+    check_equal(chttp_async_client_stop(&async, CHTTP_H2_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    check_equal(chttp_async_client_destroy(&async), SALTS_OK);
+
+    check_equal(chttp_client_init(&blocking, &config), SALTS_OK);
+    check_equal(chttp_client_set_h2_receive_window_policy(
+                    &blocking, &policy),
+                SALTS_OK);
+    check_equal(chttp_client_destroy(&blocking, CHTTP_H2_TEST_TIMEOUT_MS),
+                SALTS_OK);
+  }
+
   it("performs a blocking h2c prior-knowledge request without caller polling") {
     chttp_client client = {0};
     chttp_client_config config = chttp_h2_test_config();
