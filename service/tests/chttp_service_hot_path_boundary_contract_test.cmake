@@ -1,6 +1,9 @@
 if(NOT DEFINED SERVICE_SOURCE OR SERVICE_SOURCE STREQUAL "")
   message(FATAL_ERROR "SERVICE_SOURCE is required")
 endif()
+if(NOT DEFINED RPC_SERVICE_SOURCE OR RPC_SERVICE_SOURCE STREQUAL "")
+  message(FATAL_ERROR "RPC_SERVICE_SOURCE is required")
+endif()
 if(NOT DEFINED SERVICE_HEADER OR SERVICE_HEADER STREQUAL "")
   message(FATAL_ERROR "SERVICE_HEADER is required")
 endif()
@@ -9,8 +12,22 @@ if(NOT DEFINED SERVER_HEADER OR SERVER_HEADER STREQUAL "")
 endif()
 
 file(READ "${SERVICE_SOURCE}" SERVICE_TEXT)
+file(READ "${RPC_SERVICE_SOURCE}" RPC_SERVICE_TEXT)
 file(READ "${SERVICE_HEADER}" SERVICE_HEADER_TEXT)
 file(READ "${SERVER_HEADER}" SERVER_TEXT)
+
+foreach(SEMANTIC_SOURCE IN ITEMS SERVICE_TEXT RPC_SERVICE_TEXT)
+  foreach(REQUIRED_SEMANTIC
+      "CMETA_RESULT_VALUE"
+      "CMETA_PARAM_IN | CMETA_PARAM_BORROWED"
+      "CMETA_PARAM_OUT | CMETA_PARAM_BORROWED")
+    string(FIND "${${SEMANTIC_SOURCE}}" "${REQUIRED_SEMANTIC}" POS)
+    if(POS EQUAL -1)
+      message(FATAL_ERROR
+        "Generated Service admission must consume canonical CMeta ownership semantics: ${REQUIRED_SEMANTIC}")
+    endif()
+  endforeach()
+endforeach()
 
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_execute(" EXEC_START)
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_handler(" EXEC_END)
