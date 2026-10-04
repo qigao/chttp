@@ -328,10 +328,6 @@ static void ws_bench_worker_main(void *user) {
     }
   }
 
-  atomic_store_explicit(&worker->shared->first_error,
-                        atomic_load_explicit(&worker->shared->first_error,
-                                             memory_order_acquire),
-                        memory_order_release);
   atomic_fetch_add_explicit(
       &shared->ready, 1, memory_order_acq_rel);
   announced = true;
