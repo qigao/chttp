@@ -635,6 +635,7 @@ int main(void) {
                          OWNER_WS_LARGE_MESSAGES);
   const size_t warmup =
       owner_ws_env_count("CHTTP_OWNER_WS_WARMUP", OWNER_WS_WARMUP);
+  const char *workload_filter = getenv("CHTTP_OWNER_WS_WORKLOAD");
   char *cert_path = NULL;
   char *key_path = NULL;
   char *ca_path = NULL;
@@ -668,6 +669,7 @@ int main(void) {
       "\"small_messages\":%zu,"
       "\"large_messages\":%zu,"
       "\"warmup\":%zu,"
+      "\"workload_filter\":\"%s\","
       "\"note\":\"post-fix 16/32/64-KiB WS/WSS matrix; connections and TLS handshakes complete before timing; captured-push measures bounded server session command admission into the fixed owner queue\"}\n",
       getenv("GITHUB_SHA") != NULL ? getenv("GITHUB_SHA") : "unknown",
 #if defined(_WIN32)
@@ -677,12 +679,18 @@ int main(void) {
 #else
       "kqueue",
 #endif
-      OWNER_WS_CONNECTIONS, small_messages, large_messages, warmup);
+      OWNER_WS_CONNECTIONS, small_messages, large_messages, warmup,
+      workload_filter != NULL && workload_filter[0] != '\0'
+          ? workload_filter
+          : "all");
   fflush(stdout);
 
   for (case_index = 0u;
        case_index < sizeof(CASES) / sizeof(CASES[0]); ++case_index) {
     const owner_ws_case *test_case = &CASES[case_index];
+    if (workload_filter != NULL && workload_filter[0] != '\0' &&
+        strcmp(workload_filter, test_case->name) != 0)
+      continue;
     const size_t messages =
         test_case->payload_bytes == OWNER_WS_SMALL_BYTES
             ? small_messages
