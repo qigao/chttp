@@ -217,6 +217,15 @@ typedef struct chttp_client_config {
 int chttp_async_client_init(chttp_async_client *client, const chttp_client_config *config);
 
 /**
+ * Replaces CNet stream socket policy for future TCP/TLS connections.
+ * Existing established/idle connections keep their current OS socket options.
+ * The full current cnet_stream_socket_options.size is required.
+ */
+int chttp_async_client_set_socket_options(
+    chttp_async_client *client,
+    const cnet_stream_socket_options *options);
+
+/**
  * Serializes and copies a request, then reuses an H1 connection or H2 session
  * keyed by exact `connection_uri + authority + TLS profile + protocol`, or
  * asynchronously connects through CNet.
@@ -272,6 +281,14 @@ const char *chttp_response_view_header(const chttp_response_view *response, cons
  * a poller, executor, or worker thread.
  */
 int chttp_client_init(chttp_client *client, const chttp_client_config *config);
+
+/**
+ * Blocking-client counterpart of chttp_async_client_set_socket_options().
+ * Returns SALTS_EBUSY while one blocking request/file operation is active.
+ */
+int chttp_client_set_socket_options(
+    chttp_client *client,
+    const cnet_stream_socket_options *options);
 
 /** Blocking requests-style methods returning an owning response. */
 int chttp_get(chttp_client *client, const chttp_options *options, chttp_response *out_response,
