@@ -302,6 +302,23 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
             &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
     const DataBindRpcProjectionConfig *projection;
     DataBindRpcMethodPlan *method_plan = NULL;
+    DataBindRpcMethodPlan *unknown_result_plan = NULL;
+    DataBindRpcMethodPlan *unborrowed_request_plan = NULL;
+    cmeta_function_desc unknown_result_function = {0};
+    cmeta_function_abi_desc unknown_result_abi = {0};
+    DataBindServiceNativeBinding unknown_result_native = {0};
+    DataBindNativeExecution unknown_result_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    chttp_rpc_service_mount_options unknown_result_mount =
+        CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
+    cmeta_param_desc unborrowed_request_params[2];
+    cmeta_function_desc unborrowed_request_function = {0};
+    cmeta_function_abi_desc unborrowed_request_abi = {0};
+    DataBindServiceNativeBinding unborrowed_request_native = {0};
+    DataBindNativeExecution unborrowed_request_execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    chttp_rpc_service_mount_options unborrowed_request_mount =
+        CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
     chttp_rpc_service service = {0};
     chttp_rpc_service_config service_config =
         CHTTP_RPC_SERVICE_CONFIG_INIT;
@@ -347,6 +364,31 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     invalid_execution = execution;
     invalid_execution.invoke = NULL;
 
+    unknown_result_function = *FunctionMeta(chttp_rpc_service_test_add);
+    unknown_result_function.result_flags = CMETA_RESULT_UNKNOWN;
+    unknown_result_abi = *FunctionAbi(chttp_rpc_service_test_add);
+    unknown_result_abi.function = &unknown_result_function;
+    unknown_result_native = native;
+    unknown_result_native.function = &unknown_result_function;
+    unknown_result_execution = execution;
+    unknown_result_execution.function = &unknown_result_function;
+    unknown_result_execution.abi = &unknown_result_abi;
+
+    unborrowed_request_params[0] =
+        FunctionMeta(chttp_rpc_service_test_add)->params[0];
+    unborrowed_request_params[1] =
+        FunctionMeta(chttp_rpc_service_test_add)->params[1];
+    unborrowed_request_params[0].flags = CMETA_PARAM_IN;
+    unborrowed_request_function = *FunctionMeta(chttp_rpc_service_test_add);
+    unborrowed_request_function.params = unborrowed_request_params;
+    unborrowed_request_abi = *FunctionAbi(chttp_rpc_service_test_add);
+    unborrowed_request_abi.function = &unborrowed_request_function;
+    unborrowed_request_native = native;
+    unborrowed_request_native.function = &unborrowed_request_function;
+    unborrowed_request_execution = execution;
+    unborrowed_request_execution.function = &unborrowed_request_function;
+    unborrowed_request_execution.abi = &unborrowed_request_abi;
+
     projection = data_bind_rpc_projection_artifact_find(
         &databind_chttp_rpc_service_rpc_projection, "Calc", "Add");
     check_not_null(projection);
@@ -364,6 +406,19 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     check_not_null(method_plan);
     check_equal(
         data_bind_rpc_method_plan_wire_method(method_plan), "calc.add");
+
+    check_equal(
+        data_bind_rpc_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &unknown_result_native,
+            &unknown_result_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(unknown_result_plan);
+    check_equal(
+        data_bind_rpc_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &unborrowed_request_native,
+            &unborrowed_request_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(unborrowed_request_plan);
 
     service_config.method_capacity = 1u;
     service_config.max_output_value_bytes = 64u;
@@ -390,6 +445,24 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     invalid.execution = &invalid_execution;
     check_equal(
         chttp_rpc_service_mount(&service, &server, &invalid), SALTS_EINVAL);
+
+    unknown_result_mount.target = "/rpc";
+    unknown_result_mount.method_plan = unknown_result_plan;
+    unknown_result_mount.native_binding = &unknown_result_native;
+    unknown_result_mount.execution = &unknown_result_execution;
+    check_equal(
+        chttp_rpc_service_mount(
+            &service, &server, &unknown_result_mount),
+        SALTS_ENOTSUP);
+
+    unborrowed_request_mount.target = "/rpc";
+    unborrowed_request_mount.method_plan = unborrowed_request_plan;
+    unborrowed_request_mount.native_binding = &unborrowed_request_native;
+    unborrowed_request_mount.execution = &unborrowed_request_execution;
+    check_equal(
+        chttp_rpc_service_mount(
+            &service, &server, &unborrowed_request_mount),
+        SALTS_ENOTSUP);
 
     mount.target = "/rpc";
     mount.method_plan = method_plan;
@@ -541,6 +614,8 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         SALTS_OK);
     check_equal(crpc_server_destroy(&server), SALTS_OK);
     check_equal(chttp_rpc_service_destroy(&service), SALTS_OK);
+    data_bind_rpc_method_plan_free(unborrowed_request_plan);
+    data_bind_rpc_method_plan_free(unknown_result_plan);
     data_bind_rpc_method_plan_free(method_plan);
     data_bind_free(contract);
   }
