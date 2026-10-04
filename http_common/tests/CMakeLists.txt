@@ -94,3 +94,9 @@ set_target_properties(chttp_cnet_retained_test PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
+
+add_test(
+  NAME chttp_no_openssl_contract_test
+  COMMAND ${CMAKE_COMMAND}
+          -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_no_openssl_contract_test.cmake)
