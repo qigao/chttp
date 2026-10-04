@@ -38,7 +38,6 @@ if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
 endif()
 find_package(llhttp CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
 
 add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
