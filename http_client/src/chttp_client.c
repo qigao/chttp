@@ -960,6 +960,19 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
   return SALTS_OK;
 }
 
+int chttp_async_client_set_socket_options(
+    chttp_async_client *client,
+    const cnet_stream_socket_options *options) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  if (impl == NULL || options == NULL ||
+      options->size != sizeof(*options))
+    return SALTS_EINVAL;
+  if (impl->poll_active || impl->callback_active || impl->stop_active ||
+      impl->stopped)
+    return SALTS_EBUSY;
+  return cnet_client_set_stream_socket_options(&impl->network, options);
+}
+
 static int chttp_async_client_submit_impl(chttp_async_client *client,
                                           const chttp_request_options *options,
                                           chttp_file_transfer *file_transfer,

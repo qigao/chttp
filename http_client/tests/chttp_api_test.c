@@ -211,6 +211,35 @@ static int chttp_test_poll_until(chttp_async_client *client, chttp_test_probe *p
 }
 
 spec("CHTTP advanced async client API") {
+  it("applies explicit stream socket policy to future async connections") {
+    chttp_async_client client = {0};
+    chttp_client_config config = chttp_test_config();
+    cnet_stream_socket_options options =
+        (cnet_stream_socket_options)CNET_STREAM_SOCKET_OPTIONS_INIT;
+
+    options.nodelay = 1;
+    check_equal(chttp_async_client_set_socket_options(&client, &options),
+                SALTS_EINVAL);
+    check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_async_client_set_socket_options(&client, &options),
+                SALTS_OK);
+
+    options.size = 0u;
+    check_equal(chttp_async_client_set_socket_options(&client, &options),
+                SALTS_EINVAL);
+    options =
+        (cnet_stream_socket_options)CNET_STREAM_SOCKET_OPTIONS_INIT;
+    check_equal(chttp_async_client_set_socket_options(&client, &options),
+                SALTS_OK);
+
+    check_equal(chttp_async_client_stop(&client, CHTTP_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    options.nodelay = 1;
+    check_equal(chttp_async_client_set_socket_options(&client, &options),
+                SALTS_EBUSY);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+  }
+
   it("exposes an explicit no-poll server lifecycle") {
     chttp_server server = {0};
     chttp_server_config config = {0};
