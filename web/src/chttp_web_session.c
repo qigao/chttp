@@ -172,7 +172,7 @@ chttp_web_status chttp_web_csrf_validate_token(
     if (salts_crypto_equal(expected, token, CHTTP_WEB_CSRF_TOKEN_BYTES, &equal) != SALTS_OK ||
         !equal)
       return chttp_web_session_fail(
-        error, CHTTP_WEB_CSRF, 0, 0u,
+          error, CHTTP_WEB_CSRF, 0, 0u,
           "CSRF token does not match the current session");
   }
   return chttp_web_session_fail(error, CHTTP_WEB_OK, 0, 0u, NULL);
