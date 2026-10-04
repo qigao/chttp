@@ -187,7 +187,7 @@ salts_idl_target(
   TARGET chttp_service_generic_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_generic.schema"
   ARTIFACT_NAME "chttp_service_generic"
-  ARTIFACTS NATIVE)
+  ARTIFACTS MESSAGE)
 
 add_executable(chttp_service_generic_cross_tu_test
   chttp_service_generic_cross_tu_test.c
