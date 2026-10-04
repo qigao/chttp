@@ -41,6 +41,7 @@ copy_sizes = (16383, 16384, 32768, 65535, 65536, 131072)
 retained_sizes = (65535, 65536, 131072)
 transports = ("tcp", "tls")
 windows = ("default", "wide")
+FLOW_CONNECTION_WINDOW = 1024 * 1024
 owners_set = {1, 2, 4}
 
 expected = {}
@@ -52,7 +53,8 @@ for transport in transports:
                 "transport": transport,
                 "payload": size,
                 "retained": False,
-                "window": 65535 if window == "default" else 131072,
+                "stream_window": 65535 if window == "default" else 131072,
+                "connection_window": 65535 if window == "default" else FLOW_CONNECTION_WINDOW,
                 "client_nodelay": True,
             }
     for size in retained_sizes:
@@ -62,7 +64,8 @@ for transport in transports:
                 "transport": transport,
                 "payload": size,
                 "retained": True,
-                "window": 65535 if window == "default" else 131072,
+                "stream_window": 65535 if window == "default" else 131072,
+                "connection_window": 65535 if window == "default" else FLOW_CONNECTION_WINDOW,
                 "client_nodelay": True,
             }
     for size in (65535, 65536):
@@ -72,8 +75,23 @@ for transport in transports:
                 "transport": transport,
                 "payload": size,
                 "retained": False,
-                "window": 65535 if window == "default" else 131072,
+                "stream_window": 65535 if window == "default" else 131072,
+                "connection_window": 65535 if window == "default" else FLOW_CONNECTION_WINDOW,
                 "client_nodelay": False,
+            }
+
+for transport in transports:
+    for body, sizes in (("copy", (65535, 65536, 131072)),
+                        ("retained", retained_sizes)):
+        for size in sizes:
+            name = f"{transport}-{body}-{size}-conn-wide"
+            expected[name] = {
+                "transport": transport,
+                "payload": size,
+                "retained": body == "retained",
+                "stream_window": 65535,
+                "connection_window": FLOW_CONNECTION_WINDOW,
+                "client_nodelay": True,
             }
 
 groups = {}
@@ -114,9 +132,9 @@ for name, spec in expected.items():
                     f"{name}/{owners}: expected operations/samples={expected_ops}, "
                     f"got {row['operations']}/{row['samples']}"
                 )
-            if int(row["stream_receive_window"]) != spec["window"]:
+            if int(row["stream_receive_window"]) != spec["stream_window"]:
                 raise SystemExit(f"{name}/{owners}: stream window mismatch")
-            if int(row["connection_receive_window"]) != spec["window"]:
+            if int(row["connection_receive_window"]) != spec["connection_window"]:
                 raise SystemExit(f"{name}/{owners}: connection window mismatch")
             if bool(row["client_nodelay"]) != spec["client_nodelay"]:
                 raise SystemExit(f"{name}/{owners}: client_nodelay mismatch")
@@ -169,6 +187,28 @@ for transport in transports:
                 f"{ratio(b_ops,a_ops):.3f}x | {int(a_p50)} | {int(b_p50)} | "
                 f"{ratio(b_p50,a_p50):.3f}x |"
             )
+print()
+
+print("### Connection-credit vs stream-credit isolation")
+print()
+print("| transport | body | size | owners | default ops/s | conn-wide ops/s | wide ops/s | conn/default | wide/conn |")
+print("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+for transport in transports:
+    for body, sizes in (("copy", (65535, 65536, 131072)),
+                        ("retained", retained_sizes)):
+        for size in sizes:
+            d = f"{transport}-{body}-{size}-default"
+            c = f"{transport}-{body}-{size}-conn-wide"
+            w = f"{transport}-{body}-{size}-wide"
+            for owners in (1, 4):
+                d_ops = med(d, owners, "ops_per_second")
+                c_ops = med(c, owners, "ops_per_second")
+                w_ops = med(w, owners, "ops_per_second")
+                print(
+                    f"| {transport} | {body} | {size} | {owners} | "
+                    f"{d_ops:.1f} | {c_ops:.1f} | {w_ops:.1f} | "
+                    f"{ratio(c_ops,d_ops):.3f}x | {ratio(w_ops,c_ops):.3f}x |"
+                )
 print()
 
 print("### Wide-window gain and owner scaling")
