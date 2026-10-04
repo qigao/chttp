@@ -34,6 +34,23 @@ jobs:
       - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
 
+      - name: Verify fixed Salts TLS baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_file="$SALTS_ROOT/lib/cmake/Salts/SaltsConfigVersion.cmake"
+          test -f "$version_file"
+          version="$(sed -n 's/^[[:space:]]*set(PACKAGE_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' "$version_file" | head -n 1)"
+          test -n "$version"
+          python3 - "$version" <<'PY'
+          import sys
+          got = tuple(int(x) for x in sys.argv[1].split(".")[:3])
+          minimum = (1, 8, 17)
+          if got < minimum:
+              raise SystemExit(f"Salts.Native {sys.argv[1]} is too old; need >= 1.8.17 for GmSSL full-duplex TLS fix")
+          print(f"Salts.Native baseline: {sys.argv[1]} (>= 1.8.17)")
+          PY
+
       - name: Configure release benchmark
         shell: bash
         run: |
