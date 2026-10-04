@@ -313,6 +313,7 @@ spec("CHttp owner topology") {
       check_equal(owner->terminal_status, SALTS_OK);
       check(!owner->network_initialized);
       check(!owner->thread_started);
+      check(owner->websocket_command_sync_initialized);
       for (connection_index = 0u;
            connection_index < owner->connection_count; ++connection_index)
         check(chttp_server_owner_lease_try_acquire(owner));
