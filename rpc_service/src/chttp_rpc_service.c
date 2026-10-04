@@ -462,7 +462,7 @@ static int chttp_rpc_service_execution_admit(
   expected_params = native->error_count == 0u ? 2u : 3u;
   if (!chttp_rpc_service_function_semantics_admit(function, expected_params))
     return SALTS_ENOTSUP;
-  if (      execution->abi->param_count != expected_params ||
+  if (execution->abi->param_count != expected_params ||
       execution->abi->return_carrier != CMETA_ABI_SCALAR ||
       cmeta_function_param_abi(execution->abi, 0u) !=
           CMETA_ABI_OBJECT_POINTER ||
