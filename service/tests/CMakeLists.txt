@@ -200,6 +200,14 @@ set_target_properties(chttp_service_header_cpp_test PROPERTIES
 
 
 add_test(
+  NAME chttp_service_authority_contract
+  COMMAND ${CMAKE_COMMAND}
+    -DIDL_FILE=${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.schema
+    -DPROJECTION_FILE=${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.projection.json
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_authority_contract_test.cmake)
+
+
+add_test(
   NAME chttp_service_single_materialization_contract
   COMMAND ${CMAKE_COMMAND}
     -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
