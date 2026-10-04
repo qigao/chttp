@@ -1,4 +1,5 @@
 #include "chttp_server_runtime.h"
+#include "chttp_client_internal.h"
 #include "chttp_tls_test_material.h"
 #define TINYTEST_NO_MAIN 1
 #include "tinytest.h"
@@ -24,7 +25,10 @@ enum {
   OWNER_PROTO_SMALL_BYTES = 1024,
   OWNER_PROTO_BELOW_WINDOW_BYTES = 16383,
   OWNER_PROTO_CROSS_WINDOW_BYTES = 16384,
+  OWNER_PROTO_32K_BYTES = 32 * 1024,
+  OWNER_PROTO_DEFAULT_WINDOW_BYTES = 65535,
   OWNER_PROTO_RETAINED_BYTES = 64 * 1024,
+  OWNER_PROTO_128K_BYTES = 128 * 1024,
   OWNER_PROTO_SMALL_ROUNDS = 80,
   OWNER_PROTO_RETAINED_ROUNDS = 16,
   OWNER_PROTO_WARMUP_ROUNDS = 2
@@ -39,6 +43,9 @@ typedef struct owner_proto_case {
   bool client_nodelay;
   size_t payload_bytes;
   size_t streams_per_connection;
+  uint32_t stream_receive_window;
+  uint32_t connection_receive_window;
+  const char *benchmark_name;
 } owner_proto_case;
 
 typedef struct owner_proto_route {
@@ -84,8 +91,8 @@ typedef struct owner_proto_pressure {
 } owner_proto_pressure;
 
 static unsigned char OWNER_PROTO_SMALL_BODY[OWNER_PROTO_SMALL_BYTES];
-static unsigned char OWNER_PROTO_LARGE_COPY_BODY[OWNER_PROTO_RETAINED_BYTES];
-static unsigned char OWNER_PROTO_RETAINED_BODY[OWNER_PROTO_RETAINED_BYTES];
+static unsigned char OWNER_PROTO_LARGE_COPY_BODY[OWNER_PROTO_128K_BYTES];
+static unsigned char OWNER_PROTO_RETAINED_BODY[OWNER_PROTO_128K_BYTES];
 
 static int owner_proto_u64_compare(const void *left, const void *right) {
   const uint64_t a = *(const uint64_t *)left;
@@ -359,6 +366,14 @@ static void owner_proto_worker_main(void *user) {
 
   status = chttp_async_client_init(&client, &config);
   if (status != SALTS_OK) goto cleanup;
+  if (worker->test_case->protocol == CHTTP_HTTP_2 &&
+      (worker->test_case->stream_receive_window != 0u ||
+       worker->test_case->connection_receive_window != 0u)) {
+    status = chttp_async_client_set_h2_receive_window_policy(
+        &client, worker->test_case->stream_receive_window,
+        worker->test_case->connection_receive_window);
+    if (status != SALTS_OK) goto cleanup;
+  }
   if (worker->test_case->client_nodelay) {
     cnet_stream_socket_options socket_options =
         (cnet_stream_socket_options)CNET_STREAM_SOCKET_OPTIONS_INIT;
@@ -600,7 +615,7 @@ static int owner_proto_run(const owner_proto_case *test_case,
 
   printf(
       "{\"kind\":\"measurement\","
-      "\"benchmark\":\"chttp_server_owner_protocol_scaling\","
+      "\"benchmark\":\"%s\","
       "\"workload\":\"%s\","
       "\"protocol\":\"%s\","
       "\"transport\":\"%s\","
@@ -629,8 +644,13 @@ static int owner_proto_run(const owner_proto_case *test_case,
       "\"peak_owner2_ring\":%zu,"
       "\"peak_owner3_ring\":%zu,"
       "\"cross_owner_admission_handoffs\":%zu,"
+      "\"stream_receive_window\":%u,"
+      "\"connection_receive_window\":%u,"
       "\"cross_owner_data_plane_hops\":0,"
       "\"errors\":0}\n",
+      test_case->benchmark_name != NULL
+          ? test_case->benchmark_name
+          : "chttp_server_owner_protocol_scaling",
       test_case->name,
       test_case->protocol == CHTTP_HTTP_2 ? "h2" : "h1",
       test_case->tls ? "tls" : "tcp",
@@ -653,7 +673,13 @@ static int owner_proto_run(const owner_proto_case *test_case,
       pressure.owner_leases[2], pressure.owner_leases[3],
       pressure.peak_owner_rings[0], pressure.peak_owner_rings[1],
       pressure.peak_owner_rings[2], pressure.peak_owner_rings[3],
-      pressure.cross_owner_handoffs);
+      pressure.cross_owner_handoffs,
+      test_case->stream_receive_window != 0u
+          ? test_case->stream_receive_window
+          : UINT32_C(65535),
+      test_case->connection_receive_window != 0u
+          ? test_case->connection_receive_window
+          : UINT32_C(65535));
   fflush(stdout);
   result = 0;
 
@@ -742,7 +768,7 @@ int main(void) {
   retained = mem_wrap_external(OWNER_PROTO_RETAINED_BODY,
                                sizeof(OWNER_PROTO_RETAINED_BODY), NULL, NULL);
   if (retained == NULL) return 2;
-  mem_set_used(retained, sizeof(OWNER_PROTO_RETAINED_BODY));
+  mem_set_used(retained, OWNER_PROTO_RETAINED_BYTES);
 
   cert_path = tt_make_temp_file("chttp-owner-cert", ".pem");
   key_path = tt_make_temp_file("chttp-owner-key", ".pem");
@@ -772,7 +798,7 @@ int main(void) {
       .retained = false};
   large_copy_route = (owner_proto_route){
       .small_body = OWNER_PROTO_LARGE_COPY_BODY,
-      .small_size = sizeof(OWNER_PROTO_LARGE_COPY_BODY),
+      .small_size = OWNER_PROTO_RETAINED_BYTES,
       .retained = false};
   retained_route = (owner_proto_route){
       .retained_body = retained,
