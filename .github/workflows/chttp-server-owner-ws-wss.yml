@@ -101,6 +101,28 @@ jobs:
               | tee -a "$jsonl"
           done
 
+      - name: Run isolated 64 KiB WSS controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          for workload in wss-echo-64k wss-push-64k; do
+            jsonl="benchmark-results/isolated-${workload}.jsonl"
+            : > "$jsonl"
+            for repeat in 1 2 3; do
+              echo "isolated workload=$workload repeat=$repeat"
+              GITHUB_SHA="$CHTTP_HEAD_SHA" \
+              CHTTP_OWNER_WS_WORKLOAD="$workload" \
+              CHTTP_OWNER_WS_SMALL_MESSAGES=240 \
+              CHTTP_OWNER_WS_LARGE_MESSAGES=24 \
+              CHTTP_OWNER_WS_WARMUP=8 \
+                build/linux-gcc-release/bin/chttp_server_ws_owner_benchmark \
+                | tee -a "$jsonl"
+            done
+            python3 http_server/benchmarks/verify_owner_ws_benchmark.py \
+              "$jsonl" "$workload" \
+              | tee "benchmark-results/isolated-${workload}-summary.md"
+          done
+
       - name: Verify and summarize WS WSS evidence
         shell: bash
         run: |
@@ -114,6 +136,12 @@ jobs:
             cat benchmark-results/environment-ws-wss.txt
             echo
             cat benchmark-results/owner-ws-wss-summary.md
+            echo
+            echo "## Isolated 64 KiB WSS controls"
+            echo
+            cat benchmark-results/isolated-wss-echo-64k-summary.md
+            echo
+            cat benchmark-results/isolated-wss-push-64k-summary.md
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload raw WS WSS benchmark evidence
