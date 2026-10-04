@@ -29,51 +29,127 @@ foreach(SEMANTIC_SOURCE IN ITEMS SERVICE_TEXT RPC_SERVICE_TEXT)
   endforeach()
 endforeach()
 
-# Cross-TU/DSO admission must use canonical semantic equality. Descriptor
-# addresses are not identities, and generic owners must not regress to
-# string-based identity when upstream generic reflection evolves.
-foreach(REQUIRED_IDENTITY
-    "cmeta_function_desc_equal")
-  string(FIND "${SERVICE_TEXT}" "${REQUIRED_IDENTITY}" SERVICE_IDENTITY_POS)
-  string(FIND "${RPC_SERVICE_TEXT}" "${REQUIRED_IDENTITY}" RPC_IDENTITY_POS)
-  if(SERVICE_IDENTITY_POS EQUAL -1 OR RPC_IDENTITY_POS EQUAL -1)
+# Semantic identity belongs to CMeta. Service/RpcService admission must
+# compare canonical descriptors semantically rather than by descriptor address.
+string(FIND "${SERVICE_TEXT}" "static int chttp_service_capability_admit(" SERVICE_ADMIT_START)
+string(FIND "${SERVICE_TEXT}" "static int chttp_service_direct_admit(" SERVICE_ADMIT_END)
+if(SERVICE_ADMIT_START LESS 0 OR SERVICE_ADMIT_END LESS 0 OR
+   SERVICE_ADMIT_END LESS_EQUAL SERVICE_ADMIT_START)
+  message(FATAL_ERROR "Could not isolate Service semantic admission")
+endif()
+math(EXPR SERVICE_ADMIT_LENGTH "${SERVICE_ADMIT_END} - ${SERVICE_ADMIT_START}")
+string(SUBSTRING "${SERVICE_TEXT}" ${SERVICE_ADMIT_START}
+       ${SERVICE_ADMIT_LENGTH} SERVICE_ADMIT_TEXT)
+string(REGEX REPLACE "[ \t\r\n]+" " " SERVICE_ADMIT_NORMALIZED
+       "${SERVICE_ADMIT_TEXT}")
+
+string(FIND "${SERVICE_ADMIT_TEXT}" "cmeta_function_desc_equal" POS)
+if(POS EQUAL -1)
+  message(FATAL_ERROR
+    "Service admission must use canonical FunctionDesc semantic equality")
+endif()
+
+foreach(FORBIDDEN_IDENTITY
+    "function == native->function"
+    "function != native->function"
+    "native->function == function"
+    "native->function != function"
+    "function == capability_function"
+    "function != capability_function"
+    "capability_function == function"
+    "capability_function != function"
+    "native->function == capability_function"
+    "native->function != capability_function"
+    "capability_function == native->function"
+    "capability_function != native->function")
+  string(FIND "${SERVICE_ADMIT_NORMALIZED}" "${FORBIDDEN_IDENTITY}" POS)
+  if(NOT POS EQUAL -1)
     message(FATAL_ERROR
-      "Service/RpcService admission must use canonical semantic function identity: ${REQUIRED_IDENTITY}")
+      "Service semantic admission must not use descriptor address identity: ${FORBIDDEN_IDENTITY}")
   endif()
 endforeach()
 
-string(FIND "${SERVICE_TEXT}" "cmeta_type_equal" SERVICE_TYPE_EQUAL_POS)
-if(SERVICE_TYPE_EQUAL_POS EQUAL -1)
+string(FIND "${RPC_SERVICE_TEXT}" "static int chttp_rpc_service_execution_admit(" RPC_ADMIT_START)
+string(FIND "${RPC_SERVICE_TEXT}" "static void chttp_rpc_service_method_release(" RPC_ADMIT_END)
+if(RPC_ADMIT_START LESS 0 OR RPC_ADMIT_END LESS 0 OR
+   RPC_ADMIT_END LESS_EQUAL RPC_ADMIT_START)
+  message(FATAL_ERROR "Could not isolate RpcService semantic admission")
+endif()
+math(EXPR RPC_ADMIT_LENGTH "${RPC_ADMIT_END} - ${RPC_ADMIT_START}")
+string(SUBSTRING "${RPC_SERVICE_TEXT}" ${RPC_ADMIT_START}
+       ${RPC_ADMIT_LENGTH} RPC_ADMIT_TEXT)
+string(REGEX REPLACE "[ \t\r\n]+" " " RPC_ADMIT_NORMALIZED
+       "${RPC_ADMIT_TEXT}")
+
+string(FIND "${RPC_ADMIT_TEXT}" "cmeta_function_desc_equal" POS)
+if(POS EQUAL -1)
   message(FATAL_ERROR
-    "Service typed projection admission must use canonical semantic type identity")
+    "RpcService admission must use canonical FunctionDesc semantic equality")
 endif()
 
-foreach(SEMANTIC_SOURCE IN ITEMS SERVICE_TEXT RPC_SERVICE_TEXT)
-  foreach(FORBIDDEN_IDENTITY
-      "function == native->function"
-      "function == execution->function"
-      "function == capability_function"
-      "native->function == function"
-      "execution->function == function"
-      "capability_function == function"
-      "owner_name")
-    string(FIND "${${SEMANTIC_SOURCE}}" "${FORBIDDEN_IDENTITY}" POS)
-    if(NOT POS EQUAL -1)
-      message(FATAL_ERROR
-        "Semantic admission must not use descriptor-address/string identity: ${FORBIDDEN_IDENTITY}")
-    endif()
-  endforeach()
-endforeach()
-
-foreach(FORBIDDEN_TYPE_IDENTITY
-    "projection->input_type == native->request->data->storage_type"
-    "projection->output_type == native->response->data->storage_type"
-    "native->request->data->storage_type == projection->input_type"
-    "native->response->data->storage_type == projection->output_type")
-  string(FIND "${SERVICE_TEXT}" "${FORBIDDEN_TYPE_IDENTITY}" POS)
+foreach(FORBIDDEN_IDENTITY
+    "function == native->function"
+    "function != native->function"
+    "native->function == function"
+    "native->function != function"
+    "function == execution->function"
+    "function != execution->function"
+    "execution->function == function"
+    "execution->function != function"
+    "native->function == execution->function"
+    "native->function != execution->function"
+    "execution->function == native->function"
+    "execution->function != native->function")
+  string(FIND "${RPC_ADMIT_NORMALIZED}" "${FORBIDDEN_IDENTITY}" POS)
   if(NOT POS EQUAL -1)
     message(FATAL_ERROR
-      "Typed Service admission must compare CMeta types semantically: ${FORBIDDEN_TYPE_IDENTITY}")
+      "RpcService semantic admission must not use descriptor address identity: ${FORBIDDEN_IDENTITY}")
+  endif()
+endforeach()
+
+# CFlow admission joins producer projection types to DataBind native storage by
+# canonical type identity. It must never require TypeDesc address equality.
+string(FIND "${SERVICE_TEXT}" "static int chttp_service_cflow_admit(" CFLOW_ADMIT_START)
+string(FIND "${SERVICE_TEXT}" "static int chttp_service_plugin_resolve(" CFLOW_ADMIT_END)
+if(CFLOW_ADMIT_START LESS 0 OR CFLOW_ADMIT_END LESS 0 OR
+   CFLOW_ADMIT_END LESS_EQUAL CFLOW_ADMIT_START)
+  message(FATAL_ERROR "Could not isolate CFlow type admission")
+endif()
+math(EXPR CFLOW_ADMIT_LENGTH "${CFLOW_ADMIT_END} - ${CFLOW_ADMIT_START}")
+string(SUBSTRING "${SERVICE_TEXT}" ${CFLOW_ADMIT_START}
+       ${CFLOW_ADMIT_LENGTH} CFLOW_ADMIT_TEXT)
+string(REGEX REPLACE "[ \t\r\n]+" " " CFLOW_ADMIT_NORMALIZED
+       "${CFLOW_ADMIT_TEXT}")
+
+string(FIND "${CFLOW_ADMIT_TEXT}" "cmeta_type_equal" POS)
+if(POS EQUAL -1)
+  message(FATAL_ERROR
+    "CFlow Service admission must use canonical TypeDesc semantic equality")
+endif()
+
+foreach(FORBIDDEN_IDENTITY
+    "projection->input_type == native->request->data->storage_type"
+    "projection->input_type != native->request->data->storage_type"
+    "native->request->data->storage_type == projection->input_type"
+    "native->request->data->storage_type != projection->input_type"
+    "projection->output_type == native->response->data->storage_type"
+    "projection->output_type != native->response->data->storage_type"
+    "native->response->data->storage_type == projection->output_type"
+    "native->response->data->storage_type != projection->output_type")
+  string(FIND "${CFLOW_ADMIT_NORMALIZED}" "${FORBIDDEN_IDENTITY}" POS)
+  if(NOT POS EQUAL -1)
+    message(FATAL_ERROR
+      "CFlow Service admission must not use TypeDesc address identity: ${FORBIDDEN_IDENTITY}")
+  endif()
+endforeach()
+
+# Generic constructor identity is upstream CMeta truth. Until #854 exposes the
+# final owner surface, CHttp must not introduce owner-name string semantics.
+foreach(SEMANTIC_SOURCE IN ITEMS SERVICE_TEXT RPC_SERVICE_TEXT)
+  string(FIND "${${SEMANTIC_SOURCE}}" "owner_name" POS)
+  if(NOT POS EQUAL -1)
+    message(FATAL_ERROR
+      "Service admission must not introduce generic owner-name string identity")
   endif()
 endforeach()
 
