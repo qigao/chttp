@@ -29,6 +29,54 @@ foreach(SEMANTIC_SOURCE IN ITEMS SERVICE_TEXT RPC_SERVICE_TEXT)
   endforeach()
 endforeach()
 
+# Cross-TU/DSO admission must use canonical semantic equality. Descriptor
+# addresses are not identities, and generic owners must not regress to
+# string-based identity when upstream generic reflection evolves.
+foreach(REQUIRED_IDENTITY
+    "cmeta_function_desc_equal")
+  string(FIND "${SERVICE_TEXT}" "${REQUIRED_IDENTITY}" SERVICE_IDENTITY_POS)
+  string(FIND "${RPC_SERVICE_TEXT}" "${REQUIRED_IDENTITY}" RPC_IDENTITY_POS)
+  if(SERVICE_IDENTITY_POS EQUAL -1 OR RPC_IDENTITY_POS EQUAL -1)
+    message(FATAL_ERROR
+      "Service/RpcService admission must use canonical semantic function identity: ${REQUIRED_IDENTITY}")
+  endif()
+endforeach()
+
+string(FIND "${SERVICE_TEXT}" "cmeta_type_equal" SERVICE_TYPE_EQUAL_POS)
+if(SERVICE_TYPE_EQUAL_POS EQUAL -1)
+  message(FATAL_ERROR
+    "Service typed projection admission must use canonical semantic type identity")
+endif()
+
+foreach(SEMANTIC_SOURCE IN ITEMS SERVICE_TEXT RPC_SERVICE_TEXT)
+  foreach(FORBIDDEN_IDENTITY
+      "function == native->function"
+      "function == execution->function"
+      "function == capability_function"
+      "native->function == function"
+      "execution->function == function"
+      "capability_function == function"
+      "owner_name")
+    string(FIND "${${SEMANTIC_SOURCE}}" "${FORBIDDEN_IDENTITY}" POS)
+    if(NOT POS EQUAL -1)
+      message(FATAL_ERROR
+        "Semantic admission must not use descriptor-address/string identity: ${FORBIDDEN_IDENTITY}")
+    endif()
+  endforeach()
+endforeach()
+
+foreach(FORBIDDEN_TYPE_IDENTITY
+    "projection->input_type == native->request->data->storage_type"
+    "projection->output_type == native->response->data->storage_type"
+    "native->request->data->storage_type == projection->input_type"
+    "native->response->data->storage_type == projection->output_type")
+  string(FIND "${SERVICE_TEXT}" "${FORBIDDEN_TYPE_IDENTITY}" POS)
+  if(NOT POS EQUAL -1)
+    message(FATAL_ERROR
+      "Typed Service admission must compare CMeta types semantically: ${FORBIDDEN_TYPE_IDENTITY}")
+  endif()
+endforeach()
+
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_execute(" EXEC_START)
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_handler(" EXEC_END)
 if(EXEC_START LESS 0 OR EXEC_END LESS 0 OR EXEC_END LESS_EQUAL EXEC_START)
