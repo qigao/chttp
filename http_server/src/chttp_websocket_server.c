@@ -459,7 +459,9 @@ static int chttp_server_websocket_command_submit(
     free(copy);
     return SALTS_ESHUTDOWN;
   }
+  salts_mutex_lock(&owner->websocket_command_mutex);
   if (owner->websocket_command_count == server->config.network.command_capacity) {
+    salts_mutex_unlock(&owner->websocket_command_mutex);
     salts_mutex_unlock(&server->mutex);
     free(copy);
     return SALTS_ENOBUFS;
@@ -473,6 +475,7 @@ static int chttp_server_websocket_command_submit(
                                               .close_code = close_code,
                                               .kind = kind};
   ++owner->websocket_command_count;
+  salts_mutex_unlock(&owner->websocket_command_mutex);
   salts_mutex_unlock(&server->mutex);
   (void)cnet_client_wake(network);
   return SALTS_OK;
@@ -537,13 +540,13 @@ int chttp_server_websocket_commands_progress(
     chttp_server_websocket_peer *peer;
     chttp_server_connection *connection = NULL;
     int status;
-    salts_mutex_lock(&server->mutex);
+    salts_mutex_lock(&owner->websocket_command_mutex);
     if (owner->websocket_command_count == 0u) {
-      salts_mutex_unlock(&server->mutex);
+      salts_mutex_unlock(&owner->websocket_command_mutex);
       return SALTS_OK;
     }
     command = &owner->websocket_commands[owner->websocket_command_head];
-    salts_mutex_unlock(&server->mutex);
+    salts_mutex_unlock(&owner->websocket_command_mutex);
     peer = chttp_server_websocket_command_peer(server, &command->session, &connection);
     if (peer != NULL && (connection == NULL || connection->owner != owner))
       peer = NULL;
@@ -565,12 +568,12 @@ int chttp_server_websocket_commands_progress(
       if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) status = SALTS_OK;
     }
     if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) return SALTS_OK;
-    salts_mutex_lock(&server->mutex);
+    salts_mutex_lock(&owner->websocket_command_mutex);
     free(command->data);
     *command = (chttp_server_websocket_command){0};
     owner->websocket_command_head =
         (owner->websocket_command_head + 1u) % server->config.network.command_capacity;
     --owner->websocket_command_count;
-    salts_mutex_unlock(&server->mutex);
+    salts_mutex_unlock(&owner->websocket_command_mutex);
   }
 }
