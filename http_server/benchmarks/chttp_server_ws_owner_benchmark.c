@@ -1,5 +1,6 @@
 #include "chttp_server_runtime.h"
 #include "chttp_tls_test_material.h"
+#define TINYTEST_NO_MAIN 1
 #include "tinytest.h"
 
 #include <http_client/http.h>
