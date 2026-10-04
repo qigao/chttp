@@ -67,6 +67,8 @@ int main() {
   auto *deferred_reply = &chttp_server_deferred_reply;
   auto *deferred_reply_buffer = &chttp_server_deferred_reply_buffer;
   auto *deferred_cancel = &chttp_server_deferred_cancel;
+  auto *async_socket_options = &chttp_async_client_set_socket_options;
+  auto *client_socket_options = &chttp_client_set_socket_options;
   auto *post_file = &chttp_post_file;
   auto *put_file = &chttp_put_file;
   auto *download_file = &chttp_download_file;
@@ -78,6 +80,8 @@ int main() {
   (void)deferred_reply;
   (void)deferred_reply_buffer;
   (void)deferred_cancel;
+  (void)async_socket_options;
+  (void)client_socket_options;
   (void)post_file;
   (void)put_file;
   (void)download_file;
