@@ -1403,6 +1403,11 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     check_equal(chttp_service_destroy(&service), SALTS_OK);
     check_equal(
+        salts_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        SALTS_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)0u);
+    check_equal(
         salts_plugin_registry_poll_quiescent(
             &registry, plugin_ref, &quiescent),
         SALTS_PLUGIN_OK);
