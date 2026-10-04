@@ -21,8 +21,10 @@ typedef struct chttp_blocking_client_impl {
   chttp_async_client async;
   chttp_client_config config;
   cnet_stream_socket_options socket_options;
+  chttp_h2_receive_window_policy h2_window_policy;
   chttp_requests_probe probe;
   bool socket_options_set;
+  bool h2_window_policy_set;
   bool operation_active;
   bool usable;
 } chttp_blocking_client_impl;
@@ -139,6 +141,9 @@ static int chttp_requests_recover(chttp_blocking_client_impl *impl, uint32_t tim
   chttp_response_destroy(&impl->probe.response);
   impl->probe = (chttp_requests_probe){0};
   status = chttp_async_client_init(&impl->async, &impl->config);
+  if (status == SALTS_OK && impl->h2_window_policy_set)
+    status = chttp_async_client_set_h2_receive_window_policy(
+        &impl->async, &impl->h2_window_policy);
   if (status == SALTS_OK && impl->socket_options_set)
     status = chttp_async_client_set_socket_options(
         &impl->async, &impl->socket_options);
@@ -173,6 +178,23 @@ int chttp_client_init(chttp_client *client, const chttp_client_config *config) {
   impl->config = *config;
   impl->usable = true;
   client->impl = impl;
+  return SALTS_OK;
+}
+
+int chttp_client_set_h2_receive_window_policy(
+    chttp_client *client,
+    const chttp_h2_receive_window_policy *policy) {
+  chttp_blocking_client_impl *impl = chttp_client_get_impl(client);
+  int status;
+  if (impl == NULL || policy == NULL || policy->size != sizeof(*policy))
+    return SALTS_EINVAL;
+  if (!impl->usable) return SALTS_ESHUTDOWN;
+  if (impl->operation_active) return SALTS_EBUSY;
+  status = chttp_async_client_set_h2_receive_window_policy(
+      &impl->async, policy);
+  if (status != SALTS_OK) return status;
+  impl->h2_window_policy = *policy;
+  impl->h2_window_policy_set = true;
   return SALTS_OK;
 }
 
