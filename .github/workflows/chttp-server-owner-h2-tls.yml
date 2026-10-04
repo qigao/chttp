@@ -45,10 +45,10 @@ jobs:
           python3 - "$version" <<'PY'
           import sys
           got = tuple(int(x) for x in sys.argv[1].split(".")[:3])
-          minimum = (1, 8, 17)
+          minimum = (1, 8, 18)
           if got < minimum:
-              raise SystemExit(f"Salts.Native {sys.argv[1]} is too old; need >= 1.8.17 for GmSSL full-duplex TLS fix")
-          print(f"Salts.Native baseline: {sys.argv[1]} (>= 1.8.17)")
+              raise SystemExit(f"Salts.Native {sys.argv[1]} is too old; need >= 1.8.18 for GmSSL full-duplex TLS fix")
+          print(f"Salts.Native baseline: {sys.argv[1]} (>= 1.8.18)")
           PY
 
       - name: Configure release benchmark
