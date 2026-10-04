@@ -2,14 +2,13 @@
 
 #include <base64_utils.h>
 
-#include <openssl/crypto.h>
-#include <openssl/evp.h>
+#include <salts_crypto.h>
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { S3_SSE_CUSTOMER_KEY_BYTES = 32, S3_SSE_MD5_BYTES = 16 };
+enum { S3_SSE_CUSTOMER_KEY_BYTES = 32, S3_SSE_MD5_BYTES = SALTS_MD5_DIGEST_BYTES };
 
 static int s3_sse_has_kms_fields(const s3_sse_options *options) {
   return options->kms_key_id != NULL || options->kms_context != NULL ||
@@ -34,20 +33,17 @@ static int s3_sse_base64(const void *data, size_t size, size_t max_header_bytes,
 static int s3_sse_customer_headers(const s3_sse_options *options, size_t max_header_bytes,
                                    s3_sse_headers *headers) {
   unsigned char digest[S3_SSE_MD5_BYTES];
-  unsigned int digest_size = 0u;
   int status;
   if (s3_sse_has_kms_fields(options) || options->customer_key == NULL ||
       options->customer_key_size != S3_SSE_CUSTOMER_KEY_BYTES)
     return SALTS_EINVAL;
   status = s3_sse_base64(options->customer_key, options->customer_key_size, max_header_bytes,
                          &headers->owned_values[0]);
-  if (status == SALTS_OK && (EVP_Digest(options->customer_key, options->customer_key_size, digest,
-                                        &digest_size, EVP_md5(), NULL) != 1 ||
-                             digest_size != sizeof(digest)))
-    status = SALTS_EIO;
+  if (status == SALTS_OK)
+    status = salts_md5(options->customer_key, options->customer_key_size, digest);
   if (status == SALTS_OK)
     status = s3_sse_base64(digest, sizeof(digest), max_header_bytes, &headers->owned_values[1]);
-  OPENSSL_cleanse(digest, sizeof(digest));
+  salts_crypto_clear(digest, sizeof(digest));
   if (status != SALTS_OK) return status;
   headers->items[0] = (chttp_header){"X-Amz-Server-Side-Encryption-Customer-Algorithm", "AES256"};
   headers->items[1] =
@@ -106,7 +102,7 @@ void s3_sse_headers_destroy(s3_sse_headers *headers) {
   for (index = 0u; index < sizeof(headers->owned_values) / sizeof(headers->owned_values[0]);
        ++index) {
     if (headers->owned_values[index] != NULL) {
-      OPENSSL_cleanse(headers->owned_values[index], strlen(headers->owned_values[index]));
+      salts_crypto_clear(headers->owned_values[index], strlen(headers->owned_values[index]));
       free(headers->owned_values[index]);
     }
   }
