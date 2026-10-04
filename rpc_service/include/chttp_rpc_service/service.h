@@ -40,7 +40,10 @@ typedef struct chttp_rpc_service_config {
  * - native_binding owns request/response/error storage layout;
  * - execution owns FunctionDesc/FunctionAbi + generated exact adapter.
  *
- * Mount validates these artifacts before registering the CRPC method.
+ * Mount validates these artifacts plus the canonical generated Service
+ * ownership shape: VALUE status result, IN|BORROWED request, and OUT|BORROWED
+ * response/error storage. UNKNOWN or alternate ownership semantics fail closed
+ * before registering the CRPC method.
  */
 typedef struct chttp_rpc_service_mount_options {
   size_t size;
