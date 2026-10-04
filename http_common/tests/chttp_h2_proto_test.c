@@ -44,6 +44,8 @@ typedef struct e2e_s {
   uint32_t goaway_error;
   int ping_acks;
   uint8_t ping_ack[8];
+  uint32_t peer_initial_window;
+  uint32_t connection_window_increment;
 } e2e_t;
 
 typedef struct h2_waiting_source_probe {
@@ -189,6 +191,21 @@ static void capture_ping_ack(void *ud, const uint8_t opaque[8]) {
   memcpy(e->ping_ack, opaque, sizeof(e->ping_ack));
 }
 
+static void capture_settings(void *ud, const uint32_t *ids,
+                             const uint32_t *values, size_t count) {
+  e2e_t *e = (e2e_t *)ud;
+  size_t index;
+  for (index = 0u; index < count; ++index)
+    if (ids[index] == CHTTP_H2_SETTING_INITIAL_WINDOW_SIZE)
+      e->peer_initial_window = values[index];
+}
+
+static void capture_window_update(void *ud, int32_t stream_id,
+                                  uint32_t increment) {
+  e2e_t *e = (e2e_t *)ud;
+  if (stream_id == 0) e->connection_window_increment += increment;
+}
+
 static void pump(e2e_t *e) {
   int iter;
   for (iter = 0; iter < 200; iter++) {
@@ -225,6 +242,8 @@ static void e2e_init_with_config(e2e_t *e, const chttp_h2_proto_config *config) 
   scbs.on_header = srv_hdr;
   scbs.on_end_headers = srv_end;
   scbs.on_data = srv_data;
+  scbs.on_settings = capture_settings;
+  scbs.on_window_update = capture_window_update;
   scbs.on_goaway = capture_goaway;
   ccbs.user_data = e;
   ccbs.on_begin_headers = cli_begin;
@@ -248,6 +267,32 @@ static void e2e_request_headers(chttp_h2_hpack_header headers[4], const char *me
 }
 
 spec("CHTTP HTTP/2 protocol engine") {
+  it("advertises explicit receive windows in SETTINGS and connection credit") {
+    const chttp_h2_proto_config config = {
+        .stream_capacity = 8u,
+        .output_buffer_bytes = 64u * 1024u,
+        .input_buffer_bytes = 64u * 1024u,
+        .header_block_bytes = 4096u,
+        .max_header_list_bytes = 4096u,
+        .hpack_dynamic_table_bytes = 4096u,
+        .max_hpack_string_bytes = 4096u,
+        .max_settings_count = 16u,
+        .local_initial_window_size = 131072u,
+        .connection_receive_window_size = 131072u};
+    static const uint8_t ping[8] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u};
+    e2e_t e;
+    e2e_init_with_config(&e, &config);
+    check_not_null(e.client);
+    check_not_null(e.server);
+    check_equal(chttp_h2_proto_submit_ping(e.client, ping), 0);
+    pump(&e);
+    check_equal(e.server_recv_error, 0);
+    check_equal(e.peer_initial_window, (uint32_t)131072u);
+    check_equal(e.connection_window_increment, (uint32_t)(131072u - 65535u));
+    chttp_h2_proto_destroy(e.client);
+    chttp_h2_proto_destroy(e.server);
+  }
+
   it("keeps an extended CONNECT stream open for bidirectional DATA") {
     static const chttp_h2_hpack_header request[] = {
         {":method", sizeof(":method") - 1u, "CONNECT", sizeof("CONNECT") - 1u},
