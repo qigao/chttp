@@ -1,7 +1,7 @@
 #include <http_server/http.h>
 
 #include <cjwt/cjwt.h>
-#include <openssl/crypto.h>
+#include <salts_crypto.h>
 
 #include "chttp_jwt_internal.h"
 #include "chttp_jwt_policy.h"
@@ -134,7 +134,7 @@ int chttp_jwt_bearer_validator_init(chttp_jwt_bearer_validator *validator,
   impl->expected_audience = chttp_jwt_string_copy(options->expected_audience);
   if (impl->key == NULL || (options->expected_issuer != NULL && impl->expected_issuer == NULL) ||
       (options->expected_audience != NULL && impl->expected_audience == NULL)) {
-    if (impl->key != NULL) OPENSSL_cleanse(impl->key, impl->key_size);
+    if (impl->key != NULL) salts_crypto_clear(impl->key, impl->key_size);
     free(impl->key);
     free(impl->expected_issuer);
     free(impl->expected_audience);
@@ -151,7 +151,7 @@ int chttp_jwt_bearer_validator_destroy(chttp_jwt_bearer_validator *validator) {
   if (validator == NULL) return SALTS_EINVAL;
   impl = (chttp_jwt_bearer_validator_impl *)validator->impl;
   if (impl != NULL) {
-    OPENSSL_cleanse(impl->key, impl->key_size);
+    salts_crypto_clear(impl->key, impl->key_size);
     free(impl->key);
     free(impl->expected_issuer);
     free(impl->expected_audience);
