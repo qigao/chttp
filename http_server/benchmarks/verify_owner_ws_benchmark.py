@@ -32,12 +32,16 @@ if len(heads) != 1 or len(backends) != 1 or connections != {8}:
 repeat_count = len(environments)
 
 expected = {
-    "ws-echo-64": ("tcp", "callback-echo", 64),
-    "ws-push-64": ("tcp", "captured-push", 64),
+    "ws-echo-16k": ("tcp", "callback-echo", 16 * 1024),
+    "ws-push-16k": ("tcp", "captured-push", 16 * 1024),
+    "ws-echo-32k": ("tcp", "callback-echo", 32 * 1024),
+    "ws-push-32k": ("tcp", "captured-push", 32 * 1024),
     "ws-echo-64k": ("tcp", "callback-echo", 64 * 1024),
     "ws-push-64k": ("tcp", "captured-push", 64 * 1024),
-    "wss-echo-64": ("tls", "callback-echo", 64),
-    "wss-push-64": ("tls", "captured-push", 64),
+    "wss-echo-16k": ("tls", "callback-echo", 16 * 1024),
+    "wss-push-16k": ("tls", "captured-push", 16 * 1024),
+    "wss-echo-32k": ("tls", "callback-echo", 32 * 1024),
+    "wss-push-32k": ("tls", "captured-push", 32 * 1024),
     "wss-echo-64k": ("tls", "callback-echo", 64 * 1024),
     "wss-push-64k": ("tls", "captured-push", 64 * 1024),
 }
@@ -177,6 +181,6 @@ print(
     "captured-session command queue/wake path."
 )
 print(
-    "Performance remains evidence-only for #175/#172 acceptance; no hosted-runner "
+    "Performance remains evidence-only for #180 attribution; no hosted-runner "
     "absolute threshold is enforced."
 )
