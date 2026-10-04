@@ -696,7 +696,6 @@ cleanup_threads:
       salts_thread_destroy(&threads[index]);
     }
   }
-  }
 
 cleanup:
   if (server.impl != NULL) {
@@ -710,41 +709,41 @@ cleanup:
 int main(void) {
   static const owner_proto_case CASES[] = {
       {"h2-tcp-1k-copy", CHTTP_HTTP_2, false, false, false, false,
-       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tcp-1k-copy-server-nodelay", CHTTP_HTTP_2, false, false, true, false,
-       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tcp-1k-copy-client-nodelay", CHTTP_HTTP_2, false, false, false, true,
-       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tcp-1k-copy-both-nodelay", CHTTP_HTTP_2, false, false, true, true,
-       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tcp-64k-retained", CHTTP_HTTP_2, false, true, false, false,
-       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tcp-64k-retained-client-nodelay", CHTTP_HTTP_2, false, true, false, true,
-       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h1-tls-1k-copy", CHTTP_HTTP_1_1, true, false, false, false,
-       OWNER_PROTO_SMALL_BYTES, 1u},
+       OWNER_PROTO_SMALL_BYTES, 1u, 0u, 0u, NULL},
       {"h1-tls-64k-retained", CHTTP_HTTP_1_1, true, true, false, false,
-       OWNER_PROTO_RETAINED_BYTES, 1u},
+       OWNER_PROTO_RETAINED_BYTES, 1u, 0u, 0u, NULL},
       {"h2-tls-1k-copy", CHTTP_HTTP_2, true, false, false, false,
-       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-1k-copy-client-nodelay", CHTTP_HTTP_2, true, false, false, true,
-       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_SMALL_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-16383-copy-single", CHTTP_HTTP_2, true, false, false, false,
-       OWNER_PROTO_BELOW_WINDOW_BYTES, 1u},
+       OWNER_PROTO_BELOW_WINDOW_BYTES, 1u, 0u, 0u, NULL},
       {"h2-tls-64k-copy-single", CHTTP_HTTP_2, true, false, false, false,
-       OWNER_PROTO_RETAINED_BYTES, 1u},
+       OWNER_PROTO_RETAINED_BYTES, 1u, 0u, 0u, NULL},
       {"h2-tls-16383-copy", CHTTP_HTTP_2, true, false, false, false,
-       OWNER_PROTO_BELOW_WINDOW_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_BELOW_WINDOW_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-16384-copy", CHTTP_HTTP_2, true, false, false, false,
-       OWNER_PROTO_CROSS_WINDOW_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_CROSS_WINDOW_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-64k-copy", CHTTP_HTTP_2, true, false, false, false,
-       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-64k-copy-client-nodelay", CHTTP_HTTP_2, true, false, false, true,
-       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-64k-retained", CHTTP_HTTP_2, true, true, false, false,
-       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH},
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL},
       {"h2-tls-64k-retained-client-nodelay", CHTTP_HTTP_2, true, true, false, true,
-       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH}};
+       OWNER_PROTO_RETAINED_BYTES, OWNER_PROTO_H2_DEPTH, 0u, 0u, NULL}};
   static const owner_proto_case FLOW_CASES[] = {
 #define FLOW_COPY_CASE(name_, tls_, nodelay_, bytes_, stream_, conn_) \
       {.name = name_, .protocol = CHTTP_HTTP_2, .tls = tls_,            \
