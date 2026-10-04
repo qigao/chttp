@@ -1,4 +1,4 @@
-name: CHttp server WS and WSS owner scaling
+name: CHttp server post-fix WSS attribution
 
 on:
   pull_request:
@@ -16,7 +16,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: chttp-server-owner-ws-wss-${{ github.event.pull_request.number || github.ref }}
+  group: chttp-server-wss-postfix-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +33,23 @@ jobs:
 
       - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
+
+      - name: Verify fixed Salts TLS baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_file="$SALTS_ROOT/lib/cmake/Salts/SaltsConfigVersion.cmake"
+          test -f "$version_file"
+          version="$(sed -n 's/^[[:space:]]*set(PACKAGE_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' "$version_file" | head -n 1)"
+          test -n "$version"
+          python3 - "$version" <<'PY'
+          import sys
+          got = tuple(int(x) for x in sys.argv[1].split(".")[:3])
+          minimum = (1, 8, 18)
+          if got < minimum:
+              raise SystemExit(f"Salts.Native {sys.argv[1]} is too old; need >= 1.8.18 for GmSSL full-duplex TLS fix")
+          print(f"Salts.Native baseline: {sys.argv[1]} (>= 1.8.18)")
+          PY
 
       - name: Configure release benchmark
         shell: bash
@@ -57,7 +74,7 @@ jobs:
           set -euo pipefail
           python3 http_server/benchmarks/verify_owner_handoff_boundary.py
 
-      - name: Run repeated WS WSS owner matrix
+      - name: Run repeated post-fix WS WSS matrix
         shell: bash
         run: |
           set -euo pipefail
@@ -92,7 +109,7 @@ jobs:
             benchmark-results/owner-ws-wss.jsonl \
             | tee benchmark-results/owner-ws-wss-summary.md
           {
-            echo "## CHttp WS/WSS fixed-owner scaling"
+            echo "## CHttp post-fix WS/WSS 16/32/64-KiB attribution"
             echo
             cat benchmark-results/environment-ws-wss.txt
             echo
@@ -102,7 +119,7 @@ jobs:
       - name: Upload raw WS WSS benchmark evidence
         uses: actions/upload-artifact@v4
         with:
-          name: chttp-server-owner-ws-wss-linux-x64
+          name: chttp-server-wss-postfix-linux-x64
           path: benchmark-results/
           if-no-files-found: error
 
