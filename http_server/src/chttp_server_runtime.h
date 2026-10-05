@@ -238,12 +238,32 @@ typedef enum chttp_server_owner_runtime_state {
   CHTTP_SERVER_OWNER_RUNTIME_DONE
 } chttp_server_owner_runtime_state;
 
+typedef struct chttp_server_websocket_profile {
+  _Atomic uint64_t commands;
+  _Atomic uint64_t bytes;
+  _Atomic uint64_t failed_commands;
+  _Atomic uint64_t copy_ns;
+  _Atomic uint64_t enqueue_ns;
+  _Atomic uint64_t wake_ns;
+  _Atomic uint64_t queue_residence_ns;
+  _Atomic uint64_t send_admission_ns;
+  _Atomic uint64_t send_completion_commands;
+  _Atomic uint64_t send_completion_ns;
+  _Atomic uint64_t max_queue_residence_ns;
+  _Atomic uint64_t max_send_admission_ns;
+  _Atomic uint64_t max_send_completion_ns;
+} chttp_server_websocket_profile;
+
 typedef struct chttp_server_websocket_command {
   chttp_server_websocket_session session;
   unsigned char *data;
+  chttp_server_websocket_profile *profile;
+  uint64_t profile_enqueued_ns;
+  uint64_t profile_send_ns;
   size_t size;
   uint16_t close_code;
   chttp_server_websocket_command_kind kind;
+  bool profile_residence_recorded;
 } chttp_server_websocket_command;
 
 struct chttp_server_connection {
@@ -284,6 +304,8 @@ struct chttp_server_connection {
   bool deferred_disconnected;
   bool deferred_response_writing;
   bool retained_response_paused;
+  chttp_server_websocket_profile *websocket_send_profile;
+  uint64_t websocket_send_started_ns;
   bool retained_response_sg;
   bool owner_lease_held;
   chttp_server_pending_action pending_action;
@@ -436,6 +458,7 @@ struct chttp_server_impl {
   salts_cond_t changed;
   salts_thread_t thread;
   chttp_server_stats stats;
+  chttp_server_websocket_profile *websocket_profile;
   size_t admission_cursor;
   size_t started_owner_count;
   size_t startup_reported_count;
@@ -510,6 +533,9 @@ int chttp_server_route_register(chttp_server_impl *server,
                                 const chttp_server_route_options *options);
 int chttp_server_websocket_route_register(chttp_server_impl *server,
                                           const chttp_server_websocket_options *options);
+void chttp_server_websocket_profile_reset(chttp_server_websocket_profile *profile);
+void chttp_server_websocket_profile_send_complete(
+    chttp_server_connection *connection);
 chttp_server_route_record *chttp_server_route_find(chttp_server_request_state *state,
                                                    chttp_method method, const char *path,
                                                    unsigned int *out_allowed_methods,
