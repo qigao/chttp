@@ -1833,6 +1833,12 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_client_config client_config =
         chttp_service_test_client_config();
     chttp_response response = {0};
+    chttp_service_executor_gate plugin_gate;
+    cflow_executor_task plugin_gate_task;
+    chttp_service_request_thread_args plugin_request;
+    cflow_executor_stats executor_stats = {0};
+    salts_thread_t plugin_request_thread = {0};
+    uint64_t deadline;
     bool quiescent = true;
     uint16_t port = 0u;
     char uri[64];
@@ -1939,14 +1945,69 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
+    /*
+     * Occupy the only worker so the Plugin-backed request can complete HTTP
+     * bind/defer admission and remain queued without invoking provider code.
+     * This gives a deterministic accepted-invocation lifetime barrier.
+     */
+    atomic_init(&plugin_gate.started, 0);
+    atomic_init(&plugin_gate.release, 0);
+    plugin_gate_task = (cflow_executor_task){
+        .run = chttp_service_executor_gate_run,
+        .user = &plugin_gate};
     check_equal(
-        chttp_service_test_call(
-            &client, uri, "/plugin/3?right=4&scale=2", &response),
+        cflow_executor_try_post_task(&executor, &plugin_gate_task),
+        CFLOW_ADMISSION_ACCEPTED);
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(&plugin_gate.started, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(&plugin_gate.started, memory_order_acquire), 1);
+
+    memset(&plugin_request, 0, sizeof(plugin_request));
+    plugin_request.config = chttp_service_test_client_config();
+    plugin_request.target = "/plugin/3?right=4&scale=2";
+    atomic_init(&plugin_request.completed, 0);
+    check_greater(
+        snprintf(plugin_request.uri, sizeof(plugin_request.uri),
+                 "tcp://127.0.0.1:%u", (unsigned int)port),
+        0);
+    check_equal(
+        salts_thread_create(
+            &plugin_request_thread, chttp_service_request_thread,
+            &plugin_request),
         SALTS_OK);
-    check_equal(response.status_code, 201u);
-    check_equal(response.body_size, (size_t)2u);
-    check_equal(response.body, "11", 2u);
-    chttp_response_destroy(&response);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    do {
+      check_true(cflow_executor_get_stats(&executor, &executor_stats));
+      if (executor_stats.pending >= 1u) break;
+      salts_thread_yield();
+    } while (salts_monotonic_ms() < deadline);
+    check_true(executor_stats.pending >= 1u);
+
+    /*
+     * Accepted Plugin work still borrows record/execution/descriptors from the
+     * mount-owned lease. Service destruction must be fail-atomic and unload
+     * must remain blocked until task finalization.
+     */
+    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_equal(
+        salts_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        SALTS_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)1u);
+    check_equal(
+        salts_plugin_registry_unload(&registry, plugin_ref),
+        SALTS_PLUGIN_BUSY);
+
+    atomic_store_explicit(&plugin_gate.release, 1, memory_order_release);
+    check_equal(salts_thread_join(&plugin_request_thread), SALTS_OK);
+    salts_thread_destroy(&plugin_request_thread);
+    check_equal(plugin_request.status, SALTS_OK);
+    check_equal(plugin_request.http_status, 201u);
+    check_true(cflow_executor_wait_idle(&executor));
 
     check_equal(
         chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
