@@ -473,6 +473,264 @@ static const DataBindNativeErrorBinding
          chttp_service_owned_error_resolve,
          offsetof(CHttpServiceOwnedErrorEnvelope, payload.error_1)}};
 
+
+typedef struct CHttpServiceRollbackBuffer {
+  size_t size;
+  unsigned char bytes[16];
+} CHttpServiceRollbackBuffer;
+
+typedef struct CHttpServiceRollbackRequest {
+  CHttpServiceRollbackBuffer first;
+  CHttpServiceRollbackBuffer second;
+} CHttpServiceRollbackRequest;
+
+static _Atomic int CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES;
+static _Atomic int CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES;
+static _Atomic int CHTTP_SERVICE_ROLLBACK_CALLS;
+
+static bool chttp_service_rollback_buffer_is_zero(const void *object) {
+  const CHttpServiceRollbackBuffer *value =
+      (const CHttpServiceRollbackBuffer *)object;
+  return value != NULL && value->size == 0u;
+}
+
+static cmeta_status chttp_service_rollback_buffer_assign(
+    void *object, const unsigned char *data, size_t size, size_t max_bytes) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL || (data == NULL && size != 0u))
+    return CMETA_INVALID_ARGUMENT;
+  if (size > sizeof(value->bytes) || size > max_bytes)
+    return CMETA_CAPACITY_EXCEEDED;
+  if (size != 0u) memcpy(value->bytes, data, size);
+  value->size = size;
+  return CMETA_OK;
+}
+
+static cmeta_status chttp_service_rollback_buffer_read(
+    const void *object, const unsigned char **out_data, size_t *out_size) {
+  const CHttpServiceRollbackBuffer *value =
+      (const CHttpServiceRollbackBuffer *)object;
+  if (value == NULL || out_data == NULL || out_size == NULL)
+    return CMETA_INVALID_ARGUMENT;
+  *out_data = value->bytes;
+  *out_size = value->size;
+  return CMETA_OK;
+}
+
+static void chttp_service_rollback_buffer_move(
+    void *destination, void *source) {
+  CHttpServiceRollbackBuffer *dst =
+      (CHttpServiceRollbackBuffer *)destination;
+  CHttpServiceRollbackBuffer *src =
+      (CHttpServiceRollbackBuffer *)source;
+  if (dst == NULL || src == NULL) return;
+  *dst = *src;
+  memset(src, 0, sizeof(*src));
+}
+
+static cmeta_status chttp_service_rollback_first_init(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return CMETA_INVALID_ARGUMENT;
+  memset(value, 0, sizeof(*value));
+  return CMETA_OK;
+}
+
+static cmeta_status chttp_service_rollback_second_init(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return CMETA_INVALID_ARGUMENT;
+  memset(value, 0, sizeof(*value));
+  return CMETA_CALLBACK_ERROR;
+}
+
+static void chttp_service_rollback_first_restore(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return;
+  atomic_fetch_add_explicit(
+      &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, 1, memory_order_relaxed);
+  memset(value, 0, sizeof(*value));
+}
+
+static void chttp_service_rollback_second_restore(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return;
+  atomic_fetch_add_explicit(
+      &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, 1, memory_order_relaxed);
+  memset(value, 0, sizeof(*value));
+}
+
+static const cmeta_type_identity CHTTP_SERVICE_ROLLBACK_BUFFER_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.RollbackBuffer");
+static const cmeta_type_desc CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE = {
+    "CHttpServiceRollbackBuffer",
+    sizeof(CHttpServiceRollbackBuffer),
+    _Alignof(CHttpServiceRollbackBuffer),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_ROLLBACK_BUFFER_ID};
+static const cmeta_data_buffer_shape CHTTP_SERVICE_ROLLBACK_BUFFER_SHAPE = {
+    CMETA_DATA_BUFFER_OWNED};
+
+#define CHTTP_SERVICE_ROLLBACK_OPS(NAME, INIT, RESTORE)                       \
+  static const cmeta_data_buffer_ops NAME = {                                 \
+      sizeof(cmeta_data_buffer_ops), CMETA_DATA_BUFFER_OPS_ABI_VERSION,       \
+      &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE, CMETA_DATA_BUFFER_OWNED,           \
+      chttp_service_rollback_buffer_is_zero,                                  \
+      chttp_service_rollback_buffer_assign, RESTORE,                          \
+      chttp_service_rollback_buffer_read, INIT,                               \
+      chttp_service_rollback_buffer_move}
+
+CHTTP_SERVICE_ROLLBACK_OPS(
+    CHTTP_SERVICE_ROLLBACK_FIRST_OPS,
+    chttp_service_rollback_first_init,
+    chttp_service_rollback_first_restore);
+CHTTP_SERVICE_ROLLBACK_OPS(
+    CHTTP_SERVICE_ROLLBACK_SECOND_OPS,
+    chttp_service_rollback_second_init,
+    chttp_service_rollback_second_restore);
+
+#undef CHTTP_SERVICE_ROLLBACK_OPS
+
+static const cmeta_data_desc CHTTP_SERVICE_ROLLBACK_FIRST_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.RollbackRequest.first",
+    .display_name = "RollbackFirst",
+    .kind = CMETA_DATA_BYTES,
+    .storage_type = &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE,
+    .shape = &CHTTP_SERVICE_ROLLBACK_BUFFER_SHAPE,
+    .buffer_ops = &CHTTP_SERVICE_ROLLBACK_FIRST_OPS};
+static const cmeta_data_desc CHTTP_SERVICE_ROLLBACK_SECOND_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.RollbackRequest.second",
+    .display_name = "RollbackSecond",
+    .kind = CMETA_DATA_BYTES,
+    .storage_type = &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE,
+    .shape = &CHTTP_SERVICE_ROLLBACK_BUFFER_SHAPE,
+    .buffer_ops = &CHTTP_SERVICE_ROLLBACK_SECOND_OPS};
+
+static const cmeta_type_identity CHTTP_SERVICE_ROLLBACK_REQUEST_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.RollbackRequest");
+static const cmeta_type_desc CHTTP_SERVICE_ROLLBACK_REQUEST_TYPE = {
+    "CHttpServiceRollbackRequest",
+    sizeof(CHttpServiceRollbackRequest),
+    _Alignof(CHttpServiceRollbackRequest),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_ROLLBACK_REQUEST_ID};
+static const cmeta_type_desc CHTTP_SERVICE_ROLLBACK_REQUEST_PTR_TYPE = {
+    "const CHttpServiceRollbackRequest *",
+    sizeof(CHttpServiceRollbackRequest *),
+    _Alignof(CHttpServiceRollbackRequest *),
+    CMETA_T_POINTER,
+    &CHTTP_SERVICE_ROLLBACK_REQUEST_TYPE,
+    NULL,
+    NULL};
+
+static const cmeta_field_desc CHTTP_SERVICE_ROLLBACK_LAYOUT_FIELDS[] = {
+    {"first", "bytes", offsetof(CHttpServiceRollbackRequest, first),
+     sizeof(CHttpServiceRollbackBuffer),
+     _Alignof(CHttpServiceRollbackBuffer),
+     &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE, NULL},
+    {"second", "bytes", offsetof(CHttpServiceRollbackRequest, second),
+     sizeof(CHttpServiceRollbackBuffer),
+     _Alignof(CHttpServiceRollbackBuffer),
+     &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE, NULL}};
+static const cmeta_struct_desc CHTTP_SERVICE_ROLLBACK_LAYOUT = {
+    "CHttpServiceRollbackRequest",
+    sizeof(CHttpServiceRollbackRequest),
+    _Alignof(CHttpServiceRollbackRequest),
+    CHTTP_SERVICE_ROLLBACK_LAYOUT_FIELDS,
+    2u};
+static const cmeta_data_field_desc CHTTP_SERVICE_ROLLBACK_FIELDS[] = {
+    {"test.chttp.RollbackRequest.first", "first",
+     offsetof(CHttpServiceRollbackRequest, first),
+     &CHTTP_SERVICE_ROLLBACK_FIRST_DATA},
+    {"test.chttp.RollbackRequest.second", "second",
+     offsetof(CHttpServiceRollbackRequest, second),
+     &CHTTP_SERVICE_ROLLBACK_SECOND_DATA}};
+static const cmeta_data_struct_shape CHTTP_SERVICE_ROLLBACK_SHAPE = {
+    &CHTTP_SERVICE_ROLLBACK_LAYOUT,
+    CHTTP_SERVICE_ROLLBACK_FIELDS,
+    2u};
+static const cmeta_data_desc CHTTP_SERVICE_ROLLBACK_REQUEST_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.RollbackRequest.data",
+    .display_name = "CHttpServiceRollbackRequest",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &CHTTP_SERVICE_ROLLBACK_REQUEST_TYPE,
+    .shape = &CHTTP_SERVICE_ROLLBACK_SHAPE};
+static const DataBindNativeTypeBinding CHTTP_SERVICE_ROLLBACK_REQUEST_NATIVE = {
+    .size = sizeof(DataBindNativeTypeBinding),
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
+    .idl_type_name = "RollbackRequest",
+    .data = &CHTTP_SERVICE_ROLLBACK_REQUEST_DATA};
+
+FunctionDeclAsAbiResult(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    CMETA_RESULT_VALUE, chttp_service_test_rollback,
+    (const CHttpServiceRollbackRequest *, request,
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &CHTTP_SERVICE_ROLLBACK_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
+
+int chttp_service_test_rollback(
+    const CHttpServiceRollbackRequest *request, AddResponse *response) {
+  (void)request;
+  (void)response;
+  atomic_fetch_add_explicit(
+      &CHTTP_SERVICE_ROLLBACK_CALLS, 1, memory_order_relaxed);
+  return 0;
+}
+
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_rollback_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 2u ||
+      params[0] == NULL || params[1] == NULL)
+    return false;
+  result = chttp_service_test_rollback(
+      (const CHttpServiceRollbackRequest *)params[0],
+      (AddResponse *)params[1]);
+  *(int *)return_storage = result;
+  return true;
+}
+
+static const DataBindHttpFieldProjection CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP[] = {
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "first", DATA_BIND_HTTP_QUERY, "first", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "second", DATA_BIND_HTTP_QUERY, "second", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS,
+     "sum", DATA_BIND_HTTP_RESPONSE_BODY, "sum", SIZE_MAX}};
+
+static const DataBindHttpProjectionConfig CHTTP_SERVICE_ROLLBACK_HTTP = {
+    sizeof(DataBindHttpProjectionConfig),
+    DATA_BIND_METHOD_PLAN_ABI_VERSION,
+    "GET",
+    "/rollback",
+    200,
+    DATA_BIND_HTTP_CONTEXT_NONE,
+    CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP,
+    sizeof(CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP) /
+        sizeof(CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP[0]),
+    NULL,
+    0u,
+    DATA_BIND_FORMAT_JSON,
+    DATA_BIND_FORMAT_JSON};
+
 static native_io_backend_kind chttp_service_test_backend(void) {
 #if defined(_WIN32)
   return NATIVE_IO_BACKEND_IOCP;
@@ -534,10 +792,57 @@ static chttp_client_config chttp_service_test_client_config(void) {
   return config;
 }
 
+static int chttp_service_test_call(
+    chttp_client *client, const char *uri, const char *target,
+    chttp_response *response);
+
 typedef struct chttp_service_executor_gate {
   _Atomic int started;
   _Atomic int release;
 } chttp_service_executor_gate;
+
+typedef struct chttp_service_request_thread_args {
+  chttp_client_config config;
+  char uri[64];
+  const char *target;
+  _Atomic int completed;
+  int status;
+  unsigned int http_status;
+} chttp_service_request_thread_args;
+
+static void chttp_service_request_thread(void *user) {
+  chttp_service_request_thread_args *args =
+      (chttp_service_request_thread_args *)user;
+  chttp_client client = {0};
+  chttp_response response = {0};
+  if (args == NULL) return;
+  args->status = chttp_client_init(&client, &args->config);
+  if (args->status == SALTS_OK) {
+    args->status =
+        chttp_service_test_call(&client, args->uri, args->target, &response);
+    if (args->status == SALTS_OK)
+      args->http_status = response.status_code;
+    chttp_response_destroy(&response);
+    if (chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS) !=
+            SALTS_OK &&
+        args->status == SALTS_OK)
+      args->status = SALTS_EIO;
+  }
+  atomic_store_explicit(&args->completed, 1, memory_order_release);
+}
+
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_blocking_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  chttp_service_executor_gate *gate =
+      (chttp_service_executor_gate *)context;
+  if (gate == NULL) return false;
+  atomic_store_explicit(&gate->started, 1, memory_order_release);
+  while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
+    salts_thread_yield();
+  return chttp_service_test_invoke(
+      NULL, return_storage, params, param_count);
+}
 
 static void chttp_service_executor_gate_run(void *user) {
   chttp_service_executor_gate *gate =
@@ -943,6 +1248,132 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     data_bind_free(contract);
   }
 
+
+  it("does not double-teardown a DataBind-rolled-back failed request") {
+    static const char schema[] =
+        "message RollbackRequest {"
+        " bytes first;"
+        " bytes second;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "service Rollback { Run: RollbackRequest -> AddResponse; }";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_rollback),
+            &CHTTP_SERVICE_ROLLBACK_REQUEST_NATIVE,
+            &ADD_RESPONSE_NATIVE);
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    chttp_response response = {0};
+    int rollback_first_after_bind;
+    int rollback_second_after_bind;
+    uint16_t port = 0u;
+    char uri[64];
+
+    execution.function = FunctionMeta(chttp_service_test_rollback);
+    execution.abi = FunctionAbi(chttp_service_test_rollback);
+    execution.invoke = chttp_service_test_rollback_invoke;
+
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Rollback", "Run", &CHTTP_SERVICE_ROLLBACK_HTTP,
+            &native, &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 16u;
+    service_config.max_call_frame_bytes = 1024u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = &execution;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    atomic_store_explicit(
+        &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, 0, memory_order_relaxed);
+    atomic_store_explicit(
+        &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, 0, memory_order_relaxed);
+    atomic_store_explicit(
+        &CHTTP_SERVICE_ROLLBACK_CALLS, 0, memory_order_relaxed);
+
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/rollback?first=abc&second=def", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 500u);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_CALLS, memory_order_relaxed),
+        0);
+    rollback_first_after_bind = atomic_load_explicit(
+        &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed);
+    rollback_second_after_bind = atomic_load_explicit(
+        &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, memory_order_relaxed);
+    check_true(rollback_first_after_bind > 0);
+    check_true(rollback_second_after_bind > 0);
+    chttp_response_destroy(&response);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+
+    /*
+     * Service teardown after the failed request must not touch DataBind's
+     * already-rolled-back request storage again.
+     */
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed),
+        rollback_first_after_bind);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, memory_order_relaxed),
+        rollback_second_after_bind);
+
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
   it("defers direct execution onto a bounded borrowed executor") {
     static const char schema[] =
         "message AddRequest {"
@@ -1096,6 +1527,136 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_true(cflow_executor_wait_idle(&executor));
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(chttp_service_destroy(&service), SALTS_OK);
+    cflow_executor_destroy(&executor);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+  it("keeps deferred method state alive until task finalization") {
+    static const char schema[] =
+        "message AddRequest {"
+        " @Min(1) uint32 left;"
+        " uint32 right;"
+        " optional uint32 scale default 1;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "service Calc { Add: AddRequest -> AddResponse; }";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_add),
+            &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    const DataBindHttpProjectionConfig *projection;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    cflow_executor executor = {0};
+    chttp_service_executor_gate invoke_gate;
+    chttp_service_request_thread_args request_args;
+    salts_thread_t request_thread = {0};
+    uint64_t deadline;
+    uint16_t port = 0u;
+
+    projection = data_bind_http_projection_artifact_find(
+        &databind_chttp_service_http_projection, "Calc", "Add");
+    check_not_null(projection);
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &native,
+            &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    atomic_init(&invoke_gate.started, 0);
+    atomic_init(&invoke_gate.release, 0);
+    execution.function = FunctionMeta(chttp_service_test_add);
+    execution.abi = FunctionAbi(chttp_service_test_add);
+    execution.context = &invoke_gate;
+    execution.invoke = chttp_service_test_blocking_invoke;
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
+    service_config.max_call_frame_bytes = 512u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+
+    check_true(cflow_executor_worker_init_with_capacity(
+        &executor, 1u, 2u));
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = &execution;
+    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.executor = &executor;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(port != 0u);
+
+    memset(&request_args, 0, sizeof(request_args));
+    request_args.config = chttp_service_test_client_config();
+    request_args.target = "/add/3?right=4&scale=2";
+    atomic_init(&request_args.completed, 0);
+    check_greater(
+        snprintf(request_args.uri, sizeof(request_args.uri),
+                 "tcp://127.0.0.1:%u", (unsigned int)port),
+        0);
+    check_equal(
+        salts_thread_create(
+            &request_thread, chttp_service_request_thread, &request_args),
+        SALTS_OK);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(
+               &invoke_gate.started, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(&invoke_gate.started, memory_order_acquire), 1);
+
+    /*
+     * The accepted task still dereferences immutable method/execution state.
+     * Destroy must therefore fail atomically without releasing any method
+     * storage or provider lifetime.
+     */
+    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_not_null(service.impl);
+
+    atomic_store_explicit(&invoke_gate.release, 1, memory_order_release);
+    check_equal(salts_thread_join(&request_thread), SALTS_OK);
+    salts_thread_destroy(&request_thread);
+    check_equal(
+        atomic_load_explicit(&request_args.completed, memory_order_acquire), 1);
+    check_equal(request_args.status, SALTS_OK);
+    check_equal(request_args.http_status, 201u);
+    check_true(cflow_executor_wait_idle(&executor));
+
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
@@ -1271,6 +1832,13 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_client_config client_config =
         chttp_service_test_client_config();
     chttp_response response = {0};
+    chttp_service_executor_gate plugin_gate;
+    cflow_executor_task plugin_gate_task;
+    chttp_service_request_thread_args plugin_request;
+    cflow_executor_stats executor_stats = {0};
+    size_t executor_pending_baseline = 0u;
+    salts_thread_t plugin_request_thread = {0};
+    uint64_t deadline;
     bool quiescent = true;
     uint16_t port = 0u;
     char uri[64];
@@ -1377,14 +1945,71 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
+    /*
+     * Occupy the only worker so the Plugin-backed request can complete HTTP
+     * bind/defer admission and remain queued without invoking provider code.
+     * This gives a deterministic accepted-invocation lifetime barrier.
+     */
+    atomic_init(&plugin_gate.started, 0);
+    atomic_init(&plugin_gate.release, 0);
+    plugin_gate_task = (cflow_executor_task){
+        .run = chttp_service_executor_gate_run,
+        .user = &plugin_gate};
     check_equal(
-        chttp_service_test_call(
-            &client, uri, "/plugin/3?right=4&scale=2", &response),
+        cflow_executor_try_post_task(&executor, &plugin_gate_task),
+        CFLOW_ADMISSION_ACCEPTED);
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(&plugin_gate.started, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(&plugin_gate.started, memory_order_acquire), 1);
+    check_true(cflow_executor_get_stats(&executor, &executor_stats));
+    executor_pending_baseline = executor_stats.pending;
+
+    memset(&plugin_request, 0, sizeof(plugin_request));
+    plugin_request.config = chttp_service_test_client_config();
+    plugin_request.target = "/plugin/3?right=4&scale=2";
+    atomic_init(&plugin_request.completed, 0);
+    check_greater(
+        snprintf(plugin_request.uri, sizeof(plugin_request.uri),
+                 "tcp://127.0.0.1:%u", (unsigned int)port),
+        0);
+    check_equal(
+        salts_thread_create(
+            &plugin_request_thread, chttp_service_request_thread,
+            &plugin_request),
         SALTS_OK);
-    check_equal(response.status_code, 201u);
-    check_equal(response.body_size, (size_t)2u);
-    check_equal(response.body, "11", 2u);
-    chttp_response_destroy(&response);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    do {
+      check_true(cflow_executor_get_stats(&executor, &executor_stats));
+      if (executor_stats.pending > executor_pending_baseline) break;
+      salts_thread_yield();
+    } while (salts_monotonic_ms() < deadline);
+    check_true(executor_stats.pending > executor_pending_baseline);
+
+    /*
+     * Accepted Plugin work still borrows record/execution/descriptors from the
+     * mount-owned lease. Service destruction must be fail-atomic and unload
+     * must remain blocked until task finalization.
+     */
+    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_equal(
+        salts_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        SALTS_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)1u);
+    check_equal(
+        salts_plugin_registry_unload(&registry, plugin_ref),
+        SALTS_PLUGIN_BUSY);
+
+    atomic_store_explicit(&plugin_gate.release, 1, memory_order_release);
+    check_equal(salts_thread_join(&plugin_request_thread), SALTS_OK);
+    salts_thread_destroy(&plugin_request_thread);
+    check_equal(plugin_request.status, SALTS_OK);
+    check_equal(plugin_request.http_status, 201u);
+    check_true(cflow_executor_wait_idle(&executor));
 
     check_equal(
         chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),

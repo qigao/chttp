@@ -174,10 +174,18 @@ int chttp_service_mount_http(
  * Release service-owned bounded scratch/method records.
  *
  * Every server containing routes mounted by this service must be stopped and
- * destroyed before this call. For deferred mounts, accepted executor work
- * must also be idle before server destruction; this prevents a worker from
- * outliving its generation-checked deferred target. Mounted CFlow Plans are
- * destroyed here after all worker execution has drained.
+ * destroyed before a successful call.
+ *
+ * Accepted deferred work explicitly holds the mounted method/domain lifetime
+ * until its task finalizer has destroyed request/response/error native values.
+ * If any deferred invocation is still live, this call returns SALTS_EBUSY
+ * without releasing any method storage, CFlow Plan, borrowed descriptor/
+ * execution pointer, or mount-owned Plugin lease. The caller may retry after
+ * executor quiescence.
+ *
+ * This is a domain-lifetime gate only. Native value ownership and destruction
+ * remain authoritative in DataBind/CMeta; the Service does not introduce a
+ * second native ownership model.
  */
 int chttp_service_destroy(chttp_service *service);
 
