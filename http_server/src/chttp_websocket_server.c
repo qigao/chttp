@@ -43,23 +43,6 @@ void chttp_server_websocket_profile_reset(
   atomic_init(&profile->max_send_completion_ns, 0u);
 }
 
-int chttp_server_websocket_profile_callback_send_begin(
-    chttp_websocket *websocket, chttp_server_websocket_profile *profile) {
-  chttp_server_websocket_peer *peer;
-  chttp_server_connection *connection;
-  if (websocket == NULL || profile == NULL) return SALTS_EINVAL;
-  peer = chttp_websocket_peer(websocket);
-  if (peer == NULL || peer->stream_id != 0 || peer->transport == NULL)
-    return SALTS_ENOTSUP;
-  connection = (chttp_server_connection *)peer->transport;
-  if (connection->websocket_send_profile != NULL ||
-      connection->websocket_send_started_ns != 0u)
-    return SALTS_EBUSY;
-  connection->websocket_send_profile = profile;
-  connection->websocket_send_started_ns = salts_hrtime();
-  return SALTS_OK;
-}
-
 void chttp_server_websocket_profile_send_complete(
     chttp_server_connection *connection) {
   chttp_server_websocket_profile *profile;
@@ -92,6 +75,23 @@ static chttp_server_websocket_peer *chttp_websocket_peer(const chttp_websocket *
       peer->engine.impl == NULL)
     return NULL;
   return peer;
+}
+
+int chttp_server_websocket_profile_callback_send_begin(
+    chttp_websocket *websocket, chttp_server_websocket_profile *profile) {
+  chttp_server_websocket_peer *peer;
+  chttp_server_connection *connection;
+  if (websocket == NULL || profile == NULL) return SALTS_EINVAL;
+  peer = chttp_websocket_peer(websocket);
+  if (peer == NULL || peer->stream_id != 0 || peer->transport == NULL)
+    return SALTS_ENOTSUP;
+  connection = (chttp_server_connection *)peer->transport;
+  if (connection->websocket_send_profile != NULL ||
+      connection->websocket_send_started_ns != 0u)
+    return SALTS_EBUSY;
+  connection->websocket_send_profile = profile;
+  connection->websocket_send_started_ns = salts_hrtime();
+  return SALTS_OK;
 }
 
 static int chttp_server_websocket_engine_write(void *user, const uint8_t *data, size_t size) {
