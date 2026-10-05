@@ -1561,7 +1561,7 @@ static int chttp_service_http_execute_deferred(
    * canonical native-value teardown before dropping this count.
    */
   (void)atomic_fetch_add_explicit(
-      &record->deferred_in_flight, 1u, memory_order_acquire);
+      &record->deferred_in_flight, 1u, memory_order_acq_rel);
   invocation->deferred_method_held = 1;
   task = (cflow_executor_task){
       .run = record->execution_mode ==
@@ -1824,6 +1824,7 @@ int chttp_service_mount_http(
 
   record = &impl->methods[impl->method_count];
   memset(record, 0, sizeof(*record));
+  atomic_init(&record->deferred_in_flight, 0u);
   record->owner = impl;
   record->method_plan = mount->method_plan;
   record->execution_mode = mount->execution_mode;
