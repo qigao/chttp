@@ -415,6 +415,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   salts_thread_t threads[OWNER_WS_CONNECTIONS] = {0};
   bool started[OWNER_WS_CONNECTIONS] = {false};
   owner_ws_pressure pressure = {0};
+  chttp_server_websocket_profile command_profile;
   chttp_server_stats stats = {0};
   chttp_server_impl *impl;
   uint64_t *latencies = NULL;
@@ -434,6 +435,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   latencies = (uint64_t *)calloc(total_messages, sizeof(*latencies));
   if (latencies == NULL) return 1;
   memset(&state, 0, sizeof(state));
+  chttp_server_websocket_profile_reset(&command_profile);
   state.mode = test_case->mode;
   route.user = &state;
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index)
@@ -499,6 +501,13 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   for (index = 1u; index < owner_count; ++index)
     pressure.cross_owner_handoffs += pressure.owner_leases[index];
 
+  if (test_case->mode == OWNER_WS_CAPTURED_PUSH) {
+    chttp_server_websocket_profile_reset(&command_profile);
+    impl->websocket_profile = &command_profile;
+  } else {
+    impl->websocket_profile = NULL;
+  }
+
   cpu_started = clock();
   started_ns = salts_hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
@@ -519,6 +528,19 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
                              memory_order_acquire) != SALTS_OK)
       goto cleanup_threads;
   }
+
+  if (test_case->mode == OWNER_WS_CAPTURED_PUSH) {
+    const uint64_t drain_deadline = salts_hrtime() + UINT64_C(5000000000);
+    while (atomic_load_explicit(&command_profile.send_completion_commands,
+                                memory_order_acquire) !=
+           atomic_load_explicit(&command_profile.commands,
+                                memory_order_acquire)) {
+      if (salts_hrtime() >= drain_deadline) goto cleanup;
+      owner_ws_sample_command_pressure(impl, &pressure, owner_count);
+      salts_sleep_ms(1u);
+    }
+  }
+  impl->websocket_profile = NULL;
 
   if (atomic_load_explicit(&state.callback_errors,
                            memory_order_acquire) != 0)
@@ -561,6 +583,19 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       "\"peak_owner2_admission_ring\":%zu,"
       "\"peak_owner3_admission_ring\":%zu,"
       "\"captured_command_admissions\":%zu,"
+      "\"profile_commands\":%llu,"
+      "\"profile_bytes\":%llu,"
+      "\"profile_failed_commands\":%llu,"
+      "\"profile_copy_ns_per_command\":%.3f,"
+      "\"profile_enqueue_ns_per_command\":%.3f,"
+      "\"profile_wake_ns_per_command\":%.3f,"
+      "\"profile_queue_residence_ns_per_command\":%.3f,"
+      "\"profile_send_admission_ns_per_command\":%.3f,"
+      "\"profile_send_completion_commands\":%llu,"
+      "\"profile_send_completion_ns_per_command\":%.3f,"
+      "\"profile_max_queue_residence_ns\":%llu,"
+      "\"profile_max_send_admission_ns\":%llu,"
+      "\"profile_max_send_completion_ns\":%llu,"
       "\"cross_owner_admission_handoffs\":%zu,"
       "\"cross_owner_data_plane_hops\":0,"
       "\"errors\":0}\n",
@@ -589,6 +624,57 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       pressure.peak_admission_ring[0], pressure.peak_admission_ring[1],
       pressure.peak_admission_ring[2], pressure.peak_admission_ring[3],
       test_case->mode == OWNER_WS_CAPTURED_PUSH ? total_messages : 0u,
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.commands, memory_order_relaxed),
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.bytes, memory_order_relaxed),
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.failed_commands, memory_order_relaxed),
+      atomic_load_explicit(&command_profile.commands, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &command_profile.copy_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &command_profile.commands, memory_order_relaxed)
+          : 0.0,
+      atomic_load_explicit(&command_profile.commands, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &command_profile.enqueue_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &command_profile.commands, memory_order_relaxed)
+          : 0.0,
+      atomic_load_explicit(&command_profile.commands, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &command_profile.wake_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &command_profile.commands, memory_order_relaxed)
+          : 0.0,
+      atomic_load_explicit(&command_profile.commands, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &command_profile.queue_residence_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &command_profile.commands, memory_order_relaxed)
+          : 0.0,
+      atomic_load_explicit(&command_profile.commands, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &command_profile.send_admission_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &command_profile.commands, memory_order_relaxed)
+          : 0.0,
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.send_completion_commands, memory_order_relaxed),
+      atomic_load_explicit(
+          &command_profile.send_completion_commands, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &command_profile.send_completion_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &command_profile.send_completion_commands, memory_order_relaxed)
+          : 0.0,
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.max_queue_residence_ns, memory_order_relaxed),
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.max_send_admission_ns, memory_order_relaxed),
+      (unsigned long long)atomic_load_explicit(
+          &command_profile.max_send_completion_ns, memory_order_relaxed),
       pressure.cross_owner_handoffs);
   fflush(stdout);
   result = 0;
