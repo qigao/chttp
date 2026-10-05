@@ -63,7 +63,7 @@ cjwt_code_t jws_jwk_to_pkey(const cjwt_jwk_t *jwk, void **pkey,
 {
     (void)jwk;
     if (pkey) *pkey = NULL;
-    if (pkey_type) *pkey_type = JWS_PKEY_EVP;
+    if (pkey_type) *pkey_type = JWS_PKEY_UNSUPPORTED;
     return CJWTE_SIGNATURE_UNSUPPORTED_ALG;
 }
 
