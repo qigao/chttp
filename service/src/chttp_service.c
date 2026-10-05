@@ -113,6 +113,8 @@ static int chttp_service_scalar_kind(const cmeta_data_desc *data) {
   case CMETA_DATA_SINT:
   case CMETA_DATA_UINT:
   case CMETA_DATA_FLOAT:
+  case CMETA_DATA_STRING:
+  case CMETA_DATA_BYTES:
   case CMETA_DATA_ENUM:
     return 1;
   default:
