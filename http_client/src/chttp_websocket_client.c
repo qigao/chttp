@@ -407,6 +407,15 @@ static void chttp_websocket_client_on_receive(void *user, cnet_connection connec
     status = SALTS_EPROTO;
   }
   if (client->event_overflow) status = SALTS_ENOBUFS;
+  if (status == SALTS_OK && client->phase == CHTTP_WEBSOCKET_CLIENT_OPEN &&
+      client->event_count == 0u && !client->transport_terminal &&
+      client->terminal_status == SALTS_OK && !client->receive_pending) {
+    status = cnet_receive(&client->network, client->connection, 1u);
+    if (status == SALTS_OK)
+      client->receive_pending = true;
+    else if (status == SALTS_EBUSY || status == SALTS_ENOBUFS)
+      status = SALTS_OK;
+  }
   if (status != SALTS_OK) client->terminal_status = status;
 }
 
