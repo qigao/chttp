@@ -145,6 +145,25 @@ for workload in expected:
                     raise SystemExit(
                         f"{workload}/{owners}: callback echo emitted copied-command profile"
                     )
+                if int(row.get("server_callback_echo_send_calls", 0)) != int(
+                    row["operations"]
+                ):
+                    raise SystemExit(
+                        f"{workload}/{owners}: callback echo send calls "
+                        f"{row.get('server_callback_echo_send_calls')} "
+                        f"!= operations {row['operations']}"
+                    )
+                for field in (
+                    "client_send_p50_ns",
+                    "client_send_p95_ns",
+                    "client_receive_p50_ns",
+                    "client_receive_p95_ns",
+                    "server_callback_echo_send_ns_per_call",
+                ):
+                    if float(row.get(field, 0)) <= 0:
+                        raise SystemExit(
+                            f"{workload}/{owners}: invalid {field}={row.get(field)}"
+                        )
             if mode == "captured-push":
                 if captured != int(row["operations"]):
                     raise SystemExit(
@@ -222,6 +241,21 @@ for workload in expected:
             f"{int(sample['cross_owner_admission_handoffs'])} | {leases} | {peaks} |"
         )
     print()
+    if mode == "callback-echo":
+        print("| owners | client send p50 us | client send p95 us | client receive p50 us | client receive p95 us | server callback send ns/call |")
+        print("| ---: | ---: | ---: | ---: | ---: | ---: |")
+        for owners in (1, 2, 4):
+            points = by_owner[owners]
+            print(
+                f"| {owners} | "
+                f"{median_value(points, 'client_send_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_send_p95_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_receive_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_receive_p95_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'server_callback_echo_send_ns_per_call'):.1f} |"
+            )
+        print()
+
     if mode == "captured-push":
         print("| owners | copy ns/cmd | enqueue ns/cmd | wake ns/cmd | queue residence ns/cmd | send admission ns/cmd | send completion ns/sample | max queue ns | max send admission ns | max send completion ns |")
         print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
