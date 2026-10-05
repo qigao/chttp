@@ -1039,7 +1039,18 @@ static int chttp_websocket_client_send(chttp_websocket_client *client,
     return SALTS_ESHUTDOWN;
   impl->operation_active = true;
   deadline = chttp_websocket_client_deadline(timeout_ms);
-  status = chttp_websocket_client_drain_output(impl, deadline);
+
+  /*
+   * Keep one bounded receive demand armed while a synchronous send drains.
+   * TLS/WebSocket is full duplex: waiting until the later receive() call to
+   * rearm transport input can leave direction-changing request/response
+   * traffic exposed to TCP delayed-ACK/Nagle latency even when NODELAY is
+   * explicitly requested. Incoming frames remain queued in the existing
+   * bounded event ring and are returned by the next receive() call.
+   */
+  status = chttp_websocket_client_receive_arm(impl);
+  if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) status = SALTS_OK;
+  if (status == SALTS_OK) status = chttp_websocket_client_drain_output(impl, deadline);
   if (status == SALTS_OK) status = send(&impl->websocket, data, size);
   if (status == SALTS_OK) status = chttp_websocket_client_drain_output(impl, deadline);
   if (status == SALTS_OK && impl->terminal_status != SALTS_OK) status = impl->terminal_status;
