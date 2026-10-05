@@ -534,6 +534,10 @@ static chttp_client_config chttp_service_test_client_config(void) {
   return config;
 }
 
+static int chttp_service_test_call(
+    chttp_client *client, const char *uri, const char *target,
+    chttp_response *response);
+
 typedef struct chttp_service_executor_gate {
   _Atomic int started;
   _Atomic int release;
