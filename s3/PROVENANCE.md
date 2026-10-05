@@ -13,7 +13,7 @@ The migration retains the following conceptual mapping:
 
 | Legacy source | Salts destination | Adaptation |
 | --- | --- | --- |
-| `s3/src/s3_signer.c` | `s3/src/s3_signer.c` | Rebuilt on BoringSSL's OpenSSL-compatible API with strict bounds, duplicate handling, key cleansing, and AWS vectors |
+| `s3/src/s3_signer.c` | `s3/src/s3_signer.c` | Rebuilt with strict bounds, duplicate handling and AWS vectors; current crypto execution uses provider-neutral Salts SHA-256/HMAC and secure-clear APIs rather than the legacy provider API |
 | `s3/src/s3_url.c`, `s3/src/s3_multimap.c` | `s3/src/s3_request.c` | One encoded/sorted request-plan fact source; repeated query names retained |
 | `s3/src/s3_http.c` | `s3/src/s3_client.c` | Replaced the legacy CoroNet/H3 facade with injected CHTTP H1/H2 clients |
 | `s3/src/s3_response.c` | `s3/src/s3_xml.c` | Replaced unbounded parser use and timestamp placeholders with the bounded Salts XML facade |

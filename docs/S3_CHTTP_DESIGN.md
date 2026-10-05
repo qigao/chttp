@@ -43,17 +43,15 @@ source/sink progress, and protocol shutdown.
 application
     |
     v
-CHttp::S3  -- private --> BoringSSL OpenSSL-compatible Crypto target
-    |        -- private --> Salts::XmlParser / Salts::CSTL / Salts::Core
+CHttp::S3  -- private --> Salts provider-neutral crypto / XmlParser / CSTL / Core
     v
 CHttp::Client
     v
-Salts::CNet -> NativeIO
+Salts::CNet -> private TLS provider -> NativeIO
 ```
 
 The installed C target is `CHttp::S3`; its implementation library is
-`chttp_s3`, version and SOVERSION 1. Public headers include CHTTP types but do
-not expose BoringSSL, llhttp, the XML engine, CoroNet, or H3 types.
+`chttp_s3`, version and SOVERSION 1. Public headers include CHTTP types but do not expose a crypto provider, llhttp, the XML engine, CoroNet, or H3 types. CHttp::S3 does not select or link OpenSSL/BoringSSL/GmSSL directly.
 
 ## Public model
 

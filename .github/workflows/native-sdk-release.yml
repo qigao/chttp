@@ -30,6 +30,9 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify provider-neutral source and manifest contract
+        shell: bash
+        run: cmake -DPROJECT_SOURCE_DIR="$GITHUB_WORKSPACE" -P http_common/tests/chttp_no_openssl_contract_test.cmake
       - id: version
         shell: bash
         run: |
@@ -242,6 +245,24 @@ jobs:
             "arch=x64"
             "profile=release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "chttp-sdk-manifest.txt")
+
+      - name: Verify Windows provider-neutral DLL imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $vsdev = Join-Path $env:VSINSTALL "Common7\Tools\VsDevCmd.bat"
+          $dlls = Get-ChildItem -LiteralPath (Join-Path $prefix "bin") -Filter "*.dll" -File
+          if ($dlls.Count -eq 0) { throw "no installed CHttp DLLs found" }
+          $forbidden = '(?im)^\s*(?:crypto|ssl|gmssl|libcrypto[^\s]*|libssl[^\s]*)\.dll\s*$'
+          foreach ($dll in $dlls) {
+            $command = 'call "' + $vsdev + '" -arch=x64 -host_arch=x64 >nul && dumpbin /dependents "' + $dll.FullName + '"'
+            $output = (cmd.exe /d /s /c $command | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $($dll.Name)" }
+            if ($output -match $forbidden) {
+              throw "provider-specific crypto DLL import found in $($dll.Name): $($Matches[0].Trim())"
+            }
+          }
 
       - name: Verify Windows installed-package consumer
         shell: pwsh
