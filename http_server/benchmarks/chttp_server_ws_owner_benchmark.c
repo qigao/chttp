@@ -121,6 +121,30 @@ static uint64_t owner_ws_percentile(const uint64_t *values, size_t count,
   return result;
 }
 
+static int owner_ws_u32_compare(const void *left, const void *right) {
+  const uint32_t a = *(const uint32_t *)left;
+  const uint32_t b = *(const uint32_t *)right;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static uint32_t owner_ws_percentile_u32(
+    const uint32_t *values, size_t count, unsigned int percent) {
+  uint32_t *ordered;
+  size_t rank;
+  uint32_t result;
+  if (values == NULL || count == 0u) return 0u;
+  ordered = (uint32_t *)malloc(count * sizeof(*ordered));
+  if (ordered == NULL) return 0u;
+  memcpy(ordered, values, count * sizeof(*ordered));
+  qsort(ordered, count, sizeof(*ordered), owner_ws_u32_compare);
+  rank = ((size_t)percent * count + 99u) / 100u;
+  if (rank == 0u) rank = 1u;
+  if (rank > count) rank = count;
+  result = ordered[rank - 1u];
+  free(ordered);
+  return result;
+}
+
 static size_t owner_ws_env_count(const char *name, size_t fallback) {
   const char *value = getenv(name);
   char *end = NULL;
@@ -740,8 +764,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       (unsigned long long)owner_ws_percentile(cnet_receive_latencies, total_messages, 50u),
       (unsigned long long)owner_ws_percentile(message_event_latencies, total_messages, 50u),
       (unsigned long long)owner_ws_percentile(receive_return_latencies, total_messages, 50u),
-      (unsigned long long)owner_ws_percentile(
-          (const uint64_t *)receive_callback_counts, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile_u32(
+          receive_callback_counts, total_messages, 50u),
       (unsigned long long)owner_ws_percentile(plaintext_bytes, total_messages, 50u),
       (unsigned long long)owner_ws_percentile(message_plaintext_bytes, total_messages, 50u),
       atomic_load_explicit(
