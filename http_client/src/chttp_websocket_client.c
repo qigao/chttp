@@ -1127,7 +1127,7 @@ int chttp_websocket_client_profile_receive_stages(
   impl = (chttp_websocket_client_impl *)client->impl;
   if (impl->profile_receive_started_ns == 0u ||
       impl->profile_receive_return_ns == 0u)
-    return SALTS_EAGAIN;
+    return SALTS_EBUSY;
   *cnet_ns = impl->profile_cnet_receive_ns > impl->profile_receive_started_ns
                  ? impl->profile_cnet_receive_ns -
                        impl->profile_receive_started_ns
