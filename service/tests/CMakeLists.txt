@@ -183,6 +183,37 @@ set_target_properties(chttp_service_http_test PROPERTIES
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
 
+salts_idl_target(
+  TARGET chttp_service_generic_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_generic.schema"
+  ARTIFACT_NAME "chttp_service_generic"
+  ARTIFACTS MESSAGE)
+
+add_executable(chttp_service_generic_cross_tu_test
+  chttp_service_generic_cross_tu_test.c
+  chttp_service_generic_identity_a.c
+  chttp_service_generic_identity_b.c)
+
+target_link_libraries(chttp_service_generic_cross_tu_test PRIVATE
+  chttp_service_generic_fixture_native
+  Salts::CMeta
+  Salts::DataBind)
+
+target_include_directories(chttp_service_generic_cross_tu_test PRIVATE
+  "${chttp_service_generic_fixture_GENERATED_DIR}")
+
+add_dependencies(chttp_service_generic_cross_tu_test
+  chttp_service_generic_fixture_idl_codegen)
+
+add_test(NAME chttp_service_generic_cross_tu_test
+  COMMAND chttp_service_generic_cross_tu_test)
+
+set_target_properties(chttp_service_generic_cross_tu_test PROPERTIES
+  FOLDER "service/tests"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
 add_executable(chttp_service_header_cpp_test
   chttp_service_header_cpp_test.cpp)
 
