@@ -51,6 +51,7 @@ typedef struct owner_ws_server_state {
   atomic_int callback_errors;
   atomic_uint_fast64_t callback_echo_send_ns;
   atomic_uint_fast64_t callback_echo_send_calls;
+  _Atomic(chttp_server_websocket_profile *) callback_echo_profile;
 } owner_ws_server_state;
 
 typedef struct owner_ws_barrier {
@@ -215,14 +216,26 @@ static void owner_ws_event(void *user, chttp_websocket *websocket,
     atomic_fetch_add_explicit(&state->callback_errors, 1,
                               memory_order_acq_rel);
   } else {
+    chttp_server_websocket_profile *profile =
+        atomic_load_explicit(&state->callback_echo_profile,
+                             memory_order_acquire);
     const uint64_t started_ns = salts_hrtime();
-    const int status =
-        chttp_websocket_send_binary(websocket, event->data, event->size);
-    const uint64_t elapsed_ns = salts_hrtime() - started_ns;
-    atomic_fetch_add_explicit(&state->callback_echo_send_ns, elapsed_ns,
-                              memory_order_relaxed);
-    atomic_fetch_add_explicit(&state->callback_echo_send_calls, 1u,
-                              memory_order_relaxed);
+    int status;
+    if (profile != NULL) {
+      status = chttp_server_websocket_profile_callback_send_begin(
+          websocket, profile);
+      if (status != SALTS_OK)
+        atomic_fetch_add_explicit(&state->callback_errors, 1,
+                                  memory_order_acq_rel);
+    }
+    status = chttp_websocket_send_binary(websocket, event->data, event->size);
+    {
+      const uint64_t elapsed_ns = salts_hrtime() - started_ns;
+      atomic_fetch_add_explicit(&state->callback_echo_send_ns, elapsed_ns,
+                                memory_order_relaxed);
+      atomic_fetch_add_explicit(&state->callback_echo_send_calls, 1u,
+                                memory_order_relaxed);
+    }
     if (status != SALTS_OK)
       atomic_fetch_add_explicit(&state->callback_errors, 1,
                                 memory_order_acq_rel);
@@ -477,6 +490,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   atomic_init(&state.callback_errors, 0);
   atomic_init(&state.callback_echo_send_ns, 0u);
   atomic_init(&state.callback_echo_send_calls, 0u);
+  atomic_init(&state.callback_echo_profile, NULL);
   atomic_init(&barrier.ready, 0);
   atomic_init(&barrier.start, 0);
   atomic_init(&barrier.done, 0);
@@ -539,6 +553,12 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   for (index = 1u; index < owner_count; ++index)
     pressure.cross_owner_handoffs += pressure.owner_leases[index];
 
+  if (test_case->mode == OWNER_WS_CALLBACK_ECHO) {
+    chttp_server_websocket_profile_reset(&command_profile);
+    atomic_store_explicit(&state.callback_echo_profile, &command_profile,
+                          memory_order_release);
+  }
+
   if (test_case->mode == OWNER_WS_CAPTURED_PUSH) {
     chttp_server_websocket_profile_reset(&command_profile);
     impl->websocket_profile = &command_profile;
@@ -572,6 +592,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
    * coalesce or split WebSocket command bytes, so they are not a one-to-one
    * command completion contract and must not gate benchmark termination.
    */
+  atomic_store_explicit(&state.callback_echo_profile, NULL,
+                        memory_order_release);
   impl->websocket_profile = NULL;
 
   if (atomic_load_explicit(&state.callback_errors,
