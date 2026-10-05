@@ -88,6 +88,8 @@ HTTPS policy、H1 Upgrade、H2 Extended CONNECT、路由和 byte-stream Adapter�
 WebSocket client 通过 `chttp_websocket_client_config.socket_options` 配置。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
+对低延迟、双向 request/response 型 TCP/TLS/WebSocket 流，建议显式设置 `cnet_stream_socket_options.nodelay = 1`。默认零值保留平台 Nagle 策略；在 Linux loopback 的 32/64 KiB TLS echo qualification 中，默认策略会与 delayed ACK 形成约 40–45 ms 的固定延迟台阶，而显式 `TCP_NODELAY` 可显著降低中位延迟。该选择属于连接 socket policy，不改变 CNet owner affinity、TLS provider 或 WebSocket framing 语义。
+
 CHTTP 的 production transport send 只使用 CNet retained ownership。长期 H1/H2/WebSocket
 wire buffer 通过 persistent external `mem_buffer_t` wrapper 交给 CNet；一次性 H1 request bytes
 把 malloc ownership 转交给 retained buffer。成功 admission 后 caller 不再修改对应 storage，直到
