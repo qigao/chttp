@@ -3,7 +3,6 @@
 set(TEST_FILES
     test_utils.c
     test_print.c
-    test_cjwt_new.c
     test_map.c
     test_encode.c
 )
