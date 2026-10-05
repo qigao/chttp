@@ -555,6 +555,10 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
 
   if (test_case->mode == OWNER_WS_CALLBACK_ECHO) {
     chttp_server_websocket_profile_reset(&command_profile);
+    atomic_store_explicit(&state.callback_echo_send_ns, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&state.callback_echo_send_calls, 0u,
+                          memory_order_relaxed);
     atomic_store_explicit(&state.callback_echo_profile, &command_profile,
                           memory_order_release);
   }
