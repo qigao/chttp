@@ -158,6 +158,9 @@ for workload in expected:
                     "client_send_p95_ns",
                     "client_receive_p50_ns",
                     "client_receive_p95_ns",
+                    "client_cnet_receive_p50_ns",
+                    "client_message_event_p50_ns",
+                    "client_receive_return_p50_ns",
                     "server_callback_echo_send_ns_per_call",
                 ):
                     if float(row.get(field, 0)) <= 0:
@@ -242,16 +245,17 @@ for workload in expected:
         )
     print()
     if mode == "callback-echo":
-        print("| owners | client send p50 us | client send p95 us | client receive p50 us | client receive p95 us | server callback send ns/call |")
-        print("| ---: | ---: | ---: | ---: | ---: | ---: |")
+        print("| owners | client send p50 us | client receive p50 us | CNet receive p50 us | message event p50 us | receive return p50 us | server callback send ns/call |")
+        print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
         for owners in (1, 2, 4):
             points = by_owner[owners]
             print(
                 f"| {owners} | "
                 f"{median_value(points, 'client_send_p50_ns')/1000.0:.1f} | "
-                f"{median_value(points, 'client_send_p95_ns')/1000.0:.1f} | "
                 f"{median_value(points, 'client_receive_p50_ns')/1000.0:.1f} | "
-                f"{median_value(points, 'client_receive_p95_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_cnet_receive_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_message_event_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_receive_return_p50_ns')/1000.0:.1f} | "
                 f"{median_value(points, 'server_callback_echo_send_ns_per_call'):.1f} |"
             )
         print()
