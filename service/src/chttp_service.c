@@ -37,6 +37,7 @@ typedef struct chttp_service_method_record {
   size_t response_bytes;
   size_t error_bytes;
   size_t param_count;
+  _Atomic size_t deferred_in_flight;
 } chttp_service_method_record;
 
 struct chttp_service_impl {
@@ -68,6 +69,7 @@ typedef struct chttp_service_invocation {
   DataBindNativeOptions native_options;
   chttp_server_deferred deferred;
   int frame_live;
+  int deferred_method_held;
 } chttp_service_invocation;
 
 typedef struct chttp_service_scalar_reader {
@@ -1181,8 +1183,15 @@ static void chttp_service_invocation_release(
 static void chttp_service_invocation_finalize(void *user) {
   chttp_service_invocation *invocation =
       (chttp_service_invocation *)user;
+  chttp_service_method_record *record;
+  int held;
   if (invocation == NULL) return;
+  record = invocation->record;
+  held = invocation->deferred_method_held;
   chttp_service_invocation_release(invocation);
+  if (held && record != NULL)
+    (void)atomic_fetch_sub_explicit(
+        &record->deferred_in_flight, 1u, memory_order_release);
   free(invocation);
 }
 
@@ -1544,6 +1553,14 @@ static int chttp_service_http_execute_deferred(
     return status;
   }
 
+  /*
+   * From this point the deferred task may outlive the HTTP callback. Hold the
+   * method/mount domain lifetime explicitly until task.finalize, which runs
+   * canonical native-value teardown before dropping this count.
+   */
+  (void)atomic_fetch_add_explicit(
+      &record->deferred_in_flight, 1u, memory_order_acquire);
+  invocation->deferred_method_held = 1;
   task = (cflow_executor_task){
       .run = record->execution_mode ==
                      CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW
@@ -1904,6 +1921,20 @@ int chttp_service_destroy(chttp_service *service) {
   if (service == NULL) return SALTS_EINVAL;
   impl = (chttp_service_impl *)service->impl;
   if (impl == NULL) return SALTS_OK;
+
+  /*
+   * Destruction is all-or-nothing. A stopped/destroyed Server prevents new
+   * route admission; any accepted deferred task must finish/cancel and run its
+   * finalizer before method storage, cached borrowed descriptors/execution, a
+   * CFlow Plan, or a mount-owned Plugin lease may be released.
+   */
+  for (i = 0u; i < impl->method_count; ++i) {
+    if (atomic_load_explicit(
+            &impl->methods[i].deferred_in_flight,
+            memory_order_acquire) != 0u)
+      return SALTS_EBUSY;
+  }
+
   for (i = 0u; i < impl->method_count; ++i)
     chttp_service_method_release(&impl->methods[i]);
   free(impl->methods);
