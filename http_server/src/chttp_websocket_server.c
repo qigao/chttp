@@ -36,7 +36,7 @@ void chttp_server_websocket_profile_reset(
   atomic_init(&profile->wake_ns, 0u);
   atomic_init(&profile->queue_residence_ns, 0u);
   atomic_init(&profile->send_admission_ns, 0u);
-  atomic_init(&profile->send_completion_commands, 0u);
+  atomic_init(&profile->send_completion_samples, 0u);
   atomic_init(&profile->send_completion_ns, 0u);
   atomic_init(&profile->max_queue_residence_ns, 0u);
   atomic_init(&profile->max_send_admission_ns, 0u);
@@ -52,7 +52,7 @@ void chttp_server_websocket_profile_send_complete(
     return;
   profile = connection->websocket_send_profile;
   elapsed = salts_hrtime() - connection->websocket_send_started_ns;
-  atomic_fetch_add_explicit(&profile->send_completion_commands, 1u,
+  atomic_fetch_add_explicit(&profile->send_completion_samples, 1u,
                             memory_order_relaxed);
   chttp_server_websocket_profile_add(&profile->send_completion_ns, elapsed);
   chttp_server_websocket_profile_max(&profile->max_send_completion_ns,
