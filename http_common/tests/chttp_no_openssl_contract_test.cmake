@@ -10,7 +10,9 @@ set(scan_roots
   s3
   vendor/cjwt)
 
-set(production_files "${PROJECT_SOURCE_DIR}/CMakeLists.txt")
+set(production_files
+  "${PROJECT_SOURCE_DIR}/CMakeLists.txt"
+  "${PROJECT_SOURCE_DIR}/vcpkg.json")
 foreach(root IN LISTS scan_roots)
   file(GLOB_RECURSE root_files
     "${PROJECT_SOURCE_DIR}/${root}/*.c"
@@ -28,7 +30,8 @@ set(forbidden_patterns
   "EVP_"
   "OPENSSL_"
   "CRYPTO_memcmp"
-  "HMAC(")
+  "HMAC("
+  "\"boringssl\"")
 
 foreach(path IN LISTS production_files)
   file(READ "${path}" text)
