@@ -30,6 +30,9 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify provider-neutral source and manifest contract
+        shell: bash
+        run: cmake -DPROJECT_SOURCE_DIR="$GITHUB_WORKSPACE" -P http_common/tests/chttp_no_openssl_contract_test.cmake
       - id: version
         shell: bash
         run: |
@@ -242,6 +245,316 @@ jobs:
             "arch=x64"
             "profile=release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "chttp-sdk-manifest.txt")
+
+      - name: Verify Windows provider-neutral DLL imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $vsdev = Join-Path $env:VSINSTALL "Common7\Tools\VsDevCmd.bat"
+          $dlls = Get-ChildItem -LiteralPath (Join-Path $prefix "bin") -Filter "*.dll" -File
+          if ($dlls.Count -eq 0) { throw "no installed CHttp DLLs found" }
+          $forbidden = '(?im)^\s*(?:crypto|ssl|gmssl|libcrypto[^\s]*|libssl[^\s]*)\.dll\s*
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $probe = Join-Path $env:RUNNER_TEMP "chttp-installed-probe"
+          New-Item -ItemType Directory -Force -Path $probe | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.25)
+          project(chttp_installed_probe LANGUAGES C)
+          find_package(Chttp CONFIG REQUIRED
+            PATHS "$ENV{CHTTP_ROOT}"
+            NO_DEFAULT_PATH)
+          if(NOT TARGET CHttp::Client OR NOT TARGET CHttp::Server)
+            message(FATAL_ERROR "installed CHttp package is missing Client/Server targets")
+          endif()
+          add_custom_target(chttp_installed_probe ALL)
+          '@ | Set-Content -LiteralPath (Join-Path $probe "CMakeLists.txt")
+          $env:CHTTP_ROOT = $prefix
+          $build = Join-Path $probe "build"
+          $vsdev = Join-Path $env:VSINSTALL "Common7\Tools\VsDevCmd.bat"
+          $command = "call `"$vsdev`" -arch=x64 -host_arch=x64 >nul && cmake -S `"$probe`" -B `"$build`" -G Ninja && cmake --build `"$build`""
+          cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { throw "installed-package configure/build failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chttp-sdk-windows-x64
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  android:
+    name: Android arm64-v8a SDK
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare Android toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm
+          test -n "${VCPKG_ROOT:-}"
+          test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
+          test -n "${ANDROID_NDK_HOME:-}"
+
+      - name: Restore target SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash cmake/ci/restore-native-sdks.sh android-arm64-v8a
+      - name: Configure, build and install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          prefix="$GITHUB_WORKSPACE/stage/sdk/android-arm64-v8a"
+          cmake -S . -B build/android-native-sdk -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-android \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build build/android-native-sdk --parallel 2
+          cmake --install build/android-native-sdk
+          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=$GITHUB_SHA
+          os=android
+          abi=arm64-v8a
+          api=android-26
+          profile=release
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chttp-sdk-android-arm64-v8a
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  ios:
+    name: iOS SDK / ${{ matrix.name }}
+    needs: metadata
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: device arm64, triplet: arm64-ios, rid: ios-arm64, sysroot: iphoneos}
+          - {name: simulator arm64, triplet: arm64-ios-simulator, rid: ios-simulator-arm64, sysroot: iphonesimulator}
+    env:
+      X_VCPKG_NUGET_ID_PREFIX: vcpkg-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare iOS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          brew install ninja nasm
+          test -n "${VCPKG_ROOT:-}"
+          test -n "${QIGAO_VCPKG_TOOLCHAIN_FILE:-}"
+          test -f "$QIGAO_VCPKG_TOOLCHAIN_FILE"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
+
+      - name: Restore target SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash cmake/ci/restore-native-sdks.sh "${{ matrix.rid }}"
+
+      - name: Configure, build and install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          build="$GITHUB_WORKSPACE/build/${{ matrix.rid }}"
+          prefix="$GITHUB_WORKSPACE/stage/sdk/${{ matrix.rid }}"
+          cmake -S . -B "$build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="${{ matrix.sysroot }}" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed-${{ matrix.triplet }}" \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build "$build" --parallel 2
+          cmake --install "$build"
+
+          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+          test -f "$prefix/include/chttp_service/service.h"
+          test -f "$prefix/include/chttp_rpc_service/service.h"
+          grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+          grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+
+          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=$GITHUB_SHA
+          os=ios
+          rid=${{ matrix.rid }}
+          triplet=${{ matrix.triplet }}
+          profile=release
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chttp-sdk-${{ matrix.rid }}
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  pack:
+    name: Pack CHttp.Native
+    needs: [metadata, linux, macos, windows, android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: chttp-sdk-*
+          path: package/sdk
+          merge-multiple: true
+      - name: Verify package payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f package/sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/ios-arm64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/ios-simulator-arm64/lib/cmake/Chttp/ChttpConfig.cmake
+          test -f package/sdk/linux-x64/include/chttp_service/service.h
+          test -f package/sdk/windows-x64/include/chttp_service/service.h
+          test -f package/sdk/android-arm64-v8a/include/chttp_service/service.h
+          test -f package/sdk/linux-x64/include/chttp_rpc_service/service.h
+          test -f package/sdk/windows-x64/include/chttp_rpc_service/service.h
+          test -f package/sdk/android-arm64-v8a/include/chttp_rpc_service/service.h
+          for rid in ios-arm64 ios-simulator-arm64; do
+            test -f "package/sdk/$rid/include/chttp_service/service.h"
+            test -f "package/sdk/$rid/include/chttp_rpc_service/service.h"
+            grep -q 'CHttp::Service' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::RpcService' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+          done
+          grep -q 'CHttp::Service' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          grep -q 'CHttp::RpcService' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Configure GitHub Packages source
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/nuget.config"
+          printf '<?xml version="1.0" encoding="utf-8"?><configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          echo "NUGET_CONFIG=$config" >> "$GITHUB_ENV"
+      - name: Pack NuGet
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore packaging/nuget/CHttp.Native.csproj --configfile "$NUGET_CONFIG" --packages "$RUNNER_TEMP/pack-nuget"
+          dotnet pack packaging/nuget/CHttp.Native.csproj --no-restore --configuration Release --output dist -p:PackageVersion=${{ needs.metadata.outputs.version }} -p:PackageRoot="$GITHUB_WORKSPACE/package" -p:RestorePackagesPath="$RUNNER_TEMP/pack-nuget"
+          nupkg="dist/CHttp.Native.${{ needs.metadata.outputs.version }}.nupkg"
+          test -f "$nupkg"
+          unzip -p "$nupkg" '*.nuspec' > "$RUNNER_TEMP/chttp.nuspec"
+          if grep -q '<dependencies' "$RUNNER_TEMP/chttp.nuspec"; then
+            echo "CHttp.Native must not publish dependency metadata" >&2
+            cat "$RUNNER_TEMP/chttp.nuspec" >&2
+            exit 1
+          fi
+          unzip -Z1 "$nupkg" | sort | tee "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/ios-arm64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+          grep -Fx "sdk/ios-simulator-arm64/lib/cmake/Chttp/ChttpConfig.cmake" "$RUNNER_TEMP/chttp-nupkg.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chttp-native-nuget
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    name: Publish package and GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [metadata, pack]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chttp-native-nuget
+          path: dist
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Publish to GitHub Packages
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dotnet nuget add source --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --name github https://nuget.pkg.github.com/qigao/index.json
+          dotnet nuget push "dist/CHttp.Native.${{ needs.metadata.outputs.version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          gh release create "$TAG" dist/*.nupkg --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "CHttp $VERSION" --generate-notes
+
+          foreach ($dll in $dlls) {
+            $command = 'call "' + $vsdev + '" -arch=x64 -host_arch=x64 >nul && dumpbin /dependents "' + $dll.FullName + '"'
+            $output = (cmd.exe /d /s /c $command | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $($dll.Name)" }
+            if ($output -match $forbidden) {
+              throw "provider-specific crypto DLL import found in $($dll.Name): $($Matches[0].Trim())"
+            }
+          }
 
       - name: Verify Windows installed-package consumer
         shell: pwsh
