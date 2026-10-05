@@ -175,7 +175,9 @@ static chttp_websocket_client_config owner_ws_client_config(bool tls) {
       .max_message_bytes = OWNER_WS_LARGE_BYTES,
       .max_buffered_input_bytes = OWNER_WS_LARGE_BYTES + 64u,
       .max_handshake_header_bytes = 4096u,
-      .event_capacity = 16u};
+      .event_capacity = 16u,
+      .socket_options = CNET_STREAM_SOCKET_OPTIONS_INIT};
+  config.socket_options.nodelay = 1;
   return config;
 }
 
@@ -398,6 +400,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   static const char *H1_ALPN[] = {"http/1.1"};
   chttp_server server = {0};
   chttp_server_config config = owner_ws_server_config(test_case->tls);
+  chttp_server_socket_options socket_options =
+      CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   chttp_server_execution_options execution =
       (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
   cnet_tls_server_config tls_config = {0};
@@ -458,6 +462,9 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   }
 
   if (chttp_server_init(&server, &config) != SALTS_OK) goto cleanup;
+  socket_options.stream.nodelay = 1;
+  if (chttp_server_set_socket_options(&server, &socket_options) != SALTS_OK)
+    goto cleanup;
   execution.owner_count = owner_count;
   if (chttp_server_set_execution_options(&server, &execution) != SALTS_OK)
     goto cleanup;
