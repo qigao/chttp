@@ -88,6 +88,10 @@ typedef struct chttp_websocket_client_impl {
   bool h2_stream_terminal;
   bool h2_end_submitted;
   bool h2_close_requested;
+  uint64_t profile_receive_started_ns;
+  uint64_t profile_cnet_receive_ns;
+  uint64_t profile_message_event_ns;
+  uint64_t profile_receive_return_ns;
   char expected_accept[CHTTP_WEBSOCKET_ACCEPT_CAPACITY];
 } chttp_websocket_client_impl;
 
@@ -120,6 +124,10 @@ static void chttp_websocket_client_event_push(void *user, cnet_websocket *websoc
                               .size = event->size,
                               .close_code = event->close_code};
   ++client->event_count;
+  if (event->kind == CNET_WEBSOCKET_EVENT_MESSAGE &&
+      client->profile_receive_started_ns != 0u &&
+      client->profile_message_event_ns == 0u)
+    client->profile_message_event_ns = salts_hrtime();
 }
 
 static int chttp_websocket_client_write(void *user, const uint8_t *data, size_t size) {
@@ -353,6 +361,9 @@ static void chttp_websocket_client_on_receive(void *user, cnet_connection connec
     return;
   }
   client->receive_pending = false;
+  if (client->profile_receive_started_ns != 0u &&
+      client->profile_cnet_receive_ns == 0u)
+    client->profile_cnet_receive_ns = salts_hrtime();
   if (client->protocol == CHTTP_HTTP_2) {
     const ptrdiff_t consumed = chttp_h2_proto_recv(client->h2_protocol, view->data, view->size);
     if (consumed < 0 || (size_t)consumed != view->size) status = SALTS_EPROTO;
@@ -1079,6 +1090,10 @@ int chttp_websocket_client_receive(chttp_websocket_client *client, uint32_t time
   if (impl->phase != CHTTP_WEBSOCKET_CLIENT_OPEN && impl->event_count == 0u) return SALTS_ESHUTDOWN;
   impl->operation_active = true;
   deadline = chttp_websocket_client_deadline(timeout_ms);
+  impl->profile_receive_started_ns = salts_hrtime();
+  impl->profile_cnet_receive_ns = 0u;
+  impl->profile_message_event_ns = 0u;
+  impl->profile_receive_return_ns = 0u;
   while (impl->event_count == 0u && !impl->transport_terminal &&
          impl->terminal_status == SALTS_OK) {
     status = chttp_websocket_client_receive_arm(impl);
@@ -1097,8 +1112,33 @@ int chttp_websocket_client_receive(chttp_websocket_client *client, uint32_t time
   } else if (status == SALTS_OK) {
     status = impl->terminal_status == SALTS_OK ? SALTS_ECONNRESET : impl->terminal_status;
   }
+  impl->profile_receive_return_ns = salts_hrtime();
   impl->operation_active = false;
   return status;
+}
+
+int chttp_websocket_client_profile_receive_stages(
+    chttp_websocket_client *client, uint64_t *cnet_ns,
+    uint64_t *event_ns, uint64_t *return_ns) {
+  chttp_websocket_client_impl *impl;
+  if (client == NULL || client->impl == NULL || cnet_ns == NULL ||
+      event_ns == NULL || return_ns == NULL)
+    return SALTS_EINVAL;
+  impl = (chttp_websocket_client_impl *)client->impl;
+  if (impl->profile_receive_started_ns == 0u ||
+      impl->profile_receive_return_ns == 0u)
+    return SALTS_EAGAIN;
+  *cnet_ns = impl->profile_cnet_receive_ns > impl->profile_receive_started_ns
+                 ? impl->profile_cnet_receive_ns -
+                       impl->profile_receive_started_ns
+                 : 0u;
+  *event_ns = impl->profile_message_event_ns > impl->profile_receive_started_ns
+                  ? impl->profile_message_event_ns -
+                        impl->profile_receive_started_ns
+                  : 0u;
+  *return_ns = impl->profile_receive_return_ns -
+               impl->profile_receive_started_ns;
+  return SALTS_OK;
 }
 
 int chttp_websocket_client_close(chttp_websocket_client *client, uint16_t code, const void *reason,
