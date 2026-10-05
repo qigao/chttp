@@ -473,6 +473,264 @@ static const DataBindNativeErrorBinding
          chttp_service_owned_error_resolve,
          offsetof(CHttpServiceOwnedErrorEnvelope, payload.error_1)}};
 
+
+typedef struct CHttpServiceRollbackBuffer {
+  size_t size;
+  unsigned char bytes[16];
+} CHttpServiceRollbackBuffer;
+
+typedef struct CHttpServiceRollbackRequest {
+  CHttpServiceRollbackBuffer first;
+  CHttpServiceRollbackBuffer second;
+} CHttpServiceRollbackRequest;
+
+static _Atomic int CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES;
+static _Atomic int CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES;
+static _Atomic int CHTTP_SERVICE_ROLLBACK_CALLS;
+
+static bool chttp_service_rollback_buffer_is_zero(const void *object) {
+  const CHttpServiceRollbackBuffer *value =
+      (const CHttpServiceRollbackBuffer *)object;
+  return value != NULL && value->size == 0u;
+}
+
+static cmeta_status chttp_service_rollback_buffer_assign(
+    void *object, const unsigned char *data, size_t size, size_t max_bytes) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL || (data == NULL && size != 0u))
+    return CMETA_INVALID_ARGUMENT;
+  if (size > sizeof(value->bytes) || size > max_bytes)
+    return CMETA_CAPACITY_EXCEEDED;
+  if (size != 0u) memcpy(value->bytes, data, size);
+  value->size = size;
+  return CMETA_OK;
+}
+
+static cmeta_status chttp_service_rollback_buffer_read(
+    const void *object, const unsigned char **out_data, size_t *out_size) {
+  const CHttpServiceRollbackBuffer *value =
+      (const CHttpServiceRollbackBuffer *)object;
+  if (value == NULL || out_data == NULL || out_size == NULL)
+    return CMETA_INVALID_ARGUMENT;
+  *out_data = value->bytes;
+  *out_size = value->size;
+  return CMETA_OK;
+}
+
+static void chttp_service_rollback_buffer_move(
+    void *destination, void *source) {
+  CHttpServiceRollbackBuffer *dst =
+      (CHttpServiceRollbackBuffer *)destination;
+  CHttpServiceRollbackBuffer *src =
+      (CHttpServiceRollbackBuffer *)source;
+  if (dst == NULL || src == NULL) return;
+  *dst = *src;
+  memset(src, 0, sizeof(*src));
+}
+
+static cmeta_status chttp_service_rollback_first_init(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return CMETA_INVALID_ARGUMENT;
+  memset(value, 0, sizeof(*value));
+  return CMETA_OK;
+}
+
+static cmeta_status chttp_service_rollback_second_init(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return CMETA_INVALID_ARGUMENT;
+  memset(value, 0, sizeof(*value));
+  return CMETA_CALLBACK_ERROR;
+}
+
+static void chttp_service_rollback_first_restore(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return;
+  atomic_fetch_add_explicit(
+      &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, 1, memory_order_relaxed);
+  memset(value, 0, sizeof(*value));
+}
+
+static void chttp_service_rollback_second_restore(void *object) {
+  CHttpServiceRollbackBuffer *value =
+      (CHttpServiceRollbackBuffer *)object;
+  if (value == NULL) return;
+  atomic_fetch_add_explicit(
+      &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, 1, memory_order_relaxed);
+  memset(value, 0, sizeof(*value));
+}
+
+static const cmeta_type_identity CHTTP_SERVICE_ROLLBACK_BUFFER_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.RollbackBuffer");
+static const cmeta_type_desc CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE = {
+    "CHttpServiceRollbackBuffer",
+    sizeof(CHttpServiceRollbackBuffer),
+    _Alignof(CHttpServiceRollbackBuffer),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_ROLLBACK_BUFFER_ID};
+static const cmeta_data_buffer_shape CHTTP_SERVICE_ROLLBACK_BUFFER_SHAPE = {
+    CMETA_DATA_BUFFER_OWNED};
+
+#define CHTTP_SERVICE_ROLLBACK_OPS(NAME, INIT, RESTORE)                       \
+  static const cmeta_data_buffer_ops NAME = {                                 \
+      sizeof(cmeta_data_buffer_ops), CMETA_DATA_BUFFER_OPS_ABI_VERSION,       \
+      &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE, CMETA_DATA_BUFFER_OWNED,           \
+      chttp_service_rollback_buffer_is_zero,                                  \
+      chttp_service_rollback_buffer_assign, RESTORE,                          \
+      chttp_service_rollback_buffer_read, INIT,                               \
+      chttp_service_rollback_buffer_move}
+
+CHTTP_SERVICE_ROLLBACK_OPS(
+    CHTTP_SERVICE_ROLLBACK_FIRST_OPS,
+    chttp_service_rollback_first_init,
+    chttp_service_rollback_first_restore);
+CHTTP_SERVICE_ROLLBACK_OPS(
+    CHTTP_SERVICE_ROLLBACK_SECOND_OPS,
+    chttp_service_rollback_second_init,
+    chttp_service_rollback_second_restore);
+
+#undef CHTTP_SERVICE_ROLLBACK_OPS
+
+static const cmeta_data_desc CHTTP_SERVICE_ROLLBACK_FIRST_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.RollbackRequest.first",
+    .display_name = "RollbackFirst",
+    .kind = CMETA_DATA_BYTES,
+    .storage_type = &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE,
+    .shape = &CHTTP_SERVICE_ROLLBACK_BUFFER_SHAPE,
+    .buffer_ops = &CHTTP_SERVICE_ROLLBACK_FIRST_OPS};
+static const cmeta_data_desc CHTTP_SERVICE_ROLLBACK_SECOND_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.RollbackRequest.second",
+    .display_name = "RollbackSecond",
+    .kind = CMETA_DATA_BYTES,
+    .storage_type = &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE,
+    .shape = &CHTTP_SERVICE_ROLLBACK_BUFFER_SHAPE,
+    .buffer_ops = &CHTTP_SERVICE_ROLLBACK_SECOND_OPS};
+
+static const cmeta_type_identity CHTTP_SERVICE_ROLLBACK_REQUEST_ID =
+    CMETA_TYPE_ID_ATOM_INIT("test.chttp.RollbackRequest");
+static const cmeta_type_desc CHTTP_SERVICE_ROLLBACK_REQUEST_TYPE = {
+    "CHttpServiceRollbackRequest",
+    sizeof(CHttpServiceRollbackRequest),
+    _Alignof(CHttpServiceRollbackRequest),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &CHTTP_SERVICE_ROLLBACK_REQUEST_ID};
+static const cmeta_type_desc CHTTP_SERVICE_ROLLBACK_REQUEST_PTR_TYPE = {
+    "const CHttpServiceRollbackRequest *",
+    sizeof(CHttpServiceRollbackRequest *),
+    _Alignof(CHttpServiceRollbackRequest *),
+    CMETA_T_POINTER,
+    &CHTTP_SERVICE_ROLLBACK_REQUEST_TYPE,
+    NULL,
+    NULL};
+
+static const cmeta_field_desc CHTTP_SERVICE_ROLLBACK_LAYOUT_FIELDS[] = {
+    {"first", "bytes", offsetof(CHttpServiceRollbackRequest, first),
+     sizeof(CHttpServiceRollbackBuffer),
+     _Alignof(CHttpServiceRollbackBuffer),
+     &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE, NULL},
+    {"second", "bytes", offsetof(CHttpServiceRollbackRequest, second),
+     sizeof(CHttpServiceRollbackBuffer),
+     _Alignof(CHttpServiceRollbackBuffer),
+     &CHTTP_SERVICE_ROLLBACK_BUFFER_TYPE, NULL}};
+static const cmeta_struct_desc CHTTP_SERVICE_ROLLBACK_LAYOUT = {
+    "CHttpServiceRollbackRequest",
+    sizeof(CHttpServiceRollbackRequest),
+    _Alignof(CHttpServiceRollbackRequest),
+    CHTTP_SERVICE_ROLLBACK_LAYOUT_FIELDS,
+    2u};
+static const cmeta_data_field_desc CHTTP_SERVICE_ROLLBACK_FIELDS[] = {
+    {"test.chttp.RollbackRequest.first", "first",
+     offsetof(CHttpServiceRollbackRequest, first),
+     &CHTTP_SERVICE_ROLLBACK_FIRST_DATA},
+    {"test.chttp.RollbackRequest.second", "second",
+     offsetof(CHttpServiceRollbackRequest, second),
+     &CHTTP_SERVICE_ROLLBACK_SECOND_DATA}};
+static const cmeta_data_struct_shape CHTTP_SERVICE_ROLLBACK_SHAPE = {
+    &CHTTP_SERVICE_ROLLBACK_LAYOUT,
+    CHTTP_SERVICE_ROLLBACK_FIELDS,
+    2u};
+static const cmeta_data_desc CHTTP_SERVICE_ROLLBACK_REQUEST_DATA = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.RollbackRequest.data",
+    .display_name = "CHttpServiceRollbackRequest",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &CHTTP_SERVICE_ROLLBACK_REQUEST_TYPE,
+    .shape = &CHTTP_SERVICE_ROLLBACK_SHAPE};
+static const DataBindNativeTypeBinding CHTTP_SERVICE_ROLLBACK_REQUEST_NATIVE = {
+    .size = sizeof(DataBindNativeTypeBinding),
+    .abi_version = DATA_BIND_NATIVE_BINDING_ABI_VERSION,
+    .idl_type_name = "RollbackRequest",
+    .data = &CHTTP_SERVICE_ROLLBACK_REQUEST_DATA};
+
+FunctionDeclAsAbiResult(
+    value, int, &cmeta_type_int, CMETA_ABI_SCALAR,
+    CMETA_RESULT_VALUE, chttp_service_test_rollback,
+    (const CHttpServiceRollbackRequest *, request,
+     CMETA_PARAM_IN | CMETA_PARAM_BORROWED,
+     &CHTTP_SERVICE_ROLLBACK_REQUEST_PTR_TYPE, CMETA_ABI_OBJECT_POINTER),
+    (AddResponse *, response,
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,
+     &ADD_RESPONSE_PTR_TYPE, CMETA_ABI_OBJECT_POINTER));
+
+int chttp_service_test_rollback(
+    const CHttpServiceRollbackRequest *request, AddResponse *response) {
+  (void)request;
+  (void)response;
+  atomic_fetch_add_explicit(
+      &CHTTP_SERVICE_ROLLBACK_CALLS, 1, memory_order_relaxed);
+  return 0;
+}
+
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_rollback_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  int result;
+  (void)context;
+  if (return_storage == NULL || params == NULL || param_count != 2u ||
+      params[0] == NULL || params[1] == NULL)
+    return false;
+  result = chttp_service_test_rollback(
+      (const CHttpServiceRollbackRequest *)params[0],
+      (AddResponse *)params[1]);
+  *(int *)return_storage = result;
+  return true;
+}
+
+static const DataBindHttpFieldProjection CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP[] = {
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "first", DATA_BIND_HTTP_QUERY, "first", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS,
+     "second", DATA_BIND_HTTP_QUERY, "second", SIZE_MAX},
+    {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS,
+     "sum", DATA_BIND_HTTP_RESPONSE_BODY, "sum", SIZE_MAX}};
+
+static const DataBindHttpProjectionConfig CHTTP_SERVICE_ROLLBACK_HTTP = {
+    sizeof(DataBindHttpProjectionConfig),
+    DATA_BIND_METHOD_PLAN_ABI_VERSION,
+    "GET",
+    "/rollback",
+    200,
+    DATA_BIND_HTTP_CONTEXT_NONE,
+    CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP,
+    sizeof(CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP) /
+        sizeof(CHTTP_SERVICE_ROLLBACK_FIELDS_HTTP[0]),
+    NULL,
+    0u,
+    DATA_BIND_FORMAT_JSON,
+    DATA_BIND_FORMAT_JSON};
+
 static native_io_backend_kind chttp_service_test_backend(void) {
 #if defined(_WIN32)
   return NATIVE_IO_BACKEND_IOCP;
@@ -986,6 +1244,133 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(chttp_service_destroy(&service), SALTS_OK);
     data_bind_http_method_plan_free(unborrowed_request_plan);
     data_bind_http_method_plan_free(unknown_result_plan);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+
+  it("does not double-teardown a DataBind-rolled-back failed request") {
+    static const char schema[] =
+        "message RollbackRequest {"
+        " bytes first;"
+        " bytes second;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "service Rollback { Run: RollbackRequest -> AddResponse; }";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_rollback),
+            &CHTTP_SERVICE_ROLLBACK_REQUEST_NATIVE,
+            &ADD_RESPONSE_NATIVE);
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    chttp_response response = {0};
+    uint16_t port = 0u;
+    char uri[64];
+
+    execution.function = FunctionMeta(chttp_service_test_rollback);
+    execution.abi = FunctionAbi(chttp_service_test_rollback);
+    execution.invoke = chttp_service_test_rollback_invoke;
+
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Rollback", "Run", &CHTTP_SERVICE_ROLLBACK_HTTP,
+            &native, &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 16u;
+    service_config.max_call_frame_bytes = 1024u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = &execution;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    atomic_store_explicit(
+        &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, 0, memory_order_relaxed);
+    atomic_store_explicit(
+        &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, 0, memory_order_relaxed);
+    atomic_store_explicit(
+        &CHTTP_SERVICE_ROLLBACK_CALLS, 0, memory_order_relaxed);
+
+    check_equal(
+        chttp_service_test_call(
+            &client, uri, "/rollback?first=abc&second=def", &response),
+        SALTS_OK);
+    check_equal(response.status_code, 500u);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_CALLS, memory_order_relaxed),
+        0);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed),
+        1);
+    /*
+     * The second descriptor fails initialization. It may restore its own
+     * failure-atomic state internally, but CHttp must never add another whole
+     * frame restore after bind_inputs() reports failure.
+     */
+    check_true(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES,
+            memory_order_relaxed) <= 1);
+    chttp_response_destroy(&response);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+
+    /*
+     * Service teardown after the failed request must not touch DataBind's
+     * already-rolled-back request storage again.
+     */
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed),
+        1);
+
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }
