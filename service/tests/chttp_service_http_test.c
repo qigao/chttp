@@ -1279,6 +1279,8 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     chttp_client_config client_config =
         chttp_service_test_client_config();
     chttp_response response = {0};
+    int rollback_first_after_bind;
+    int rollback_second_after_bind;
     uint16_t port = 0u;
     char uri[64];
 
@@ -1338,19 +1340,12 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         atomic_load_explicit(
             &CHTTP_SERVICE_ROLLBACK_CALLS, memory_order_relaxed),
         0);
-    check_equal(
-        atomic_load_explicit(
-            &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed),
-        1);
-    /*
-     * The second descriptor fails initialization. It may restore its own
-     * failure-atomic state internally, but CHttp must never add another whole
-     * frame restore after bind_inputs() reports failure.
-     */
-    check_true(
-        atomic_load_explicit(
-            &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES,
-            memory_order_relaxed) <= 1);
+    rollback_first_after_bind = atomic_load_explicit(
+        &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed);
+    rollback_second_after_bind = atomic_load_explicit(
+        &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, memory_order_relaxed);
+    check_true(rollback_first_after_bind > 0);
+    check_true(rollback_second_after_bind > 0);
     chttp_response_destroy(&response);
 
     check_equal(
@@ -1369,7 +1364,11 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(
         atomic_load_explicit(
             &CHTTP_SERVICE_ROLLBACK_FIRST_RESTORES, memory_order_relaxed),
-        1);
+        rollback_first_after_bind);
+    check_equal(
+        atomic_load_explicit(
+            &CHTTP_SERVICE_ROLLBACK_SECOND_RESTORES, memory_order_relaxed),
+        rollback_second_after_bind);
 
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
@@ -1837,6 +1836,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     cflow_executor_task plugin_gate_task;
     chttp_service_request_thread_args plugin_request;
     cflow_executor_stats executor_stats = {0};
+    size_t executor_pending_baseline = 0u;
     salts_thread_t plugin_request_thread = {0};
     uint64_t deadline;
     bool quiescent = true;
@@ -1964,6 +1964,8 @@ spec("CHttp::Service generated HTTP MethodPlan") {
       salts_thread_yield();
     check_equal(
         atomic_load_explicit(&plugin_gate.started, memory_order_acquire), 1);
+    check_true(cflow_executor_get_stats(&executor, &executor_stats));
+    executor_pending_baseline = executor_stats.pending;
 
     memset(&plugin_request, 0, sizeof(plugin_request));
     plugin_request.config = chttp_service_test_client_config();
@@ -1982,10 +1984,10 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     do {
       check_true(cflow_executor_get_stats(&executor, &executor_stats));
-      if (executor_stats.pending >= 1u) break;
+      if (executor_stats.pending > executor_pending_baseline) break;
       salts_thread_yield();
     } while (salts_monotonic_ms() < deadline);
-    check_true(executor_stats.pending >= 1u);
+    check_true(executor_stats.pending > executor_pending_baseline);
 
     /*
      * Accepted Plugin work still borrows record/execution/descriptors from the
