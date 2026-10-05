@@ -53,6 +53,7 @@ typedef struct owner_ws_session_probe {
 
 typedef struct owner_ws_server_state {
   owner_ws_mode mode;
+  size_t connection_count;
   owner_ws_session_probe sessions[OWNER_WS_CONNECTIONS];
   atomic_int callback_errors;
   atomic_uint_fast64_t callback_echo_send_ns;
@@ -216,7 +217,9 @@ static chttp_websocket_client_config owner_ws_client_config(bool tls) {
       .max_message_bytes = OWNER_WS_LARGE_BYTES,
       .max_buffered_input_bytes = OWNER_WS_LARGE_BYTES + 64u,
       .max_handshake_header_bytes = 4096u,
-      .event_capacity = 16u};
+      .event_capacity = 16u,
+      .socket_options = CNET_STREAM_SOCKET_OPTIONS_INIT};
+  config.socket_options.nodelay = 1;
   return config;
 }
 
@@ -231,7 +234,7 @@ static int owner_ws_open(void *user, chttp_websocket *websocket,
   (void)response;
   if (state == NULL || id_text == NULL) return SALTS_EINVAL;
   id = strtoul(id_text, &end, 10);
-  if (end == id_text || *end != '\0' || id >= OWNER_WS_CONNECTIONS)
+  if (end == id_text || *end != '\0' || id >= state->connection_count)
     return SALTS_ERANGE;
   status = chttp_server_websocket_session_capture(
       websocket, &state->sessions[id].session);
@@ -476,7 +479,7 @@ static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
 }
 
 static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
-                        size_t messages, size_t warmup,
+                        size_t connection_count, size_t messages, size_t warmup,
                         const char *cert_path, const char *key_path,
                         const char *ca_path) {
   static const char *H1_ALPN[] = {"http/1.1"};
@@ -520,10 +523,11 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   size_t index;
   int result = 1;
 
-  if (test_case == NULL || owner_count == 0u || owner_count > 4u)
+  if (test_case == NULL || owner_count == 0u || owner_count > 4u ||
+      connection_count == 0u || connection_count > OWNER_WS_CONNECTIONS)
     return 1;
-  if (messages > SIZE_MAX / OWNER_WS_CONNECTIONS) return 1;
-  total_messages = messages * OWNER_WS_CONNECTIONS;
+  if (messages > SIZE_MAX / connection_count) return 1;
+  total_messages = messages * connection_count;
   latencies = (uint64_t *)calloc(total_messages, sizeof(*latencies));
   send_latencies =
       (uint64_t *)calloc(total_messages, sizeof(*send_latencies));
@@ -550,6 +554,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   memset(&state, 0, sizeof(state));
   chttp_server_websocket_profile_reset(&command_profile);
   state.mode = test_case->mode;
+  state.connection_count = connection_count;
   route.user = &state;
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index)
     atomic_init(&state.sessions[index].captured, 0);
@@ -574,6 +579,13 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   }
 
   if (chttp_server_init(&server, &config) != SALTS_OK) goto cleanup;
+  {
+    chttp_server_socket_options socket_options =
+        (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
+    socket_options.stream.nodelay = 1;
+    if (chttp_server_set_socket_options(&server, &socket_options) != SALTS_OK)
+      goto cleanup;
+  }
   execution.owner_count = owner_count;
   if (chttp_server_set_execution_options(&server, &execution) != SALTS_OK)
     goto cleanup;
@@ -584,7 +596,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
     goto cleanup;
   impl = (chttp_server_impl *)server.impl;
 
-  for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index) {
+  for (index = 0u; index < connection_count; ++index) {
     workers[index] = (owner_ws_worker){
         .test_case = test_case,
         .client_id = index,
@@ -611,12 +623,12 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   }
 
   while (atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
-         OWNER_WS_CONNECTIONS) {
+         connection_count) {
     owner_ws_sample_pressure(impl, &pressure, owner_count, true);
     salts_thread_yield();
   }
   owner_ws_sample_pressure(impl, &pressure, owner_count, true);
-  for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index)
+  for (index = 0u; index < connection_count; ++index)
     if (atomic_load_explicit(&workers[index].status,
                              memory_order_acquire) != SALTS_OK)
       goto cleanup_threads;
@@ -646,14 +658,14 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   started_ns = salts_hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   while (atomic_load_explicit(&barrier.done, memory_order_acquire) !=
-         OWNER_WS_CONNECTIONS) {
+         connection_count) {
     owner_ws_sample_command_pressure(impl, &pressure, owner_count);
     salts_sleep_ms(1u);
   }
   wall_ns = salts_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
 
-  for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index) {
+  for (index = 0u; index < connection_count; ++index) {
     if (salts_thread_join(&threads[index]) != SALTS_OK)
       goto cleanup_threads;
     salts_thread_destroy(&threads[index]);
@@ -676,7 +688,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
                            memory_order_acquire) != 0)
     goto cleanup;
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK) goto cleanup;
-  if (stats.accepted_connections != OWNER_WS_CONNECTIONS ||
+  if (stats.accepted_connections != connection_count ||
       stats.rejected_connections != 0u)
     goto cleanup;
 
@@ -745,7 +757,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       test_case->mode == OWNER_WS_CALLBACK_ECHO ? "callback-echo"
                                                 : "captured-push",
       test_case->name, test_case->payload_bytes, owner_count,
-      OWNER_WS_CONNECTIONS, messages, total_messages, total_messages,
+      connection_count, messages, total_messages, total_messages,
       (unsigned long long)wall_ns,
       wall_ns != 0u
           ? (double)total_messages * 1.0e9 / (double)wall_ns
@@ -843,7 +855,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
 
 cleanup_threads:
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
-  for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index) {
+  for (index = 0u; index < connection_count; ++index) {
     if (started[index]) {
       (void)salts_thread_join(&threads[index]);
       salts_thread_destroy(&threads[index]);
@@ -891,6 +903,9 @@ int main(void) {
                          OWNER_WS_LARGE_MESSAGES);
   const size_t warmup =
       owner_ws_env_count("CHTTP_OWNER_WS_WARMUP", OWNER_WS_WARMUP);
+  const size_t connection_count =
+      owner_ws_env_count("CHTTP_OWNER_WS_CONNECTIONS",
+                         OWNER_WS_CONNECTIONS);
   const char *workload_filter = getenv("CHTTP_OWNER_WS_WORKLOAD");
   char *cert_path = NULL;
   char *key_path = NULL;
@@ -935,7 +950,7 @@ int main(void) {
 #else
       "kqueue",
 #endif
-      OWNER_WS_CONNECTIONS, small_messages, large_messages, warmup,
+      connection_count, small_messages, large_messages, warmup,
       workload_filter != NULL && workload_filter[0] != '\0'
           ? workload_filter
           : "all");
@@ -953,8 +968,8 @@ int main(void) {
             : large_messages;
     for (owner_index = 0u;
          owner_index < sizeof(OWNERS) / sizeof(OWNERS[0]); ++owner_index) {
-      if (owner_ws_run(test_case, OWNERS[owner_index], messages, warmup,
-                       cert_path, key_path, ca_path) != 0) {
+      if (owner_ws_run(test_case, OWNERS[owner_index], connection_count,
+                       messages, warmup, cert_path, key_path, ca_path) != 0) {
         fprintf(stderr,
                 "WS owner benchmark failed workload=%s owners=%zu\n",
                 test_case->name, OWNERS[owner_index]);

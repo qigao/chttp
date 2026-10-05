@@ -123,6 +123,28 @@ jobs:
               | tee "benchmark-results/isolated-${workload}-summary.md"
           done
 
+      - name: Run focused WSS client concurrency A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          jsonl=benchmark-results/wss-client-concurrency-ab.jsonl
+          : > "$jsonl"
+          for repeat in 1 2 3; do
+            for connections in 4 8; do
+              for workload in wss-echo-32k wss-echo-64k; do
+                echo "client-concurrency repeat=$repeat connections=$connections workload=$workload"
+                GITHUB_SHA="$CHTTP_HEAD_SHA" \
+                CHTTP_OWNER_WS_CONNECTIONS="$connections" \
+                CHTTP_OWNER_WS_WORKLOAD="$workload" \
+                CHTTP_OWNER_WS_SMALL_MESSAGES=240 \
+                CHTTP_OWNER_WS_LARGE_MESSAGES=24 \
+                CHTTP_OWNER_WS_WARMUP=8 \
+                  build/linux-gcc-release/bin/chttp_server_ws_owner_benchmark \
+                  | tee -a "$jsonl"
+              done
+            done
+          done
+
       - name: Verify and summarize WS WSS evidence
         shell: bash
         run: |
