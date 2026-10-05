@@ -534,6 +534,8 @@ int chttp_server_route_register(chttp_server_impl *server,
 int chttp_server_websocket_route_register(chttp_server_impl *server,
                                           const chttp_server_websocket_options *options);
 void chttp_server_websocket_profile_reset(chttp_server_websocket_profile *profile);
+int chttp_server_websocket_profile_callback_send_begin(
+    chttp_websocket *websocket, chttp_server_websocket_profile *profile);
 void chttp_server_websocket_profile_send_complete(
     chttp_server_connection *connection);
 chttp_server_route_record *chttp_server_route_find(chttp_server_request_state *state,

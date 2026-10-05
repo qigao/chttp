@@ -16,6 +16,12 @@
 #include <string.h>
 #include <time.h>
 
+int chttp_websocket_client_profile_receive_stages(
+    chttp_websocket_client *client, uint64_t *cnet_ns,
+    uint64_t *event_ns, uint64_t *return_ns,
+    uint32_t *receive_callbacks, uint64_t *plaintext_bytes,
+    uint64_t *message_plaintext_bytes);
+
 enum {
   OWNER_WS_CONNECTIONS = 8,
   OWNER_WS_TIMEOUT_MS = 10000,
@@ -49,6 +55,9 @@ typedef struct owner_ws_server_state {
   owner_ws_mode mode;
   owner_ws_session_probe sessions[OWNER_WS_CONNECTIONS];
   atomic_int callback_errors;
+  atomic_uint_fast64_t callback_echo_send_ns;
+  atomic_uint_fast64_t callback_echo_send_calls;
+  _Atomic(chttp_server_websocket_profile *) callback_echo_profile;
 } owner_ws_server_state;
 
 typedef struct owner_ws_barrier {
@@ -67,6 +76,14 @@ typedef struct owner_ws_worker {
   size_t warmup;
   size_t messages;
   uint64_t *latencies;
+  uint64_t *send_latencies;
+  uint64_t *receive_latencies;
+  uint64_t *cnet_receive_latencies;
+  uint64_t *message_event_latencies;
+  uint64_t *receive_return_latencies;
+  uint32_t *receive_callback_counts;
+  uint64_t *plaintext_bytes;
+  uint64_t *message_plaintext_bytes;
   atomic_int status;
 } owner_ws_worker;
 
@@ -96,6 +113,30 @@ static uint64_t owner_ws_percentile(const uint64_t *values, size_t count,
   if (ordered == NULL) return 0u;
   memcpy(ordered, values, count * sizeof(*ordered));
   qsort(ordered, count, sizeof(*ordered), owner_ws_u64_compare);
+  rank = ((size_t)percent * count + 99u) / 100u;
+  if (rank == 0u) rank = 1u;
+  if (rank > count) rank = count;
+  result = ordered[rank - 1u];
+  free(ordered);
+  return result;
+}
+
+static int owner_ws_u32_compare(const void *left, const void *right) {
+  const uint32_t a = *(const uint32_t *)left;
+  const uint32_t b = *(const uint32_t *)right;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static uint32_t owner_ws_percentile_u32(
+    const uint32_t *values, size_t count, unsigned int percent) {
+  uint32_t *ordered;
+  size_t rank;
+  uint32_t result;
+  if (values == NULL || count == 0u) return 0u;
+  ordered = (uint32_t *)malloc(count * sizeof(*ordered));
+  if (ordered == NULL) return 0u;
+  memcpy(ordered, values, count * sizeof(*ordered));
+  qsort(ordered, count, sizeof(*ordered), owner_ws_u32_compare);
   rank = ((size_t)percent * count + 99u) / 100u;
   if (rank == 0u) rank = 1u;
   if (rank > count) rank = count;
@@ -207,11 +248,34 @@ static void owner_ws_event(void *user, chttp_websocket *websocket,
   if (state->mode != OWNER_WS_CALLBACK_ECHO ||
       event->kind != CHTTP_WEBSOCKET_EVENT_MESSAGE)
     return;
-  if (event->message_type != CHTTP_WEBSOCKET_MESSAGE_BINARY ||
-      chttp_websocket_send_binary(websocket, event->data, event->size) !=
-          SALTS_OK)
+  if (event->message_type != CHTTP_WEBSOCKET_MESSAGE_BINARY) {
     atomic_fetch_add_explicit(&state->callback_errors, 1,
                               memory_order_acq_rel);
+  } else {
+    chttp_server_websocket_profile *profile =
+        atomic_load_explicit(&state->callback_echo_profile,
+                             memory_order_acquire);
+    const uint64_t started_ns = salts_hrtime();
+    int status;
+    if (profile != NULL) {
+      status = chttp_server_websocket_profile_callback_send_begin(
+          websocket, profile);
+      if (status != SALTS_OK)
+        atomic_fetch_add_explicit(&state->callback_errors, 1,
+                                  memory_order_acq_rel);
+    }
+    status = chttp_websocket_send_binary(websocket, event->data, event->size);
+    {
+      const uint64_t elapsed_ns = salts_hrtime() - started_ns;
+      atomic_fetch_add_explicit(&state->callback_echo_send_ns, elapsed_ns,
+                                memory_order_relaxed);
+      atomic_fetch_add_explicit(&state->callback_echo_send_calls, 1u,
+                                memory_order_relaxed);
+    }
+    if (status != SALTS_OK)
+      atomic_fetch_add_explicit(&state->callback_errors, 1,
+                                memory_order_acq_rel);
+  }
 }
 
 static int owner_ws_receive_expected(chttp_websocket_client *client,
@@ -233,21 +297,30 @@ static int owner_ws_one_message(owner_ws_worker *worker,
                                 chttp_websocket_client *client,
                                 const unsigned char *payload,
                                 size_t payload_bytes,
-                                uint64_t *latency_out) {
+                                uint64_t *latency_out,
+                                uint64_t *send_latency_out,
+                                uint64_t *receive_latency_out) {
   uint64_t started;
+  uint64_t stage_started;
   int status;
   if (worker == NULL || client == NULL || payload == NULL ||
       latency_out == NULL)
     return SALTS_EINVAL;
   started = salts_hrtime();
+  stage_started = started;
   if (worker->test_case->mode == OWNER_WS_CALLBACK_ECHO)
     status = chttp_websocket_client_send_binary(
         client, payload, payload_bytes, OWNER_WS_TIMEOUT_MS);
   else
     status = chttp_server_websocket_send_binary(
         &worker->probe->session, payload, payload_bytes);
+  if (send_latency_out != NULL)
+    *send_latency_out = salts_hrtime() - stage_started;
   if (status != SALTS_OK) return status;
+  stage_started = salts_hrtime();
   status = owner_ws_receive_expected(client, payload, payload_bytes);
+  if (receive_latency_out != NULL)
+    *receive_latency_out = salts_hrtime() - stage_started;
   if (status != SALTS_OK) return status;
   *latency_out = salts_hrtime() - started;
   return SALTS_OK;
@@ -310,7 +383,8 @@ static void owner_ws_worker_main(void *user) {
 
   for (index = 0u; index < worker->warmup; ++index) {
     status = owner_ws_one_message(
-        worker, &client, payload, worker->test_case->payload_bytes, &ignored);
+        worker, &client, payload, worker->test_case->payload_bytes, &ignored,
+        NULL, NULL);
     if (status != SALTS_OK) goto cleanup;
   }
 
@@ -324,7 +398,17 @@ static void owner_ws_worker_main(void *user) {
   for (index = 0u; index < worker->messages; ++index) {
     status = owner_ws_one_message(
         worker, &client, payload, worker->test_case->payload_bytes,
-        &worker->latencies[index]);
+        &worker->latencies[index], &worker->send_latencies[index],
+        &worker->receive_latencies[index]);
+    if (status == SALTS_OK &&
+        worker->test_case->mode == OWNER_WS_CALLBACK_ECHO)
+      status = chttp_websocket_client_profile_receive_stages(
+          &client, &worker->cnet_receive_latencies[index],
+          &worker->message_event_latencies[index],
+          &worker->receive_return_latencies[index],
+          &worker->receive_callback_counts[index],
+          &worker->plaintext_bytes[index],
+          &worker->message_plaintext_bytes[index]);
     if (status != SALTS_OK) {
       atomic_store_explicit(&worker->status, status, memory_order_release);
       goto cleanup;
@@ -419,6 +503,14 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   chttp_server_stats stats = {0};
   chttp_server_impl *impl;
   uint64_t *latencies = NULL;
+  uint64_t *send_latencies = NULL;
+  uint64_t *receive_latencies = NULL;
+  uint64_t *cnet_receive_latencies = NULL;
+  uint64_t *message_event_latencies = NULL;
+  uint64_t *receive_return_latencies = NULL;
+  uint32_t *receive_callback_counts = NULL;
+  uint64_t *plaintext_bytes = NULL;
+  uint64_t *message_plaintext_bytes = NULL;
   uint16_t port = 0u;
   uint64_t started_ns;
   uint64_t wall_ns;
@@ -433,7 +525,28 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   if (messages > SIZE_MAX / OWNER_WS_CONNECTIONS) return 1;
   total_messages = messages * OWNER_WS_CONNECTIONS;
   latencies = (uint64_t *)calloc(total_messages, sizeof(*latencies));
-  if (latencies == NULL) return 1;
+  send_latencies =
+      (uint64_t *)calloc(total_messages, sizeof(*send_latencies));
+  receive_latencies =
+      (uint64_t *)calloc(total_messages, sizeof(*receive_latencies));
+  cnet_receive_latencies =
+      (uint64_t *)calloc(total_messages, sizeof(*cnet_receive_latencies));
+  message_event_latencies =
+      (uint64_t *)calloc(total_messages, sizeof(*message_event_latencies));
+  receive_return_latencies =
+      (uint64_t *)calloc(total_messages, sizeof(*receive_return_latencies));
+  receive_callback_counts =
+      (uint32_t *)calloc(total_messages, sizeof(*receive_callback_counts));
+  plaintext_bytes =
+      (uint64_t *)calloc(total_messages, sizeof(*plaintext_bytes));
+  message_plaintext_bytes =
+      (uint64_t *)calloc(total_messages, sizeof(*message_plaintext_bytes));
+  if (latencies == NULL || send_latencies == NULL ||
+      receive_latencies == NULL || cnet_receive_latencies == NULL ||
+      message_event_latencies == NULL || receive_return_latencies == NULL ||
+      receive_callback_counts == NULL || plaintext_bytes == NULL ||
+      message_plaintext_bytes == NULL)
+    goto cleanup;
   memset(&state, 0, sizeof(state));
   chttp_server_websocket_profile_reset(&command_profile);
   state.mode = test_case->mode;
@@ -441,6 +554,9 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index)
     atomic_init(&state.sessions[index].captured, 0);
   atomic_init(&state.callback_errors, 0);
+  atomic_init(&state.callback_echo_send_ns, 0u);
+  atomic_init(&state.callback_echo_send_calls, 0u);
+  atomic_init(&state.callback_echo_profile, NULL);
   atomic_init(&barrier.ready, 0);
   atomic_init(&barrier.start, 0);
   atomic_init(&barrier.done, 0);
@@ -478,7 +594,15 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
         .barrier = &barrier,
         .warmup = warmup,
         .messages = messages,
-        .latencies = latencies + index * messages};
+        .latencies = latencies + index * messages,
+        .send_latencies = send_latencies + index * messages,
+        .receive_latencies = receive_latencies + index * messages,
+        .cnet_receive_latencies = cnet_receive_latencies + index * messages,
+        .message_event_latencies = message_event_latencies + index * messages,
+        .receive_return_latencies = receive_return_latencies + index * messages,
+        .receive_callback_counts = receive_callback_counts + index * messages,
+        .plaintext_bytes = plaintext_bytes + index * messages,
+        .message_plaintext_bytes = message_plaintext_bytes + index * messages};
     atomic_init(&workers[index].status, SALTS_EIO);
     if (salts_thread_create(&threads[index], owner_ws_worker_main,
                             &workers[index]) != SALTS_OK)
@@ -500,6 +624,16 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   pressure.cross_owner_handoffs = 0u;
   for (index = 1u; index < owner_count; ++index)
     pressure.cross_owner_handoffs += pressure.owner_leases[index];
+
+  if (test_case->mode == OWNER_WS_CALLBACK_ECHO) {
+    chttp_server_websocket_profile_reset(&command_profile);
+    atomic_store_explicit(&state.callback_echo_send_ns, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&state.callback_echo_send_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&state.callback_echo_profile, &command_profile,
+                          memory_order_release);
+  }
 
   if (test_case->mode == OWNER_WS_CAPTURED_PUSH) {
     chttp_server_websocket_profile_reset(&command_profile);
@@ -534,6 +668,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
    * coalesce or split WebSocket command bytes, so they are not a one-to-one
    * command completion contract and must not gate benchmark termination.
    */
+  atomic_store_explicit(&state.callback_echo_profile, NULL,
+                        memory_order_release);
   impl->websocket_profile = NULL;
 
   if (atomic_load_explicit(&state.callback_errors,
@@ -562,6 +698,18 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       "\"p50_ns\":%llu,"
       "\"p95_ns\":%llu,"
       "\"p99_ns\":%llu,"
+      "\"client_send_p50_ns\":%llu,"
+      "\"client_send_p95_ns\":%llu,"
+      "\"client_receive_p50_ns\":%llu,"
+      "\"client_receive_p95_ns\":%llu,"
+      "\"client_cnet_receive_p50_ns\":%llu,"
+      "\"client_message_event_p50_ns\":%llu,"
+      "\"client_receive_return_p50_ns\":%llu,"
+      "\"client_receive_callbacks_p50\":%llu,"
+      "\"client_plaintext_bytes_p50\":%llu,"
+      "\"client_message_plaintext_bytes_p50\":%llu,"
+      "\"server_callback_echo_send_ns_per_call\":%.3f,"
+      "\"server_callback_echo_send_calls\":%llu,"
       "\"accepted_connections\":%llu,"
       "\"rejected_connections\":%llu,"
       "\"owner0_leases\":%zu,"
@@ -609,6 +757,26 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       (unsigned long long)owner_ws_percentile(latencies, total_messages, 50u),
       (unsigned long long)owner_ws_percentile(latencies, total_messages, 95u),
       (unsigned long long)owner_ws_percentile(latencies, total_messages, 99u),
+      (unsigned long long)owner_ws_percentile(send_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(send_latencies, total_messages, 95u),
+      (unsigned long long)owner_ws_percentile(receive_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(receive_latencies, total_messages, 95u),
+      (unsigned long long)owner_ws_percentile(cnet_receive_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(message_event_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(receive_return_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile_u32(
+          receive_callback_counts, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(plaintext_bytes, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(message_plaintext_bytes, total_messages, 50u),
+      atomic_load_explicit(
+          &state.callback_echo_send_calls, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &state.callback_echo_send_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &state.callback_echo_send_calls, memory_order_relaxed)
+          : 0.0,
+      (unsigned long long)atomic_load_explicit(
+          &state.callback_echo_send_calls, memory_order_relaxed),
       (unsigned long long)stats.accepted_connections,
       (unsigned long long)stats.rejected_connections,
       pressure.owner_leases[0], pressure.owner_leases[1],
@@ -688,6 +856,14 @@ cleanup:
     (void)chttp_server_stop(&server, OWNER_WS_TIMEOUT_MS);
     (void)chttp_server_destroy(&server);
   }
+  free(message_plaintext_bytes);
+  free(plaintext_bytes);
+  free(receive_callback_counts);
+  free(receive_return_latencies);
+  free(message_event_latencies);
+  free(cnet_receive_latencies);
+  free(receive_latencies);
+  free(send_latencies);
   free(latencies);
   return result;
 }
