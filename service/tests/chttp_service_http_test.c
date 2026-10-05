@@ -539,6 +539,49 @@ typedef struct chttp_service_executor_gate {
   _Atomic int release;
 } chttp_service_executor_gate;
 
+typedef struct chttp_service_request_thread_args {
+  chttp_client_config config;
+  char uri[64];
+  const char *target;
+  _Atomic int completed;
+  int status;
+  unsigned int http_status;
+} chttp_service_request_thread_args;
+
+static void chttp_service_request_thread(void *user) {
+  chttp_service_request_thread_args *args =
+      (chttp_service_request_thread_args *)user;
+  chttp_client client = {0};
+  chttp_response response = {0};
+  if (args == NULL) return;
+  args->status = chttp_client_init(&client, &args->config);
+  if (args->status == SALTS_OK) {
+    args->status =
+        chttp_service_test_call(&client, args->uri, args->target, &response);
+    if (args->status == SALTS_OK)
+      args->http_status = response.status_code;
+    chttp_response_destroy(&response);
+    if (chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS) !=
+            SALTS_OK &&
+        args->status == SALTS_OK)
+      args->status = SALTS_EIO;
+  }
+  atomic_store_explicit(&args->completed, 1, memory_order_release);
+}
+
+static bool DATA_BIND_NATIVE_CALL chttp_service_test_blocking_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  chttp_service_executor_gate *gate =
+      (chttp_service_executor_gate *)context;
+  if (gate == NULL) return false;
+  atomic_store_explicit(&gate->started, 1, memory_order_release);
+  while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
+    salts_thread_yield();
+  return chttp_service_test_invoke(
+      NULL, return_storage, params, param_count);
+}
+
 static void chttp_service_executor_gate_run(void *user) {
   chttp_service_executor_gate *gate =
       (chttp_service_executor_gate *)user;
@@ -1096,6 +1139,136 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_true(cflow_executor_wait_idle(&executor));
     check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_equal(chttp_service_destroy(&service), SALTS_OK);
+    cflow_executor_destroy(&executor);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+  it("keeps deferred method state alive until task finalization") {
+    static const char schema[] =
+        "message AddRequest {"
+        " @Min(1) uint32 left;"
+        " uint32 right;"
+        " optional uint32 scale default 1;"
+        "}"
+        "message AddResponse { uint32 sum; }"
+        "service Calc { Add: AddRequest -> AddResponse; }";
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+            FunctionMeta(chttp_service_test_add),
+            &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
+    DataBindNativeExecution execution =
+        (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+    const DataBindHttpProjectionConfig *projection;
+    DataBindHttpMethodPlan *method_plan = NULL;
+    chttp_service service = {0};
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    cflow_executor executor = {0};
+    chttp_service_executor_gate invoke_gate;
+    chttp_service_request_thread_args request_args;
+    salts_thread_t request_thread = {0};
+    uint64_t deadline;
+    uint16_t port = 0u;
+
+    projection = data_bind_http_projection_artifact_find(
+        &databind_chttp_service_http_projection, "Calc", "Add");
+    check_not_null(projection);
+    check_equal(
+        data_bind_create_from_text(
+            schema, sizeof(schema) - 1u, &contract, &bind_error),
+        DATA_BIND_OK);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &native,
+            &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    atomic_init(&invoke_gate.started, 0);
+    atomic_init(&invoke_gate.release, 0);
+    execution.function = FunctionMeta(chttp_service_test_add);
+    execution.abi = FunctionAbi(chttp_service_test_add);
+    execution.context = &invoke_gate;
+    execution.invoke = chttp_service_test_blocking_invoke;
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 2u;
+    service_config.max_call_frame_bytes = 512u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+
+    check_true(cflow_executor_worker_init_with_capacity(
+        &executor, 1u, 2u));
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    mount.method_plan = method_plan;
+    mount.native_binding = &native;
+    mount.execution = &execution;
+    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.executor = &executor;
+    check_equal(
+        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_true(port != 0u);
+
+    memset(&request_args, 0, sizeof(request_args));
+    request_args.config = chttp_service_test_client_config();
+    request_args.target = "/add/3?right=4&scale=2";
+    atomic_init(&request_args.completed, 0);
+    check_greater(
+        snprintf(request_args.uri, sizeof(request_args.uri),
+                 "tcp://127.0.0.1:%u", (unsigned int)port),
+        0);
+    check_equal(
+        salts_thread_create(
+            &request_thread, chttp_service_request_thread, &request_args),
+        SALTS_OK);
+
+    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(
+               &invoke_gate.started, memory_order_acquire) == 0 &&
+           salts_monotonic_ms() < deadline)
+      salts_thread_yield();
+    check_equal(
+        atomic_load_explicit(&invoke_gate.started, memory_order_acquire), 1);
+
+    /*
+     * The accepted task still dereferences immutable method/execution state.
+     * Destroy must therefore fail atomically without releasing any method
+     * storage or provider lifetime.
+     */
+    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_not_null(service.impl);
+
+    atomic_store_explicit(&invoke_gate.release, 1, memory_order_release);
+    check_equal(salts_thread_join(&request_thread), SALTS_OK);
+    salts_thread_destroy(&request_thread);
+    check_equal(
+        atomic_load_explicit(&request_args.completed, memory_order_acquire), 1);
+    check_equal(request_args.status, SALTS_OK);
+    check_equal(request_args.http_status, 201u);
+    check_true(cflow_executor_wait_idle(&executor));
+
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
