@@ -1,7 +1,7 @@
 add_library(chttp_cjwt STATIC
   "src/cjwt.c"
-  "src/jwe_openssl_3.c"
-  "src/jws_openssl_3.c"
+  "src/jwe_unsupported.c"
+  "src/jws_chttp_hs256.c"
   "src/print.c"
   "src/utils.c")
 set_target_properties(chttp_cjwt PROPERTIES FOLDER "vendor/cjwt")
@@ -13,7 +13,7 @@ target_include_directories(
           "${CHTTP_CJWT_ROOT}/src")
 target_link_libraries(
   chttp_cjwt
-  PRIVATE Salts::JsonParser Salts::Crypto OpenSSL::Crypto)
+  PRIVATE Salts::JsonParser Salts::Core)
 
 
 if(BUILD_TESTS)
