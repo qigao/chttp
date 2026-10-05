@@ -23,7 +23,7 @@ target_include_directories(chttp_web
          $<INSTALL_INTERFACE:include>)
 target_link_libraries(chttp_web
   PUBLIC CHttp::Server Salts::CMeta
-  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core OpenSSL::Crypto
+  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core
   INTERFACE
     $<LINK_ONLY:Salts::JinjaCMeta>
     $<LINK_ONLY:Salts::DataBind>)

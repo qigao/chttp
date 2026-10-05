@@ -2,9 +2,7 @@
 
 #include "s3_internal.h"
 
-#include <openssl/crypto.h>
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
+#include <salts_crypto.h>
 
 #include <ctype.h>
 #include <limits.h>
@@ -12,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { S3_SHA256_SIZE = 32 };
+enum { S3_SHA256_SIZE = SALTS_SHA256_DIGEST_BYTES };
 enum { S3_SIGNER_COMPONENT_LIMIT = 1024 };
 
 typedef struct s3_normalized_header {
@@ -22,7 +20,7 @@ typedef struct s3_normalized_header {
 
 static void s3_cleanse_tstr_free(tstr value) {
   if (value == NULL) return;
-  OPENSSL_cleanse(value, tstr_len(value));
+  salts_crypto_clear(value, tstr_len(value));
   tstr_free(value);
 }
 
@@ -39,28 +37,23 @@ static void s3_hex_lower(const unsigned char *input, size_t size, char *output) 
 int s3_signer_sha256_hex(const void *data, size_t size,
                          char out_hex[S3_SIGNER_SHA256_HEX_SIZE + 1]) {
   unsigned char digest[S3_SHA256_SIZE];
-  unsigned int digest_size = 0u;
+  int status;
 
   if (out_hex == NULL || (data == NULL && size != 0u)) return SALTS_EINVAL;
-  if (EVP_Digest(data != NULL ? data : "", size, digest, &digest_size, EVP_sha256(), NULL) != 1 ||
-      digest_size != sizeof(digest)) {
-    OPENSSL_cleanse(digest, sizeof(digest));
-    return SALTS_EIO;
+  status = salts_sha256(data, size, digest);
+  if (status != SALTS_OK) {
+    salts_crypto_clear(digest, sizeof(digest));
+    return status;
   }
   s3_hex_lower(digest, sizeof(digest), out_hex);
-  OPENSSL_cleanse(digest, sizeof(digest));
+  salts_crypto_clear(digest, sizeof(digest));
   return SALTS_OK;
 }
 
 static int s3_hmac_sha256(const unsigned char *key, size_t key_size, const void *data,
                           size_t data_size, unsigned char output[S3_SHA256_SIZE]) {
-  unsigned int output_size = 0u;
-  const unsigned char *input = (const unsigned char *)(data != NULL ? data : "");
-  if (key == NULL || (data == NULL && data_size != 0u) || key_size > INT_MAX) return SALTS_EINVAL;
-  if (HMAC(EVP_sha256(), key, (int)key_size, input, data_size, output, &output_size) == NULL ||
-      output_size != S3_SHA256_SIZE)
-    return SALTS_EIO;
-  return SALTS_OK;
+  if (key == NULL || (data == NULL && data_size != 0u)) return SALTS_EINVAL;
+  return salts_hmac_sha256(key, key_size, data, data_size, output);
 }
 
 static int s3_signer_date_valid(const char *date) {
@@ -164,7 +157,7 @@ static void s3_headers_destroy(s3_normalized_header *headers, size_t count) {
   size_t index;
   for (index = 0u; index < count; ++index) {
     if (headers[index].value != NULL)
-      OPENSSL_cleanse(headers[index].value, tstr_len(headers[index].value));
+      salts_crypto_clear(headers[index].value, tstr_len(headers[index].value));
     tstr_free(headers[index].name);
     tstr_free(headers[index].value);
   }
@@ -367,12 +360,12 @@ static int s3_derive_signature(const s3_signer_request *request, const char *str
     status = s3_hmac_sha256(signing_key, sizeof(signing_key), string_to_sign,
                             strlen(string_to_sign), raw_signature);
   if (status == SALTS_OK) s3_hex_lower(raw_signature, sizeof(raw_signature), signature);
-  OPENSSL_cleanse(secret_prefix, sizeof(secret_prefix));
-  OPENSSL_cleanse(date_key, sizeof(date_key));
-  OPENSSL_cleanse(region_key, sizeof(region_key));
-  OPENSSL_cleanse(service_key, sizeof(service_key));
-  OPENSSL_cleanse(signing_key, sizeof(signing_key));
-  OPENSSL_cleanse(raw_signature, sizeof(raw_signature));
+  salts_crypto_clear(secret_prefix, sizeof(secret_prefix));
+  salts_crypto_clear(date_key, sizeof(date_key));
+  salts_crypto_clear(region_key, sizeof(region_key));
+  salts_crypto_clear(service_key, sizeof(service_key));
+  salts_crypto_clear(signing_key, sizeof(signing_key));
+  salts_crypto_clear(raw_signature, sizeof(raw_signature));
   return status;
 }
 
@@ -494,23 +487,23 @@ int s3_signer_sign(const s3_signer_request *request, s3_signer_result *out_resul
   s3_headers_destroy(headers, header_count);
   s3_cleanse_tstr_free(canonical_headers);
   tstr_free(scope);
-  OPENSSL_cleanse(canonical_hash, sizeof(canonical_hash));
-  OPENSSL_cleanse(signature, sizeof(signature));
+  salts_crypto_clear(canonical_hash, sizeof(canonical_hash));
+  salts_crypto_clear(signature, sizeof(signature));
   return status;
 }
 
 void s3_signer_result_destroy(s3_signer_result *result) {
   if (result == NULL) return;
   if (result->authorization != NULL)
-    OPENSSL_cleanse(result->authorization, tstr_len((tstr)result->authorization));
+    salts_crypto_clear(result->authorization, tstr_len((tstr)result->authorization));
   if (result->signature != NULL)
-    OPENSSL_cleanse(result->signature, tstr_len((tstr)result->signature));
+    salts_crypto_clear(result->signature, tstr_len((tstr)result->signature));
   if (result->canonical_query != NULL)
-    OPENSSL_cleanse(result->canonical_query, tstr_len((tstr)result->canonical_query));
+    salts_crypto_clear(result->canonical_query, tstr_len((tstr)result->canonical_query));
   if (result->canonical_request != NULL)
-    OPENSSL_cleanse(result->canonical_request, tstr_len((tstr)result->canonical_request));
+    salts_crypto_clear(result->canonical_request, tstr_len((tstr)result->canonical_request));
   if (result->string_to_sign != NULL)
-    OPENSSL_cleanse(result->string_to_sign, tstr_len((tstr)result->string_to_sign));
+    salts_crypto_clear(result->string_to_sign, tstr_len((tstr)result->string_to_sign));
   tstr_free(result->authorization);
   tstr_free(result->signed_headers);
   tstr_free(result->signature);
@@ -523,9 +516,9 @@ void s3_signer_result_destroy(s3_signer_result *result) {
 void s3_presign_result_destroy(s3_presign_result *result) {
   if (result == NULL) return;
   if (result->canonical_query != NULL)
-    OPENSSL_cleanse(result->canonical_query, tstr_len((tstr)result->canonical_query));
+    salts_crypto_clear(result->canonical_query, tstr_len((tstr)result->canonical_query));
   if (result->signature != NULL)
-    OPENSSL_cleanse(result->signature, tstr_len((tstr)result->signature));
+    salts_crypto_clear(result->signature, tstr_len((tstr)result->signature));
   tstr_free(result->canonical_query);
   tstr_free(result->signature);
   memset(result, 0, sizeof(*result));
@@ -719,7 +712,7 @@ int s3_signer_presign(const s3_presign_request *request, s3_presign_result *out_
   s3_cleanse_tstr_free(canonical_request);
   s3_cleanse_tstr_free(string_to_sign);
   free(query);
-  OPENSSL_cleanse(canonical_hash, sizeof(canonical_hash));
-  OPENSSL_cleanse(signature, sizeof(signature));
+  salts_crypto_clear(canonical_hash, sizeof(canonical_hash));
+  salts_crypto_clear(signature, sizeof(signature));
   return status;
 }

@@ -1,6 +1,6 @@
 #include <chttp_web/web.h>
 
-#include <openssl/crypto.h>
+#include <salts_crypto.h>
 #include <platform.h>
 #include <salts/error_codes.h>
 
@@ -80,7 +80,7 @@ static chttp_web_status chttp_web_csrf_write(
 
   status = salts_secure_random(random, sizeof(random));
   if (status != SALTS_OK) {
-    OPENSSL_cleanse(random, sizeof(random));
+    salts_crypto_clear(random, sizeof(random));
     return chttp_web_session_status(
         error, status, "secure random generation failed");
   }
@@ -89,10 +89,10 @@ static chttp_web_status chttp_web_csrf_write(
     token[i * 2u + 1u] = hex[random[i] & 0x0fu];
   }
   token[CHTTP_WEB_CSRF_TOKEN_BYTES] = '\0';
-  OPENSSL_cleanse(random, sizeof(random));
+  salts_crypto_clear(random, sizeof(random));
 
   status = chttp_session_set(session, CHTTP_WEB_CSRF_SESSION_KEY, token);
-  OPENSSL_cleanse(token, sizeof(token));
+  salts_crypto_clear(token, sizeof(token));
   if (status != SALTS_OK)
     return chttp_web_session_status(
         error, status, "CHTTP session rejected the CSRF token");
@@ -167,10 +167,14 @@ chttp_web_status chttp_web_csrf_validate_token(
     return chttp_web_session_fail(
         error, CHTTP_WEB_CSRF, 0, 0u,
         "CSRF token is missing or malformed");
-  if (CRYPTO_memcmp(expected, token, CHTTP_WEB_CSRF_TOKEN_BYTES) != 0)
-    return chttp_web_session_fail(
-        error, CHTTP_WEB_CSRF, 0, 0u,
-        "CSRF token does not match the current session");
+  {
+    int equal = 0;
+    if (salts_crypto_equal(expected, token, CHTTP_WEB_CSRF_TOKEN_BYTES, &equal) != SALTS_OK ||
+        !equal)
+      return chttp_web_session_fail(
+          error, CHTTP_WEB_CSRF, 0, 0u,
+          "CSRF token does not match the current session");
+  }
   return chttp_web_session_fail(error, CHTTP_WEB_OK, 0, 0u, NULL);
 }
 
@@ -409,7 +413,7 @@ chttp_web_status chttp_web_flash_push(
   next[total] = '\0';
 
   status = chttp_session_set(session, CHTTP_WEB_FLASH_SESSION_KEY, next);
-  OPENSSL_cleanse(next, sizeof(next));
+  salts_crypto_clear(next, sizeof(next));
   return chttp_web_session_status(
       error, status, "CHTTP session rejected flash state");
 }
