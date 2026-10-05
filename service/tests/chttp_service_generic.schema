@@ -1,0 +1,1 @@
+message GenericEnvelope { list<int32> values; set<int32> ids; }
