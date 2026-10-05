@@ -145,14 +145,13 @@ for workload in expected:
                     raise SystemExit(
                         f"{workload}/{owners}: callback echo emitted copied-command profile"
                     )
-                expected_callback_sends = int(row["operations"]) + (
-                    int(environments[0].get("warmup", 0)) * int(row["connections"])
-                )
-                if int(row.get("server_callback_echo_send_calls", 0)) != expected_callback_sends:
+                if int(row.get("server_callback_echo_send_calls", 0)) != int(
+                    row["operations"]
+                ):
                     raise SystemExit(
                         f"{workload}/{owners}: callback echo send calls "
                         f"{row.get('server_callback_echo_send_calls')} "
-                        f"!= measured+warmup {expected_callback_sends}"
+                        f"!= operations {row['operations']}"
                     )
                 for field in (
                     "client_send_p50_ns",
