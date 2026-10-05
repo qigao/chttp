@@ -529,17 +529,11 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       goto cleanup_threads;
   }
 
-  if (test_case->mode == OWNER_WS_CAPTURED_PUSH) {
-    const uint64_t drain_deadline = salts_hrtime() + UINT64_C(5000000000);
-    while (atomic_load_explicit(&command_profile.send_completion_commands,
-                                memory_order_acquire) !=
-           atomic_load_explicit(&command_profile.commands,
-                                memory_order_acquire)) {
-      if (salts_hrtime() >= drain_deadline) goto cleanup;
-      owner_ws_sample_command_pressure(impl, &pressure, owner_count);
-      salts_sleep_ms(1u);
-    }
-  }
+  /*
+   * Transport write completions are sampled evidence only. CNet/TLS may
+   * coalesce or split WebSocket command bytes, so they are not a one-to-one
+   * command completion contract and must not gate benchmark termination.
+   */
   impl->websocket_profile = NULL;
 
   if (atomic_load_explicit(&state.callback_errors,
@@ -591,8 +585,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       "\"profile_wake_ns_per_command\":%.3f,"
       "\"profile_queue_residence_ns_per_command\":%.3f,"
       "\"profile_send_admission_ns_per_command\":%.3f,"
-      "\"profile_send_completion_commands\":%llu,"
-      "\"profile_send_completion_ns_per_command\":%.3f,"
+      "\"profile_send_completion_samples\":%llu,"
+      "\"profile_send_completion_ns_per_sample\":%.3f,"
       "\"profile_max_queue_residence_ns\":%llu,"
       "\"profile_max_send_admission_ns\":%llu,"
       "\"profile_max_send_completion_ns\":%llu,"
@@ -661,13 +655,13 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
                     &command_profile.commands, memory_order_relaxed)
           : 0.0,
       (unsigned long long)atomic_load_explicit(
-          &command_profile.send_completion_commands, memory_order_relaxed),
+          &command_profile.send_completion_samples, memory_order_relaxed),
       atomic_load_explicit(
-          &command_profile.send_completion_commands, memory_order_relaxed) != 0u
+          &command_profile.send_completion_samples, memory_order_relaxed) != 0u
           ? (double)atomic_load_explicit(
                 &command_profile.send_completion_ns, memory_order_relaxed) /
                 (double)atomic_load_explicit(
-                    &command_profile.send_completion_commands, memory_order_relaxed)
+                    &command_profile.send_completion_samples, memory_order_relaxed)
           : 0.0,
       (unsigned long long)atomic_load_explicit(
           &command_profile.max_queue_residence_ns, memory_order_relaxed),
