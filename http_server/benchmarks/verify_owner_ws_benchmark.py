@@ -166,13 +166,12 @@ for workload in expected:
                     raise SystemExit(
                         f"{workload}/{owners}: profile failures={profile_failed}"
                     )
-                completion_commands = int(
-                    row.get("profile_send_completion_commands", 0)
+                completion_samples = int(
+                    row.get("profile_send_completion_samples", 0)
                 )
-                if completion_commands != int(row["operations"]):
+                if completion_samples <= 0:
                     raise SystemExit(
-                        f"{workload}/{owners}: send completions "
-                        f"{completion_commands} != operations {row['operations']}"
+                        f"{workload}/{owners}: missing transport send-completion samples"
                     )
                 for field in (
                     "profile_copy_ns_per_command",
@@ -180,7 +179,7 @@ for workload in expected:
                     "profile_wake_ns_per_command",
                     "profile_queue_residence_ns_per_command",
                     "profile_send_admission_ns_per_command",
-                    "profile_send_completion_ns_per_command",
+                    "profile_send_completion_ns_per_sample",
                     "profile_max_queue_residence_ns",
                     "profile_max_send_admission_ns",
                     "profile_max_send_completion_ns",
@@ -224,7 +223,7 @@ for workload in expected:
         )
     print()
     if mode == "captured-push":
-        print("| owners | copy ns/cmd | enqueue ns/cmd | wake ns/cmd | queue residence ns/cmd | send admission ns/cmd | send completion ns/cmd | max queue ns | max send admission ns | max send completion ns |")
+        print("| owners | copy ns/cmd | enqueue ns/cmd | wake ns/cmd | queue residence ns/cmd | send admission ns/cmd | send completion ns/sample | max queue ns | max send admission ns | max send completion ns |")
         print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
         for owners in (1, 2, 4):
             points = by_owner[owners]
@@ -235,7 +234,7 @@ for workload in expected:
                 f"{median_value(points, 'profile_wake_ns_per_command'):.1f} | "
                 f"{median_value(points, 'profile_queue_residence_ns_per_command'):.1f} | "
                 f"{median_value(points, 'profile_send_admission_ns_per_command'):.1f} | "
-                f"{median_value(points, 'profile_send_completion_ns_per_command'):.1f} | "
+                f"{median_value(points, 'profile_send_completion_ns_per_sample'):.1f} | "
                 f"{int(median_value(points, 'profile_max_queue_residence_ns'))} | "
                 f"{int(median_value(points, 'profile_max_send_admission_ns'))} | "
                 f"{int(median_value(points, 'profile_max_send_completion_ns'))} |"
