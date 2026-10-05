@@ -247,7 +247,7 @@ typedef struct chttp_server_websocket_profile {
   _Atomic uint64_t wake_ns;
   _Atomic uint64_t queue_residence_ns;
   _Atomic uint64_t send_admission_ns;
-  _Atomic uint64_t send_completion_commands;
+  _Atomic uint64_t send_completion_samples;
   _Atomic uint64_t send_completion_ns;
   _Atomic uint64_t max_queue_residence_ns;
   _Atomic uint64_t max_send_admission_ns;
