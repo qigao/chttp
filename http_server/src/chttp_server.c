@@ -1578,8 +1578,10 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
   if (resume_retained)
     chttp_server_response_builder_release_retained_body(
         &connection->request_state.response_builder);
-  if (connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_NONE)
+  if (connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_NONE) {
+    chttp_server_websocket_profile_send_complete(connection);
     status = chttp_server_websocket_send_complete(connection);
+  }
   if (connection->response_streaming) status = chttp_server_response_stream_next(connection);
   if (connection->outbound_size == 0u && !connection->response_streaming &&
       connection->websocket_peer.phase == CHTTP_SERVER_WEBSOCKET_NONE &&

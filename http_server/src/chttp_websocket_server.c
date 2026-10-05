@@ -2,8 +2,64 @@
 #include "chttp_h2_server.h"
 #include "chttp_websocket_handshake.h"
 
+#include <salts/clock.h>
+
 #include <stdlib.h>
 #include <string.h>
+
+static void chttp_server_websocket_profile_add(
+    _Atomic uint64_t *counter, uint64_t value) {
+  if (counter != NULL && value != 0u)
+    atomic_fetch_add_explicit(counter, value, memory_order_relaxed);
+}
+
+static void chttp_server_websocket_profile_max(
+    _Atomic uint64_t *counter, uint64_t value) {
+  uint64_t observed;
+  if (counter == NULL) return;
+  observed = atomic_load_explicit(counter, memory_order_relaxed);
+  while (observed < value &&
+         !atomic_compare_exchange_weak_explicit(
+             counter, &observed, value, memory_order_relaxed,
+             memory_order_relaxed)) {
+  }
+}
+
+void chttp_server_websocket_profile_reset(
+    chttp_server_websocket_profile *profile) {
+  if (profile == NULL) return;
+  atomic_init(&profile->commands, 0u);
+  atomic_init(&profile->bytes, 0u);
+  atomic_init(&profile->failed_commands, 0u);
+  atomic_init(&profile->copy_ns, 0u);
+  atomic_init(&profile->enqueue_ns, 0u);
+  atomic_init(&profile->wake_ns, 0u);
+  atomic_init(&profile->queue_residence_ns, 0u);
+  atomic_init(&profile->send_admission_ns, 0u);
+  atomic_init(&profile->send_completion_samples, 0u);
+  atomic_init(&profile->send_completion_ns, 0u);
+  atomic_init(&profile->max_queue_residence_ns, 0u);
+  atomic_init(&profile->max_send_admission_ns, 0u);
+  atomic_init(&profile->max_send_completion_ns, 0u);
+}
+
+void chttp_server_websocket_profile_send_complete(
+    chttp_server_connection *connection) {
+  chttp_server_websocket_profile *profile;
+  uint64_t elapsed;
+  if (connection == NULL || connection->websocket_send_profile == NULL ||
+      connection->websocket_send_started_ns == 0u)
+    return;
+  profile = connection->websocket_send_profile;
+  elapsed = salts_hrtime() - connection->websocket_send_started_ns;
+  atomic_fetch_add_explicit(&profile->send_completion_samples, 1u,
+                            memory_order_relaxed);
+  chttp_server_websocket_profile_add(&profile->send_completion_ns, elapsed);
+  chttp_server_websocket_profile_max(&profile->max_send_completion_ns,
+                                     elapsed);
+  connection->websocket_send_profile = NULL;
+  connection->websocket_send_started_ns = 0u;
+}
 
 typedef struct chttp_websocket_open_context {
   chttp_server_websocket_peer *peer;
@@ -356,6 +412,8 @@ int chttp_server_websocket_send_complete(chttp_server_connection *connection) {
 
 void chttp_server_websocket_transport_closed(chttp_server_connection *connection) {
   if (connection == NULL) return;
+  connection->websocket_send_profile = NULL;
+  connection->websocket_send_started_ns = 0u;
   chttp_server_websocket_peer_transport_closed(&connection->websocket_peer);
   chttp_server_websocket_reset(connection);
 }
@@ -427,15 +485,20 @@ static int chttp_server_websocket_command_submit(
     uint16_t close_code, const void *data, size_t size) {
   chttp_server_impl *server;
   chttp_server_websocket_command *command;
+  chttp_server_websocket_profile *profile;
   chttp_server_owner_lane *owner;
   cnet_client *network;
   unsigned char *copy = NULL;
+  uint64_t copy_started = 0u;
+  uint64_t enqueue_started = 0u;
+  uint64_t wake_started = 0u;
   size_t tail;
   if (session == NULL || session->impl == NULL || session->connection_slot == 0u ||
       session->connection_generation == 0u || session->stream_id < 0 ||
       (data == NULL && size != 0u))
     return SALTS_EINVAL;
   server = (chttp_server_impl *)session->impl;
+  profile = server->websocket_profile;
   owner = chttp_server_websocket_command_owner(server, session);
   network = chttp_server_owner_network(owner);
   if (owner == NULL || owner->server != server || network == NULL)
@@ -448,33 +511,69 @@ static int chttp_server_websocket_command_submit(
   if (kind == CHTTP_SERVER_WEBSOCKET_COMMAND_CLOSE &&
       size > CNET_WEBSOCKET_MAX_CONTROL_BYTES - sizeof(uint16_t))
     return SALTS_EMSGSIZE;
+  if (profile != NULL) copy_started = salts_hrtime();
   if (size != 0u) {
     copy = (unsigned char *)malloc(size);
-    if (copy == NULL) return SALTS_ENOMEM;
+    if (copy == NULL) {
+      if (profile != NULL)
+        atomic_fetch_add_explicit(&profile->failed_commands, 1u,
+                                  memory_order_relaxed);
+      return SALTS_ENOMEM;
+    }
     memcpy(copy, data, size);
   }
+  if (profile != NULL)
+    chttp_server_websocket_profile_add(
+        &profile->copy_ns, salts_hrtime() - copy_started);
+  if (profile != NULL) enqueue_started = salts_hrtime();
   salts_mutex_lock(&server->mutex);
   if (!server->stats.running || server->stats.stopping || server->worker_done) {
     salts_mutex_unlock(&server->mutex);
+    if (profile != NULL) {
+      chttp_server_websocket_profile_add(
+          &profile->enqueue_ns, salts_hrtime() - enqueue_started);
+      atomic_fetch_add_explicit(&profile->failed_commands, 1u,
+                                memory_order_relaxed);
+    }
     free(copy);
     return SALTS_ESHUTDOWN;
   }
   if (owner->websocket_command_count == server->config.network.command_capacity) {
     salts_mutex_unlock(&server->mutex);
+    if (profile != NULL) {
+      chttp_server_websocket_profile_add(
+          &profile->enqueue_ns, salts_hrtime() - enqueue_started);
+      atomic_fetch_add_explicit(&profile->failed_commands, 1u,
+                                memory_order_relaxed);
+    }
     free(copy);
     return SALTS_ENOBUFS;
   }
   tail = (owner->websocket_command_head + owner->websocket_command_count) %
          server->config.network.command_capacity;
   command = &owner->websocket_commands[tail];
-  *command = (chttp_server_websocket_command){.session = *session,
-                                              .data = copy,
-                                              .size = size,
-                                              .close_code = close_code,
-                                              .kind = kind};
+  *command = (chttp_server_websocket_command){
+      .session = *session,
+      .data = copy,
+      .profile = profile,
+      .profile_enqueued_ns = profile != NULL ? salts_hrtime() : 0u,
+      .size = size,
+      .close_code = close_code,
+      .kind = kind};
   ++owner->websocket_command_count;
   salts_mutex_unlock(&server->mutex);
+  if (profile != NULL) {
+    chttp_server_websocket_profile_add(
+        &profile->enqueue_ns, salts_hrtime() - enqueue_started);
+    atomic_fetch_add_explicit(&profile->commands, 1u, memory_order_relaxed);
+    atomic_fetch_add_explicit(&profile->bytes, (uint64_t)size,
+                              memory_order_relaxed);
+    wake_started = salts_hrtime();
+  }
   (void)cnet_client_wake(network);
+  if (profile != NULL)
+    chttp_server_websocket_profile_add(
+        &profile->wake_ns, salts_hrtime() - wake_started);
   return SALTS_OK;
 }
 
@@ -544,27 +643,63 @@ int chttp_server_websocket_commands_progress(
     }
     command = &owner->websocket_commands[owner->websocket_command_head];
     salts_mutex_unlock(&server->mutex);
+    if (command->profile != NULL && !command->profile_residence_recorded) {
+      const uint64_t residence =
+          salts_hrtime() - command->profile_enqueued_ns;
+      chttp_server_websocket_profile_add(
+          &command->profile->queue_residence_ns, residence);
+      chttp_server_websocket_profile_max(
+          &command->profile->max_queue_residence_ns, residence);
+      command->profile_residence_recorded = true;
+    }
     peer = chttp_server_websocket_command_peer(server, &command->session, &connection);
     if (peer != NULL && (connection == NULL || connection->owner != owner))
       peer = NULL;
-    if (peer == NULL)
+    if (peer == NULL) {
       status = SALTS_ENOENT;
-    else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_TEXT)
-      status = cnet_websocket_send_text(&peer->engine, command->data, command->size);
-    else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_BINARY)
-      status = cnet_websocket_send_binary(&peer->engine, command->data, command->size);
-    else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PING)
-      status = cnet_websocket_send_ping(&peer->engine, command->data, command->size);
-    else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PONG)
-      status = cnet_websocket_send_pong(&peer->engine, command->data, command->size);
-    else
-      status = cnet_websocket_close(&peer->engine, command->close_code, command->data,
-                                    command->size);
+    } else {
+      const bool profile_h1 =
+          command->profile != NULL && command->session.stream_id == 0 &&
+          connection != NULL &&
+          connection->websocket_send_profile == NULL;
+      const uint64_t send_started =
+          command->profile != NULL ? salts_hrtime() : 0u;
+      if (profile_h1) {
+        connection->websocket_send_profile = command->profile;
+        connection->websocket_send_started_ns = send_started;
+      }
+      if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_TEXT)
+        status = cnet_websocket_send_text(&peer->engine, command->data, command->size);
+      else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_BINARY)
+        status = cnet_websocket_send_binary(&peer->engine, command->data, command->size);
+      else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PING)
+        status = cnet_websocket_send_ping(&peer->engine, command->data, command->size);
+      else if (command->kind == CHTTP_SERVER_WEBSOCKET_COMMAND_PONG)
+        status = cnet_websocket_send_pong(&peer->engine, command->data, command->size);
+      else
+        status = cnet_websocket_close(&peer->engine, command->close_code, command->data,
+                                      command->size);
+      if (command->profile != NULL)
+        command->profile_send_ns += salts_hrtime() - send_started;
+      if (profile_h1 && status != SALTS_OK) {
+        connection->websocket_send_profile = NULL;
+        connection->websocket_send_started_ns = 0u;
+      }
+    }
     if (status == SALTS_OK && command->session.stream_id != 0) {
       status = chttp_server_send_pending(connection);
       if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) status = SALTS_OK;
     }
     if (status == SALTS_EBUSY || status == SALTS_ENOBUFS) return SALTS_OK;
+    if (command->profile != NULL) {
+      chttp_server_websocket_profile_add(
+          &command->profile->send_admission_ns, command->profile_send_ns);
+      chttp_server_websocket_profile_max(
+          &command->profile->max_send_admission_ns, command->profile_send_ns);
+      if (status != SALTS_OK)
+        atomic_fetch_add_explicit(&command->profile->failed_commands, 1u,
+                                  memory_order_relaxed);
+    }
     salts_mutex_lock(&server->mutex);
     free(command->data);
     *command = (chttp_server_websocket_command){0};
