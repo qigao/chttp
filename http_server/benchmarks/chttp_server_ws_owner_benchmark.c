@@ -600,6 +600,12 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       "\"p50_ns\":%llu,"
       "\"p95_ns\":%llu,"
       "\"p99_ns\":%llu,"
+      "\"client_send_p50_ns\":%llu,"
+      "\"client_send_p95_ns\":%llu,"
+      "\"client_receive_p50_ns\":%llu,"
+      "\"client_receive_p95_ns\":%llu,"
+      "\"server_callback_echo_send_ns_per_call\":%.3f,"
+      "\"server_callback_echo_send_calls\":%llu,"
       "\"accepted_connections\":%llu,"
       "\"rejected_connections\":%llu,"
       "\"owner0_leases\":%zu,"
@@ -647,6 +653,19 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
       (unsigned long long)owner_ws_percentile(latencies, total_messages, 50u),
       (unsigned long long)owner_ws_percentile(latencies, total_messages, 95u),
       (unsigned long long)owner_ws_percentile(latencies, total_messages, 99u),
+      (unsigned long long)owner_ws_percentile(send_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(send_latencies, total_messages, 95u),
+      (unsigned long long)owner_ws_percentile(receive_latencies, total_messages, 50u),
+      (unsigned long long)owner_ws_percentile(receive_latencies, total_messages, 95u),
+      atomic_load_explicit(
+          &state.callback_echo_send_calls, memory_order_relaxed) != 0u
+          ? (double)atomic_load_explicit(
+                &state.callback_echo_send_ns, memory_order_relaxed) /
+                (double)atomic_load_explicit(
+                    &state.callback_echo_send_calls, memory_order_relaxed)
+          : 0.0,
+      (unsigned long long)atomic_load_explicit(
+          &state.callback_echo_send_calls, memory_order_relaxed),
       (unsigned long long)stats.accepted_connections,
       (unsigned long long)stats.rejected_connections,
       pressure.owner_leases[0], pressure.owner_leases[1],
