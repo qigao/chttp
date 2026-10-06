@@ -33,7 +33,7 @@ static const cmeta_type_desc rate_bucket_type = {
 #undef CMETA_KNOWN_TYPE_LIST
 #define CMETA_KNOWN_TYPE_LIST CMETA_BUILTIN_TYPE_LIST, \
     (rate_bucket, chttp_rate_bucket, rate_bucket_type, CMETA_T_OBJECT, rate_bucket_traits)
-typed(Vec, chttp_rate_buckets, chttp_rate_bucket);
+cmeta_type(Vec, chttp_rate_buckets, chttp_rate_bucket);
 
 typedef struct chttp_rate_limit_impl {
   chttp_rate_limit_config config;
