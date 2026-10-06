@@ -2,6 +2,7 @@
 
 #include <salts/error_codes.h>
 #include <salts_buffer.h>
+#include <tlog.h>
 #include <data_bind_plugin_execution.h>
 
 #include <cserde/cserde.h>
@@ -68,7 +69,7 @@ typedef struct chttp_service_invocation {
   unsigned char *native_workspace;
   DataBindNativeOptions native_options;
   chttp_server_deferred deferred;
-  int frame_live;
+  DataBindBindingCallLifetime frame_lifetime;
   int deferred_method_held;
 } chttp_service_invocation;
 
@@ -1150,29 +1151,19 @@ static void chttp_service_method_release(
 
 static void chttp_service_invocation_release(
     chttp_service_invocation *invocation) {
-  const DataBindServiceNativeBinding *native;
   if (invocation == NULL) return;
-  native = invocation->record != NULL
-               ? invocation->record->native_binding
-               : NULL;
-  if (invocation->frame_live && native != NULL) {
-    if (invocation->error_storage != NULL) {
-      DataBindError error = DATA_BIND_ERROR_INIT;
-      (void)data_bind_service_native_error_restore_zero(
-          native, invocation->error_storage,
-          invocation->record != NULL
-              ? invocation->record->error_bytes
-              : 0u,
-          &error);
+  if (data_bind_binding_call_is_live(&invocation->frame_lifetime)) {
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindStatus status = data_bind_binding_call_restore_zero(
+        &invocation->frame_lifetime, &diagnostic);
+    if (status != DATA_BIND_OK) {
+      /* A provider contract failure cannot release its descriptor domain. */
+      TLOG_FATALF("Service call teardown failed: code={}, parameter={}, reason={}; "
+                  "check the native provider lifecycle contract",
+                  (int)status, diagnostic.function_param, diagnostic.message);
+      abort();
     }
-    if (native->response != NULL && native->response->data != NULL &&
-        invocation->response_storage != NULL)
-      (void)cmeta_data_value_restore_zero(
-          native->response->data, invocation->response_storage);
-    if (native->request != NULL && native->request->data != NULL &&
-        invocation->request_storage != NULL)
-      (void)cmeta_data_value_restore_zero(
-          native->request->data, invocation->request_storage);
   }
   free(invocation->native_workspace);
   free(invocation->scalar_scratch);
@@ -1209,6 +1200,8 @@ static int chttp_service_invocation_init(
 
   service = record->owner;
   *invocation = (chttp_service_invocation){0};
+  invocation->frame_lifetime =
+      (DataBindBindingCallLifetime)DATA_BIND_BINDING_CALL_LIFETIME_INIT;
   invocation->record = record;
   invocation->request_storage =
       (unsigned char *)calloc(1u, record->request_bytes);
@@ -1535,11 +1528,9 @@ static int chttp_service_http_execute_deferred(
   provider.context = &provider_context;
   provider.open_input = chttp_service_http_open_input;
 
-  bind_status = data_bind_binding_plan_bind_inputs(
+  bind_status = data_bind_binding_plan_bind_call(
       record->binding, &provider, &invocation->native_options,
-      &invocation->frame, &diagnostic);
-  if (bind_status == DATA_BIND_OK)
-    invocation->frame_live = 1;
+      &invocation->frame, &invocation->frame_lifetime, &diagnostic);
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =
         chttp_service_http_ingress_failure(bind_status);
@@ -1625,11 +1616,9 @@ static int chttp_service_http_execute(
   provider.abort_output = chttp_service_http_abort_output;
 
   binding = record->binding;
-  bind_status = data_bind_binding_plan_bind_inputs(
+  bind_status = data_bind_binding_plan_bind_call(
       binding, &provider, &invocation.native_options,
-      &invocation.frame, &diagnostic);
-  if (bind_status == DATA_BIND_OK)
-    invocation.frame_live = 1;
+      &invocation.frame, &invocation.frame_lifetime, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =

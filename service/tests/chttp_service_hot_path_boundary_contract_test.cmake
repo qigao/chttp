@@ -179,7 +179,7 @@ endforeach()
 
 foreach(REQUIRED
     "binding = record->binding"
-    "data_bind_binding_plan_bind_inputs"
+    "data_bind_binding_plan_bind_call"
     "record->execution->invoke"
     "data_bind_binding_plan_write_outcome"
     "chttp_server_reply_buffer")

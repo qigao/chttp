@@ -422,6 +422,16 @@ native result
 builder 0 次，copy into flat H1 outbound 0 次，CNet payload admission copy 0 次。错误/兼容 API
 仍可使用普通 copied reply，不改变低层 CHTTP 语义。
 
+生成 Service 的 native 帧使用 DataBind `DataBindBindingCallLifetime`：
+`data_bind_binding_plan_bind_call()` 仅在成功绑定后建立释放义务，失败时 producer
+内部回滚。同步退出、执行/egress 失败及 deferred finalize 均由
+`data_bind_binding_call_restore_zero()` 统一恢复 request、response 与 active typed error，
+不维护本地 `frame_live` 或三段字段清理。终止失败表示 native provider 生命周期契约
+已被破坏，释放边界记录诊断并 fail fast；不会带着半可信状态卸载 descriptor domain。
+HTTP retained buffer 和 deferred response 仍按各自协议释放，method/mount lease 在
+native 帧恢复之后释放。此路径要求包含整帧生命周期入口的新 SaltsUtils SDK，
+不提供旧接口兼容分支。
+
 这样
 `max_response_body_bytes` 可以作为大文件/source 的传输总量上限，而不要求每条 connection/stream
 预分配同样大的 response buffer。`stream_chunk_bytes` 同样限制服务端 response source；H2 还会受

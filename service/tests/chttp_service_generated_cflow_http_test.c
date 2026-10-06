@@ -90,6 +90,11 @@ static int generated_cflow_call(
   return chttp_get(client, &options, response, &error);
 }
 
+static void generated_executor_host_probe(void *context) {
+  unsigned *calls = (unsigned *)context;
+  ++*calls;
+}
+
 static void run_generated_mode(
     const DataBindHttpMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
@@ -97,6 +102,9 @@ static void run_generated_mode(
     const cflow_function_typed_adapter_projection *projection,
     chttp_service_execution_mode mode) {
   cflow_executor executor = {0};
+  unsigned host_probe_calls = 0u;
+  cflow_executor_task host_probe = {
+      .run = generated_executor_host_probe, .user = &host_probe_calls};
   chttp_service service = {0};
   chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
   chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
@@ -118,6 +126,9 @@ static void run_generated_mode(
   service_config.native_max_owned_bytes = 1024u;
 
   check_true(cflow_executor_worker_init_with_capacity(&executor, 1u, 2u));
+  check_equal(cflow_executor_try_post_task(&executor, &host_probe), CFLOW_ADMISSION_ACCEPTED);
+  check_true(cflow_executor_wait_idle(&executor));
+  check_equal(host_probe_calls, 1u);
   check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
   check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
