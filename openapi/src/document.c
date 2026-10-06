@@ -14,7 +14,7 @@ Enum(OaMethod,
 
 /* Indices use the installed CMeta callable universe. No consumer-only ABI type
  * registrations or pointer captures: records stay borrowed through evaluation. */
-typed(filter, value, bool, annotated_index, (int index)) { return index >= 0; }
+cmeta_function(filter, value, bool, annotated_index, (int index)) { return index >= 0; }
 
 static int put(json_value_t *object, const char *key, json_value_t *value) {
     if (value && json_object_add_checked(object, key, value)) return 1;
