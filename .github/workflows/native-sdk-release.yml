@@ -29,6 +29,7 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: read
   packages: read
 
