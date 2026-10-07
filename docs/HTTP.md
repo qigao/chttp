@@ -146,8 +146,10 @@ GET handler，但只发送 headers。
 `enable_http2 = 1` 后，同一个 listener 同时接受 H1 与 H2。明文 H2 使用 h2c prior knowledge，
 不支持 `Upgrade: h2c`；TLS 通过 ALPN 在 `h2` 与 `http/1.1` 间选择。H2 stream 可以在一条连接上
 交错收发；同一 H2 connection 的 stream 始终由其固定 owner 推进，不跨 owner 迁移。多个 owner
-启用时，不同 connection 的 handler 可以并发执行。停服先关闭 listener admission、发送
-GOAWAY，再排空已经接纳的 stream；新 stream 不再进入 handler。最后通过 drain PING/ACK
+启用时，不同 connection 的 handler 可以并发执行。停服先由 listener control thread
+停止 accept 并关闭/销毁 listener，再允许各 owner 进入 STOPPING、取消尚未 adopt 的 admission
+并发送 GOAWAY；因此 listener 不会在 owner CNet teardown 后继续 enqueue/wake。随后排空已经接纳的
+stream；新 stream 不再进入 handler。最后通过 drain PING/ACK
 确认此前帧已按序到达后关闭 transport；不响应 PING 的 peer 使用有界 grace 后关闭。
 
 Server 的 H2 容量必须显式提供：`h2_input_buffer_bytes >= 16393`，
