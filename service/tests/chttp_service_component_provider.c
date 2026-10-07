@@ -1,6 +1,7 @@
 #include <chttp_service/component.h>
 
 #include "chttp_service_plugin_native.h"
+#include "chttp_service_plugin.service_native.h"
 
 #include <salts/component_plugin_abi.h>
 #include <salts/plugin_decl.h>
