@@ -226,8 +226,12 @@ static void owner_cpu_deferred_job_run(void *user) {
   if (job->burn_iterations != 0u)
     (void)owner_cpu_burn(job->burn_iterations);
   status = chttp_server_deferred_reply(&job->deferred, &reply);
-  if (status != SALTS_OK && job->errors != NULL)
+  if (status != SALTS_OK && job->errors != NULL) {
     atomic_fetch_add_explicit(job->errors, 1u, memory_order_relaxed);
+    if (job->deferred.impl != NULL &&
+        chttp_server_deferred_cancel(&job->deferred) != SALTS_OK)
+      atomic_fetch_add_explicit(job->errors, 1u, memory_order_relaxed);
+  }
   owner_cpu_deferred_job_release(job);
 }
 
@@ -300,9 +304,14 @@ static int owner_cpu_handler(void *user,
     atomic_fetch_add_explicit(
         route->deferred_errors, 1u, memory_order_relaxed);
     status = chttp_server_deferred_reply(&job->deferred, &rejected);
-    if (status != SALTS_OK)
+    if (status != SALTS_OK) {
       atomic_fetch_add_explicit(
           route->deferred_errors, 1u, memory_order_relaxed);
+      if (job->deferred.impl != NULL &&
+          chttp_server_deferred_cancel(&job->deferred) != SALTS_OK)
+        atomic_fetch_add_explicit(
+            route->deferred_errors, 1u, memory_order_relaxed);
+    }
     owner_cpu_deferred_job_release(job);
   }
   return SALTS_OK;
