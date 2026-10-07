@@ -110,7 +110,7 @@ endforeach()
 # CFlow admission joins producer projection types to DataBind native storage by
 # canonical type identity. It must never require TypeDesc address equality.
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_cflow_admit(" CFLOW_ADMIT_START)
-string(FIND "${SERVICE_TEXT}" "static int chttp_service_plugin_resolve(" CFLOW_ADMIT_END)
+string(FIND "${SERVICE_TEXT}" "static int chttp_service_component_resolve(" CFLOW_ADMIT_END)
 if(CFLOW_ADMIT_START LESS 0 OR CFLOW_ADMIT_END LESS 0 OR
    CFLOW_ADMIT_END LESS_EQUAL CFLOW_ADMIT_START)
   message(FATAL_ERROR "Could not isolate CFlow type admission")
@@ -167,7 +167,8 @@ foreach(FORBIDDEN
     "data_bind_native_execution_valid"
     "data_bind_http_method_plan_binding"
     "cflow_function_projection"
-    "salts_plugin"
+    "salts_component_plugin_"
+    "cmeta_plugin_"
     "FunctionMeta("
     "FunctionAbi("
     "registry")
@@ -193,35 +194,34 @@ string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_direct_run(" P
 string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" PLUGIN_RUN_END)
 if(PLUGIN_RUN_START LESS 0 OR PLUGIN_RUN_END LESS 0 OR
    PLUGIN_RUN_END LESS_EQUAL PLUGIN_RUN_START)
-  message(FATAL_ERROR "Could not isolate deferred direct/Plugin worker path")
+  message(FATAL_ERROR "Could not isolate deferred direct/Component worker path")
 endif()
 math(EXPR PLUGIN_RUN_LENGTH "${PLUGIN_RUN_END} - ${PLUGIN_RUN_START}")
 string(SUBSTRING "${SERVICE_TEXT}" ${PLUGIN_RUN_START} ${PLUGIN_RUN_LENGTH}
        PLUGIN_RUN_TEXT)
 
-foreach(FORBIDDEN_PLUGIN_HOT
-    "cmeta_plugin_registry_"
-    "cmeta_plugin_manifest_"
-    "data_bind_plugin_catalog_"
-    "data_bind_plugin_operation_execution_admit"
+foreach(FORBIDDEN_COMPONENT_HOT
+    "salts_component_plugin_"
+    "cmeta_plugin_"
+    "data_bind_plugin_"
     "FunctionMeta("
     "FunctionAbi(")
-  string(FIND "${PLUGIN_RUN_TEXT}" "${FORBIDDEN_PLUGIN_HOT}" POS)
+  string(FIND "${PLUGIN_RUN_TEXT}" "${FORBIDDEN_COMPONENT_HOT}" POS)
   if(NOT POS EQUAL -1)
     message(FATAL_ERROR
-      "Deferred Plugin worker must consume cached exact execution only: ${FORBIDDEN_PLUGIN_HOT}")
+      "Deferred Component worker must consume cached exact execution only: ${FORBIDDEN_COMPONENT_HOT}")
   endif()
 endforeach()
 
-foreach(REQUIRED_PLUGIN_CONTROL
-    "cmeta_plugin_registry_acquire"
-    "DATA_BIND_PLUGIN_CATALOG_EXPORT_ID"
-    "data_bind_plugin_operation_execution_admit"
-    "cmeta_cleanup_run(&record->plugin_cleanup)")
-  string(FIND "${SERVICE_TEXT}" "${REQUIRED_PLUGIN_CONTROL}" POS)
+foreach(REQUIRED_COMPONENT_CONTROL
+    "salts_component_plugin_scope_acquire"
+    "salts_component_plugin_scope_find_service_from"
+    "chttp_service_operation_provider_borrow_from_object"
+    "salts_component_plugin_scope_release")
+  string(FIND "${SERVICE_TEXT}" "${REQUIRED_COMPONENT_CONTROL}" POS)
   if(POS EQUAL -1)
     message(FATAL_ERROR
-      "Plugin mount/release control plane is missing: ${REQUIRED_PLUGIN_CONTROL}")
+      "Component mount/release control plane is missing: ${REQUIRED_COMPONENT_CONTROL}")
   endif()
 endforeach()
 
@@ -235,11 +235,12 @@ math(EXPR METHOD_RELEASE_LENGTH "${METHOD_RELEASE_END} - ${METHOD_RELEASE_START}
 string(SUBSTRING "${SERVICE_TEXT}" ${METHOD_RELEASE_START}
        ${METHOD_RELEASE_LENGTH} METHOD_RELEASE_TEXT)
 string(FIND "${METHOD_RELEASE_TEXT}" "cflow_plan_destroy" PLAN_DESTROY_POS)
-string(FIND "${METHOD_RELEASE_TEXT}" "salts_plugin_registry_release" LEASE_RELEASE_POS)
-if(PLAN_DESTROY_POS EQUAL -1 OR LEASE_RELEASE_POS EQUAL -1 OR
-   LEASE_RELEASE_POS LESS_EQUAL PLAN_DESTROY_POS)
+string(FIND "${METHOD_RELEASE_TEXT}"
+       "salts_component_plugin_scope_release" SCOPE_RELEASE_POS)
+if(PLAN_DESTROY_POS EQUAL -1 OR SCOPE_RELEASE_POS EQUAL -1 OR
+   SCOPE_RELEASE_POS LESS_EQUAL PLAN_DESTROY_POS)
   message(FATAL_ERROR
-    "Mounted Service teardown must destroy dependent Plan state before releasing the Plugin lease")
+    "Mounted Service teardown must destroy dependent Plan state before releasing the Component generation scope")
 endif()
 
 string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" CFLOW_RUN_START)
