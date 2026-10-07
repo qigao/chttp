@@ -24,6 +24,13 @@ barrier ensures no listener wake can race backend destruction. Deploy the matchi
 the candidate SDK. Reverting this adapter and its private link dependency
 restores raw CNet adoption without a protocol or data migration.
 
+For host integration acceptance, dispatch `native-sdk-release.yml` with both
+`salts_candidate_run_id` and `salts_candidate_sha`. The run must be a successful
+Salts CI dispatch with retained SDK artifacts. Linux, Windows and macOS use the
+selected artifact and run the formal CTest suite; SaltsUtils still resolves from
+the package feed. Candidate mode skips cross compilation, packaging and
+publication. Omit both inputs to retain the published-SDK release workflow.
+
 The manifest includes Lua and QuickJS because the installed SaltsUtils package
 exports those dependencies; it does not introduce another HTTP or TLS provider.
 

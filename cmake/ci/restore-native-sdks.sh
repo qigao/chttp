@@ -20,13 +20,15 @@ cat > "$project" <<'EOF'
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="*" Condition="'$(UseSaltsCandidate)' != 'true'" />
     <PackageReference Include="SaltsUtils.Native" Version="*" />
     <PackageReference Include="TurboWasm.Native" Version="*" Condition="'$(WithTurboWasm)' == 'true'" />
   </ItemGroup>
 </Project>
 EOF
-dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache --force-evaluate -p:WithTurboWasm="$with_turbowasm"
+use_candidate=false
+if [ -n "${SALTS_CANDIDATE_ROOT:-}" ]; then use_candidate=true; fi
+dotnet restore "$project" --packages "$packages" --configfile "$config" --no-cache --force-evaluate -p:WithTurboWasm="$with_turbowasm" -p:UseSaltsCandidate="$use_candidate"
 
 sdk_root() {
   python3 - "$RUNNER_TEMP/obj/project.assets.json" "$packages" "$1" "$rid" <<'PY'
@@ -40,7 +42,11 @@ print((pathlib.Path(sys.argv[2]) / matches[0] / 'sdk' / sys.argv[4]).resolve())
 PY
 }
 
-salts_root="$(sdk_root salts.native)"
+if [ "$use_candidate" = true ]; then
+  salts_root="$SALTS_CANDIDATE_ROOT"
+else
+  salts_root="$(sdk_root salts.native)"
+fi
 utils_root="$(sdk_root saltsutils.native)"
 test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
 test -f "$salts_root/include/cmeta/function.h"

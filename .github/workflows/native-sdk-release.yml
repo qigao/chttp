@@ -3,6 +3,15 @@ name: CHttp native SDK release
 
 on:
   workflow_dispatch:
+    inputs:
+      salts_candidate_run_id:
+        description: Successful Salts CI candidate run (requires SHA; skips publication)
+        type: string
+        default: ''
+      salts_candidate_sha:
+        description: Full source SHA of the Salts candidate
+        type: string
+        default: ''
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -35,6 +44,17 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate candidate selection
+        shell: pwsh
+        env:
+          CANDIDATE_RUN: ${{ inputs.salts_candidate_run_id }}
+          CANDIDATE_SHA: ${{ inputs.salts_candidate_sha }}
+        run: |
+          if ($env:CANDIDATE_RUN -or $env:CANDIDATE_SHA) {
+            if ($env:CANDIDATE_RUN -notmatch '^[1-9][0-9]*$' -or $env:CANDIDATE_SHA -notmatch '^[0-9a-f]{40}$') {
+              throw 'Specify both the candidate run ID and full source SHA'
+            }
+          }
       - id: version
         shell: bash
         run: |
@@ -78,6 +98,14 @@ jobs:
           esac
           test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
+      - name: Select candidate Salts SDK
+        if: inputs.salts_candidate_run_id != ''
+        uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
+        with:
+          run-id: ${{ inputs.salts_candidate_run_id }}
+          commit: ${{ inputs.salts_candidate_sha }}
+          rid: linux-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK graph
         shell: bash
         env:
@@ -89,8 +117,9 @@ jobs:
           set -euxo pipefail
           prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
           export QIGAO_SDK_RID=linux-x64 QIGAO_TARGET_TRIPLET=x64-linux QIGAO_HOST_TRIPLET=x64-linux
-          cmake --preset ci-sdk-release-user
+          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
           cmake --build --preset ci-sdk-release-user --parallel 2
+          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
           cmake --build --preset install-ci-sdk-release-user
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
@@ -141,6 +170,14 @@ jobs:
           echo "rid=$rid" >> "$GITHUB_OUTPUT"
           echo "triplet=$triplet" >> "$GITHUB_OUTPUT"
 
+      - name: Select candidate Salts SDK
+        if: inputs.salts_candidate_run_id != ''
+        uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
+        with:
+          run-id: ${{ inputs.salts_candidate_run_id }}
+          commit: ${{ inputs.salts_candidate_sha }}
+          rid: ${{ steps.env.outputs.rid }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK graph
         shell: bash
         env:
@@ -153,8 +190,9 @@ jobs:
           prefix="$GITHUB_WORKSPACE/stage/sdk/${{ steps.env.outputs.rid }}"
           export QIGAO_SDK_RID="${{ steps.env.outputs.rid }}"
           export QIGAO_TARGET_TRIPLET="${{ steps.env.outputs.triplet }}" QIGAO_HOST_TRIPLET="${{ steps.env.outputs.triplet }}"
-          cmake --preset ci-sdk-release-user
+          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
           cmake --build --preset ci-sdk-release-user --parallel 2
+          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
           cmake --build --preset install-ci-sdk-release-user
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
@@ -204,6 +242,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
 
+      - name: Select candidate Salts SDK
+        if: inputs.salts_candidate_run_id != ''
+        uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
+        with:
+          run-id: ${{ inputs.salts_candidate_run_id }}
+          commit: ${{ inputs.salts_candidate_sha }}
+          rid: windows-x64
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK graph
         shell: pwsh
         env:
@@ -220,9 +266,11 @@ jobs:
           set "QIGAO_SDK_RID=windows-x64"
           set "QIGAO_TARGET_TRIPLET=%QIGAO_VCPKG_WINDOWS_TRIPLET%"
           set "QIGAO_HOST_TRIPLET=%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET%"
-          cmake --preset ci-sdk-release-user
+          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
           if errorlevel 1 exit /b 1
           cmake --build --preset ci-sdk-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
           if errorlevel 1 exit /b 1
           cmake --build --preset install-ci-sdk-release-user
           if errorlevel 1 exit /b 1
@@ -248,6 +296,7 @@ jobs:
           compression-level: 9
 
   android:
+    if: inputs.salts_candidate_run_id == ''
     name: Android arm64-v8a SDK
     needs: metadata
     runs-on: ubuntu-24.04
@@ -306,6 +355,7 @@ jobs:
           compression-level: 9
 
   ios:
+    if: inputs.salts_candidate_run_id == ''
     name: iOS SDK / ${{ matrix.name }}
     needs: metadata
     runs-on: macos-15
@@ -382,6 +432,7 @@ jobs:
           compression-level: 9
 
   pack:
+    if: inputs.salts_candidate_run_id == ''
     name: Pack CHttp.Native
     needs: [metadata, linux, macos, windows, android, ios]
     runs-on: ubuntu-latest
@@ -455,7 +506,7 @@ jobs:
 
   publish:
     name: Publish package and GitHub Release
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    if: inputs.salts_candidate_run_id == '' && inputs.salts_candidate_sha == '' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
     needs: [metadata, pack]
     runs-on: ubuntu-latest
     permissions:
