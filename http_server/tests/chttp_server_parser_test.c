@@ -312,8 +312,8 @@ spec("CHTTP server request parser") {
         chttp_server_reply_buffer(
             &response, 200u, "text/plain", buffer),
         SALTS_OK);
-    check_equal(builder.body, NULL);
-    check_equal(builder.retained_body, buffer);
+    check_null(builder.body);
+    check_equal((const void *)builder.retained_body, (const void *)buffer);
     check_equal(mem_buffer_ref_count(buffer), (uint32_t)2u);
 
     mem_buffer_release(buffer);
@@ -340,7 +340,7 @@ spec("CHTTP server request parser") {
 
     chttp_server_response_builder_reset(&builder);
     check_equal(probe.releases, 1);
-    check_equal(builder.retained_body, NULL);
+    check_null(builder.retained_body);
     chttp_server_response_builder_destroy(&builder);
     check_equal(probe.releases, 1);
   }
@@ -365,7 +365,7 @@ spec("CHTTP server request parser") {
             &response, 200u, "text/plain", buffer),
         SALTS_EMSGSIZE);
     check_equal(mem_buffer_ref_count(buffer), (uint32_t)1u);
-    check_equal(builder.retained_body, NULL);
+    check_null(builder.retained_body);
     mem_buffer_release(buffer);
     check_equal(probe.releases, 1);
     chttp_server_response_builder_destroy(&builder);
