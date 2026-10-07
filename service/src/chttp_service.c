@@ -1044,12 +1044,12 @@ static int chttp_service_component_resolve(
   salts_component_service service = {0};
   chttp_service_operation_provider provider =
       chttp_service_operation_provider_bind(NULL, NULL);
-  chttp_service_component_operation operation =
-      (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
-
   if (record == NULL || runtime == NULL ||
       component_id == NULL || component_id[0] == '\0')
     return SALTS_EINVAL;
+
+  record->component_operation =
+      (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
 
   if (salts_component_plugin_scope_acquire(
           runtime, &record->component_scope) !=
@@ -1067,11 +1067,11 @@ static int chttp_service_component_resolve(
           service.object, service.interfaces, &provider) != CMETA_OK ||
       !chttp_service_operation_provider_valid(&provider) ||
       !chttp_service_operation_provider_get_operation(
-          &provider, &operation) ||
-      !chttp_service_component_operation_valid(&operation))
+          &provider, &record->component_operation) ||
+      !chttp_service_component_operation_valid(
+          &record->component_operation))
     return SALTS_EINVAL;
 
-  record->component_operation = operation;
   record->native_binding = &record->component_operation.native;
   record->execution = &record->component_operation.execution;
   return SALTS_OK;
