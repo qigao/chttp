@@ -2481,15 +2481,15 @@ static int chttp_server_listener_cleanup(chttp_server_impl *server) {
 
 static int chttp_server_listener_startup(
     chttp_server_impl *server, uint16_t *out_port) {
-  const cnet_listener_config listener_config = {
-      .backend = server != NULL ? server->config.network.backend
-                                : NATIVE_IO_BACKEND_NONE,
-      .host = server != NULL ? server->host : NULL,
-      .port = server != NULL ? server->config.port : 0u,
-      .backlog = server != NULL ? server->config.backlog : 0u};
+  cnet_listener_config listener_config;
   int status;
   if (server == NULL || out_port == NULL) return SALTS_EINVAL;
   *out_port = 0u;
+  listener_config = (cnet_listener_config){
+      .backend = server->config.network.backend,
+      .host = server->host,
+      .port = server->config.port,
+      .backlog = server->config.backlog};
 
   status = cnet_listener_init_ex(
       &server->listener, &listener_config, &server->socket_options.listener);
