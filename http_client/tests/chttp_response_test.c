@@ -286,7 +286,7 @@ spec("CHTTP strict incremental response parser") {
                 SALTS_OK);
     check_not_null(parser.arena);
     check_null(parser.body_storage);
-    check_equal(parser.file_sink_transfer, file_sink);
+    check_equal((const void *)parser.file_sink_transfer, (const void *)file_sink);
     chttp_response_parser_destroy(&parser);
 
     check_equal(chttp_response_parser_init_with_sinks(
