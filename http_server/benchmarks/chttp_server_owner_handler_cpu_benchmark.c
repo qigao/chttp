@@ -48,8 +48,15 @@ typedef enum owner_cpu_mode {
   OWNER_CPU_MODE_DEFERRED = 1
 } owner_cpu_mode;
 
+typedef enum owner_cpu_job_stage {
+  OWNER_CPU_JOB_ABORTED = 0,
+  OWNER_CPU_JOB_WAITING = 1,
+  OWNER_CPU_JOB_READY = 2
+} owner_cpu_job_stage;
+
 typedef struct owner_cpu_deferred_job {
   atomic_int in_use;
+  atomic_int stage;
   size_t burn_iterations;
   chttp_server_deferred deferred;
   atomic_uint *errors;
@@ -208,6 +215,8 @@ static void owner_cpu_deferred_job_release(owner_cpu_deferred_job *job) {
   job->deferred = (chttp_server_deferred){0};
   job->burn_iterations = 0u;
   job->errors = NULL;
+  atomic_store_explicit(
+      &job->stage, OWNER_CPU_JOB_ABORTED, memory_order_release);
   atomic_store_explicit(&job->in_use, 0, memory_order_release);
 }
 
@@ -221,8 +230,19 @@ static void owner_cpu_deferred_job_run(void *user) {
       .body = body,
       .body_size = sizeof(body) - 1u};
   int status;
+  int stage;
 
   if (job == NULL) return;
+  do {
+    stage = atomic_load_explicit(&job->stage, memory_order_acquire);
+    if (stage == OWNER_CPU_JOB_WAITING) cmeta_thread_yield();
+  } while (stage == OWNER_CPU_JOB_WAITING);
+
+  if (stage != OWNER_CPU_JOB_READY) {
+    owner_cpu_deferred_job_release(job);
+    return;
+  }
+
   if (job->burn_iterations != 0u)
     (void)owner_cpu_burn(job->burn_iterations);
   status = chttp_server_deferred_reply(&job->deferred, &reply);
@@ -243,8 +263,17 @@ static owner_cpu_deferred_job *owner_cpu_deferred_job_claim(
     int expected = 0;
     if (atomic_compare_exchange_strong_explicit(
             &route->jobs[index].in_use, &expected, 1,
-            memory_order_acq_rel, memory_order_acquire))
+            memory_order_acq_rel, memory_order_acquire)) {
+      route->jobs[index].deferred =
+          (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
+      route->jobs[index].burn_iterations = 0u;
+      route->jobs[index].errors = NULL;
+      atomic_store_explicit(
+          &route->jobs[index].stage,
+          OWNER_CPU_JOB_WAITING,
+          memory_order_release);
       return &route->jobs[index];
+    }
   }
   return NULL;
 }
@@ -284,36 +313,35 @@ static int owner_cpu_handler(void *user,
 
   job->burn_iterations = route->burn_iterations;
   job->errors = route->deferred_errors;
-  status = chttp_server_response_defer(response, &job->deferred);
-  if (status != SALTS_OK) {
-    owner_cpu_deferred_job_release(job);
-    return status;
-  }
 
+  /*
+   * Canonical application-worker handoff:
+   * reserve bounded worker capacity before transferring the HTTP request,
+   * then publish READY only after response_defer succeeds. The accepted worker
+   * may start immediately but cannot touch the deferred handle while WAITING.
+   */
   task = (cflow_executor_task){
       .run = owner_cpu_deferred_job_run,
       .user = job};
   admission = cflow_executor_try_post_task(route->executor, &task);
   if (admission != CFLOW_ADMISSION_ACCEPTED) {
-    chttp_server_deferred_response rejected = {
-        .size = sizeof(rejected),
-        .status_code = 503u,
-        .content_type = "text/plain",
-        .body = unavailable,
-        .body_size = sizeof(unavailable) - 1u};
     atomic_fetch_add_explicit(
         route->deferred_errors, 1u, memory_order_relaxed);
-    status = chttp_server_deferred_reply(&job->deferred, &rejected);
-    if (status != SALTS_OK) {
-      atomic_fetch_add_explicit(
-          route->deferred_errors, 1u, memory_order_relaxed);
-      if (job->deferred.impl != NULL &&
-          chttp_server_deferred_cancel(&job->deferred) != SALTS_OK)
-        atomic_fetch_add_explicit(
-            route->deferred_errors, 1u, memory_order_relaxed);
-    }
     owner_cpu_deferred_job_release(job);
+    return chttp_server_reply(
+        response, 503u, "text/plain",
+        unavailable, sizeof(unavailable) - 1u);
   }
+
+  status = chttp_server_response_defer(response, &job->deferred);
+  if (status != SALTS_OK) {
+    atomic_store_explicit(
+        &job->stage, OWNER_CPU_JOB_ABORTED, memory_order_release);
+    return status;
+  }
+
+  atomic_store_explicit(
+      &job->stage, OWNER_CPU_JOB_READY, memory_order_release);
   return SALTS_OK;
 }
 
@@ -532,8 +560,10 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   atomic_init(&barrier.ready, 0);
   atomic_init(&barrier.start, 0);
   atomic_init(&deferred_errors, 0u);
-  for (index = 0u; index < OWNER_CPU_DEFERRED_JOBS; ++index)
+  for (index = 0u; index < OWNER_CPU_DEFERRED_JOBS; ++index) {
     atomic_init(&deferred_jobs[index].in_use, 0);
+    atomic_init(&deferred_jobs[index].stage, OWNER_CPU_JOB_ABORTED);
+  }
 
   slow_route.burn_iterations =
       owner_cpu_calibrate(target_work_ns, &calibrated_work_ns);
