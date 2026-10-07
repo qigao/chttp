@@ -12,7 +12,7 @@ salts_idl_target(
   COMPONENT "CHttpPlugin.CalcPlugin"
   VERSION "1.0.0"
   ARTIFACT_NAME "chttp_service_plugin"
-  ARTIFACTS NATIVE PLUGIN
+  ARTIFACTS NATIVE
   TRANSPORTS HTTP
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json"
@@ -190,12 +190,10 @@ target_include_directories(chttp_service_http_test PRIVATE
 
 add_dependencies(chttp_service_http_test
   chttp_service_http_fixture_idl_codegen
-  chttp_service_plugin_fixture_plugin
   chttp_service_plugin_fixture_native
   chttp_service_component_provider_fixture)
 
 target_compile_definitions(chttp_service_http_test PRIVATE
-  GENERATED_CHTTP_SERVICE_PLUGIN_PATH="$<TARGET_FILE:chttp_service_plugin_fixture_plugin>"
   GENERATED_CHTTP_SERVICE_COMPONENT_PROVIDER_PATH="$<TARGET_FILE:chttp_service_component_provider_fixture>")
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
