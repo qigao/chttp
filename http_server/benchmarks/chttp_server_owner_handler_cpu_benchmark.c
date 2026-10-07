@@ -372,7 +372,6 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   owner_cpu_route fast_route = {0};
   owner_cpu_route slow_route = {0};
   owner_cpu_socket sockets[OWNER_CPU_CONNECTIONS];
-  size_t connection_owner[OWNER_CPU_CONNECTIONS] = {0};
   size_t leases[OWNER_CPU_MAX_OWNERS] = {0};
   size_t before[OWNER_CPU_MAX_OWNERS] = {0};
   owner_cpu_client clients[OWNER_CPU_CONNECTIONS];
@@ -432,7 +431,6 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
       if (owner_cpu_request(sockets[index], target, &ignored) != 0) goto cleanup;
     if (owner_cpu_wait_total(impl, owner_count, index + 1u, leases) != 0) goto cleanup;
     if (owner_cpu_delta_owner(before, leases, owner_count, &assigned) != 0) goto cleanup;
-    connection_owner[index] = assigned;
     if (slow)
       slow_owner_mask |= 1u << assigned;
     else
