@@ -1,7 +1,7 @@
 #include <chttp_service/service.h>
 
 #include <http_client/http.h>
-#include <salts_cmeta_fixed_width.h>
+#include <cmeta_cmeta_fixed_width.h>
 #include "chttp_service.http.h"
 #include "chttp_service_plugin.http.h"
 #include "chttp_service_plugin.service_native.h"
@@ -545,7 +545,7 @@ static void chttp_service_executor_gate_run(void *user) {
   if (gate == NULL) return;
   atomic_store_explicit(&gate->started, 1, memory_order_release);
   while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
-    salts_thread_yield();
+    cmeta_thread_yield();
 }
 
 static void chttp_service_executor_noop(void *user) {
@@ -1065,10 +1065,10 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(
         cflow_executor_try_post_task(&executor, &gate_task),
         CFLOW_ADMISSION_ACCEPTED);
-    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&gate.started, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
-      salts_thread_yield();
+           cmeta_monotonic_ms() < deadline)
+      cmeta_thread_yield();
     check_equal(
         atomic_load_explicit(&gate.started, memory_order_acquire), 1);
     check_equal(
@@ -1253,12 +1253,12 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
     const DataBindHttpProjectionConfig *projection = NULL;
     DataBindHttpMethodPlan *method_plan = NULL;
-    salts_plugin_registry registry = {0};
-    salts_plugin_registry_config registry_config = {.capacity = 2u};
-    salts_plugin_ref plugin_ref = {0};
-    salts_plugin_lifecycle_info lifecycle = {0};
-    salts_plugin_lease rejected_lease = {0};
-    const salts_plugin_manifest *rejected_manifest = NULL;
+    cmeta_plugin_registry registry = {0};
+    cmeta_plugin_registry_config registry_config = {.capacity = 2u};
+    cmeta_plugin_ref plugin_ref = {0};
+    cmeta_plugin_lifecycle_info lifecycle = {0};
+    cmeta_plugin_lease rejected_lease = {0};
+    const cmeta_plugin_manifest *rejected_manifest = NULL;
     cflow_executor executor = {0};
     chttp_service service = {0};
     chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
@@ -1297,15 +1297,15 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         data_bind_http_method_plan_route(method_plan), "/plugin/{left}");
 
     check_equal(
-        salts_plugin_registry_init(&registry, &registry_config),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_init(&registry, &registry_config),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_load(
+        cmeta_plugin_registry_load(
             &registry, GENERATED_CHTTP_SERVICE_PLUGIN_PATH, &plugin_ref),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_start(&registry, plugin_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_start(&registry, plugin_ref),
+        CMETA_PLUGIN_OK);
 
     service_config.method_capacity = 1u;
     service_config.max_binding_value_bytes = 64u;
@@ -1330,6 +1330,19 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         chttp_service_mount_http(&service, &server, &invalid),
         SALTS_EINVAL);
 
+    /* Failed resolution must release its acquired lease and leave the only
+     * method slot available for the subsequent successful mount. */
+    invalid.plugin_registry = &registry;
+    invalid.plugin_export_id = "CHttpPlugin.Calc.Missing";
+    check_equal(
+        chttp_service_mount_http(&service, &server, &invalid),
+        SALTS_EINVAL);
+    check_equal(
+        cmeta_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        CMETA_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)0u);
+
     mount.method_plan = method_plan;
     mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
     mount.executor = &executor;
@@ -1341,9 +1354,9 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         SALTS_OK);
 
     check_equal(
-        salts_plugin_registry_get_lifecycle(
+        cmeta_plugin_registry_get_lifecycle(
             &registry, plugin_ref, &lifecycle),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
 
     /*
@@ -1352,21 +1365,21 @@ spec("CHttp::Service generated HTTP MethodPlan") {
      * own live lease.
      */
     check_equal(
-        salts_plugin_registry_request_stop(&registry, plugin_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_request_stop(&registry, plugin_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_acquire(
+        cmeta_plugin_registry_acquire(
             &registry, plugin_ref, &rejected_lease, &rejected_manifest),
-        SALTS_PLUGIN_INVALID_STATE);
-    check_false(salts_plugin_lease_valid(rejected_lease));
+        CMETA_PLUGIN_INVALID_STATE);
+    check_false(cmeta_plugin_lease_valid(rejected_lease));
     check_null(rejected_manifest);
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin_ref),
-        SALTS_PLUGIN_BUSY);
+        cmeta_plugin_registry_unload(&registry, plugin_ref),
+        CMETA_PLUGIN_BUSY);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, plugin_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_false(quiescent);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
@@ -1396,23 +1409,23 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
 
     check_equal(
-        salts_plugin_registry_get_lifecycle(
+        cmeta_plugin_registry_get_lifecycle(
             &registry, plugin_ref, &lifecycle),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
 
     check_equal(chttp_service_destroy(&service), SALTS_OK);
     check_equal(
-        salts_plugin_registry_poll_quiescent(
+        cmeta_plugin_registry_poll_quiescent(
             &registry, plugin_ref, &quiescent),
-        SALTS_PLUGIN_OK);
+        CMETA_PLUGIN_OK);
     check_true(quiescent);
     check_equal(
-        salts_plugin_registry_unload(&registry, plugin_ref),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_unload(&registry, plugin_ref),
+        CMETA_PLUGIN_OK);
     check_equal(
-        salts_plugin_registry_destroy(&registry),
-        SALTS_PLUGIN_OK);
+        cmeta_plugin_registry_destroy(&registry),
+        CMETA_PLUGIN_OK);
 
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);

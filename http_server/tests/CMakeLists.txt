@@ -1,5 +1,5 @@
 add_executable(chttp_server_parser_test chttp_server_parser_test.c)
-target_link_libraries(chttp_server_parser_test PRIVATE CHttp::Client CHttp::Server llhttp::llhttp_static Salts::TinyTest)
+target_link_libraries(chttp_server_parser_test PRIVATE CHttp::Client CHttp::Server llhttp::llhttp_static Salts::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_parser_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
 add_test(NAME chttp_server_parser_test COMMAND chttp_server_parser_test)
 set_target_properties(chttp_server_parser_test PROPERTIES FOLDER "http_server/tests")
@@ -31,7 +31,7 @@ set_target_properties(chttp_server_execution_options_test PROPERTIES
 
 
 add_executable(chttp_server_owner_topology_test chttp_server_owner_topology_test.c)
-target_link_libraries(chttp_server_owner_topology_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
+target_link_libraries(chttp_server_owner_topology_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
 target_include_directories(
   chttp_server_owner_topology_test
   PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
@@ -47,7 +47,7 @@ set_target_properties(chttp_server_owner_topology_test PROPERTIES
 
 
 add_executable(chttp_session_snapshot_test chttp_session_snapshot_test.c)
-target_link_libraries(chttp_session_snapshot_test PRIVATE CHttp::Server Salts::TinyTest)
+target_link_libraries(chttp_session_snapshot_test PRIVATE CHttp::Server Salts::CFlow Salts::TinyTest)
 target_include_directories(
   chttp_session_snapshot_test
   PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http

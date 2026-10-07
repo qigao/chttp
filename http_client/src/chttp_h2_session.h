@@ -8,7 +8,7 @@
 #include "chttp_tls.h"
 
 #include <stdbool.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 
 typedef enum chttp_h2_session_state {
   CHTTP_H2_SESSION_FREE = 0,

@@ -3,7 +3,7 @@
 #include <datetime_parser.h>
 #include <platform.h>
 #include <salts/clock.h>
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -91,7 +91,7 @@ static bool file_http_date(const char *value, time_t *out) {
     if (sscanf(value, "%15[^,], %2d-%3s-%2d %2d:%2d:%2d %3s%n", weekday, &day, month,
                &year, &hour, &minute, &second, zone, &consumed) == 8 &&
         (size_t)consumed == length && strcmp(zone, "GMT") == 0) {
-      if (salts_gmtime((time_t)(salts_realtime_ms() / MILLISECONDS_PER_SECOND), &utc) != 0)
+      if (cmeta_gmtime((time_t)(cmeta_realtime_ms() / MILLISECONDS_PER_SECOND), &utc) != 0)
         return false;
       const int current_year = utc.tm_year + YEAR_BASE;
       year += (current_year / CENTURY) * CENTURY;
@@ -112,7 +112,7 @@ static bool file_http_date(const char *value, time_t *out) {
       date.day > 31 || date.hour < 0 || date.hour > 23 || date.minute < 0 ||
       date.minute > 59 || date.second < 0 || date.second > 59) return false;
   *out = datetime_to_time(&date);
-  if (*out == (time_t)-1 || salts_gmtime(*out, &utc) != 0) return false;
+  if (*out == (time_t)-1 || cmeta_gmtime(*out, &utc) != 0) return false;
   return utc.tm_year + YEAR_BASE == date.year && utc.tm_mon + 1 == date.month &&
          utc.tm_mday == date.day;
 }
@@ -194,7 +194,7 @@ static const char *file_mime(const char *path) {
 
 int chttp_server_serve_file(chttp_server_response *response,
     const chttp_server_request_view *request, const chttp_server_file_options *options) {
-  salts_fs_stat_t metadata;
+  cmeta_fs_stat_t metadata;
   char generated_etag[FILE_ETAG_CAPACITY], modified[CHTTP_SERVER_DATE_CAPACITY];
   char content_range[FILE_RANGE_CAPACITY];
   const char *etag, *condition;
@@ -208,7 +208,7 @@ int chttp_server_serve_file(chttp_server_response *response,
     status = chttp_server_response_set_header(response, "Allow", "GET, HEAD");
     return status == SALTS_OK ? chttp_server_reply(response, 405, NULL, NULL, 0) : status;
   }
-  status = salts_fs_stat(options->path, &metadata);
+  status = cmeta_fs_stat(options->path, &metadata);
   if (status != SALTS_OK) return status;
   if (!metadata.is_file) return SALTS_EISDIR;
   if (metadata.size > SIZE_MAX) return SALTS_EFBIG;
@@ -219,7 +219,7 @@ int chttp_server_serve_file(chttp_server_response *response,
   etag = options->etag != NULL ? options->etag : generated_etag;
   const char *tag_end = file_tag_end(etag);
   if (tag_end == NULL || *tag_end != '\0') return SALTS_EINVAL;
-  const uint64_t now = salts_realtime_ms() / MILLISECONDS_PER_SECOND;
+  const uint64_t now = cmeta_realtime_ms() / MILLISECONDS_PER_SECOND;
   const uint64_t modified_seconds = metadata.mtime / MICROSECONDS_PER_SECOND;
   const time_t mtime = (time_t)(modified_seconds < now ? modified_seconds : now);
   status = chttp_server_format_date(mtime, modified);

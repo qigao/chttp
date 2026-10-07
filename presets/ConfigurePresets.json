@@ -50,26 +50,6 @@
                 "pkg-vcpkg"
             ],
             "generator": "Ninja"
-        },
-        {
-            "name": "dev-win-clang-ninja",
-            "hidden": true,
-            "displayName": "Developer (Windows, Clang, Ninja)",
-            "inherits": [
-                "base-developer-windows-clang",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
-        },
-        {
-            "name": "release-win-clang-ninja",
-            "hidden": true,
-            "displayName": "Release (Windows, Clang, Ninja)",
-            "inherits": [
-                "base-release-windows-clang",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
         }
     ]
 }

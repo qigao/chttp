@@ -37,8 +37,6 @@ typedef struct DataBindHttpMethodPlan DataBindHttpMethodPlan;
 typedef struct DataBindNativeOptions DataBindNativeOptions;
 typedef struct DataBindBindingCallFrame DataBindBindingCallFrame;
 typedef struct DataBindBindingPlanDiagnostic DataBindBindingPlanDiagnostic;
-typedef struct TbeTypedType TbeTypedType;
-typedef struct TbeTypedDescriptor TbeTypedDescriptor;
 
 typedef struct chttp_web_renderer {
   void *impl;
@@ -674,20 +672,6 @@ void *chttp_web_upload_user(
     const chttp_web_upload_request *upload);
 
 /**
- * Caller-owned JSON bridge storage used before DataBind performs transactional
- * native conversion. No destination mutation occurs until the complete bridge
- * document has been produced.
- */
-typedef struct chttp_web_form_bind_options {
-  size_t size;
-  char *json_storage;
-  size_t json_capacity;
-} chttp_web_form_bind_options;
-
-#define CHTTP_WEB_FORM_BIND_OPTIONS_INIT \
-  {sizeof(chttp_web_form_bind_options), NULL, 0u}
-
-/**
  * Caller-owned scalar parsing scratch for generated-plan form binding.
  *
  * This storage is transport-adapter scratch only. Required/default/nullability,
@@ -1068,54 +1052,24 @@ const chttp_web_form_pair *chttp_web_form_get(
     size_t occurrence);
 
 /**
- * Transactionally binds a parsed form into an initialized DataBind typed
- * object. Scalar fields require exactly one occurrence. LIST/SET/FIXED_ARRAY
- * fields consume repeated form keys as array elements. Flat form binding
- * intentionally rejects OBJECT/MAP and object-valued collections.
- *
- * The JSON bridge is fully materialized inside options->json_storage before
- * DataBind is invoked. DataBind's typed parse contract keeps the previous
- * destination object unchanged on every failure.
- */
-chttp_web_status chttp_web_form_bind_typed(
-    const chttp_web_form *form,
-    DataBind *codec,
-    const char *type_name,
-    const TbeTypedType *type,
-    void *destination,
-    const chttp_web_form_bind_options *options,
-    chttp_web_error *error);
-
-/**
- * Canonical CMeta/DataBind descriptor variant of chttp_web_form_bind_typed().
- * Only descriptor shapes already supported by DataBind are accepted.
- */
-chttp_web_status chttp_web_form_bind_descriptor(
-    const chttp_web_form *form,
-    DataBind *codec,
-    const char *type_name,
-    const TbeTypedDescriptor *descriptor,
-    void *destination,
-    const chttp_web_form_bind_options *options,
-    chttp_web_error *error);
-
-/**
  * Binds a browser form through one generated immutable HTTP MethodPlan.
  *
  * Form field names are matched against the generated ingress wire names
- * (BindingPlan entry address.name). The adapter never parses DataBind schema,
- * walks CMeta reflection, or rebuilds validation/default/nullability rules.
+ * (BindingPlan entry address.name). The adapter never parses DataBind schema or
+ * rebuilds native layouts or validation/default/nullability rules.
  * Those semantics execute only through data_bind_binding_plan_bind_inputs().
  *
  * native_options and frame are caller-owned canonical DataBind runtime state.
- * On binding failure, frame mutation follows BindingPlan's canonical rollback
- * contract. validation is optional presentation state; when supplied it is
- * reset first and populated from the producer diagnostic without redefining
- * validation semantics.
+ * Bind into fresh unowned staging, never a live business object. On failure,
+ * initialized frame locations are restored to semantic zero. validation is
+ * optional presentation state; when supplied it is reset first and populated
+ * from the producer diagnostic without redefining validation semantics.
  *
  * Duplicate generated wire names, unknown form fields, duplicate scalar form
- * values, unsupported composite/container values, and malformed scalar text
- * fail closed.
+ * values, nested/composite values, and malformed scalar text fail closed.
+ * Repeated keys for scalar collections produce an ordered token sequence;
+ * DataBind owns collection construction, validation and rollback. The form
+ * storage and scalar scratch must remain valid through this synchronous call.
  */
 chttp_web_status chttp_web_form_bind_method_plan(
     const chttp_web_form *form,

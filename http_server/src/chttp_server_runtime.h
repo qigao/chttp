@@ -6,7 +6,7 @@
 
 #include <cnet/websocket.h>
 #include <salts/thread.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -293,12 +293,12 @@ struct chttp_server_owner_lane {
   chttp_server_impl *server;
   cnet_client *network;
   cnet_client network_storage;
-  salts_thread_t thread;
+  cmeta_thread_t thread;
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
   cnet_accepted_stream *admissions;
-  salts_mutex_t admission_mutex;
+  cmeta_mutex_t admission_mutex;
   size_t connection_begin;
   size_t connection_count;
   size_t file_transfer_capacity;
@@ -425,16 +425,16 @@ struct chttp_server_impl {
   chttp_session_entry *session_entries;
   char *session_keys;
   char *session_values;
-  salts_mutex_t session_mutex;
+  cmeta_mutex_t session_mutex;
   cnet_client network;
   chttp_server_owner_lane owner;
   chttp_server_owner_lane *additional_owners;
   size_t owner_count;
   cnet_listener listener;
   cnet_tls_server tls_server;
-  salts_mutex_t mutex;
-  salts_cond_t changed;
-  salts_thread_t thread;
+  cmeta_mutex_t mutex;
+  cmeta_cond_t changed;
+  cmeta_thread_t thread;
   chttp_server_stats stats;
   size_t admission_cursor;
   size_t started_owner_count;

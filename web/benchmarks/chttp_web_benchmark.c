@@ -188,14 +188,14 @@ static int web_bench_startup(void) {
   for (index = 0u; index < WEB_BENCH_STARTUP_SAMPLES; ++index) {
     chttp_web_renderer renderer = {0};
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     const chttp_web_status status = chttp_web_renderer_init(
         &renderer,
         WEB_BENCH_TEMPLATES,
         sizeof(WEB_BENCH_TEMPLATES) / sizeof(WEB_BENCH_TEMPLATES[0]),
         &config,
         &error);
-    elapsed[index] = salts_hrtime() - started;
+    elapsed[index] = cmeta_hrtime() - started;
     if (status != CHTTP_WEB_OK) {
       fprintf(
           stderr,
@@ -281,7 +281,7 @@ static int web_bench_render_case(
     char *html = NULL;
     size_t html_size = 0u;
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
-    const uint64_t started = salts_hrtime();
+    const uint64_t started = cmeta_hrtime();
     const chttp_web_status status = chttp_web_render(
         &renderers[index % contexts],
         template_name,
@@ -290,7 +290,7 @@ static int web_bench_render_case(
         &html,
         &html_size,
         &error);
-    elapsed[index] = salts_hrtime() - started;
+    elapsed[index] = cmeta_hrtime() - started;
     if (status != CHTTP_WEB_OK || html == NULL || html_size == 0u) {
       fprintf(
           stderr,

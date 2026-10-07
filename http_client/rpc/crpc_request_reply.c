@@ -18,7 +18,7 @@ static crpc_blocking_client_impl *crpc_client_get(crpc_client *client) {
 
 static int crpc_deadline_remaining(uint64_t started_ms, uint32_t deadline_ms,
                                    uint32_t *out_remaining_ms) {
-  const uint64_t now_ms = salts_monotonic_ms();
+  const uint64_t now_ms = cmeta_monotonic_ms();
   const uint64_t elapsed_ms = now_ms >= started_ms ? now_ms - started_ms : 0u;
   if (out_remaining_ms == NULL) return SALTS_EINVAL;
   if (deadline_ms == 0u) {
@@ -93,7 +93,7 @@ int crpc_request_reply(crpc_client *client, const crpc_options *options,
   if (impl->operation_active) return SALTS_EBUSY;
 
   impl->operation_active = true;
-  started_ms = salts_monotonic_ms();
+  started_ms = cmeta_monotonic_ms();
   status = crpc_prepare_call(options, impl->config.max_method_bytes, impl->config.max_json_depth,
                              impl->config.http.max_request_body_bytes,
                              impl->config.http.max_header_count, &prepared);

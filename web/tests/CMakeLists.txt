@@ -26,13 +26,14 @@ salts_idl_target(
   TARGET chttp_web_form_plan_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.schema"
   ARTIFACT_NAME "chttp_web_form_plan"
+  ARTIFACTS NATIVE
   TRANSPORTS HTTP
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.projection.json")
 
 add_executable(chttp_web_form_plan_test test_chttp_web_form_plan.c)
 target_link_libraries(chttp_web_form_plan_test PRIVATE
-  CHttp::Web Salts::DataBind Salts::TinyTest)
+  CHttp::Web chttp_web_form_plan_fixture_native Salts::DataBind Salts::TinyTest)
 target_include_directories(chttp_web_form_plan_test PRIVATE
   "${chttp_web_form_plan_fixture_GENERATED_DIR}")
 add_dependencies(chttp_web_form_plan_test

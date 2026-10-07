@@ -2,7 +2,7 @@
 
 #include <json_parser.h>
 #include <openapi/ui_model.h>
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -45,14 +45,14 @@ typedef struct ui_app {
 } ui_app;
 
 static char *load_file_bounded(const char *path, size_t limit, size_t *out_size) {
-    salts_fs_stat_t metadata = {0};
+    cmeta_fs_stat_t metadata = {0};
     FILE *file = NULL;
     char *bytes = NULL;
     size_t size;
 
     if (out_size) *out_size = 0u;
     if (!path || !out_size ||
-        salts_fs_stat(path, &metadata) != SALTS_OK ||
+        cmeta_fs_stat(path, &metadata) != SALTS_OK ||
         !metadata.is_file || metadata.size > limit) {
         fprintf(stderr,
                 "Asset must be a readable regular file of at most %zu bytes: %s\n",
@@ -471,8 +471,8 @@ int main(int argc, char **argv) {
         options[i].path = paths[i];
         options[i].content_type = types[i];
 
-        salts_fs_stat_t metadata = {0};
-        if (salts_fs_stat(paths[i], &metadata) != SALTS_OK ||
+        cmeta_fs_stat_t metadata = {0};
+        if (cmeta_fs_stat(paths[i], &metadata) != SALTS_OK ||
             !metadata.is_file || metadata.size > UI_FILE_BYTES) {
             fprintf(stderr,
                     "Asset must be a readable regular file of at most 2 MiB: %s\n",

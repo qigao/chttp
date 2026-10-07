@@ -142,12 +142,12 @@ static void crpc_transport_test_complete(void *user, crpc_request request,
 
 static int crpc_transport_test_poll_until(crpc_async_client *client,
                                           crpc_transport_test_completion *completion) {
-  const uint64_t deadline = salts_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+  const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
   while (!completion->called) {
     size_t count = 0u;
     const int status = crpc_async_client_poll(client, 5u, &count);
     if (status != SALTS_OK) return status;
-    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return completion->status;
 }

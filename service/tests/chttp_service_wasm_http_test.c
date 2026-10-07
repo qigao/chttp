@@ -134,7 +134,7 @@ static void chttp_service_wasm_executor_gate_run(void *user) {
   if (gate == NULL) return;
   atomic_store_explicit(&gate->started, 1, memory_order_release);
   while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
-    salts_thread_yield();
+    cmeta_thread_yield();
 }
 
 static void chttp_service_wasm_executor_noop(void *user) {
@@ -300,10 +300,10 @@ spec("CHttp::Service generated WASM execution") {
     check_equal(
         cflow_executor_try_post_task(&executor, &gate_task),
         CFLOW_ADMISSION_ACCEPTED);
-    deadline = salts_monotonic_ms() + CHTTP_SERVICE_WASM_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_WASM_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&gate.started, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
-      salts_thread_yield();
+           cmeta_monotonic_ms() < deadline)
+      cmeta_thread_yield();
     check_equal(
         atomic_load_explicit(&gate.started, memory_order_acquire), 1);
     check_equal(

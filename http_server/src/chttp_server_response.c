@@ -27,7 +27,7 @@ int chttp_server_format_date(time_t value, char output[CHTTP_SERVER_DATE_CAPACIT
   enum { TM_YEAR_BASE = 1900, HTTP_MAX_YEAR = 9999 };
   struct tm utc;
   output[0] = '\0';
-  if (salts_gmtime(value, &utc) != 0)
+  if (cmeta_gmtime(value, &utc) != 0)
     return SALTS_EIO;
   if (utc.tm_year < 0 || utc.tm_year > HTTP_MAX_YEAR - TM_YEAR_BASE) return SALTS_ERANGE;
   /* IMF-fixdate uses English names regardless of the process locale. */
@@ -45,7 +45,7 @@ int chttp_server_response_date(const chttp_server_response_builder *builder,
     for (size_t index = 0; index < builder->header_count; ++index)
       if (chttp_server_response_ascii_equal(builder->headers[index].name, "Date")) return SALTS_OK;
   }
-  return chttp_server_format_date((time_t)(salts_realtime_ms() / MILLISECONDS_PER_SECOND), output);
+  return chttp_server_format_date((time_t)(cmeta_realtime_ms() / MILLISECONDS_PER_SECOND), output);
 }
 
 static bool chttp_server_response_token(const char *value) {

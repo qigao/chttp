@@ -8,7 +8,7 @@
 #include <http_server/http.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -265,7 +265,7 @@ static void owner_proto_complete(void *user, chttp_request request,
     completion->error_stage = "response-validate";
   }
   if (completion->latency_out != NULL)
-    *completion->latency_out = salts_hrtime() - completion->started_ns;
+    *completion->latency_out = cmeta_hrtime() - completion->started_ns;
   completion->done = 1;
 }
 
@@ -298,7 +298,7 @@ static int owner_proto_round(chttp_async_client *client,
     completion->status = SALTS_EBUSY;
     completion->latency_out =
         latencies != NULL ? &latencies[(*latency_index)++] : NULL;
-    completion->started_ns = salts_hrtime();
+    completion->started_ns = cmeta_hrtime();
     options.user = completion;
     {
       const int status =
@@ -307,7 +307,7 @@ static int owner_proto_round(chttp_async_client *client,
     }
   }
 
-  deadline = salts_monotonic_ms() + OWNER_PROTO_TIMEOUT_MS;
+  deadline = cmeta_monotonic_ms() + OWNER_PROTO_TIMEOUT_MS;
   while (complete_count < depth) {
     size_t callbacks = 0u;
     int status = chttp_async_client_poll(client, 5u, &callbacks);
@@ -315,7 +315,7 @@ static int owner_proto_round(chttp_async_client *client,
     complete_count = 0u;
     for (index = 0u; index < depth; ++index)
       if (completions[index].done) ++complete_count;
-    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   for (index = 0u; index < depth; ++index) {
     if (completions[index].status != SALTS_OK) {
@@ -413,7 +413,7 @@ static void owner_proto_worker_main(void *user) {
   announced = true;
   while (atomic_load_explicit(&worker->barrier->start,
                               memory_order_acquire) == 0)
-    salts_thread_yield();
+    cmeta_thread_yield();
 
   for (round = 0u; round < worker->rounds; ++round) {
     status = owner_proto_round(
@@ -465,9 +465,9 @@ static void owner_proto_sample_pressure(chttp_server_impl *impl,
     size_t ring;
     if (owner == NULL) continue;
     leases = chttp_server_owner_lease_count(owner);
-    salts_mutex_lock(&owner->admission_mutex);
+    cmeta_mutex_lock(&owner->admission_mutex);
     ring = owner->admission_count;
-    salts_mutex_unlock(&owner->admission_mutex);
+    cmeta_mutex_unlock(&owner->admission_mutex);
     pressure->owner_leases[index] = leases;
     if (leases > pressure->peak_owner_leases[index])
       pressure->peak_owner_leases[index] = leases;
@@ -492,7 +492,7 @@ static int owner_proto_run(const owner_proto_case *test_case,
   chttp_server_impl *impl;
   owner_proto_barrier barrier;
   owner_proto_worker workers[OWNER_PROTO_CONNECTIONS];
-  salts_thread_t threads[OWNER_PROTO_CONNECTIONS] = {0};
+  cmeta_thread_t threads[OWNER_PROTO_CONNECTIONS] = {0};
   bool thread_started[OWNER_PROTO_CONNECTIONS] = {false};
   owner_proto_pressure pressure = {0};
   uint64_t *latencies = NULL;
@@ -563,7 +563,7 @@ static int owner_proto_run(const owner_proto_case *test_case,
         .latencies = latencies + index * latencies_per_worker,
         .barrier = &barrier};
     atomic_init(&workers[index].status, SALTS_EIO);
-    status = salts_thread_create(&threads[index], owner_proto_worker_main,
+    status = cmeta_thread_create(&threads[index], owner_proto_worker_main,
                                  &workers[index]);
     if (status != SALTS_OK) goto cleanup_threads;
     thread_started[index] = true;
@@ -572,7 +572,7 @@ static int owner_proto_run(const owner_proto_case *test_case,
   while (atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
          OWNER_PROTO_CONNECTIONS) {
     owner_proto_sample_pressure(impl, &pressure, owner_count);
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
   owner_proto_sample_pressure(impl, &pressure, owner_count);
   for (index = 0u; index < OWNER_PROTO_CONNECTIONS; ++index) {
@@ -590,15 +590,15 @@ static int owner_proto_run(const owner_proto_case *test_case,
     pressure.cross_owner_handoffs += pressure.owner_leases[index];
 
   cpu_started = clock();
-  started_ns = salts_hrtime();
+  started_ns = cmeta_hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
 
   for (index = 0u; index < OWNER_PROTO_CONNECTIONS; ++index) {
-    if (salts_thread_join(&threads[index]) != SALTS_OK) {
+    if (cmeta_thread_join(&threads[index]) != SALTS_OK) {
       status = SALTS_EIO;
       goto cleanup_threads;
     }
-    salts_thread_destroy(&threads[index]);
+    cmeta_thread_destroy(&threads[index]);
     thread_started[index] = false;
     status = atomic_load_explicit(&workers[index].status, memory_order_acquire);
     if (status != SALTS_OK) {
@@ -609,7 +609,7 @@ static int owner_proto_run(const owner_proto_case *test_case,
     }
   }
 
-  wall_ns = salts_hrtime() - started_ns;
+  wall_ns = cmeta_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
   status = chttp_server_get_stats(&server, &stats);
   if (status != SALTS_OK || stats.rejected_connections != 0u) goto cleanup;
@@ -692,8 +692,8 @@ cleanup_threads:
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   for (index = 0u; index < OWNER_PROTO_CONNECTIONS; ++index) {
     if (thread_started[index]) {
-      (void)salts_thread_join(&threads[index]);
-      salts_thread_destroy(&threads[index]);
+      (void)cmeta_thread_join(&threads[index]);
+      cmeta_thread_destroy(&threads[index]);
     }
   }
 

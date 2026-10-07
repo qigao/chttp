@@ -1,7 +1,7 @@
 #include <chttp_rpc_service/service.h>
 
 #include <http_client/rpc.h>
-#include <salts_cmeta_fixed_width.h>
+#include <cmeta_cmeta_fixed_width.h>
 #include "chttp_rpc_service.rpc.h"
 #include "tinytest.h"
 

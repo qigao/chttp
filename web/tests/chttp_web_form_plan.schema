@@ -1,3 +1,8 @@
+schema WebForm [version(1)];
+
+enum Side <uint8> { Buy = 1; Sell = 2; }
+message FormValues { uint32 count; Side side; list<uint32> tags; }
+
 message FormRequest {
   @Min(1) uint32 left;
   uint32 right;
@@ -8,4 +13,5 @@ message FormResponse {
 }
 service Calc {
   Submit: FormRequest -> FormResponse;
+  Values: FormValues -> FormResponse;
 }

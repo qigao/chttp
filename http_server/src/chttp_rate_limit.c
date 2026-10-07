@@ -33,12 +33,12 @@ static const cmeta_type_desc rate_bucket_type = {
 #undef CMETA_KNOWN_TYPE_LIST
 #define CMETA_KNOWN_TYPE_LIST CMETA_BUILTIN_TYPE_LIST, \
     (rate_bucket, chttp_rate_bucket, rate_bucket_type, CMETA_T_OBJECT, rate_bucket_traits)
-typed(Vec, chttp_rate_buckets, chttp_rate_bucket);
+cmeta_type(Vec, chttp_rate_buckets, chttp_rate_bucket);
 
 typedef struct chttp_rate_limit_impl {
   chttp_rate_limit_config config;
   chttp_rate_buckets buckets;
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   uint64_t last_ms;
   uint64_t maximum_credit;
   size_t used;
@@ -62,7 +62,7 @@ int chttp_rate_limiter_init(chttp_rate_limiter *limiter, const chttp_rate_limit_
   if (impl == NULL) return SALTS_ENOMEM;
   impl->config = *config;
   impl->maximum_credit = (uint64_t)config->burst * config->refill_period_ms;
-  salts_mutex_init(&impl->mutex);
+  cmeta_mutex_init(&impl->mutex);
   impl->sync_initialized = true;
   if (chttp_rate_buckets_init(&impl->buckets, config->group_capacity) != STL_OK ||
       chttp_rate_buckets_reserve(&impl->buckets, config->group_capacity) != STL_OK) {
@@ -77,7 +77,7 @@ int chttp_rate_limiter_init(chttp_rate_limiter *limiter, const chttp_rate_limit_
   return SALTS_OK;
 allocation_failed:
   chttp_rate_buckets_destroy(&impl->buckets);
-  if (impl->sync_initialized) salts_mutex_destroy(&impl->mutex);
+  if (impl->sync_initialized) cmeta_mutex_destroy(&impl->mutex);
   free(impl);
   return SALTS_ENOMEM;
 }
@@ -86,7 +86,7 @@ void chttp_rate_limiter_destroy(chttp_rate_limiter *limiter) {
   if (limiter == NULL || limiter->impl == NULL) return;
   chttp_rate_limit_impl *impl = limiter->impl;
   chttp_rate_buckets_destroy(&impl->buckets);
-  if (impl->sync_initialized) salts_mutex_destroy(&impl->mutex);
+  if (impl->sync_initialized) cmeta_mutex_destroy(&impl->mutex);
   free(impl);
   limiter->impl = NULL;
 }
@@ -159,15 +159,15 @@ int chttp_rate_limiter_admit_at(chttp_rate_limiter *limiter,
     return SALTS_EINVAL;
   impl = (chttp_rate_limit_impl *)limiter->impl;
 
-  salts_mutex_lock(&impl->mutex);
+  cmeta_mutex_lock(&impl->mutex);
   if (now_ms < impl->last_ms) {
-    salts_mutex_unlock(&impl->mutex);
+    cmeta_mutex_unlock(&impl->mutex);
     return SALTS_EINVAL;
   }
 
   status = rate_key(&impl->config, request, &key, result);
   if (status != SALTS_OK || result->status_code != 0u) {
-    salts_mutex_unlock(&impl->mutex);
+    cmeta_mutex_unlock(&impl->mutex);
     return status;
   }
 
@@ -196,7 +196,7 @@ int chttp_rate_limiter_admit_at(chttp_rate_limiter *limiter,
       ++impl->used;
     } else {
       result->status_code = RATE_CAPACITY;
-      salts_mutex_unlock(&impl->mutex);
+      cmeta_mutex_unlock(&impl->mutex);
       return SALTS_OK;
     }
   }
@@ -212,11 +212,11 @@ int chttp_rate_limiter_admit_at(chttp_rate_limiter *limiter,
     selected->credit -= impl->config.refill_period_ms;
   }
 
-  salts_mutex_unlock(&impl->mutex);
+  cmeta_mutex_unlock(&impl->mutex);
   return SALTS_OK;
 }
 
 int chttp_rate_limiter_admit(void *limiter, const chttp_server_request_view *request,
                            chttp_server_admission_result *result) {
-  return chttp_rate_limiter_admit_at(limiter, request, result, salts_monotonic_ms());
+  return chttp_rate_limiter_admit_at(limiter, request, result, cmeta_monotonic_ms());
 }

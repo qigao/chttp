@@ -214,7 +214,7 @@ static void chttp_requests_test_serve(void *user) {
   if (server->status == SALTS_OK && memcmp(received, server->expected, server->expected_size) != 0)
     server->status = SALTS_EPROTO;
   if (server->status == SALTS_OK && server->hold_after_receive_ms != 0u)
-    salts_sleep_ms(server->hold_after_receive_ms);
+    cmeta_sleep_ms(server->hold_after_receive_ms);
   if (server->status == SALTS_OK)
     server->status =
         chttp_requests_test_send_all(accepted, server->response, server->response_size);
@@ -331,7 +331,7 @@ static void chttp_requests_test_round_trip(chttp_client *client,
                                            const chttp_requests_test_case *test_case) {
   chttp_requests_test_socket listener = CHTTP_REQUESTS_TEST_INVALID_SOCKET;
   chttp_requests_test_server server = {0};
-  salts_thread_t thread = NULL;
+  cmeta_thread_t thread = NULL;
   chttp_response response = {0};
   chttp_error error = {0};
   chttp_options options;
@@ -361,7 +361,7 @@ static void chttp_requests_test_round_trip(chttp_client *client,
                                         .expected_size = (size_t)expected_size,
                                         .response = test_case->wire_response,
                                         .response_size = test_case->wire_response_size};
-  check_equal(salts_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
+  check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
   options = (chttp_options){.connection_uri = uri,
                             .authority = authority,
                             .target = test_case->target,
@@ -369,8 +369,8 @@ static void chttp_requests_test_round_trip(chttp_client *client,
                             .body_size = strlen(test_case->request_body),
                             .timeout_ms = CHTTP_REQUESTS_TEST_TIMEOUT_MS};
   check_equal(test_case->call(client, &options, &response, &error), SALTS_OK);
-  check_equal(salts_thread_join(&thread), SALTS_OK);
-  salts_thread_destroy(&thread);
+  check_equal(cmeta_thread_join(&thread), SALTS_OK);
+  cmeta_thread_destroy(&thread);
   check_equal(server.status, SALTS_OK);
   check_equal(response.status_code, test_case->status_code);
   check_equal(response.reason, test_case->reason);
@@ -412,7 +412,7 @@ spec("CHTTP requests-style client") {
     chttp_client_config config = chttp_requests_test_config();
     chttp_requests_test_socket listener = CHTTP_REQUESTS_TEST_INVALID_SOCKET;
     chttp_requests_test_keep_alive_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -454,7 +454,7 @@ spec("CHTTP requests-style client") {
         .first_response_size = sizeof(chttp_requests_test_keep_alive_response) - 1u,
         .second_response = chttp_requests_test_close_response,
         .second_response_size = sizeof(chttp_requests_test_close_response) - 1u};
-    check_equal(salts_thread_create(&thread, chttp_requests_test_serve_keep_alive, &server),
+    check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve_keep_alive, &server),
                 SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
@@ -474,8 +474,8 @@ spec("CHTTP requests-style client") {
     chttp_response_destroy(&response);
 
     check_equal(chttp_client_destroy(&client, CHTTP_REQUESTS_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     chttp_requests_test_close_socket(listener);
   }
@@ -485,7 +485,7 @@ spec("CHTTP requests-style client") {
     chttp_client_config config = chttp_requests_test_config();
     chttp_requests_test_socket listener = CHTTP_REQUESTS_TEST_INVALID_SOCKET;
     chttp_requests_test_keep_alive_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -523,7 +523,7 @@ spec("CHTTP requests-style client") {
         .first_response_size = sizeof(chttp_requests_test_keep_alive_response) - 1u,
         .second_response = chttp_requests_test_close_response,
         .second_response_size = sizeof(chttp_requests_test_close_response) - 1u};
-    check_equal(salts_thread_create(&thread, chttp_requests_test_serve_origin_switch, &server),
+    check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve_origin_switch, &server),
                 SALTS_OK);
 
     options = (chttp_options){.connection_uri = uri,
@@ -541,8 +541,8 @@ spec("CHTTP requests-style client") {
     chttp_response_destroy(&response);
 
     check_equal(chttp_client_destroy(&client, CHTTP_REQUESTS_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     chttp_requests_test_close_socket(listener);
   }
@@ -566,7 +566,7 @@ spec("CHTTP requests-style client") {
     {
       chttp_requests_test_socket listener = CHTTP_REQUESTS_TEST_INVALID_SOCKET;
       chttp_requests_test_server server = {0};
-      salts_thread_t thread = NULL;
+      cmeta_thread_t thread = NULL;
       chttp_response response_value = {0};
       chttp_error error = {0};
       chttp_options options;
@@ -592,7 +592,7 @@ spec("CHTTP requests-style client") {
                                        .expected = expected,
                                        .expected_size = (size_t)expected_size,
                                        .hold_after_receive_ms = CHTTP_REQUESTS_TEST_SERVER_HOLD_MS};
-      check_equal(salts_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
+      check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
       options = (chttp_options){.connection_uri = uri,
                                 .authority = authority,
                                 .target = "/timeout",
@@ -600,8 +600,8 @@ spec("CHTTP requests-style client") {
       check_equal(chttp_get(&client, &options, &response_value, &error), SALTS_ETIMEDOUT);
       check_equal(error.status, SALTS_ETIMEDOUT);
       check_null(response_value.body);
-      check_equal(salts_thread_join(&thread), SALTS_OK);
-      salts_thread_destroy(&thread);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
+      cmeta_thread_destroy(&thread);
       check_equal(server.status, SALTS_OK);
       chttp_requests_test_close_socket(listener);
     }
@@ -705,7 +705,7 @@ spec("CHTTP requests-style client") {
     chttp_client_config config = chttp_requests_test_config();
     chttp_requests_test_socket listener = CHTTP_REQUESTS_TEST_INVALID_SOCKET;
     chttp_requests_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -745,7 +745,7 @@ spec("CHTTP requests-style client") {
                                           .expected_size = (size_t)expected_size,
                                           .response = upload_response,
                                           .response_size = sizeof(upload_response) - 1u};
-    check_equal(salts_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/upload",
@@ -753,8 +753,8 @@ spec("CHTTP requests-style client") {
     check_equal(chttp_put_file(&client, &options, upload_path, chttp_requests_test_progress,
                                &upload_progress, &response, &error),
                 SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(response.status_code, 201u);
     check_equal(upload_progress.transferred, sizeof(upload_data) - 1u);
@@ -784,7 +784,7 @@ spec("CHTTP requests-style client") {
                                           .expected_size = (size_t)expected_size,
                                           .response = wire_response,
                                           .response_size = (size_t)wire_response_size};
-    check_equal(salts_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/download",
@@ -792,8 +792,8 @@ spec("CHTTP requests-style client") {
     check_equal(chttp_download_file(&client, &options, download_path, chttp_requests_test_progress,
                                     &download_progress, &response, &error),
                 SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(response.status_code, 200u);
     check_null(response.body);
@@ -830,7 +830,7 @@ spec("CHTTP requests-style client") {
                                           .expected_size = (size_t)expected_size,
                                           .response = wire_response,
                                           .response_size = (size_t)wire_response_size};
-    check_equal(salts_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/missing",
@@ -838,8 +838,8 @@ spec("CHTTP requests-style client") {
     check_equal(
         chttp_download_file(&client, &options, download_path, NULL, NULL, &response, &error),
         SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(response.status_code, 404u);
     downloaded = tt_read_file(download_path, &downloaded_size);

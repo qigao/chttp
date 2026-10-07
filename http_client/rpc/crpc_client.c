@@ -108,7 +108,7 @@ static void crpc_slot_complete(void *user, chttp_request http_request,
   impl = slot->client;
   slot->result_delivered = true;
   if (slot->deadline_expired || (!impl->stop_active && slot->deadline_at_ms != 0u &&
-                                 salts_monotonic_ms() >= slot->deadline_at_ms)) {
+                                 cmeta_monotonic_ms() >= slot->deadline_at_ms)) {
     slot->deadline_expired = true;
     error = (crpc_error){.status = SALTS_ETIMEDOUT, .stage = "rpc-deadline"};
     error_view = &error;
@@ -195,11 +195,11 @@ int crpc_async_client_submit(crpc_async_client *client, const crpc_options *opti
   if (slot == NULL) return SALTS_ENOBUFS;
 
   impl->submit_active = true;
-  started_ms = salts_monotonic_ms();
+  started_ms = cmeta_monotonic_ms();
   status = crpc_prepare_call(options, impl->max_method_bytes, impl->max_json_depth,
                              impl->max_body_bytes, impl->max_http_header_count, &prepared);
   if (status == SALTS_OK && options->deadline_ms != 0u &&
-      salts_monotonic_ms() - started_ms >= options->deadline_ms)
+      cmeta_monotonic_ms() - started_ms >= options->deadline_ms)
     status = SALTS_ETIMEDOUT;
   if (status != SALTS_OK) goto done;
 
@@ -215,7 +215,7 @@ int crpc_async_client_submit(crpc_async_client *client, const crpc_options *opti
   slot->callable = prepared.callable;
   slot->has_callable = prepared.has_callable;
   slot->active = true;
-  if (options->deadline_ms != 0u && salts_monotonic_ms() >= slot->deadline_at_ms) {
+  if (options->deadline_ms != 0u && cmeta_monotonic_ms() >= slot->deadline_at_ms) {
     crpc_slot_release(slot);
     status = SALTS_ETIMEDOUT;
     goto done;
@@ -261,7 +261,7 @@ int crpc_async_request_cancel(crpc_async_client *client, crpc_request request) {
 }
 
 static int crpc_expire_deadlines(crpc_async_client_impl *impl) {
-  const uint64_t now_ms = salts_monotonic_ms();
+  const uint64_t now_ms = cmeta_monotonic_ms();
   int first_status = SALTS_OK;
   size_t index;
   for (index = 0u; index < impl->request_capacity; ++index) {
@@ -280,7 +280,7 @@ static int crpc_expire_deadlines(crpc_async_client_impl *impl) {
 }
 
 static uint32_t crpc_poll_wait(const crpc_async_client_impl *impl, uint32_t timeout_ms) {
-  const uint64_t now_ms = salts_monotonic_ms();
+  const uint64_t now_ms = cmeta_monotonic_ms();
   uint64_t wait_ms = timeout_ms;
   size_t index;
   for (index = 0u; index < impl->request_capacity; ++index) {

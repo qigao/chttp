@@ -391,7 +391,7 @@ static void chttp_websocket_client_on_receive(void *user, cnet_connection connec
 }
 
 static uint64_t chttp_websocket_client_deadline(uint32_t timeout_ms) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   if (timeout_ms == 0u) return 0u;
   return UINT64_MAX - now < timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
@@ -400,7 +400,7 @@ static int chttp_websocket_client_poll(chttp_websocket_client_impl *client, uint
   uint32_t wait_ms = 1000u;
   size_t events = 0u;
   if (deadline != 0u) {
-    const uint64_t now = salts_monotonic_ms();
+    const uint64_t now = cmeta_monotonic_ms();
     uint64_t remaining;
     if (now >= deadline) return SALTS_ETIMEDOUT;
     remaining = deadline - now;

@@ -20,7 +20,7 @@
 
 ### 方案 C：统一 source/sink，协议适配器内部实现（采用）
 
-公开 API 只描述“读取下一块”和“消费下一块”。H1 适配器选择 Content-Length 或 chunked framing，H2 适配器选择 Content-Length 或无长度 DATA 流。文件便利层复用 CFlow 的共享异步文件 runtime；路径查询、打开、关闭与原子 rename 仍通过 `salts_fs` 完成，不向下游暴露 llhttp、H2 引擎、CFlow runtime 或平台文件句柄。
+公开 API 只描述“读取下一块”和“消费下一块”。H1 适配器选择 Content-Length 或 chunked framing，H2 适配器选择 Content-Length 或无长度 DATA 流。文件便利层复用 CFlow 的共享异步文件 runtime；路径查询、打开、关闭与原子 rename 仍通过 `cmeta_fs` 完成，不向下游暴露 llhttp、H2 引擎、CFlow runtime 或平台文件句柄。
 
 ## 公开接口
 
@@ -124,7 +124,7 @@ int chttp_server_response_file(chttp_server_response *, unsigned int,
 - source 失败使用其负错误码；长度不一致返回 `SALTS_EPROTO`，stage 为 `request-source` 或 `request-source-length`。
 - sink 失败使用其负错误码，stage 为 `response-sink`。
 - 文件 open/stat/read/write/fsync/rename 失败保留 native Salts 状态，stage 分别为 `file-open`、`file-stat`、`file-read`、`file-write`、`file-sync`、`file-commit`。
-- Windows IOCP 没有异步 flush；下载正文仍为异步 write，完成并关闭句柄后仅用同步 `salts_fs_fsync` 作为原子 rename 前的 durability barrier。Linux io_uring 使用原生异步 flush。其他不支持异步 regular-file read/write 的 backend 在打开前 fail fast，不降级成阻塞数据路径。
+- Windows IOCP 没有异步 flush；下载正文仍为异步 write，完成并关闭句柄后仅用同步 `cmeta_fs_fsync` 作为原子 rename 前的 durability barrier。Linux io_uring 使用原生异步 flush。其他不支持异步 regular-file read/write 的 backend 在打开前 fail fast，不降级成阻塞数据路径。
 - 非 2xx 下载不是 transport 失败：返回 `SALTS_OK` 和 owning HTTP response，删除临时文件且保持原目标不变。
 - server request sink 失败时，H1 关闭该连接；H2 RST 该 stream。`body_close` 恰好调用一次并接收终态。
 

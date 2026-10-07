@@ -97,7 +97,7 @@ typedef struct web_deferred_app {
   cmeta_data_field_desc model_fields[1];
   cmeta_data_struct_shape model_shape;
   cmeta_data_desc model_desc;
-  salts_threadpool_t *pool;
+  cmeta_threadpool_t *pool;
   web_deferred_job jobs[WEB_DEFERRED_JOB_CAPACITY];
 } web_deferred_app;
 
@@ -179,7 +179,7 @@ static void web_deferred_worker(void *user) {
 
   do {
     stage = atomic_load_explicit(&job->stage, memory_order_acquire);
-    if (stage == WEB_DEFERRED_JOB_WAITING) salts_thread_yield();
+    if (stage == WEB_DEFERRED_JOB_WAITING) cmeta_thread_yield();
   } while (stage == WEB_DEFERRED_JOB_WAITING);
 
   if (stage == WEB_DEFERRED_JOB_READY) {
@@ -239,7 +239,7 @@ static int web_deferred_handler(
 
   memcpy(job->value, value, value_size + 1u);
 
-  status = salts_threadpool_try_submit(
+  status = cmeta_threadpool_try_submit(
       app->pool, web_deferred_worker, job);
   if (status != SALTS_OK) {
     atomic_store_explicit(
@@ -267,7 +267,7 @@ int main(void) {
       "</body></html>";
   static const chttp_web_template templates[] = {
       {"worker.html", worker_page, sizeof(worker_page) - 1u}};
-  const salts_threadpool_config_t pool_config = {
+  const cmeta_threadpool_config_t pool_config = {
       .num_threads = 1,
       .queue_capacity = WEB_DEFERRED_QUEUE_CAPACITY};
   chttp_web_renderer_config renderer_config =
@@ -294,7 +294,7 @@ int main(void) {
     return EXIT_FAILURE;
   }
 
-  app.pool = salts_threadpool_create_with_config(&pool_config);
+  app.pool = cmeta_threadpool_create_with_config(&pool_config);
   if (app.pool == NULL) {
     chttp_web_renderer_destroy(&app.renderer);
     return EXIT_FAILURE;
@@ -323,14 +323,14 @@ int main(void) {
   }
 
   if (app.pool != NULL) {
-    const int shutdown_status = salts_threadpool_shutdown_with_policy(
+    const int shutdown_status = cmeta_threadpool_shutdown_with_policy(
         app.pool, SALTS_THREADPOOL_SHUTDOWN_DRAIN);
     const int wait_status =
         shutdown_status == SALTS_OK
-            ? salts_threadpool_wait_status(app.pool)
+            ? cmeta_threadpool_wait_status(app.pool)
             : shutdown_status;
     if (status == SALTS_OK) status = wait_status;
-    salts_threadpool_destroy(app.pool);
+    cmeta_threadpool_destroy(app.pool);
     app.pool = NULL;
   }
 

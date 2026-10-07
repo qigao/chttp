@@ -12,14 +12,13 @@
             "cacheVariables": {
                 "CMAKE_SYSTEM_NAME": "Android",
                 "ANDROID_STL": "c++_shared",
-                "ANDROID_PLATFORM": "android-26",
+                "ANDROID_PLATFORM": "android-24",
                 "BUILD_TESTING": false
             }
         },
         {
             "name": "android-vcpkg-chainload",
             "hidden": true,
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_MANIFEST_MODE": true,
                 "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake"
@@ -30,7 +29,6 @@
             "hidden": true,
             "inherits": "ISWindows",
             "cacheVariables": {
-                "PKG_CONFIG_EXECUTABLE": "${sourceDir}/vcpkg_installed/x64-windows/tools/pkgconf/pkgconf.exe",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed"
             }
         },

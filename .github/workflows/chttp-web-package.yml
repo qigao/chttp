@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euxo pipefail
           prefix="$RUNNER_TEMP/chttp-install"
-          cmake --preset linux-dev-user \
+          cmake --preset ci-linux-dev-user \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF \

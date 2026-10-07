@@ -239,7 +239,7 @@ static int owner_ws_one_message(owner_ws_worker *worker,
   if (worker == NULL || client == NULL || payload == NULL ||
       latency_out == NULL)
     return SALTS_EINVAL;
-  started = salts_hrtime();
+  started = cmeta_hrtime();
   if (worker->test_case->mode == OWNER_WS_CALLBACK_ECHO)
     status = chttp_websocket_client_send_binary(
         client, payload, payload_bytes, OWNER_WS_TIMEOUT_MS);
@@ -249,7 +249,7 @@ static int owner_ws_one_message(owner_ws_worker *worker,
   if (status != SALTS_OK) return status;
   status = owner_ws_receive_expected(client, payload, payload_bytes);
   if (status != SALTS_OK) return status;
-  *latency_out = salts_hrtime() - started;
+  *latency_out = cmeta_hrtime() - started;
   return SALTS_OK;
 }
 
@@ -306,7 +306,7 @@ static void owner_ws_worker_main(void *user) {
 
   while (atomic_load_explicit(&worker->probe->captured,
                               memory_order_acquire) == 0)
-    salts_thread_yield();
+    cmeta_thread_yield();
 
   for (index = 0u; index < worker->warmup; ++index) {
     status = owner_ws_one_message(
@@ -319,7 +319,7 @@ static void owner_ws_worker_main(void *user) {
   announced = true;
   while (atomic_load_explicit(&worker->barrier->start,
                               memory_order_acquire) == 0)
-    salts_thread_yield();
+    cmeta_thread_yield();
 
   for (index = 0u; index < worker->messages; ++index) {
     status = owner_ws_one_message(
@@ -361,12 +361,12 @@ static void owner_ws_sample_pressure(chttp_server_impl *impl,
     if (owner == NULL) continue;
     if (capture_leases)
       pressure->owner_leases[index] = chttp_server_owner_lease_count(owner);
-    salts_mutex_lock(&owner->admission_mutex);
+    cmeta_mutex_lock(&owner->admission_mutex);
     ring = owner->admission_count;
-    salts_mutex_unlock(&owner->admission_mutex);
-    salts_mutex_lock(&impl->mutex);
+    cmeta_mutex_unlock(&owner->admission_mutex);
+    cmeta_mutex_lock(&impl->mutex);
     commands = owner->websocket_command_count;
-    salts_mutex_unlock(&impl->mutex);
+    cmeta_mutex_unlock(&impl->mutex);
     if (ring > pressure->peak_admission_ring[index])
       pressure->peak_admission_ring[index] = ring;
     if (commands > pressure->peak_command_queue[index])
@@ -379,7 +379,7 @@ static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
                                              size_t owner_count) {
   size_t index;
   if (impl == NULL || pressure == NULL) return;
-  salts_mutex_lock(&impl->mutex);
+  cmeta_mutex_lock(&impl->mutex);
   for (index = 0u; index < owner_count && index < 4u; ++index) {
     chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
     size_t commands;
@@ -388,7 +388,7 @@ static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
     if (commands > pressure->peak_command_queue[index])
       pressure->peak_command_queue[index] = commands;
   }
-  salts_mutex_unlock(&impl->mutex);
+  cmeta_mutex_unlock(&impl->mutex);
 }
 
 static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
@@ -412,7 +412,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   owner_ws_server_state state;
   owner_ws_barrier barrier;
   owner_ws_worker workers[OWNER_WS_CONNECTIONS];
-  salts_thread_t threads[OWNER_WS_CONNECTIONS] = {0};
+  cmeta_thread_t threads[OWNER_WS_CONNECTIONS] = {0};
   bool started[OWNER_WS_CONNECTIONS] = {false};
   owner_ws_pressure pressure = {0};
   chttp_server_stats stats = {0};
@@ -478,7 +478,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
         .messages = messages,
         .latencies = latencies + index * messages};
     atomic_init(&workers[index].status, SALTS_EIO);
-    if (salts_thread_create(&threads[index], owner_ws_worker_main,
+    if (cmeta_thread_create(&threads[index], owner_ws_worker_main,
                             &workers[index]) != SALTS_OK)
       goto cleanup_threads;
     started[index] = true;
@@ -487,7 +487,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   while (atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
          OWNER_WS_CONNECTIONS) {
     owner_ws_sample_pressure(impl, &pressure, owner_count, true);
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
   owner_ws_sample_pressure(impl, &pressure, owner_count, true);
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index)
@@ -500,20 +500,20 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
     pressure.cross_owner_handoffs += pressure.owner_leases[index];
 
   cpu_started = clock();
-  started_ns = salts_hrtime();
+  started_ns = cmeta_hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   while (atomic_load_explicit(&barrier.done, memory_order_acquire) !=
          OWNER_WS_CONNECTIONS) {
     owner_ws_sample_command_pressure(impl, &pressure, owner_count);
-    salts_sleep_ms(1u);
+    cmeta_sleep_ms(1u);
   }
-  wall_ns = salts_hrtime() - started_ns;
+  wall_ns = cmeta_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
 
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index) {
-    if (salts_thread_join(&threads[index]) != SALTS_OK)
+    if (cmeta_thread_join(&threads[index]) != SALTS_OK)
       goto cleanup_threads;
-    salts_thread_destroy(&threads[index]);
+    cmeta_thread_destroy(&threads[index]);
     started[index] = false;
     if (atomic_load_explicit(&workers[index].status,
                              memory_order_acquire) != SALTS_OK)
@@ -597,8 +597,8 @@ cleanup_threads:
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   for (index = 0u; index < OWNER_WS_CONNECTIONS; ++index) {
     if (started[index]) {
-      (void)salts_thread_join(&threads[index]);
-      salts_thread_destroy(&threads[index]);
+      (void)cmeta_thread_join(&threads[index]);
+      cmeta_thread_destroy(&threads[index]);
       started[index] = false;
     }
   }

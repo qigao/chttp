@@ -1,6 +1,8 @@
 #include <http_client/http.h>
 
 #include "chttp_client_internal.h"
+#include "chttp_response_owner.h"
+#include <http_client/response_scope.h>
 
 #include <salts/clock.h>
 
@@ -31,75 +33,6 @@ static chttp_blocking_client_impl *chttp_client_get_impl(chttp_client *client) {
   return client != NULL ? (chttp_blocking_client_impl *)client->impl : NULL;
 }
 
-static char *chttp_requests_copy_text(const char *text) {
-  size_t size;
-  char *copy;
-  if (text == NULL) return NULL;
-  size = strlen(text);
-  if (size == SIZE_MAX) return NULL;
-  copy = (char *)malloc(size + 1u);
-  if (copy == NULL) return NULL;
-  memcpy(copy, text, size + 1u);
-  return copy;
-}
-
-void chttp_response_destroy(chttp_response *response) {
-  size_t index;
-  if (response == NULL) return;
-  free(response->reason);
-  for (index = 0u; index < response->header_count; ++index) {
-    free((void *)response->headers[index].name);
-    free((void *)response->headers[index].value);
-  }
-  free(response->headers);
-  free(response->body);
-  *response = (chttp_response){0};
-}
-
-static int chttp_requests_copy_response(const chttp_response_view *source, chttp_response *out) {
-  size_t index;
-  if (source == NULL || out == NULL) return SALTS_EINVAL;
-  *out = (chttp_response){.http_major = source->http_major,
-                          .http_minor = source->http_minor,
-                          .status_code = source->status_code,
-                          .header_count = source->header_count,
-                          .body_size = source->body_size,
-                          .protocol_keep_alive = source->protocol_keep_alive};
-  if (source->reason != NULL) {
-    out->reason = chttp_requests_copy_text(source->reason);
-    if (out->reason == NULL) goto no_memory;
-  }
-  if (source->header_count != 0u) {
-    if (source->headers == NULL || source->header_count > SIZE_MAX / sizeof(*out->headers))
-      goto protocol_error;
-    out->headers = (chttp_header *)calloc(source->header_count, sizeof(*out->headers));
-    if (out->headers == NULL) goto no_memory;
-    for (index = 0u; index < source->header_count; ++index) {
-      char *name = chttp_requests_copy_text(source->headers[index].name);
-      char *value = chttp_requests_copy_text(source->headers[index].value);
-      if (name == NULL || value == NULL) {
-        free(name);
-        free(value);
-        goto no_memory;
-      }
-      out->headers[index] = (chttp_header){name, value};
-    }
-  }
-  if (source->body_size != 0u && source->body != NULL) {
-    out->body = malloc(source->body_size);
-    if (out->body == NULL) goto no_memory;
-    memcpy(out->body, source->body, source->body_size);
-  }
-  return SALTS_OK;
-
-no_memory:
-  chttp_response_destroy(out);
-  return SALTS_ENOMEM;
-protocol_error:
-  chttp_response_destroy(out);
-  return SALTS_EPROTO;
-}
-
 static void chttp_requests_complete(void *user, chttp_request request,
                                     const chttp_response_view *response, const chttp_error *error) {
   chttp_requests_probe *probe = (chttp_requests_probe *)user;
@@ -112,7 +45,7 @@ static void chttp_requests_complete(void *user, chttp_request request,
     probe->error = (chttp_error){.status = SALTS_EPROTO, .stage = "response"};
     probe->copy_status = SALTS_EPROTO;
   } else {
-    probe->copy_status = chttp_requests_copy_response(response, &probe->response);
+    probe->copy_status = chttp_response_copy(response, &probe->response);
     if (probe->copy_status != SALTS_OK)
       probe->error = (chttp_error){.status = probe->copy_status, .stage = "response-copy"};
   }
@@ -124,7 +57,7 @@ static uint64_t chttp_requests_deadline_after(uint64_t now_ms, uint32_t timeout_
 }
 
 static uint32_t chttp_requests_poll_wait(uint64_t deadline_at_ms) {
-  const uint64_t now_ms = salts_monotonic_ms();
+  const uint64_t now_ms = cmeta_monotonic_ms();
   const uint64_t remaining = deadline_at_ms > now_ms ? deadline_at_ms - now_ms : 0u;
   return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
 }
@@ -235,7 +168,7 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
                                             .tls = options->tls,
                                             .protocol = options->protocol};
   if (options->timeout_ms != 0u)
-    deadline_at_ms = chttp_requests_deadline_after(salts_monotonic_ms(), options->timeout_ms);
+    deadline_at_ms = chttp_requests_deadline_after(cmeta_monotonic_ms(), options->timeout_ms);
   for (;;) {
     if (file_transfer != NULL)
       status =
@@ -322,8 +255,7 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
   } else if (status == SALTS_OK && impl->probe.done) {
     status = impl->probe.copy_status;
     if (status == SALTS_OK) {
-      *out_response = impl->probe.response;
-      impl->probe.response = (chttp_response){0};
+      chttp_response_move(out_response, &impl->probe.response);
     } else {
       *out_error = impl->probe.error;
     }

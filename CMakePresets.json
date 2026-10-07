@@ -37,18 +37,36 @@
             "hidden": true,
             "displayName": "Developer Build (Windows, Clang, Base)",
             "inherits": [
-                "dev-win-clang-ninja",
+                "ISWindows",
+                "developer-mode",
+                "Clang",
+                "flags-clang-windows",
                 "pkg-vcpkg"
-            ]
+            ],
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/Clang"
         },
         {
             "name": "base-win-release-clang-user",
             "hidden": true,
             "displayName": "Release Build (Windows, Clang, Base)",
             "inherits": [
-                "release-win-clang-ninja",
+                "ISWindows",
+                "release-mode",
+                "Clang",
+                "flags-clang-windows",
                 "pkg-vcpkg"
-            ]
+            ],
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/Clang-Release"
+        },
+        {
+            "name": "flags-clang-windows",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_C_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
+                "CMAKE_CXX_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast -fexceptions"
+            }
         }
     ]
 }

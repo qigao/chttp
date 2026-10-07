@@ -57,32 +57,10 @@
             "inherits": [
                 "ISMac",
                 "release-mode",
-                "Clang",
-                "flags-appleclang"
+                "GccMac",
+                "flags-darwin"
             ],
-            "binaryDir": "${sourceDir}/build/mac-clang-release"
-        },
-        {
-            "name": "base-developer-windows-clang",
-            "hidden": true,
-            "inherits": [
-                "ISWindows",
-                "developer-mode",
-                "Clang",
-                "flags-clang-windows"
-            ],
-            "binaryDir": "${sourceDir}/build/Clang"
-        },
-        {
-            "name": "base-release-windows-clang",
-            "hidden": true,
-            "inherits": [
-                "ISWindows",
-                "release-mode",
-                "Clang",
-                "flags-clang-windows"
-            ],
-            "binaryDir": "${sourceDir}/build/Clang-Release"
+            "binaryDir": "${sourceDir}/build/mac-gcc-release"
         }
     ]
 }

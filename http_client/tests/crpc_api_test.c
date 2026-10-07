@@ -280,12 +280,12 @@ static crpc_client_config crpc_test_config(void) {
 }
 
 static int crpc_test_poll_until(crpc_async_client *client, crpc_test_probe *probe) {
-  const uint64_t deadline = salts_monotonic_ms() + CRPC_TEST_TIMEOUT_MS;
+  const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TEST_TIMEOUT_MS;
   while (probe->called == 0) {
     size_t completions = 0u;
     const int status = crpc_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
-    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
 }
@@ -293,12 +293,12 @@ static int crpc_test_poll_until(crpc_async_client *client, crpc_test_probe *prob
 static int crpc_test_poll_until_both(crpc_async_client *client,
                                      const crpc_test_reentrant_probe *first,
                                      const crpc_test_probe *second) {
-  const uint64_t deadline = salts_monotonic_ms() + CRPC_TEST_TIMEOUT_MS;
+  const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TEST_TIMEOUT_MS;
   while (first->called == 0 || second->called == 0) {
     size_t completions = 0u;
     const int status = crpc_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
-    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
 }
@@ -316,7 +316,7 @@ spec("CRPC blocking request/reply client") {
     crpc_client_config config = crpc_test_config();
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     crpc_response response = {0};
     crpc_error error = {0};
     crpc_options options;
@@ -395,7 +395,7 @@ spec("CRPC blocking request/reply client") {
                                 .response_sizes = response_sizes,
                                 .exchange_count = 2u,
                                 .reuse_connection = 1};
-    check_equal(salts_thread_create(&thread, crpc_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, crpc_test_serve, &server), SALTS_OK);
 
     options = (crpc_options){
         .connection_uri = uri,
@@ -430,8 +430,8 @@ spec("CRPC blocking request/reply client") {
     crpc_response_destroy(&response);
 
     check_equal(crpc_client_destroy(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     crpc_test_close_socket(listener);
   }

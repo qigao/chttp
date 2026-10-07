@@ -173,10 +173,10 @@ static int web_sse_handler(
 }
 
 static int web_sse_wait_closed(web_sse_app *app, uint32_t timeout_ms) {
-  const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
   while (atomic_load_explicit(&app->close_count, memory_order_acquire) == 0) {
-    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    salts_thread_yield();
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    cmeta_thread_yield();
   }
   return SALTS_OK;
 }

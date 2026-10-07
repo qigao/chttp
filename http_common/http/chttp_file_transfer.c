@@ -276,7 +276,7 @@ int chttp_file_transfer_drain_destroy(chttp_file_transfer *transfer,
       size_t progressed = 0u;
       status = cflow_io_file_runtime_run_ready(runtime, 64u, &progressed);
       if (status != SALTS_OK) return status;
-      if (progressed == 0u) salts_thread_yield();
+      if (progressed == 0u) cmeta_thread_yield();
     }
   }
   while (!cflow_io_file_is_quiescent(&transfer->file)) {
@@ -284,7 +284,7 @@ int chttp_file_transfer_drain_destroy(chttp_file_transfer *transfer,
     status = cflow_io_file_runtime_run_ready(runtime, 64u, &progressed);
     if (status != SALTS_OK && first_status == SALTS_OK) first_status = status;
     if (status != SALTS_OK) break;
-    if (progressed == 0u) salts_thread_yield();
+    if (progressed == 0u) cmeta_thread_yield();
   }
   if (first_status != SALTS_OK) return first_status;
   return chttp_file_transfer_destroy(transfer);

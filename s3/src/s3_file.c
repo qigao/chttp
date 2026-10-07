@@ -5,7 +5,7 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 
 #include <limits.h>
 #include <stdlib.h>
@@ -24,9 +24,9 @@ static int s3_file_source_unexpected(void *user, void *buffer, size_t capacity, 
 static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SIZE + 1u],
                           size_t *out_size, s3_error *out_error) {
   static const char digits[] = "0123456789abcdef";
-  salts_fs_stat_t file_stat = {0};
-  salts_fs_stat_t after_stat = {0};
-  salts_file_t file = SALTS_INVALID_FILE;
+  cmeta_fs_stat_t file_stat = {0};
+  cmeta_fs_stat_t after_stat = {0};
+  cmeta_file_t file = SALTS_INVALID_FILE;
   EVP_MD_CTX *context = NULL;
   unsigned char digest[S3_FILE_SHA256_BYTES];
   unsigned char buffer[S3_FILE_HASH_CHUNK_BYTES];
@@ -37,7 +37,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
   int status;
   if (path == NULL || path[0] == '\0' || out_hex == NULL || out_size == NULL || out_error == NULL)
     return SALTS_EINVAL;
-  status = salts_fs_stat(path, &file_stat);
+  status = cmeta_fs_stat(path, &file_stat);
   if (status != SALTS_OK) {
     *out_error = (s3_error){.status = SALTS_EIO, .native_status = status, .stage = "file-stat"};
     return SALTS_EIO;
@@ -50,7 +50,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
     *out_error = (s3_error){.status = SALTS_EFBIG, .stage = "file-stat"};
     return SALTS_EFBIG;
   }
-  file = salts_fs_open(path, SALTS_FS_O_RDONLY, 0);
+  file = cmeta_fs_open(path, SALTS_FS_O_RDONLY, 0);
   if (file == SALTS_INVALID_FILE) {
     *out_error = (s3_error){.status = SALTS_EIO, .stage = "file-hash-open"};
     return SALTS_EIO;
@@ -65,7 +65,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
     goto done;
   }
   status = SALTS_OK;
-  while ((read_size = salts_fs_read(file, (char *)buffer, sizeof(buffer))) > 0) {
+  while ((read_size = cmeta_fs_read(file, (char *)buffer, sizeof(buffer))) > 0) {
     if (EVP_DigestUpdate(context, buffer, (size_t)read_size) != 1) {
       status = SALTS_EIO;
       break;
@@ -92,14 +92,14 @@ done:
   EVP_MD_CTX_free(context);
   OPENSSL_cleanse(buffer, sizeof(buffer));
   OPENSSL_cleanse(digest, sizeof(digest));
-  close_status = salts_fs_close(file);
+  close_status = cmeta_fs_close(file);
   if (status == SALTS_OK && close_status != SALTS_OK) {
     status = SALTS_EIO;
     *out_error =
         (s3_error){.status = status, .native_status = close_status, .stage = "file-hash-close"};
   }
   if (status == SALTS_OK) {
-    const int stat_status = salts_fs_stat(path, &after_stat);
+    const int stat_status = cmeta_fs_stat(path, &after_stat);
     if (stat_status != SALTS_OK) {
       status = SALTS_EIO;
       *out_error =

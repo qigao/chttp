@@ -7,6 +7,7 @@ add_library(chttp_client SHARED
   src/chttp_request.c
   src/chttp_requests.c
   src/chttp_response.c
+  src/chttp_response_owner.c
   src/chttp_websocket_client.c
   src/chttp_websocket_pool.c
   src/chttp_auth.c

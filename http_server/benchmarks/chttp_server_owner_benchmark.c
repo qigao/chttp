@@ -3,7 +3,7 @@
 #include <http_server/http.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -338,12 +338,12 @@ static int owner_bench_one_request(owner_bench_socket socket_value,
       target);
   if (request_size <= 0 || (size_t)request_size >= sizeof(request))
     return -1;
-  started = salts_hrtime();
+  started = cmeta_hrtime();
   if (owner_bench_send_all(socket_value, request, (size_t)request_size) != 0)
     return -1;
   if (owner_bench_receive_response(socket_value, expected_body_bytes) != 0)
     return -1;
-  *out_ns = salts_hrtime() - started;
+  *out_ns = cmeta_hrtime() - started;
   return 0;
 }
 
@@ -364,7 +364,7 @@ static void owner_bench_client_main(void *user) {
   announced = true;
   while (atomic_load_explicit(&client->barrier->start,
                               memory_order_acquire) == 0)
-    salts_thread_yield();
+    cmeta_thread_yield();
   for (index = 0u; index < client->requests; ++index) {
     if (owner_bench_one_request(socket_value, client->target,
                                 client->expected_body_bytes,
@@ -392,9 +392,9 @@ static void owner_bench_sample_pressure(chttp_server_impl *impl,
     size_t ring;
     if (owner == NULL) continue;
     leases = chttp_server_owner_lease_count(owner);
-    salts_mutex_lock(&owner->admission_mutex);
+    cmeta_mutex_lock(&owner->admission_mutex);
     ring = owner->admission_count;
-    salts_mutex_unlock(&owner->admission_mutex);
+    cmeta_mutex_unlock(&owner->admission_mutex);
     pressure->owner_leases[index] = leases;
     if (leases > pressure->peak_owner_leases[index])
       pressure->peak_owner_leases[index] = leases;
@@ -416,7 +416,7 @@ static int owner_bench_run(owner_bench_workload_kind kind,
   chttp_server_impl *impl;
   owner_bench_barrier barrier;
   owner_bench_client clients[OWNER_BENCH_CONNECTIONS];
-  salts_thread_t threads[OWNER_BENCH_CONNECTIONS] = {0};
+  cmeta_thread_t threads[OWNER_BENCH_CONNECTIONS] = {0};
   bool thread_started[OWNER_BENCH_CONNECTIONS] = {false};
   owner_bench_pressure pressure = {0};
   uint64_t *latencies = NULL;
@@ -462,7 +462,7 @@ static int owner_bench_run(owner_bench_workload_kind kind,
         .latencies = latencies + index * requests_per_connection,
         .barrier = &barrier};
     atomic_init(&clients[index].status, SALTS_EIO);
-    if (salts_thread_create(&threads[index], owner_bench_client_main,
+    if (cmeta_thread_create(&threads[index], owner_bench_client_main,
                             &clients[index]) != SALTS_OK)
       goto cleanup_threads;
     thread_started[index] = true;
@@ -471,7 +471,7 @@ static int owner_bench_run(owner_bench_workload_kind kind,
   while (atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
          OWNER_BENCH_CONNECTIONS) {
     owner_bench_sample_pressure(impl, &pressure, owners);
-    salts_thread_yield();
+    cmeta_thread_yield();
   }
   owner_bench_sample_pressure(impl, &pressure, owners);
   for (index = 0u; index < OWNER_BENCH_CONNECTIONS; ++index)
@@ -484,20 +484,20 @@ static int owner_bench_run(owner_bench_workload_kind kind,
     pressure.cross_owner_handoffs += pressure.owner_leases[index];
 
   cpu_started = clock();
-  started_ns = salts_hrtime();
+  started_ns = cmeta_hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
 
   for (index = 0u; index < OWNER_BENCH_CONNECTIONS; ++index) {
-    if (salts_thread_join(&threads[index]) != SALTS_OK)
+    if (cmeta_thread_join(&threads[index]) != SALTS_OK)
       goto cleanup_threads;
-    salts_thread_destroy(&threads[index]);
+    cmeta_thread_destroy(&threads[index]);
     thread_started[index] = false;
     if (atomic_load_explicit(&clients[index].status,
                              memory_order_acquire) != SALTS_OK)
       goto cleanup_threads;
   }
 
-  wall_ns = salts_hrtime() - started_ns;
+  wall_ns = cmeta_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK) goto cleanup;
   if (stats.rejected_connections != 0u) goto cleanup;
@@ -560,8 +560,8 @@ cleanup_threads:
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   for (index = 0u; index < OWNER_BENCH_CONNECTIONS; ++index) {
     if (thread_started[index]) {
-      (void)salts_thread_join(&threads[index]);
-      salts_thread_destroy(&threads[index]);
+      (void)cmeta_thread_join(&threads[index]);
+      cmeta_thread_destroy(&threads[index]);
       thread_started[index] = false;
     }
   }

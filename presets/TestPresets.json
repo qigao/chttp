@@ -9,6 +9,11 @@
       "hidden": true,
       "displayName": "Base Test Preset",
       "description": "Base configuration for running tests",
+      "filter": {
+        "exclude": {
+          "label": "benchmark"
+        }
+      },
       "execution": {
         "noTestsAction": "error",
         "stopOnFailure": false

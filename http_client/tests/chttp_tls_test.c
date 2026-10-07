@@ -185,12 +185,12 @@ static void chttp_tls_test_async_complete(void *user, chttp_request request,
 }
 
 static int chttp_tls_test_poll_until(chttp_async_client *client, chttp_tls_async_probe *probe) {
-  const uint64_t deadline = salts_monotonic_ms() + CHTTP_TLS_TEST_TIMEOUT_MS;
+  const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TLS_TEST_TIMEOUT_MS;
   while (probe->called == 0) {
     size_t completions = 0u;
     const int status = chttp_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
-    if (salts_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
 }

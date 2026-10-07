@@ -775,7 +775,7 @@ static bool chttp_h2_sessions_stop_ready(const chttp_client_impl *impl) {
 }
 
 static uint32_t chttp_stop_remaining_ms(uint64_t started_ms, uint32_t timeout_ms) {
-  const uint64_t elapsed_ms = salts_monotonic_ms() - started_ms;
+  const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
   return elapsed_ms >= timeout_ms ? 0u : timeout_ms - (uint32_t)elapsed_ms;
 }
 
@@ -1231,7 +1231,7 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
 
 int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
   chttp_client_impl *impl = chttp_client_get(client);
-  const uint64_t started_ms = salts_monotonic_ms();
+  const uint64_t started_ms = cmeta_monotonic_ms();
   int first_status = SALTS_OK;
   int stop_status;
   size_t index;
@@ -1284,7 +1284,7 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
         break;
       }
       file_status = chttp_file_runtime_progress(impl);
-      if (file_status == SALTS_OK) salts_thread_yield();
+      if (file_status == SALTS_OK) cmeta_thread_yield();
     }
     if (file_status != SALTS_OK && first_status == SALTS_OK) first_status = file_status;
   }

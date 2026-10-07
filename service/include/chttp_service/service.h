@@ -109,12 +109,13 @@ typedef struct chttp_service_http_mount {
    * Mount acquires an independent lease from plugin_registry/plugin_ref,
    * resolves plugin_export_id through the generated DataBind Service catalog,
    * admits the matching FUNCTION export to DataBindNativeExecution, and keeps
-   * the lease until Service destruction.
+   * the lease until Service destruction. The registry must remain at a stable
+   * address through destruction; failed mount releases its acquired lease.
    *
    * Non-Plugin modes require these fields to remain zero/NULL.
    */
-  salts_plugin_registry *plugin_registry;
-  salts_plugin_ref plugin_ref;
+  cmeta_plugin_registry *plugin_registry;
+  cmeta_plugin_ref plugin_ref;
   const char *plugin_export_id;
 } chttp_service_http_mount;
 

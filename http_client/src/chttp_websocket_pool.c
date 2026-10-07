@@ -120,13 +120,13 @@ static uint32_t chttp_websocket_pool_next_generation(uint32_t generation) {
 }
 
 static uint64_t chttp_websocket_pool_deadline(uint32_t timeout_ms) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   if (timeout_ms == 0u) return 0u;
   return UINT64_MAX - now < timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
 
 static uint32_t chttp_websocket_pool_remaining(uint64_t deadline) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   const uint64_t remaining = deadline > now ? deadline - now : 0u;
   return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
 }
@@ -561,7 +561,7 @@ static int chttp_websocket_pool_poll(chttp_websocket_pool_impl *pool, uint64_t d
   uint32_t wait_ms = 1000u;
   size_t events = 0u;
   if (deadline != 0u) {
-    const uint64_t now = salts_monotonic_ms();
+    const uint64_t now = cmeta_monotonic_ms();
     if (now >= deadline) return SALTS_ETIMEDOUT;
     wait_ms = chttp_websocket_pool_remaining(deadline);
   }

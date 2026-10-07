@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --preset linux-release-user \
+          cmake --preset ci-linux-release-user \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DBUILD_BENCHMARKS=ON \
             -DBUILD_TESTS=OFF \

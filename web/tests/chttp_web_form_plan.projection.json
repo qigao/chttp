@@ -34,6 +34,39 @@
             "name": "sum"
           }
         ]
+      },
+      {
+        "service": "Calc",
+        "operation": "Values",
+        "method": "POST",
+        "route": "/values",
+        "success_status": 200,
+        "fields": [
+          {
+            "direction": "ingress",
+            "field": "count",
+            "location": "body",
+            "name": "count"
+          },
+          {
+            "direction": "ingress",
+            "field": "side",
+            "location": "body",
+            "name": "side"
+          },
+          {
+            "direction": "ingress",
+            "field": "tags",
+            "location": "body",
+            "name": "tags"
+          },
+          {
+            "direction": "egress",
+            "field": "sum",
+            "location": "response_body",
+            "name": "sum"
+          }
+        ]
       }
     ]
   }

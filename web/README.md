@@ -333,8 +333,15 @@ when studying request/fragment and session/form concerns independently.
 from the parser's point of view: the caller supplies pair storage and decoded
 byte storage.
 
-Typed binding is transactional through DataBind-compatible descriptors. The
-destination is not partially mutated when the bridge/bind operation fails.
+表单绑定统一使用 `chttp_web_form_bind_method_plan()` 与生成的 DataBind
+HTTP MethodPlan。旧 typed/descriptor 入口及 JSON 中转存储已删除，不提供兼容接口。
+标量、枚举与重复字段的标量集合直接转换为 cserde token；字段名称、默认值、
+校验、集合构造及释放由 BindingPlan/CMeta 描述符统一负责。对象、map 和嵌套集合被拒绝。
+
+调用者提供有界 `DataBindNativeOptions` 工作区、标量 scratch 和未持有资源的暂存帧。
+绑定失败时，已初始化的帧字段恢复为语义空值；绑定成功后再提交业务写入，并按生成类型的
+生命周期接口释放暂存资源。不能向绑定接口传入已有业务对象。完整示例与失败回归见
+[`test_chttp_web_form_plan.c`](tests/test_chttp_web_form_plan.c)。
 
 For cookie/session-authenticated mutations:
 

@@ -1,3 +1,20 @@
+add_executable(chttp_response_owner_test
+  chttp_response_owner_test.c chttp_response_scope_peer.c)
+target_link_libraries(chttp_response_owner_test PRIVATE
+  Salts::CNet Salts::CMeta Salts::TinyTest)
+target_include_directories(chttp_response_owner_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_client/include
+  ${PROJECT_SOURCE_DIR}/http_common/include)
+set_target_properties(chttp_response_owner_test PROPERTIES
+  FOLDER "http_client/tests" C_EXTENSIONS OFF)
+add_test(NAME chttp_response_owner_test COMMAND chttp_response_owner_test)
+
+add_executable(chttp_response_scope_cpp_test chttp_response_scope_cpp_test.cpp)
+target_link_libraries(chttp_response_scope_cpp_test PRIVATE CHttp::Client Salts::TinyTest)
+set_target_properties(chttp_response_scope_cpp_test PROPERTIES
+  FOLDER "http_client/tests" CXX_EXTENSIONS OFF)
+add_test(NAME chttp_response_scope_cpp_test COMMAND chttp_response_scope_cpp_test)
+
 add_executable(chttp_request_test chttp_request_test.c)
 target_link_libraries(chttp_request_test PRIVATE CHttp::Client CHttp::Server llhttp::llhttp_static Salts::TinyTest)
 target_include_directories(chttp_request_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_client/src ${PROJECT_SOURCE_DIR}/http_client/rpc)

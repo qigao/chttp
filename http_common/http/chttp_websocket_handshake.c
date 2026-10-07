@@ -68,7 +68,7 @@ int chttp_websocket_client_key_generate(char *output, size_t output_capacity) {
   unsigned char nonce[CHTTP_WEBSOCKET_NONCE_BYTES];
   int status;
   if (output == NULL || output_capacity < CHTTP_WEBSOCKET_KEY_CAPACITY) return SALTS_EINVAL;
-  status = salts_platform_secure_random(nonce, sizeof(nonce));
+  status = cmeta_platform_secure_random(nonce, sizeof(nonce));
   if (status != SALTS_OK) return status;
   return tn_base64_encode_buf_ex(nonce, sizeof(nonce), output, output_capacity) == TN_BASE64_OK
              ? SALTS_OK

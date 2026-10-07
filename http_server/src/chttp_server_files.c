@@ -1,6 +1,6 @@
 #include "chttp_server_runtime.h"
 
-#include <salts_fs.h>
+#include <cmeta_fs.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -73,10 +73,10 @@ int chttp_server_send_file(chttp_server_response *response, unsigned int status_
 
 int chttp_server_response_file(chttp_server_response *response, unsigned int status_code,
                                const char *content_type, const char *path) {
-  salts_fs_stat_t file_stat = {0};
+  cmeta_fs_stat_t file_stat = {0};
   if (response == NULL || response->impl == NULL || path == NULL || path[0] == '\0')
     return SALTS_EINVAL;
-  const int status = salts_fs_stat(path, &file_stat);
+  const int status = cmeta_fs_stat(path, &file_stat);
   if (status != SALTS_OK) return SALTS_EIO;
   if (!file_stat.is_file) return SALTS_EISDIR;
   if (file_stat.size > SIZE_MAX) return SALTS_EFBIG;

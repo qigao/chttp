@@ -18,8 +18,6 @@ endforeach()
 foreach(forbidden
     "data_bind_create_from_text"
     "data_bind_create_from_file"
-    "tbe_typed_parse"
-    "tbe_typed_descriptor_parse"
     "json_storage"
     "chttp_web_json_writer")
   string(FIND "${source}" "${forbidden}" found)

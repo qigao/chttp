@@ -409,10 +409,10 @@ static int upload_http_raw_send(
 static int upload_http_wait_count(
     const size_t *value, size_t expected) {
   const uint64_t deadline =
-      salts_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+      cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
   if (value == NULL) return SALTS_EINVAL;
-  while (*value < expected && salts_monotonic_ms() < deadline)
-    salts_thread_yield();
+  while (*value < expected && cmeta_monotonic_ms() < deadline)
+    cmeta_thread_yield();
   return *value == expected ? SALTS_OK : SALTS_ETIMEDOUT;
 }
 

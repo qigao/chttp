@@ -5,10 +5,47 @@
     ],
     "configurePresets": [
         {
-            "name": "http-services-package",
+            "name": "vcpkg-cache",
             "hidden": true,
+            "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+            "environment": {
+                "VCPKG_BINARY_SOURCES": "clear;default,readwrite;nugettimeout,1800;nugetconfig,${sourceDir}/cmake/vcpkg-cache.nuget.config,read",
+                "VCPKG_OVERLAY_PORTS": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/ports",
+                "RE2C_ROOT": "$penv{RE2C_ROOT}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
+            }
+        },
+        {
+            "name": "vcpkg-cache-windows",
+            "hidden": true,
+            "inherits": "vcpkg-cache",
             "cacheVariables": {
-                "VCPKG_OVERLAY_PORTS": ""
+                "VCPKG_HOST_TRIPLET": "x64-windows"
+            },
+            "environment": {
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache",
+                "RE2C_ROOT": "$env{PKG_ROOT}/re2c/windows-x64"
+            }
+        },
+        {
+            "name": "vcpkg-cache-linux",
+            "hidden": true,
+            "inherits": "vcpkg-cache",
+            "cacheVariables": {
+                "VCPKG_HOST_TRIPLET": "x64-linux"
+            },
+            "environment": {
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{HOME}/.cache/qigao/vcpkg-cache"
+            }
+        },
+        {
+            "name": "vcpkg-cache-ci",
+            "hidden": true,
+            "inherits": "vcpkg-cache",
+            "environment": {
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+                "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
+                "VCPKG_OVERLAY_PORTS": "$penv{VCPKG_OVERLAY_PORTS}"
             }
         },
         {
@@ -19,13 +56,13 @@
                 "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "VCPKG_ROOT": "$penv{VCPKG_ROOT}"
-            }
+            },
+            "inherits": "vcpkg-cache-windows"
         },
         {
             "name": "win-paths",
             "hidden": true,
             "inherits": "win-toolchain",
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "x64-windows",
@@ -43,7 +80,6 @@
         {
             "name": "linux-paths",
             "hidden": true,
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
                 "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "x64-linux",
@@ -54,7 +90,8 @@
                 "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "VCPKG_ROOT": "$penv{VCPKG_ROOT}"
-            }
+            },
+            "inherits": "vcpkg-cache-linux"
         },
         {
             "name": "android-win-environment",
@@ -70,7 +107,7 @@
             "name": "android-dependencies-debug",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}"
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp-android/debug"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
@@ -81,7 +118,7 @@
             "name": "android-dependencies-release",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}"
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp-android/release"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
@@ -92,16 +129,15 @@
             "name": "win-dev-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/debug",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
-                "http-services-package",
                 "base-win-dev-user",
                 "win-paths"
             ]
@@ -109,16 +145,15 @@
         {
             "name": "win-release-user",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/release",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
-                "http-services-package",
                 "base-win-release-user",
                 "win-paths"
             ]
@@ -127,17 +162,16 @@
             "name": "linux-dev-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "ON",
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/debug",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
-             },
+            },
             "inherits": [
-                "http-services-package",
                 "base-linux-dev-user",
                 "linux-paths"
             ]
@@ -145,17 +179,16 @@
         {
             "name": "linux-release-user",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/release",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": [
-                "http-services-package",
                 "release-linux-ninja",
                 "linux-paths"
             ]
@@ -164,7 +197,7 @@
             "name": "linux-sdk-package",
             "binaryDir": "${sourceDir}/build/linux-gcc-sdk-package",
             "cacheVariables": {
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/release",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
                 "ENABLE_TESTS": "OFF",
@@ -174,11 +207,10 @@
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/linux-gcc-sdk-package/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/linux-gcc-sdk-package/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
             },
             "inherits": [
-                "http-services-package",
                 "release-linux-ninja",
                 "linux-paths"
             ]
@@ -189,7 +221,6 @@
                 "ANDROID_BUILD_VARIANT": "android-arm64-v8a-debug"
             },
             "inherits": [
-                "http-services-package",
                 "android-dependencies-debug",
                 "android-arm64-v8a-debug",
                 "android-win-paths",
@@ -202,7 +233,6 @@
                 "ANDROID_BUILD_VARIANT": "android-arm64-v8a-release"
             },
             "inherits": [
-                "http-services-package",
                 "android-dependencies-release",
                 "android-arm64-v8a-release",
                 "android-win-paths",
@@ -215,7 +245,6 @@
                 "ANDROID_BUILD_VARIANT": "android-x86_64-debug"
             },
             "inherits": [
-                "http-services-package",
                 "android-dependencies-debug",
                 "android-x86_64-debug",
                 "android-win-paths",
@@ -228,7 +257,6 @@
                 "ANDROID_BUILD_VARIANT": "android-x86_64-release"
             },
             "inherits": [
-                "http-services-package",
                 "android-dependencies-release",
                 "android-x86_64-release",
                 "android-win-paths",
@@ -241,7 +269,6 @@
                 "ANDROID_BUILD_VARIANT": "android-x86-debug"
             },
             "inherits": [
-                "http-services-package",
                 "android-dependencies-debug",
                 "android-x86-debug",
                 "android-win-paths",
@@ -254,7 +281,6 @@
                 "ANDROID_BUILD_VARIANT": "android-x86-release"
             },
             "inherits": [
-                "http-services-package",
                 "android-dependencies-release",
                 "android-x86-release",
                 "android-win-paths",
@@ -265,16 +291,15 @@
             "name": "win-clang-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/debug",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/Clang/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
-             },
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Clang/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+            },
             "inherits": [
-                "http-services-package",
                 "base-win-dev-clang-user",
                 "win-paths"
             ]
@@ -284,18 +309,84 @@
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
                 "ENABLE_TESTS": "ON",
-                "CMAKE_INSTALL_PREFIX": "$env{CHTTP_ROOT}",
+                "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/release",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
             "environment": {
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "${sourceDir}/build/Clang-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Clang-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             },
             "inherits": [
-                "http-services-package",
                 "base-win-release-clang-user",
                 "win-paths"
+            ]
+        },
+        {
+            "name": "ci-sdk-release-user",
+            "inherits": [
+                "vcpkg-cache-ci",
+                "pkg-vcpkg",
+                "release-mode"
+            ],
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/native-sdk",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/$env{QIGAO_SDK_RID}",
+                "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
+                "VCPKG_TARGET_TRIPLET": "$env{QIGAO_TARGET_TRIPLET}",
+                "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
+                "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
+                "BUILD_TESTING": false,
+                "BUILD_TESTS": false,
+                "BUILD_EXAMPLES": false,
+                "BUILD_BENCHMARKS": false,
+                "ENABLE_SANITIZER_ADDRESS": false
+            },
+            "environment": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+                "SALTS_ROOT": "$penv{SALTS_ROOT}",
+                "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/native-sdk/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+            }
+        },
+        {
+            "name": "ci-android-sdk-release-user",
+            "inherits": "ci-sdk-release-user",
+            "binaryDir": "${sourceDir}/build/android-native-sdk",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "Android",
+                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+                "ANDROID_ABI": "arm64-v8a",
+                "ANDROID_PLATFORM": "android-26",
+                "ANDROID_STL": "c++_shared"
+            }
+        },
+        {
+            "name": "ci-ios-sdk-release-user",
+            "inherits": "ci-sdk-release-user",
+            "binaryDir": "${sourceDir}/build/$env{QIGAO_SDK_RID}",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "iOS",
+                "CMAKE_OSX_SYSROOT": "$env{QIGAO_IOS_SYSROOT}"
+            },
+            "environment": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-$env{QIGAO_TARGET_TRIPLET}"
+            }
+        },
+        {
+            "name": "ci-linux-dev-user",
+            "inherits": [
+                "vcpkg-cache-ci",
+                "linux-dev-user"
+            ]
+        },
+        {
+            "name": "ci-linux-release-user",
+            "inherits": [
+                "vcpkg-cache-ci",
+                "linux-release-user"
             ]
         }
     ],
@@ -442,6 +533,61 @@
             "targets": [
                 "install"
             ]
+        },
+        {
+            "name": "ci-sdk-release-user",
+            "configurePreset": "ci-sdk-release-user"
+        },
+        {
+            "name": "install-ci-sdk-release-user",
+            "configurePreset": "ci-sdk-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "ci-android-sdk-release-user",
+            "configurePreset": "ci-android-sdk-release-user"
+        },
+        {
+            "name": "install-ci-android-sdk-release-user",
+            "configurePreset": "ci-android-sdk-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "ci-ios-sdk-release-user",
+            "configurePreset": "ci-ios-sdk-release-user"
+        },
+        {
+            "name": "install-ci-ios-sdk-release-user",
+            "configurePreset": "ci-ios-sdk-release-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "ci-linux-dev-user",
+            "configurePreset": "ci-linux-dev-user"
+        },
+        {
+            "name": "install-ci-linux-dev-user",
+            "configurePreset": "ci-linux-dev-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "ci-linux-release-user",
+            "configurePreset": "ci-linux-release-user"
+        },
+        {
+            "name": "install-ci-linux-release-user",
+            "configurePreset": "ci-linux-release-user",
+            "targets": [
+                "install"
+            ]
         }
     ],
     "testPresets": [
@@ -474,6 +620,16 @@
             "name": "win-clang-release-user",
             "inherits": "base-test",
             "configurePreset": "win-clang-release-user"
+        },
+        {
+            "name": "ci-linux-dev-user",
+            "configurePreset": "ci-linux-dev-user",
+            "inherits": "base-test"
+        },
+        {
+            "name": "ci-linux-release-user",
+            "configurePreset": "ci-linux-release-user",
+            "inherits": "base-test"
         }
     ]
 }

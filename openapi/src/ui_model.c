@@ -3,7 +3,7 @@
 #include "internal.h"
 #include "ui_model_internal.h"
 
-#include <salts_cmeta_data.h>
+#include <cmeta_cmeta_data.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -68,9 +68,9 @@ static const cmeta_data_desc OA_UI_VSTR_DATA = {
     .stable_id = "openapi.ui.vstr.data",
     .display_name = "OpenAPI UI text",
     .kind = CMETA_DATA_STRING,
-    .storage_type = &salts_vstr_cmeta_type,
+    .storage_type = &cmeta_vstr_cmeta_type,
     .shape = &OA_UI_VSTR_SHAPE,
-    .buffer_ops = &salts_vstr_cmeta_buffer_ops
+    .buffer_ops = &cmeta_vstr_cmeta_buffer_ops
 };
 
 static const cmeta_type_identity OA_UI_SEQUENCE_IDENTITY =
@@ -85,10 +85,10 @@ static const cmeta_type_desc OA_UI_SEQUENCE_TYPE = {
      _Alignof(field_type_), type_, NULL}
 
 static const cmeta_field_desc OA_UI_PARAMETER_LAYOUT_FIELDS[] = {
-    OA_LAYOUT_FIELD(oa_ui_parameter, name, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, location, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, description, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_parameter, schema_json, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, name, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, location, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, description, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_parameter, schema_json, vstr, "vstr", &cmeta_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_parameter, required, bool, "bool", NULL)
 };
 static const cmeta_struct_desc OA_UI_PARAMETER_LAYOUT = {
@@ -122,16 +122,16 @@ static const cmeta_data_desc OA_UI_PARAMETER_DATA = {
 };
 
 static const cmeta_field_desc OA_UI_OPERATION_LAYOUT_FIELDS[] = {
-    OA_LAYOUT_FIELD(oa_ui_operation, method, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, path, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, operation_id, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, route_key, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, summary, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, description, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, method, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, path, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, operation_id, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, route_key, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, summary, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, description, vstr, "vstr", &cmeta_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, tags, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
     OA_LAYOUT_FIELD(oa_ui_operation, parameters, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
-    OA_LAYOUT_FIELD(oa_ui_operation, request_body_json, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_operation, responses_json, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, request_body_json, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_operation, responses_json, vstr, "vstr", &cmeta_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_operation, deprecated, bool, "bool", NULL)
 };
 static const cmeta_struct_desc OA_UI_OPERATION_LAYOUT = {
@@ -171,10 +171,10 @@ static const cmeta_data_desc OA_UI_OPERATION_DATA = {
 };
 
 static const cmeta_field_desc OA_UI_DOCUMENT_LAYOUT_FIELDS[] = {
-    OA_LAYOUT_FIELD(oa_ui_document, title, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, version, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, openapi_version, vstr, "vstr", &salts_vstr_cmeta_type),
-    OA_LAYOUT_FIELD(oa_ui_document, server_url, vstr, "vstr", &salts_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, title, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, version, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, openapi_version, vstr, "vstr", &cmeta_vstr_cmeta_type),
+    OA_LAYOUT_FIELD(oa_ui_document, server_url, vstr, "vstr", &cmeta_vstr_cmeta_type),
     OA_LAYOUT_FIELD(oa_ui_document, operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE),
     OA_LAYOUT_FIELD(oa_ui_document, selected_operations, oa_ui_sequence_view, "oa_ui_sequence_view", &OA_UI_SEQUENCE_TYPE)
 };

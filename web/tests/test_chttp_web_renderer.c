@@ -2,7 +2,7 @@
 #include "tinytest.h"
 
 #include <cmeta/struct.h>
-#include <salts_cmeta_data.h>
+#include <cmeta_cmeta_data.h>
 #include <vstr.h>
 
 #include <stddef.h>
@@ -20,9 +20,9 @@ static const cmeta_data_desc WEB_VSTR_DATA = {
   .stable_id = "chttp.web.vstr.data",
   .display_name = "CHttp Web borrowed vstr",
   .kind = CMETA_DATA_STRING,
-  .storage_type = &salts_vstr_cmeta_type,
+  .storage_type = &cmeta_vstr_cmeta_type,
   .shape = &WEB_VSTR_SHAPE,
-  .buffer_ops = &salts_vstr_cmeta_buffer_ops
+  .buffer_ops = &cmeta_vstr_cmeta_buffer_ops
 };
 
 typedef struct web_test_model {

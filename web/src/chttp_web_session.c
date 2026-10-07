@@ -78,7 +78,7 @@ static chttp_web_status chttp_web_csrf_write(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0, 0u,
         "CSRF session and output are required");
 
-  status = salts_secure_random(random, sizeof(random));
+  status = cmeta_secure_random(random, sizeof(random));
   if (status != SALTS_OK) {
     OPENSSL_cleanse(random, sizeof(random));
     return chttp_web_session_status(

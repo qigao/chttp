@@ -1,12 +1,13 @@
 #include <chttp_service/service.h>
 
 #include <salts/error_codes.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 #include <data_bind_plugin_execution.h>
 
 #include <cserde/cserde.h>
 #include <cflow/plan.h>
 #include <cmeta/data.h>
+#include <salts/plugin_scope.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -27,8 +28,9 @@ typedef struct chttp_service_method_record {
   cflow_executor *executor;
   cflow_plan cflow_plan;
 
-  salts_plugin_registry *plugin_registry;
-  salts_plugin_lease plugin_lease;
+  cmeta_plugin_lease plugin_lease;
+  cmeta_plugin_cleanup_lease plugin_owner;
+  cmeta_cleanup plugin_cleanup;
   DataBindPluginOperationBinding plugin_operation;
   DataBindServiceNativeBinding plugin_native;
   DataBindNativeExecution plugin_execution;
@@ -1039,13 +1041,12 @@ static int chttp_service_cflow_admit(
 
 static int chttp_service_plugin_resolve(
     chttp_service_method_record *record,
-    salts_plugin_registry *registry,
-    salts_plugin_ref ref,
+    cmeta_plugin_registry *registry,
+    cmeta_plugin_ref ref,
     const char *export_id) {
-  salts_plugin_lease lease = {0};
-  const salts_plugin_manifest *manifest = NULL;
-  const salts_plugin_export *catalog_entry = NULL;
-  const salts_plugin_export *function_entry = NULL;
+  const cmeta_plugin_manifest *manifest = NULL;
+  const cmeta_plugin_export *catalog_entry = NULL;
+  const cmeta_plugin_export *function_entry = NULL;
   data_bind_plugin_catalog *catalog = NULL;
   DataBindPluginOperationBinding operation =
       DATA_BIND_PLUGIN_OPERATION_BINDING_INIT;
@@ -1057,33 +1058,40 @@ static int chttp_service_plugin_resolve(
   int found = 0;
 
   if (record == NULL || registry == NULL ||
-      !salts_plugin_ref_valid(ref) ||
+      !cmeta_plugin_ref_valid(ref) ||
       export_id == NULL || export_id[0] == '\0')
     return SALTS_EINVAL;
 
-  if (salts_plugin_registry_acquire(
-          registry, ref, &lease, &manifest) != SALTS_PLUGIN_OK)
+  if (cmeta_plugin_registry_acquire(
+          registry, ref, &record->plugin_lease, &manifest) != CMETA_PLUGIN_OK)
     return SALTS_EINVAL;
 
+  /* The fixed-capacity method slot owns the lease from acquisition onward.
+   * Mount rollback and Service destruction discharge the same obligation;
+   * its owner and lease addresses remain stable until then. */
+  record->plugin_owner.registry = registry;
+  record->plugin_owner.lease = &record->plugin_lease;
+  if (cmeta_plugin_cleanup_arm(
+          &record->plugin_cleanup, &record->plugin_owner) != CMETA_OK)
+    abort();
+
   if (manifest == NULL ||
-      salts_plugin_manifest_find_export(
+      cmeta_plugin_manifest_find_export(
           manifest, DATA_BIND_PLUGIN_CATALOG_EXPORT_ID,
-          &catalog_entry) != SALTS_PLUGIN_OK ||
+          &catalog_entry) != CMETA_PLUGIN_OK ||
       catalog_entry == NULL ||
-      salts_plugin_export_require_interface(
+      cmeta_plugin_export_require_interface(
           catalog_entry,
           DATA_BIND_PLUGIN_CATALOG_CONTRACT_ID,
           DATA_BIND_PLUGIN_CATALOG_CONTRACT_VERSION,
           0u,
-          data_bind_plugin_catalog_interface()) != SALTS_PLUGIN_OK) {
-    (void)salts_plugin_registry_release(registry, &lease);
+          data_bind_plugin_catalog_interface()) != CMETA_PLUGIN_OK) {
     return SALTS_EINVAL;
   }
 
   catalog =
       (data_bind_plugin_catalog *)catalog_entry->value.interface.value;
   if (!data_bind_plugin_catalog_valid(catalog)) {
-    (void)salts_plugin_registry_release(registry, &lease);
     return SALTS_EINVAL;
   }
 
@@ -1098,33 +1106,24 @@ static int chttp_service_plugin_resolve(
       continue;
     if (strcmp(candidate.export_id, export_id) != 0)
       continue;
-    if (found) {
-      (void)salts_plugin_registry_release(registry, &lease);
-      return SALTS_EINVAL;
-    }
+    if (found) return SALTS_EINVAL;
     operation = candidate;
     found = 1;
   }
 
   if (!found ||
-      salts_plugin_manifest_find_export(
-          manifest, export_id, &function_entry) != SALTS_PLUGIN_OK ||
+      cmeta_plugin_manifest_find_export(
+          manifest, export_id, &function_entry) != CMETA_PLUGIN_OK ||
       function_entry == NULL ||
       !data_bind_plugin_operation_execution_admit(
           &operation, function_entry, &execution)) {
-    (void)salts_plugin_registry_release(registry, &lease);
     return SALTS_EINVAL;
   }
 
-  record->plugin_registry = registry;
-  record->plugin_lease = lease;
   record->plugin_operation = operation;
   record->plugin_execution = execution;
   if (!data_bind_plugin_operation_native_binding(
           &record->plugin_operation, &record->plugin_native)) {
-    (void)salts_plugin_registry_release(registry, &record->plugin_lease);
-    memset(&record->plugin_lease, 0, sizeof(record->plugin_lease));
-    record->plugin_registry = NULL;
     return SALTS_EINVAL;
   }
 
@@ -1137,10 +1136,7 @@ static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
-  if (record->plugin_registry != NULL &&
-      salts_plugin_lease_valid(record->plugin_lease))
-    (void)salts_plugin_registry_release(
-        record->plugin_registry, &record->plugin_lease);
+  cmeta_cleanup_run(&record->plugin_cleanup);
   memset(record, 0, sizeof(*record));
 }
 
@@ -1770,13 +1766,13 @@ int chttp_service_mount_http(
         mount->executor == NULL ||
         !cflow_executor_valid(mount->executor) ||
         mount->plugin_registry == NULL ||
-        !salts_plugin_ref_valid(mount->plugin_ref) ||
+        !cmeta_plugin_ref_valid(mount->plugin_ref) ||
         mount->plugin_export_id == NULL ||
         mount->plugin_export_id[0] == '\0')
       return SALTS_EINVAL;
   } else {
     if (mount->plugin_registry != NULL ||
-        salts_plugin_ref_valid(mount->plugin_ref) ||
+        cmeta_plugin_ref_valid(mount->plugin_ref) ||
         mount->plugin_export_id != NULL ||
         mount->native_binding == NULL)
       return SALTS_EINVAL;

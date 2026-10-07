@@ -204,7 +204,7 @@ int chttp_session_store_init(chttp_server_impl *server) {
           server->session_values + flat * value_stride;
     }
   }
-  salts_mutex_init(&server->session_mutex);
+  cmeta_mutex_init(&server->session_mutex);
   server->session_sync_initialized = true;
   return SALTS_OK;
 }
@@ -212,7 +212,7 @@ int chttp_session_store_init(chttp_server_impl *server) {
 void chttp_session_store_destroy(chttp_server_impl *server) {
   if (server == NULL) return;
   if (server->session_sync_initialized) {
-    salts_mutex_destroy(&server->session_mutex);
+    cmeta_mutex_destroy(&server->session_mutex);
     server->session_sync_initialized = false;
   }
   free(server->session_values);
@@ -323,9 +323,9 @@ void chttp_session_request_begin(chttp_server_request_state *state,
   id = chttp_session_cookie_value(server, request, &id_size);
   if (!chttp_session_hex_id(id, id_size)) return;
   context->presented = true;
-  now_ms = salts_monotonic_ms();
+  now_ms = cmeta_monotonic_ms();
 
-  salts_mutex_lock(&server->session_mutex);
+  cmeta_mutex_lock(&server->session_mutex);
   chttp_session_expire_locked(server, now_ms);
   for (index = 0u; index < server->config.session_capacity; ++index) {
     chttp_session_record *record = &server->sessions[index];
@@ -339,7 +339,7 @@ void chttp_session_request_begin(chttp_server_request_state *state,
       break;
     }
   }
-  salts_mutex_unlock(&server->session_mutex);
+  cmeta_mutex_unlock(&server->session_mutex);
 }
 
 static bool chttp_session_id_exists_locked(const chttp_server_impl *server,
@@ -363,7 +363,7 @@ static int chttp_session_generate_id_locked(
   if (server == NULL || out_id == NULL) return SALTS_EINVAL;
   out_id[0] = '\0';
   for (attempt = 0u; attempt < CHTTP_SESSION_ID_ATTEMPTS; ++attempt) {
-    int status = salts_platform_secure_random(random, sizeof(random));
+    int status = cmeta_platform_secure_random(random, sizeof(random));
     if (status != SALTS_OK) return status;
     for (index = 0u; index < sizeof(random); ++index) {
       out_id[index * 2u] = hex[random[index] >> 4u];
@@ -384,8 +384,8 @@ static int chttp_session_create(chttp_session_context *context) {
   int status;
   if (context == NULL || context->server == NULL) return SALTS_EINVAL;
 
-  now_ms = salts_monotonic_ms();
-  salts_mutex_lock(&context->server->session_mutex);
+  now_ms = cmeta_monotonic_ms();
+  cmeta_mutex_lock(&context->server->session_mutex);
   chttp_session_expire_locked(context->server, now_ms);
   for (record_index = 0u;
        record_index < context->server->config.session_capacity;
@@ -396,13 +396,13 @@ static int chttp_session_create(chttp_session_context *context) {
     }
   }
   if (record == NULL) {
-    salts_mutex_unlock(&context->server->session_mutex);
+    cmeta_mutex_unlock(&context->server->session_mutex);
     return SALTS_ENOBUFS;
   }
 
   status = chttp_session_generate_id_locked(context->server, id);
   if (status != SALTS_OK) {
-    salts_mutex_unlock(&context->server->session_mutex);
+    cmeta_mutex_unlock(&context->server->session_mutex);
     return status;
   }
 
@@ -419,7 +419,7 @@ static int chttp_session_create(chttp_session_context *context) {
   context->invalidated = false;
   context->dirty = false;
   chttp_session_snapshot_clear(context);
-  salts_mutex_unlock(&context->server->session_mutex);
+  cmeta_mutex_unlock(&context->server->session_mutex);
   return SALTS_OK;
 }
 
@@ -526,16 +526,16 @@ int chttp_session_regenerate(chttp_session *session) {
   if (context == NULL || context->invalidated) return SALTS_EINVAL;
   if (context->record == NULL) return chttp_session_create(context);
 
-  salts_mutex_lock(&context->server->session_mutex);
+  cmeta_mutex_lock(&context->server->session_mutex);
   if (!chttp_session_record_matches(context)) {
-    salts_mutex_unlock(&context->server->session_mutex);
+    cmeta_mutex_unlock(&context->server->session_mutex);
     return SALTS_ENOENT;
   }
   status = chttp_session_generate_id_locked(context->server, id);
   if (status == SALTS_OK) {
     memcpy(context->record->id, id, sizeof(id));
     context->record->expires_at_ms =
-        chttp_session_expiry(context->server, salts_monotonic_ms());
+        chttp_session_expiry(context->server, cmeta_monotonic_ms());
     context->record->generation =
         chttp_session_generation_next(context->record->generation);
     context->record_generation = context->record->generation;
@@ -543,7 +543,7 @@ int chttp_session_regenerate(chttp_session *session) {
     context->created = true;
     context->presented = false;
   }
-  salts_mutex_unlock(&context->server->session_mutex);
+  cmeta_mutex_unlock(&context->server->session_mutex);
   return status;
 }
 
@@ -551,10 +551,10 @@ int chttp_session_invalidate(chttp_session *session) {
   chttp_session_context *context = chttp_session_context_get(session);
   if (context == NULL) return SALTS_EINVAL;
   if (context->record != NULL) {
-    salts_mutex_lock(&context->server->session_mutex);
+    cmeta_mutex_lock(&context->server->session_mutex);
     if (chttp_session_record_matches(context))
       chttp_session_record_clear(context->server, context->record);
-    salts_mutex_unlock(&context->server->session_mutex);
+    cmeta_mutex_unlock(&context->server->session_mutex);
   }
   context->record = NULL;
   context->record_generation = 0u;
@@ -587,10 +587,10 @@ static void chttp_session_discard_created(chttp_session_context *context) {
   if (context == NULL || context->server == NULL || !context->created ||
       context->record == NULL)
     return;
-  salts_mutex_lock(&context->server->session_mutex);
+  cmeta_mutex_lock(&context->server->session_mutex);
   if (chttp_session_record_matches(context))
     chttp_session_record_clear(context->server, context->record);
-  salts_mutex_unlock(&context->server->session_mutex);
+  cmeta_mutex_unlock(&context->server->session_mutex);
   context->record = NULL;
   context->record_generation = 0u;
   context->id[0] = '\0';
@@ -612,7 +612,7 @@ int chttp_session_request_finish(chttp_server_request_state *state) {
     return chttp_session_set_cookie(state, "", 0u);
   if (context->record == NULL) return SALTS_OK;
 
-  salts_mutex_lock(&context->server->session_mutex);
+  cmeta_mutex_lock(&context->server->session_mutex);
   if (!chttp_session_record_matches(context)) {
     stale = 1;
     id[0] = '\0';
@@ -620,10 +620,10 @@ int chttp_session_request_finish(chttp_server_request_state *state) {
     if (context->dirty)
       chttp_session_record_from_snapshot(context, context->record);
     context->record->expires_at_ms =
-        chttp_session_expiry(context->server, salts_monotonic_ms());
+        chttp_session_expiry(context->server, cmeta_monotonic_ms());
     memcpy(id, context->record->id, sizeof(id));
   }
-  salts_mutex_unlock(&context->server->session_mutex);
+  cmeta_mutex_unlock(&context->server->session_mutex);
 
   if (stale) {
     context->record = NULL;

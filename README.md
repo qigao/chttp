@@ -109,17 +109,34 @@ Requirements:
 - Ninja
 - vcpkg
 - C11/C++17 compiler
-- matching installed Salts and SaltsUtils SDK profiles
+- matching SDK profiles from the latest published Salts and SaltsUtils packages
+- .NET SDK 8 for the native SDK restore scripts
 
 Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, and `VCPKG_ROOT` before configuration.
 DataBind/TBE are components of the SaltsUtils installation. CHTTP consumes the
 concrete `Salts::DataBind` target from `find_package(SaltsUtils CONFIG REQUIRED)`.
 
-CI checks out both Salts and SaltsUtils from `master`. Each run records the
-resolved dependency commits for build provenance and cache identity; those
-commits are not dependency version constraints.
+Local and CI builds use the [shared vcpkg cache](https://github.com/qigao/vcpkg-cache).
+On Windows its checkout belongs at `%LOCALAPPDATA%/qigao/vcpkg-cache`; on Linux,
+`$HOME/.cache/qigao/vcpkg-cache` (NuGet binary restore also requires Mono).
+The hidden `vcpkg-cache` preset owns the outer toolchain, overlay ports, read-only
+GitHub Packages feed and writable local binary cache. Provide `GITHUB_TOKEN`
+with `read:packages` in the parent environment; credentials are never stored in
+presets. Existing vcpkg baseline and manifest dependencies remain authoritative.
 
-Windows Release:
+CI restores the latest published Salts and SaltsUtils packages with floating
+NuGet versions and `--no-cache --force-evaluate`. SDK roots come from that
+restore's `project.assets.json`, so older cached payloads cannot select an SDK.
+CI presets inherit the cache environment supplied by the setup action; native
+packaging uses `ci-sdk-release-user` and its Android/iOS variants.
+
+For a local Windows restore, use PowerShell 7, put .NET SDK 8 on `PATH`, set `GITHUB_TOKEN`, then
+run `./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64 -Local` in the same
+PowerShell session used for the build. It sets `SALTS_ROOT` and
+`SALTS_UTILS_ROOT` to the resolved SDKs without overwriting installed packages.
+
+Windows Release (enter the Visual Studio `VsDevCmd.bat` environment first,
+retaining the configured dependency roots and `VCPKG_ROOT`):
 
 ```powershell
 cmake --preset win-release-user
@@ -130,7 +147,42 @@ cmake --build --preset install-win-release-user
 
 Linux uses the corresponding `linux-*` presets.
 
-The current presets retain the historical environment variable `CHTTP_ROOT` as the install-prefix variable. It names the CHTTP package root; it should not be interpreted as a separate runtime or repository boundary.
+Local install presets derive their destination from
+`$PROJECT_ROOT/external/pkgs/chttp/debug|release`; Android uses `chttp-android`.
+`CHTTP_ROOT` remains the downstream consumer's explicit CHTTP SDK root. SDK
+packaging retains `stage/sdk/<RID>`. After changing the toolchain or SDK roots,
+reconfigure with `cmake --preset win-release-user --fresh` before building.
+
+### CMeta reflection and plugin lifetime
+
+The 2.1 migration also uses the published `cmeta_*` platform/file APIs,
+`<cmeta_buffer.h>`, `<cmeta_fs.h>` and `<cmeta_uuid.h>`. Existing `mem_*`
+buffer operations, `SALTS_*` error codes and `Salts::*` CMake targets keep their
+published names. Typed declarations use `cmeta_type` and `cmeta_function`.
+
+Service and RPC continue to use producer-owned CMeta Function/Data descriptors
+and exact DataBind adapters. Service mount performs admission before publishing
+a route; request workers use the cached execution binding under its retained
+plugin lease. Salts 2.x plugin types/functions use `cmeta_plugin_*` and
+`CMETA_PLUGIN_*`; the runtime headers remain `<salts/plugin.h>` and the target
+remains `Salts::Plugin`.
+
+Service method slots use the CMeta cleanup obligation and Plugin lease adapter
+from `<salts/plugin_scope.h>`. Each successful acquisition arms exactly one
+obligation. Failed mount and Service destruction share its discharge path;
+cleanup runs after dependent CFlow state is destroyed. The registry must remain
+at a stable address until Service destruction, after server/executor drain.
+Lease release invariant violations fail fast instead of being silently ignored.
+
+Rebuild Service consumers and generated plugins together against matching
+SDKs; old `salts_plugin_*` source names and earlier reflection/plugin ABI epochs
+are not accepted. HTTP/RPC formats, export IDs and route semantics are unchanged.
+The Service HTTP test covers rejected export cleanup, successful mount retention,
+stop/admission closure and final unload.
+
+Always restore the latest Salts and SaltsUtils packages together, then regenerate
+IDL bindings and rebuild consumers against those SDKs. CMake does not pin or
+constrain their versions.
 
 ## Using CHTTP from CMake
 

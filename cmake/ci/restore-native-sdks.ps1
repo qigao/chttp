@@ -1,15 +1,16 @@
-param([Parameter(Mandatory=$true)][string]$Rid)
+param([Parameter(Mandatory=$true)][string]$Rid, [switch]$Local)
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) { throw "GITHUB_TOKEN is required" }
-$packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $env:RUNNER_TEMP "qigao-nuget" }
-$config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
-$project = Join-Path $env:RUNNER_TEMP "qigao-chttp-sdk-restore.csproj"
-@'
-<?xml version="1.0" encoding="utf-8"?>
-<configuration><packageSources><clear /></packageSources></configuration>
-'@ | Set-Content -LiteralPath $config
-dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
-if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages" }
+if (-not $Local -and (-not $env:RUNNER_TEMP -or -not $env:GITHUB_ENV)) {
+  throw "RUNNER_TEMP and GITHUB_ENV are required in CI"
+}
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../.."))
+$restoreRoot = if ($Local) { Join-Path $repositoryRoot "build/native-sdk" } else { $env:RUNNER_TEMP }
+$packages = if ($env:QIGAO_NUGET_PACKAGES) { $env:QIGAO_NUGET_PACKAGES } else { Join-Path $restoreRoot "qigao-nuget" }
+$packages = [IO.Path]::GetFullPath($packages)
+$config = Join-Path $repositoryRoot "cmake/vcpkg-cache.nuget.config"
+$project = Join-Path $restoreRoot "qigao-chttp-sdk-restore.csproj"
+New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
 @'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -24,17 +25,12 @@ if ($LASTEXITCODE -ne 0) { throw "failed to configure GitHub Packages" }
 '@ | Set-Content -LiteralPath $project
 dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
+$assets = Get-Content -LiteralPath (Join-Path $restoreRoot "obj/project.assets.json") -Raw | ConvertFrom-Json -AsHashtable
 function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
-  $packageRoot = Join-Path $packages $packageName
-  $roots = @(
-    Get-ChildItem -LiteralPath $packageRoot -Directory |
-      ForEach-Object { Join-Path $_.FullName "sdk\$rid" } |
-      Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-  )
-  if ($roots.Count -ne 1) {
-    throw "expected exactly one restored $packageName SDK for $rid, found $($roots.Count)"
-  }
-  return $roots[0]
+  $keys = @($assets.libraries.Keys | Where-Object { $_.StartsWith("$packageName/", [StringComparison]::OrdinalIgnoreCase) })
+  if ($keys.Count -ne 1) { throw "expected one resolved $packageName package" }
+  Write-Host "restored $($keys[0]) for $rid"
+  return Join-Path (Join-Path $packages $assets.libraries[$keys[0]].path) "sdk/$rid"
 }
 
 $saltsRoot = Get-RestoredSdkRoot "salts.native" $Rid
@@ -52,6 +48,11 @@ $nativeBinding = Join-Path $utilsRoot "include\data_bind_native_binding.h"
 if ((Get-Content -LiteralPath $nativeBinding -Raw) -notmatch "DataBindNativeExecution") {
   throw "restored SaltsUtils SDK does not publish DataBindNativeExecution"
 }
-"SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
-"SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
-"QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
+$env:SALTS_ROOT = $saltsRoot
+$env:SALTS_UTILS_ROOT = $utilsRoot
+$env:QIGAO_NUGET_PACKAGES = $packages
+if (-not $Local) {
+  "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+  "SALTS_UTILS_ROOT=$utilsRoot" >> $env:GITHUB_ENV
+  "QIGAO_NUGET_PACKAGES=$packages" >> $env:GITHUB_ENV
+}

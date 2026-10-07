@@ -10,15 +10,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct chttp_web_form_plan_reader {
-  cserde_token token;
-  int emitted;
-} chttp_web_form_plan_reader;
+typedef enum chttp_web_form_plan_phase {
+  CHTTP_WEB_FORM_PLAN_BEGIN,
+  CHTTP_WEB_FORM_PLAN_VALUES,
+  CHTTP_WEB_FORM_PLAN_DONE
+} chttp_web_form_plan_phase;
 
 typedef struct chttp_web_form_plan_provider {
   const chttp_web_form *form;
   const chttp_web_form_plan_options *options;
-  chttp_web_form_plan_reader scalar;
+  const char *name;
+  const cmeta_data_desc *element;
+  size_t position;
+  int collection;
+  chttp_web_form_plan_phase phase;
 } chttp_web_form_plan_provider;
 
 static chttp_web_status chttp_web_form_plan_fail(
@@ -50,22 +55,6 @@ static void chttp_web_form_plan_bind_error(
       message != NULL ? message : "");
 }
 
-static cserde_status chttp_web_form_plan_next(
-    void *context, cserde_token *out) {
-  chttp_web_form_plan_reader *reader =
-      (chttp_web_form_plan_reader *)context;
-  if (reader == NULL || out == NULL) return CSERDE_INVALID_ARGUMENT;
-  if (reader->emitted) return CSERDE_DONE;
-  *out = reader->token;
-  reader->emitted = 1;
-  return CSERDE_OK;
-}
-
-static const cserde_reader_ops CHTTP_WEB_FORM_PLAN_READER_OPS = {
-    offsetof(cserde_reader_ops, next) + sizeof(cserde_reader_next_fn),
-    CSERDE_READER_OPS_ABI_VERSION,
-    chttp_web_form_plan_next};
-
 static int chttp_web_form_plan_view_name(
     chttp_web_string_view value, const char *name) {
   size_t size;
@@ -75,137 +64,111 @@ static int chttp_web_form_plan_view_name(
          (size == 0u || memcmp(value.data, name, size) == 0);
 }
 
-static DataBindStatus chttp_web_form_plan_scalar_reader(
+static cserde_status chttp_web_form_plan_scalar_token(
     chttp_web_form_plan_provider *provider,
-    const DataBindBindingPlanEntry *entry,
+    const cmeta_data_desc *data,
     chttp_web_string_view value,
-    cserde_reader *reader,
-    DataBindError *error) {
+    cserde_token *token) {
   char *end = NULL;
-  char *scratch;
+  char *scratch = provider->options->scalar_storage;
 
-  if (provider == NULL || provider->options == NULL ||
-      entry == NULL || entry->data == NULL || reader == NULL)
-    return DATA_BIND_ERR_INVALID_ARG;
-
-  provider->scalar = (chttp_web_form_plan_reader){0};
-  scratch = provider->options->scalar_storage;
-
-  switch (entry->data->kind) {
-  case CMETA_DATA_BOOL:
-    provider->scalar.token.kind = CSERDE_BOOL;
-    if ((value.size == 4u && memcmp(value.data, "true", 4u) == 0) ||
-        (value.size == 1u && value.data[0] == '1'))
-      provider->scalar.token.value.boolean = true;
-    else if ((value.size == 5u && memcmp(value.data, "false", 5u) == 0) ||
-             (value.size == 1u && value.data[0] == '0'))
-      provider->scalar.token.value.boolean = false;
-    else {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid boolean form value");
-      return DATA_BIND_ERR_PARSE;
-    }
-    break;
-
-  case CMETA_DATA_SINT: {
-    long long parsed;
-    if (value.size == 0u || scratch == NULL ||
-        value.size >= provider->options->scalar_capacity ||
-        memchr(value.data, '\0', value.size) != NULL) {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid signed integer form value");
-      return DATA_BIND_ERR_PARSE;
-    }
+  *token = (cserde_token){0};
+  if (data->kind == CMETA_DATA_SINT || data->kind == CMETA_DATA_UINT ||
+      data->kind == CMETA_DATA_FLOAT) {
+    if (value.size == 0u || memchr(value.data, '\0', value.size) != NULL)
+      return CSERDE_INVALID_TOKEN;
+    if (value.size >= provider->options->scalar_capacity)
+      return CSERDE_LIMIT_EXCEEDED;
     memcpy(scratch, value.data, value.size);
     scratch[value.size] = '\0';
     errno = 0;
-    parsed = strtoll(scratch, &end, 10);
-    if (errno != 0 || end != scratch + value.size) {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid signed integer form value");
-      return DATA_BIND_ERR_PARSE;
-    }
-    provider->scalar.token.kind = CSERDE_SINT;
-    provider->scalar.token.value.sint = (int64_t)parsed;
+  }
+
+  switch (data->kind) {
+  case CMETA_DATA_BOOL:
+    token->kind = CSERDE_BOOL;
+    if ((value.size == 4u && memcmp(value.data, "true", 4u) == 0) ||
+        (value.size == 1u && value.data[0] == '1'))
+      token->value.boolean = true;
+    else if ((value.size == 5u && memcmp(value.data, "false", 5u) == 0) ||
+             (value.size == 1u && value.data[0] == '0'))
+      token->value.boolean = false;
+    else
+      return CSERDE_INVALID_TOKEN;
+    break;
+
+  case CMETA_DATA_SINT: {
+    const long long parsed = strtoll(scratch, &end, 10);
+    if (errno != 0 || end != scratch + value.size) return CSERDE_INVALID_TOKEN;
+    token->kind = CSERDE_SINT;
+    token->value.sint = (int64_t)parsed;
     break;
   }
 
   case CMETA_DATA_UINT: {
     unsigned long long parsed;
-    if (value.size == 0u || value.data[0] == '-' || scratch == NULL ||
-        value.size >= provider->options->scalar_capacity ||
-        memchr(value.data, '\0', value.size) != NULL) {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid unsigned integer form value");
-      return DATA_BIND_ERR_PARSE;
-    }
-    memcpy(scratch, value.data, value.size);
-    scratch[value.size] = '\0';
-    errno = 0;
+    if (value.data[0] == '-') return CSERDE_INVALID_TOKEN;
     parsed = strtoull(scratch, &end, 10);
-    if (errno != 0 || end != scratch + value.size) {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid unsigned integer form value");
-      return DATA_BIND_ERR_PARSE;
-    }
-    provider->scalar.token.kind = CSERDE_UINT;
-    provider->scalar.token.value.uint = (uint64_t)parsed;
+    if (errno != 0 || end != scratch + value.size) return CSERDE_INVALID_TOKEN;
+    token->kind = CSERDE_UINT;
+    token->value.uint = (uint64_t)parsed;
     break;
   }
 
   case CMETA_DATA_FLOAT: {
-    double parsed;
-    if (value.size == 0u || scratch == NULL ||
-        value.size >= provider->options->scalar_capacity ||
-        memchr(value.data, '\0', value.size) != NULL) {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid floating form value");
-      return DATA_BIND_ERR_PARSE;
-    }
-    memcpy(scratch, value.data, value.size);
-    scratch[value.size] = '\0';
-    errno = 0;
-    parsed = strtod(scratch, &end);
-    if (errno != 0 || end != scratch + value.size) {
-      chttp_web_form_plan_bind_error(
-          error, DATA_BIND_ERR_PARSE, "invalid floating form value");
-      return DATA_BIND_ERR_PARSE;
-    }
-    provider->scalar.token.kind = CSERDE_FLOAT;
-    provider->scalar.token.value.floating = parsed;
+    const double parsed = strtod(scratch, &end);
+    if (errno != 0 || end != scratch + value.size) return CSERDE_INVALID_TOKEN;
+    token->kind = CSERDE_FLOAT;
+    token->value.floating = parsed;
     break;
   }
 
   case CMETA_DATA_STRING:
   case CMETA_DATA_ENUM:
-    provider->scalar.token.kind = CSERDE_STRING;
-    provider->scalar.token.value.slice.data =
-        (const unsigned char *)value.data;
-    provider->scalar.token.value.slice.size = value.size;
-    provider->scalar.token.value.slice.lifetime = CSERDE_VIEW_STABLE;
-    break;
-
   case CMETA_DATA_BYTES:
-    provider->scalar.token.kind = CSERDE_BYTES;
-    provider->scalar.token.value.slice.data =
-        (const unsigned char *)value.data;
-    provider->scalar.token.value.slice.size = value.size;
-    provider->scalar.token.value.slice.lifetime = CSERDE_VIEW_STABLE;
+    token->kind = data->kind == CMETA_DATA_BYTES ? CSERDE_BYTES : CSERDE_STRING;
+    token->value.slice.data = (const unsigned char *)value.data;
+    token->value.slice.size = value.size;
+    token->value.slice.lifetime = CSERDE_VIEW_STABLE;
     break;
 
   default:
-    chttp_web_form_plan_bind_error(
-        error, DATA_BIND_ERR_TYPE_MISMATCH,
-        "generated form field type is unsupported");
-    return DATA_BIND_ERR_TYPE_MISMATCH;
+    return CSERDE_UNSUPPORTED;
   }
-
-  return cserde_reader_init(
-             reader, &CHTTP_WEB_FORM_PLAN_READER_OPS,
-             &provider->scalar) == CSERDE_OK
-             ? DATA_BIND_OK
-             : DATA_BIND_ERR_RUNTIME;
+  return CSERDE_OK;
 }
+
+/* A reader borrows the parsed form for one synchronous bind; iteration is
+ * linear in the pair count and never allocates a second payload or JSON tree. */
+static cserde_status chttp_web_form_plan_next(void *context, cserde_token *out) {
+  chttp_web_form_plan_provider *provider = context;
+  if (provider == NULL || out == NULL) return CSERDE_INVALID_ARGUMENT;
+  *out = (cserde_token){0};
+  if (provider->phase == CHTTP_WEB_FORM_PLAN_DONE) return CSERDE_DONE;
+  if (provider->phase == CHTTP_WEB_FORM_PLAN_BEGIN) {
+    provider->phase = CHTTP_WEB_FORM_PLAN_VALUES;
+    if (provider->collection) {
+      out->kind = CSERDE_ARRAY_BEGIN;
+      return CSERDE_OK;
+    }
+  }
+  while (provider->position < provider->form->pair_count) {
+    const chttp_web_form_pair *pair =
+        &provider->form->pairs[provider->position++];
+    if (!chttp_web_form_plan_view_name(pair->name, provider->name)) continue;
+    return chttp_web_form_plan_scalar_token(
+               provider, provider->element, pair->value, out);
+  }
+  provider->phase = CHTTP_WEB_FORM_PLAN_DONE;
+  if (!provider->collection) return CSERDE_DONE;
+  out->kind = CSERDE_ARRAY_END;
+  return CSERDE_OK;
+}
+
+static const cserde_reader_ops CHTTP_WEB_FORM_PLAN_READER_OPS = {
+    offsetof(cserde_reader_ops, next) + sizeof(cserde_reader_next_fn),
+    CSERDE_READER_OPS_ABI_VERSION,
+    chttp_web_form_plan_next};
 
 static DataBindStatus chttp_web_form_plan_open_input(
     void *context, const DataBindBindingPlanEntry *entry,
@@ -213,33 +176,42 @@ static DataBindStatus chttp_web_form_plan_open_input(
     DataBindError *error) {
   chttp_web_form_plan_provider *provider =
       (chttp_web_form_plan_provider *)context;
-  const chttp_web_form_pair *pair;
   size_t count;
 
   if (provider == NULL || provider->form == NULL || entry == NULL ||
       entry->address.name == NULL || entry->address.name[0] == '\0' ||
-      reader == NULL || state == NULL)
+      entry->data == NULL || reader == NULL || state == NULL)
     return DATA_BIND_ERR_INVALID_ARG;
 
   *state = DATA_BIND_VALUE_STATE_ABSENT;
   count = chttp_web_form_count(provider->form, entry->address.name);
   if (count == 0u) return DATA_BIND_OK;
-  if (count != 1u) {
+  provider->collection = entry->data->kind == CMETA_DATA_SEQUENCE;
+  provider->element = provider->collection
+      ? cmeta_data_collection_element_data(entry->data) : entry->data;
+  if (provider->element == NULL ||
+      provider->element->kind == CMETA_DATA_SEQUENCE ||
+      provider->element->kind == CMETA_DATA_MAP ||
+      provider->element->kind == CMETA_DATA_STRUCT) {
+    chttp_web_form_plan_bind_error(
+        error, DATA_BIND_ERR_TYPE_MISMATCH,
+        "generated form requires scalar fields or scalar collections");
+    return DATA_BIND_ERR_TYPE_MISMATCH;
+  }
+  if (!provider->collection && count != 1u) {
     chttp_web_form_plan_bind_error(
         error, DATA_BIND_ERR_PARSE,
         "scalar generated form field occurs more than once");
     return DATA_BIND_ERR_PARSE;
   }
 
-  pair = chttp_web_form_get(provider->form, entry->address.name, 0u);
-  if (pair == NULL) return DATA_BIND_ERR_RUNTIME;
-
-  {
-    const DataBindStatus status = chttp_web_form_plan_scalar_reader(
-        provider, entry, pair->value, reader, error);
-    if (status == DATA_BIND_OK) *state = DATA_BIND_VALUE_STATE_VALUE;
-    return status;
-  }
+  provider->name = entry->address.name;
+  provider->position = 0u;
+  provider->phase = CHTTP_WEB_FORM_PLAN_BEGIN;
+  if (cserde_reader_init(reader, &CHTTP_WEB_FORM_PLAN_READER_OPS, provider)
+      != CSERDE_OK) return DATA_BIND_ERR_RUNTIME;
+  *state = DATA_BIND_VALUE_STATE_VALUE;
+  return DATA_BIND_OK;
 }
 
 static const char *chttp_web_form_plan_wire_name(

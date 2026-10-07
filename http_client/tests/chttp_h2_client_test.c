@@ -640,8 +640,8 @@ static void chttp_h2_tls_server_run(void *user) {
   if (server->status == SALTS_OK)
     server->status = cnet_listener_accept_tls(&server->listener, &server->network, &server->tls,
                                               &observer, &server->connection);
-  deadline = salts_monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
-  while (server->status == SALTS_OK && !server->terminal && salts_monotonic_ms() < deadline) {
+  deadline = cmeta_monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+  while (server->status == SALTS_OK && !server->terminal && cmeta_monotonic_ms() < deadline) {
     size_t events = 0u;
     server->status = cnet_client_poll(&server->network, 5u, &events);
   }
@@ -680,7 +680,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -694,7 +694,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
     server.listener = listener;
     server.expected_requests = 1u;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/h2",
@@ -710,8 +710,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(response.body_size, 2u);
     chttp_response_destroy(&response);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.request_count, 1u);
     check_equal(server.path, "/h2");
@@ -724,7 +724,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -739,7 +739,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 1u;
     server.parse_until_close = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
                 SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
@@ -751,8 +751,8 @@ spec("CHTTP HTTP/2 client") {
     chttp_response_destroy(&response);
     check_equal(chttp_client_destroy(&client, 0u), SALTS_ETIMEDOUT);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.received_goaway, 1);
     chttp_h2_test_close_socket(listener);
@@ -764,7 +764,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
     chttp_h2_test_completion completion = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -781,7 +781,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
     server.listener = listener;
     server.expected_requests = 2u;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
                                       .target = "/first",
@@ -807,8 +807,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(completion.bodies[1], "ok");
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.request_count, 2u);
     check_equal(server.paths[0], "/first");
@@ -824,7 +824,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_server server = {0};
     chttp_h2_test_completion first_completion = {0};
     chttp_h2_test_completion second_completion = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -843,7 +843,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 1u;
     server.parse_until_close = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
                 SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
@@ -880,8 +880,8 @@ spec("CHTTP HTTP/2 client") {
     }
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.received_goaway, 1);
     check_equal(server.accepted_connections, 1u);
@@ -895,7 +895,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_server server = {0};
     chttp_h2_test_completion first_completion = {0};
     chttp_h2_test_completion second_completion = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -914,7 +914,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 1u;
     server.parse_until_close = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
                 SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
@@ -951,8 +951,8 @@ spec("CHTTP HTTP/2 client") {
     }
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.received_goaway, 1);
     check_equal(server.accepted_connections, 1u);
@@ -966,7 +966,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_server server = {0};
     chttp_h2_test_completion first_completion = {0};
     chttp_h2_test_completion second_completion = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -983,7 +983,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
     server.listener = listener;
-    check_equal(salts_thread_create(&thread, chttp_h1_test_serve_keep_alive_until_close, &server),
+    check_equal(cmeta_thread_create(&thread, chttp_h1_test_serve_keep_alive_until_close, &server),
                 SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
@@ -1020,8 +1020,8 @@ spec("CHTTP HTTP/2 client") {
     }
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.accepted_connections, 1u);
     chttp_h2_test_close_socket(listener);
@@ -1034,7 +1034,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_server server = {0};
     chttp_h2_test_completion first_completion = {0};
     chttp_h2_test_completion second_completion = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -1053,7 +1053,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 2u;
     server.oversize_first_response = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
                                       .target = "/oversized",
@@ -1077,8 +1077,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(second_completion.bodies[0], "");
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.request_count, 2u);
     check_equal(server.accepted_connections, 1u);
@@ -1092,7 +1092,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_server server = {0};
     chttp_h2_test_completion first_completion = {0};
     chttp_h2_test_completion second_completion = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -1110,7 +1110,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 2u;
     server.invalid_first_header = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
                                       .target = "/invalid-response",
@@ -1134,8 +1134,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(second_completion.bodies[0], "ok");
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.request_count, 2u);
     check_equal(server.accepted_connections, 1u);
@@ -1186,7 +1186,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_socket unblocker = CHTTP_H2_TEST_INVALID_SOCKET;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -1203,7 +1203,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
     server.listener = listener;
-    check_equal(salts_thread_create(&thread, chttp_h2_pool_server_run, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_pool_server_run, &server), SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
                                       .target = "/limited-first",
@@ -1229,8 +1229,8 @@ spec("CHTTP HTTP/2 client") {
       unblocker = CHTTP_H2_TEST_INVALID_SOCKET;
     }
 
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     if (second_status == SALTS_OK) {
@@ -1252,7 +1252,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_async_client client = {0};
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_request first = {0};
     chttp_request second = {0};
     chttp_request_options options;
@@ -1268,7 +1268,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
     server.listener = listener;
     server.expected_requests = 2u;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_request_options){.connection_uri = uri,
                                       .authority = authority,
                                       .target = "/cancel-in-flight",
@@ -1291,8 +1291,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(completion.bodies[1], "ok");
     check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.request_count, 2u);
     check_equal(server.accepted_connections, 1u);
@@ -1370,7 +1370,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -1386,7 +1386,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
     server.listener = listener;
     server.expected_requests = 1u;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve_after_timeout, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve_after_timeout, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/timeout",
@@ -1400,8 +1400,8 @@ spec("CHTTP HTTP/2 client") {
     options.timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS;
     recovery_status = chttp_get(&client, &options, &response, &error);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.accepted_connections, 2u);
     check_equal(server.paths[0], "/after-timeout");
     check_equal(server.status, SALTS_OK);
@@ -1424,7 +1424,7 @@ spec("CHTTP HTTP/2 client") {
     cnet_listener_config listener_config;
     cnet_tls_server_config server_tls;
     cnet_tls_client_config client_tls;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -1469,7 +1469,7 @@ spec("CHTTP HTTP/2 client") {
     check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);
     check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
-    check_equal(salts_thread_create(&thread, chttp_h2_tls_server_run, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_tls_server_run, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = "localhost",
                               .target = "/tls-h2",
@@ -1485,8 +1485,8 @@ spec("CHTTP HTTP/2 client") {
     chttp_response_destroy(&response);
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.connected, 1);
     check_equal(server.response_submitted, 1);
@@ -1503,7 +1503,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -1518,7 +1518,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 1u;
     server.invalid_content_length = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/bad-length",
@@ -1529,8 +1529,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(error.status, SALTS_EPROTO);
     check_null(response.body);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     chttp_h2_test_close_socket(listener);
   }
@@ -1540,7 +1540,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_options options;
     chttp_response response = {0};
     chttp_error error = {0};
@@ -1555,7 +1555,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 1u;
     server.invalid_header_name = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/bad-header-name",
@@ -1566,8 +1566,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(error.status, SALTS_EPROTO);
     check_null(response.body);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     chttp_h2_test_close_socket(listener);
   }
@@ -1577,7 +1577,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_response response = {0};
     chttp_error error = {0};
     chttp_options options;
@@ -1593,7 +1593,7 @@ spec("CHTTP HTTP/2 client") {
     server.expected_requests = 2u;
     server.goaway_responses = 1u;
     server.empty_responses = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve_goaway, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve_goaway, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/before-goaway",
@@ -1607,8 +1607,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(response.status_code, 200u);
     chttp_response_destroy(&response);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     check_equal(server.request_count, 2u);
     check_equal(server.accepted_connections, 2u);
@@ -1622,7 +1622,7 @@ spec("CHTTP HTTP/2 client") {
     chttp_client_config config = chttp_h2_test_config();
     chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
     chttp_h2_test_server server = {0};
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     chttp_options options;
     chttp_response response = {0};
     chttp_error error = {0};
@@ -1637,7 +1637,7 @@ spec("CHTTP HTTP/2 client") {
     server.listener = listener;
     server.expected_requests = 1u;
     server.invalid_trailers = 1;
-    check_equal(salts_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
+    check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve, &server), SALTS_OK);
     options = (chttp_options){.connection_uri = uri,
                               .authority = authority,
                               .target = "/bad-trailers",
@@ -1648,8 +1648,8 @@ spec("CHTTP HTTP/2 client") {
     check_equal(error.status, SALTS_EPROTO);
     check_null(response.body);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(salts_thread_join(&thread), SALTS_OK);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), SALTS_OK);
+    cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
     chttp_h2_test_close_socket(listener);
   }

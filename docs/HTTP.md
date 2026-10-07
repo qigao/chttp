@@ -334,7 +334,7 @@ response，同时删除临时文件并保留原目标。sink 模式的 response 
 每个 client/server owner 懒创建一个有硬容量的共享 CFlow file runtime。正文 read/write 通过
 IOCP 或 io_uring 原生异步操作完成；completion callback 仍只在 CHTTP owner 上执行。Windows
 IOCP 不提供异步 flush，因此下载完成关闭异步句柄后，仅 durability barrier 使用同步
-`salts_fs_fsync`；Linux io_uring 使用异步 flush。不支持 regular-file async I/O 的 backend 在
+`cmeta_fs_fsync`；Linux io_uring 使用异步 flush。不支持 regular-file async I/O 的 backend 在
 file open 前返回 `SALTS_ENOTSUP`，不会把正文数据路径静默降级为同步读写。
 
 H1 在文件 write completion 前不再提交 receive。H2 在 write completion 前不归还该 DATA 的
@@ -362,7 +362,7 @@ CHTTP → CNet → NativeIO，返回后 `chttp_response` 的 status、reason、h
 调用方拥有；用户不创建 poller，也不需要提供 Executor 或 worker thread。
 
 一个 client 同一时刻只允许一个调用，并归一个线程所有。需要并行请求时，可以把多个互不
-共享的 client 交给应用已有的 `salts_threadpool` 或 Executor；不能让多个 worker 同时推进同一个
+共享的 client 交给应用已有的 `cmeta_threadpool` 或 Executor；不能让多个 worker 同时推进同一个
 client。CHTTP 不创建隐藏的全局线程池，也不会把阻塞工作转交给不可控的后台线程。
 
 `timeout_ms` 限制等待 HTTP result 的时间。到期后 CHTTP 会取消并等待底层 terminal 状态，再让

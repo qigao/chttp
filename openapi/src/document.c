@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include <vstr.h>
 
-Enum(OaMethod,
+cmeta_enum(OaMethod,
     (OA_GET, 1, "get"), (OA_PUT, 2, "put"), (OA_POST, 3, "post"),
     (OA_DELETE, 4, "delete"), (OA_OPTIONS, 5, "options"),
     (OA_HEAD, 6, "head"), (OA_PATCH, 7, "patch"), (OA_TRACE, 8, "trace")
@@ -14,7 +14,7 @@ Enum(OaMethod,
 
 /* Indices use the installed CMeta callable universe. No consumer-only ABI type
  * registrations or pointer captures: records stay borrowed through evaluation. */
-typed(filter, value, bool, annotated_index, (int index)) { return index >= 0; }
+cmeta_function(filter, value, bool, annotated_index, (int index)) { return index >= 0; }
 
 static int put(json_value_t *object, const char *key, json_value_t *value) {
     if (value && json_object_add_checked(object, key, value)) return 1;

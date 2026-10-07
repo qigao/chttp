@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user \
+          cmake --preset ci-linux-dev-user \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=OFF
@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build --preset linux-dev-user -j2
+          cmake --build --preset ci-linux-dev-user -j2
       - name: Run Web reference example smoke tests
         shell: bash
         run: |
@@ -114,7 +114,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user \
+          cmake --preset ci-linux-dev-user \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=ON \
             -DENABLE_SANITIZER_UNDEFINED=OFF
@@ -147,7 +147,7 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           set -euxo pipefail
-          cmake --preset linux-dev-user \
+          cmake --preset ci-linux-dev-user \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DENABLE_SANITIZER_ADDRESS=OFF \
             -DENABLE_SANITIZER_UNDEFINED=ON

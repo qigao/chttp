@@ -200,8 +200,8 @@ string(SUBSTRING "${SERVICE_TEXT}" ${PLUGIN_RUN_START} ${PLUGIN_RUN_LENGTH}
        PLUGIN_RUN_TEXT)
 
 foreach(FORBIDDEN_PLUGIN_HOT
-    "salts_plugin_registry_"
-    "salts_plugin_manifest_"
+    "cmeta_plugin_registry_"
+    "cmeta_plugin_manifest_"
     "data_bind_plugin_catalog_"
     "data_bind_plugin_operation_execution_admit"
     "FunctionMeta("
@@ -214,10 +214,10 @@ foreach(FORBIDDEN_PLUGIN_HOT
 endforeach()
 
 foreach(REQUIRED_PLUGIN_CONTROL
-    "salts_plugin_registry_acquire"
+    "cmeta_plugin_registry_acquire"
     "DATA_BIND_PLUGIN_CATALOG_EXPORT_ID"
     "data_bind_plugin_operation_execution_admit"
-    "salts_plugin_registry_release")
+    "cmeta_cleanup_run(&record->plugin_cleanup)")
   string(FIND "${SERVICE_TEXT}" "${REQUIRED_PLUGIN_CONTROL}" POS)
   if(POS EQUAL -1)
     message(FATAL_ERROR
