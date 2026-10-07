@@ -119,3 +119,27 @@ set_target_properties(
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF)
+
+
+add_executable(
+  chttp_server_listener_admission_stall_benchmark
+  chttp_server_listener_admission_stall_benchmark.c)
+
+target_link_libraries(
+  chttp_server_listener_admission_stall_benchmark
+  PRIVATE CHttp::Server Salts::Platform Salts::Core)
+
+target_include_directories(
+  chttp_server_listener_admission_stall_benchmark
+  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
+          ${PROJECT_SOURCE_DIR}/http_common/rpc
+          ${PROJECT_SOURCE_DIR}/http_server/src
+          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+
+set_target_properties(
+  chttp_server_listener_admission_stall_benchmark
+  PROPERTIES
+    FOLDER "http_server/benchmarks"
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
