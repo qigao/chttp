@@ -42,6 +42,10 @@ find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
 endif()
+if(NOT TARGET Salts::ComponentPlugin)
+  message(FATAL_ERROR
+    "Salts SDK must provide Salts::ComponentPlugin for CHttp::Service")
+endif()
 find_package(llhttp CONFIG REQUIRED)
 
 add_subdirectory(vendor/cjwt)
