@@ -135,8 +135,10 @@ asctime 格式，复用 `Salts::DateTimeParser` 并在 HTTP 层转换旧格式�
 两者默认关闭，生命周期和 H1/H2 超时结果见 [Admission 与 Deadline](../http_server/README.md#正文前-admission-与阶段-deadline)。
 
 普通服务端用户只注册 handler/middleware，然后调用 `chttp_server_start()`；配置的固定 owner
-线程各自独占自己的 CNet poller，业务代码不调用 `cnet_client_poll()`。默认
-`owner_count=1` 保持原有串行模型；显式配置多个 owner 后，每条连接永久固定到一个 owner，
+线程各自独占自己的 CNet poller，业务代码不调用 `cnet_client_poll()`。listener/accept/admission
+由单独的 bounded control-plane thread 推进；它只做 detached accept、owner lease 选择、bounded
+admission-ring enqueue 和 owner wake，不执行 HTTP/TLS/H2 callback，也不计入 `owner_count`。默认
+`owner_count=1` 保持单 owner 的应用 callback 串行模型；显式配置多个 owner 后，每条连接永久固定到一个 owner，
 不同连接上的 callback 可以并发执行。路由 path 不含 query，可包含完整 segment 参数，
 例如 `/users/:user/posts/:post`。静态路由优先于参数路由，HEAD 在没有显式 HEAD route 时回退
 GET handler，但只发送 headers。
