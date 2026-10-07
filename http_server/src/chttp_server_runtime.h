@@ -5,6 +5,7 @@
 #include "chttp_server_internal.h"
 
 #include <cnet/websocket.h>
+#include <cnet/manager.h>
 #include <salts/thread.h>
 #include <cmeta_buffer.h>
 
@@ -272,6 +273,7 @@ struct chttp_server_connection {
   uint32_t server_slot;
   uint32_t server_generation;
   cnet_connection handle;
+  cnet_managed_connection managed;
   chttp_server_parser parser;
   chttp_server_request_state request_state;
   chttp_server_response_builder deferred_builder;
@@ -315,6 +317,7 @@ struct chttp_server_owner_lane {
   chttp_server_impl *server;
   cnet_client *network;
   cnet_client network_storage;
+  cnet_manager manager;
   cmeta_thread_t thread;
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;

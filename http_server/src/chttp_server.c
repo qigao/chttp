@@ -1880,6 +1880,24 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
   return status;
 }
 
+/* HTTP deferred requests retain their context after transport terminal. The
+ * owner releases the extra hold only when HTTP/1 and HTTP/2 have both finished. */
+static int chttp_server_manager_progress(chttp_server_owner_lane *owner) {
+  size_t work;
+  const size_t end = chttp_server_owner_connection_end(owner);
+  for (size_t i = owner->connection_begin; i < end; ++i) {
+    chttp_server_connection *connection = &owner->server->connections[i];
+    if (connection->managed.slot == 0u || connection->active ||
+        chttp_server_deferred_token_state(atomic_load_explicit(
+            &connection->deferred_token, memory_order_acquire)) != CHTTP_SERVER_DEFERRED_IDLE ||
+        chttp_h2_server_connection_has_deferred(connection->h2)) continue;
+    const int status = cnet_manager_release_context(&owner->manager, connection->managed);
+    if (status != SALTS_OK) return status;
+    connection->managed = (cnet_managed_connection){0};
+  }
+  return cnet_manager_advance(&owner->manager, owner->connection_count, &work);
+}
+
 static chttp_server_connection *chttp_server_free_connection(
     chttp_server_owner_lane *owner) {
   chttp_server_impl *server;
@@ -1894,7 +1912,7 @@ static chttp_server_connection *chttp_server_free_connection(
       end > server->config.network.connection_capacity)
     return NULL;
   for (index = owner->connection_begin; index < end; ++index)
-    if (!server->connections[index].active &&
+    if (!server->connections[index].active && server->connections[index].managed.slot == 0u &&
         chttp_server_deferred_token_state(atomic_load_explicit(
             &server->connections[index].deferred_token, memory_order_acquire)) ==
             CHTTP_SERVER_DEFERRED_IDLE &&
@@ -2066,6 +2084,10 @@ static int chttp_server_admission_progress(
     return SALTS_EINVAL;
   network = chttp_server_owner_network(owner);
   if (network == NULL) return SALTS_EINVAL;
+  {
+    const int status = chttp_server_manager_progress(owner);
+    if (status != SALTS_OK) return status;
+  }
   for (;;) {
     chttp_server_connection *connection = chttp_server_free_connection(owner);
     cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
@@ -2095,14 +2117,18 @@ static int chttp_server_admission_progress(
                                .on_receive = chttp_server_on_receive,
                                .on_send = chttp_server_on_send,
                                .user = connection};
-    status = server->tls_initialized
-                 ? cnet_client_adopt_accepted_tls(
-                       network, &accepted, &server->tls_server, &observer, &handle)
-                 : cnet_client_adopt_accepted(
-                       network, &accepted, &observer, &handle);
+    const cnet_manager_attachment attachment = {.observer = observer, .hold_context = true};
+    status = cnet_manager_reserve(&owner->manager, &attachment, &connection->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_adopt(&owner->manager, connection->managed, &accepted,
+                                 server->tls_initialized ? &server->tls_server : NULL, &handle);
+    else
+      (void)cnet_accepted_stream_close(&accepted);
     if (status != SALTS_OK) {
       (void)chttp_server_owner_lease_release(owner);
       chttp_server_stats_rejected_connection(server);
+      const int recycle_status = chttp_server_manager_progress(owner);
+      if (recycle_status != SALTS_OK) return recycle_status;
       if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) continue;
       return status;
     }
@@ -2305,6 +2331,8 @@ static int chttp_server_begin_shutdown(
   if (owner->connection_begin > server->config.network.connection_capacity ||
       end < owner->connection_begin || end > server->config.network.connection_capacity)
     return SALTS_EINVAL;
+  status = cnet_manager_seal(&owner->manager);
+  if (status != SALTS_OK) return status;
   if (owner == &server->owner && server->listener_initialized) {
     status = cnet_listener_close(&server->listener);
     if (status != SALTS_OK && status != SALTS_EALREADY) return status;
@@ -2420,6 +2448,12 @@ static int chttp_server_owner_cleanup_network(
     if (first_status == SALTS_OK && stop_status != SALTS_OK)
       first_status = stop_status;
     if (stop_status != SALTS_ETIMEDOUT && stop_status != SALTS_EBUSY) {
+      if (owner->manager.impl != NULL) {
+        int manager_status = chttp_server_manager_progress(owner);
+        if (manager_status == SALTS_OK) manager_status = cnet_manager_destroy(&owner->manager);
+        if (manager_status != SALTS_OK)
+          return first_status != SALTS_OK ? first_status : manager_status;
+      }
       const int destroy_status = cnet_client_destroy(network);
       if (first_status == SALTS_OK && destroy_status != SALTS_OK)
         first_status = destroy_status;
@@ -2459,7 +2493,9 @@ static int chttp_server_owner_worker_startup(
       network, &server->socket_options.stream);
   if (status != SALTS_OK) return status;
 
-  return SALTS_OK;
+  const cnet_manager_config manager_config = {sizeof(manager_config), CNET_MANAGER_VERSION,
+      network, owner->connection_count, owner->connection_count};
+  return cnet_manager_init(&owner->manager, &manager_config);
 }
 
 static int chttp_server_listener_cleanup(chttp_server_impl *server) {

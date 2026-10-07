@@ -45,7 +45,23 @@ static chttp_client_config owner_topology_client_config(void) {
 static int owner_topology_ok(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
-  (void)user;
+  if (user != NULL) {
+    chttp_server_impl *impl = ((chttp_server *)user)->impl;
+    size_t matched = 0u;
+    for (size_t i = 0u; i < impl->owner_count; ++i) {
+      chttp_server_owner_lane *owner = chttp_server_owner_at(impl, i);
+      cnet_manager_snapshot snapshot;
+      const int status = cnet_manager_get_snapshot(&owner->manager, &snapshot);
+      if (status == SALTS_EPERM) continue;
+      check_equal(status, SALTS_OK);
+      check_equal(snapshot.record_capacity, owner->connection_count);
+      check(snapshot.bound > 0u);
+      check(snapshot.context_holds >= snapshot.bound);
+      check(!snapshot.drained);
+      ++matched;
+    }
+    check_equal(matched, (size_t)1u);
+  }
   (void)request;
   return chttp_server_reply(response, 200u, "text/plain", "ok", 2u);
 }
@@ -414,7 +430,7 @@ spec("CHttp owner topology") {
     check_equal(
         chttp_server_set_execution_options(&server, &execution), SALTS_OK);
     check_equal(
-        chttp_server_get(&server, "/ok", owner_topology_ok, NULL), SALTS_OK);
+        chttp_server_get(&server, "/ok", owner_topology_ok, &server), SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
