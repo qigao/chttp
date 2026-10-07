@@ -32,6 +32,9 @@ jobs:
         with:
           with-turbowasm: "false"
 
+      - name: Restore Salts host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
       - name: Checkout Salts Component integration branch
         uses: actions/checkout@v4
         with:
