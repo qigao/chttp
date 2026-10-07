@@ -62,7 +62,7 @@ jobs:
         run: |
           set -euxo pipefail
           cmake --build build/linux-gcc-release \
-            --target chttp_server_owner_benchmark -j2
+            --target chttp_server_owner_benchmark chttp_server_owner_churn_benchmark -j2
 
       - name: Verify admission-only owner handoff boundary
         shell: bash
@@ -95,6 +95,27 @@ jobs:
               build/linux-gcc-release/bin/chttp_server_owner_benchmark \
               | tee -a "$jsonl"
           done
+
+      - name: Run owner admission churn witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          jsonl=benchmark-results/owner-admission-churn.jsonl
+          : > "$jsonl"
+          for repeat in 1 2 3; do
+            echo "admission churn repeat=$repeat"
+            GITHUB_SHA="$CHTTP_HEAD_SHA" \
+              build/linux-gcc-release/bin/chttp_server_owner_churn_benchmark \
+              | tee -a "$jsonl"
+          done
+
+      - name: Verify owner admission churn evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_churn_benchmark.py \
+            benchmark-results/owner-admission-churn.jsonl \
+            | tee benchmark-results/owner-admission-churn-summary.md
 
       - name: Verify and summarize owner evidence
         shell: bash
