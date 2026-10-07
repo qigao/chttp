@@ -1,0 +1,117 @@
+name: CHttp server owner handler CPU isolation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    paths:
+      - "http_server/benchmarks/chttp_server_owner_handler_cpu_benchmark.c"
+      - "http_server/benchmarks/verify_owner_handler_cpu_benchmark.py"
+      - "http_server/benchmarks/CMakeLists.txt"
+      - "http_server/src/**"
+      - "http_server/include/**"
+      - ".github/workflows/chttp-server-owner-handler-cpu.yml"
+
+env:
+  CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-owner-handler-cpu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  owner-handler-cpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact CHttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Salts SDKs
+        uses: ./.github/actions/setup-salts-sdk
+
+      - name: Configure release benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset ci-linux-release-user \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DBUILD_BENCHMARKS=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DENABLE_SANITIZER_UNDEFINED=OFF
+
+      - name: Build owner handler CPU benchmark
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-release \
+            --target chttp_server_owner_handler_cpu_benchmark -j2
+
+      - name: Verify admission-only owner handoff boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_handoff_boundary.py
+
+      - name: Run repeated handler CPU matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          jsonl=benchmark-results/owner-handler-cpu.jsonl
+          : > "$jsonl"
+
+          {
+            echo "exact_head=$CHTTP_HEAD_SHA"
+            echo "logical_cores=$(nproc)"
+            uname -a
+            cc --version | head -n 1
+          } > benchmark-results/environment.txt
+
+          for repeat in 1 2 3; do
+            echo "handler CPU repeat=$repeat"
+            GITHUB_SHA="$CHTTP_HEAD_SHA" \
+            CHTTP_OWNER_CPU_REQUESTS=30 \
+              build/linux-gcc-release/bin/chttp_server_owner_handler_cpu_benchmark \
+              | tee -a "$jsonl"
+          done
+
+      - name: Verify and summarize handler CPU evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 http_server/benchmarks/verify_owner_handler_cpu_benchmark.py \
+            benchmark-results/owner-handler-cpu.jsonl \
+            | tee benchmark-results/summary.md
+
+          {
+            echo "## CHttp owner-local handler CPU isolation"
+            echo
+            cat benchmark-results/environment.txt
+            echo
+            cat benchmark-results/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw handler CPU evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-owner-handler-cpu-${{ env.CHTTP_HEAD_SHA }}
+          path: benchmark-results/
+          if-no-files-found: error
+
+      - name: Verify exact head and clean tracked source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
