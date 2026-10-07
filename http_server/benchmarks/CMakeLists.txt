@@ -103,7 +103,7 @@ add_executable(
 
 target_link_libraries(
   chttp_server_owner_handler_cpu_benchmark
-  PRIVATE CHttp::Server Salts::Platform Salts::Core)
+  PRIVATE CHttp::Server Salts::Platform Salts::Core Salts::Concurrency)
 
 target_include_directories(
   chttp_server_owner_handler_cpu_benchmark
