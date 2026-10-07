@@ -33,6 +33,12 @@ publication. Omit both inputs to retain the published-SDK release workflow.
 The macOS SDK profile inherits `GccMac` (GCC 15), matching the producer SDK's
 thread-local runtime ABI; Apple Clang's native TLS cannot link the GCC-built
 TinyTest runtime's emulated TLS symbols.
+Native asynchronous file upload/download and static-file responses currently
+require Windows IOCP or Linux io_uring. macOS kqueue/poll do not provide the
+regular-file operations required by CFlow, so those paths remain unsupported
+(`SALTS_ENOTSUP`); there is no implicit synchronous or thread-pool fallback.
+See [HTTP file transfer semantics](docs/HTTP.md) and the
+[CFlow backend contract](https://github.com/qigao/salts/blob/4ebdaf4003394ae481747b6087bd6e19e38c40f3/cflow/README.md#native-socket-byte-pipe-and-regular-file-io).
 
 The manifest includes Lua and QuickJS because the installed SaltsUtils package
 exports those dependencies; it does not introduce another HTTP or TLS provider.
