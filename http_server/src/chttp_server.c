@@ -2366,6 +2366,26 @@ static void chttp_server_owner_worker_finish(
       server->stats.terminal_status == SALTS_OK)
     server->stats.terminal_status = terminal_status;
   if (server->start_called &&
+      server->finished_owner_count >= server->started_owner_count &&
+      server->listener_done) {
+    server->stats.running = 0;
+    server->stats.stopping = 0;
+    server->worker_done = true;
+  }
+  cmeta_cond_broadcast(&server->changed);
+  cmeta_mutex_unlock(&server->mutex);
+}
+
+static void chttp_server_listener_worker_finish(
+    chttp_server_impl *server, int terminal_status) {
+  cmeta_mutex_lock(&server->mutex);
+  server->listener_terminal_status = terminal_status;
+  server->listener_done = true;
+  if (terminal_status != SALTS_OK &&
+      terminal_status != SALTS_ECANCELED &&
+      server->stats.terminal_status == SALTS_OK)
+    server->stats.terminal_status = terminal_status;
+  if (server->start_called &&
       server->finished_owner_count >= server->started_owner_count) {
     server->stats.running = 0;
     server->stats.stopping = 0;
@@ -2390,12 +2410,6 @@ static int chttp_server_owner_cleanup_network(
   if (server == NULL || owner == NULL || owner->server != server)
     return SALTS_EINVAL;
 
-  if (owner == &server->owner && server->listener_initialized) {
-    const int close_status = cnet_listener_close(&server->listener);
-    if (close_status != SALTS_OK && close_status != SALTS_EALREADY)
-      first_status = close_status;
-  }
-
   network = chttp_server_owner_network_storage(server, owner);
   if (owner->network_initialized) {
     int stop_status;
@@ -2419,25 +2433,16 @@ static int chttp_server_owner_cleanup_network(
     }
   }
 
-  if (owner == &server->owner && server->listener_initialized) {
-    const int destroy_status = cnet_listener_destroy(&server->listener);
-    if (first_status == SALTS_OK && destroy_status != SALTS_OK)
-      first_status = destroy_status;
-    if (destroy_status == SALTS_OK) server->listener_initialized = false;
-  }
   return first_status;
 }
 
 static int chttp_server_owner_worker_startup(
-    chttp_server_impl *server, chttp_server_owner_lane *owner,
-    uint16_t *out_port) {
+    chttp_server_impl *server, chttp_server_owner_lane *owner) {
   cnet_client_config network_config;
   cnet_client *network;
   int status;
-  if (server == NULL || owner == NULL || owner->server != server ||
-      out_port == NULL)
+  if (server == NULL || owner == NULL || owner->server != server)
     return SALTS_EINVAL;
-  *out_port = 0u;
 
   network = chttp_server_owner_network_storage(server, owner);
   if (network == NULL) return SALTS_EINVAL;
@@ -2454,20 +2459,43 @@ static int chttp_server_owner_worker_startup(
       network, &server->socket_options.stream);
   if (status != SALTS_OK) return status;
 
-  if (owner == &server->owner) {
-    const cnet_listener_config listener_config = {
-        .backend = server->config.network.backend,
-        .host = server->host,
-        .port = server->config.port,
-        .backlog = server->config.backlog};
-    status = cnet_listener_init_ex(
-        &server->listener, &listener_config, &server->socket_options.listener);
-    if (status != SALTS_OK) return status;
-    server->listener_initialized = true;
-    status = cnet_listener_port(&server->listener, out_port);
-    if (status != SALTS_OK) return status;
-  }
   return SALTS_OK;
+}
+
+static int chttp_server_listener_cleanup(chttp_server_impl *server) {
+  int first_status = SALTS_OK;
+  int status;
+  if (server == NULL) return SALTS_EINVAL;
+  if (!server->listener_initialized) return SALTS_OK;
+
+  status = cnet_listener_close(&server->listener);
+  if (status != SALTS_OK && status != SALTS_EALREADY)
+    first_status = status;
+
+  status = cnet_listener_destroy(&server->listener);
+  if (first_status == SALTS_OK && status != SALTS_OK)
+    first_status = status;
+  if (status == SALTS_OK) server->listener_initialized = false;
+  return first_status;
+}
+
+static int chttp_server_listener_startup(
+    chttp_server_impl *server, uint16_t *out_port) {
+  const cnet_listener_config listener_config = {
+      .backend = server != NULL ? server->config.network.backend
+                                : NATIVE_IO_BACKEND_NONE,
+      .host = server != NULL ? server->host : NULL,
+      .port = server != NULL ? server->config.port : 0u,
+      .backlog = server != NULL ? server->config.backlog : 0u};
+  int status;
+  if (server == NULL || out_port == NULL) return SALTS_EINVAL;
+  *out_port = 0u;
+
+  status = cnet_listener_init_ex(
+      &server->listener, &listener_config, &server->socket_options.listener);
+  if (status != SALTS_OK) return status;
+  server->listener_initialized = true;
+  return cnet_listener_port(&server->listener, out_port);
 }
 
 static void chttp_server_request_global_stop(
@@ -2489,17 +2517,82 @@ static void chttp_server_request_global_stop(
   chttp_server_wake_owners(server);
 }
 
+static void chttp_server_listener_worker(void *user) {
+  chttp_server_impl *server = (chttp_server_impl *)user;
+  uint16_t port = 0u;
+  bool startup_abort = false;
+  int status;
+
+  if (server == NULL) return;
+  status = chttp_server_listener_startup(server, &port);
+
+  cmeta_mutex_lock(&server->mutex);
+  server->listener_terminal_status = status;
+  server->listener_startup_reported = true;
+  if (status != SALTS_OK) {
+    if (server->startup_status == SALTS_OK)
+      server->startup_status = status;
+    server->startup_abort = true;
+  } else {
+    server->startup_port = port;
+  }
+  cmeta_cond_broadcast(&server->changed);
+  while (status == SALTS_OK && !server->startup_go &&
+         !server->startup_abort)
+    cmeta_cond_wait(&server->changed, &server->mutex);
+  startup_abort = server->startup_abort;
+  cmeta_mutex_unlock(&server->mutex);
+
+  if (status != SALTS_OK || startup_abort) {
+    const int cleanup_status = chttp_server_listener_cleanup(server);
+    if (status == SALTS_OK && cleanup_status != SALTS_OK)
+      status = cleanup_status;
+    chttp_server_listener_worker_finish(
+        server, status != SALTS_OK ? status : SALTS_ECANCELED);
+    return;
+  }
+
+  cmeta_mutex_lock(&server->mutex);
+  server->listener_ready = true;
+  cmeta_cond_broadcast(&server->changed);
+  while (!server->start_called && !server->startup_abort)
+    cmeta_cond_wait(&server->changed, &server->mutex);
+  startup_abort = server->startup_abort;
+  cmeta_mutex_unlock(&server->mutex);
+
+  while (status == SALTS_OK && !startup_abort &&
+         !chttp_server_should_stop(server)) {
+    int ready = 0;
+    const uint32_t wait_ms =
+        server->config.poll_slice_ms != 0u
+            ? server->config.poll_slice_ms
+            : 1u;
+    status = cnet_listener_wait(&server->listener, wait_ms, &ready);
+    if (status != SALTS_OK) break;
+    if (ready) status = chttp_server_listener_progress(server);
+  }
+
+  if (status != SALTS_OK)
+    chttp_server_request_global_stop(server, status);
+
+  {
+    const int cleanup_status = chttp_server_listener_cleanup(server);
+    if (status == SALTS_OK && cleanup_status != SALTS_OK)
+      status = cleanup_status;
+  }
+  chttp_server_listener_worker_finish(server, status);
+}
+
 static void chttp_server_owner_worker(void *user) {
   chttp_server_owner_lane *owner = (chttp_server_owner_lane *)user;
   chttp_server_impl *server;
   cnet_client *network;
-  uint16_t port = 0u;
   bool startup_abort = false;
   int status;
 
   if (owner == NULL || owner->server == NULL) return;
   server = owner->server;
-  status = chttp_server_owner_worker_startup(server, owner, &port);
+  status = chttp_server_owner_worker_startup(server, owner);
 
   cmeta_mutex_lock(&server->mutex);
   owner->terminal_status = status;
@@ -2507,8 +2600,6 @@ static void chttp_server_owner_worker(void *user) {
     if (server->startup_status == SALTS_OK)
       server->startup_status = status;
     server->startup_abort = true;
-  } else if (owner == &server->owner) {
-    server->startup_port = port;
   }
   ++server->startup_reported_count;
   cmeta_cond_broadcast(&server->changed);
@@ -2575,16 +2666,6 @@ static void chttp_server_owner_worker(void *user) {
     if (status != SALTS_OK) break;
     status = chttp_server_retry_pending(server, owner);
     if (status != SALTS_OK) break;
-
-    if (owner == &server->owner) {
-      int ready = 0;
-      status = cnet_listener_wait(&server->listener, 0u, &ready);
-      if (status != SALTS_OK) break;
-      if (ready) {
-        status = chttp_server_listener_progress(server);
-        if (status != SALTS_OK) break;
-      }
-    }
 
     status = cnet_client_poll(
         network, chttp_server_poll_timeout(server, owner), &events);
@@ -2666,10 +2747,20 @@ static cmeta_thread_t *chttp_server_owner_thread_handle(
   return owner == &server->owner ? &server->thread : &owner->thread;
 }
 
-static int chttp_server_join_owner_threads(chttp_server_impl *server) {
+static int chttp_server_join_runtime_threads(chttp_server_impl *server) {
   size_t index;
   int first_status = SALTS_OK;
   if (server == NULL) return SALTS_EINVAL;
+
+  if (server->listener_thread_started) {
+    if (cmeta_thread_join(&server->listener_thread) != SALTS_OK) {
+      first_status = SALTS_EIO;
+    } else {
+      cmeta_thread_destroy(&server->listener_thread);
+      server->listener_thread_started = false;
+    }
+  }
+
   for (index = 0u; index < server->owner_count; ++index) {
     chttp_server_owner_lane *owner = chttp_server_owner_at(server, index);
     cmeta_thread_t *thread;
@@ -2705,6 +2796,10 @@ static void chttp_server_reset_failed_start(chttp_server_impl *server) {
   server->finished_owner_count = 0u;
   server->startup_port = 0u;
   server->startup_status = SALTS_OK;
+  server->listener_terminal_status = SALTS_OK;
+  server->listener_startup_reported = false;
+  server->listener_ready = false;
+  server->listener_done = false;
   server->startup_go = false;
   server->startup_abort = false;
   server->stop_requested = false;
@@ -2732,6 +2827,10 @@ int chttp_server_start(chttp_server *server) {
   impl->finished_owner_count = 0u;
   impl->startup_port = 0u;
   impl->startup_status = SALTS_OK;
+  impl->listener_terminal_status = SALTS_OK;
+  impl->listener_startup_reported = false;
+  impl->listener_ready = false;
+  impl->listener_done = false;
   impl->startup_go = false;
   impl->startup_abort = false;
   impl->stop_requested = false;
@@ -2761,6 +2860,24 @@ int chttp_server_start(chttp_server *server) {
     }
   }
 
+  status = cmeta_thread_create(
+      &impl->listener_thread, chttp_server_listener_worker, impl);
+  if (status != SALTS_OK) {
+    for (index = 0u; index < impl->owner_count; ++index) {
+      chttp_server_owner_lane *pending =
+          chttp_server_owner_at(impl, index);
+      if (pending != NULL &&
+          chttp_server_owner_runtime_state_get(pending) ==
+              CHTTP_SERVER_OWNER_RUNTIME_STARTING)
+        (void)chttp_server_owner_runtime_transition(
+            pending, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
+            CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+    }
+    chttp_server_reset_failed_start(impl);
+    return SALTS_EIO;
+  }
+  impl->listener_thread_started = true;
+
   for (index = 0u; index < impl->owner_count; ++index) {
     chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
     cmeta_thread_t *thread = chttp_server_owner_thread_handle(impl, owner);
@@ -2783,7 +2900,7 @@ int chttp_server_start(chttp_server *server) {
               pending, CHTTP_SERVER_OWNER_RUNTIME_STARTING,
               CHTTP_SERVER_OWNER_RUNTIME_IDLE);
       }
-      (void)chttp_server_join_owner_threads(impl);
+      (void)chttp_server_join_runtime_threads(impl);
       chttp_server_reset_failed_start(impl);
       return SALTS_EIO;
     }
@@ -2792,7 +2909,8 @@ int chttp_server_start(chttp_server *server) {
   }
 
   cmeta_mutex_lock(&impl->mutex);
-  while (impl->startup_reported_count < impl->owner_count &&
+  while ((impl->startup_reported_count < impl->owner_count ||
+          !impl->listener_startup_reported) &&
          !impl->startup_abort)
     cmeta_cond_wait(&impl->changed, &impl->mutex);
   if (impl->startup_abort) {
@@ -2801,7 +2919,7 @@ int chttp_server_start(chttp_server *server) {
                  : impl->startup_status;
     cmeta_cond_broadcast(&impl->changed);
     cmeta_mutex_unlock(&impl->mutex);
-    (void)chttp_server_join_owner_threads(impl);
+    (void)chttp_server_join_runtime_threads(impl);
     chttp_server_reset_failed_start(impl);
     return status;
   }
@@ -2812,7 +2930,8 @@ int chttp_server_start(chttp_server *server) {
   impl->stats.terminal_status = SALTS_OK;
   impl->startup_go = true;
   cmeta_cond_broadcast(&impl->changed);
-  while (impl->ready_owner_count < impl->owner_count &&
+  while ((impl->ready_owner_count < impl->owner_count ||
+          !impl->listener_ready) &&
          !impl->startup_abort)
     cmeta_cond_wait(&impl->changed, &impl->mutex);
   if (impl->startup_abort) {
@@ -2824,7 +2943,7 @@ int chttp_server_start(chttp_server *server) {
     cmeta_cond_broadcast(&impl->changed);
     cmeta_mutex_unlock(&impl->mutex);
     chttp_server_wake_owners(impl);
-    (void)chttp_server_join_owner_threads(impl);
+    (void)chttp_server_join_runtime_threads(impl);
     chttp_server_reset_failed_start(impl);
     return status;
   }
@@ -2895,7 +3014,7 @@ int chttp_server_stop(chttp_server *server, uint32_t timeout_ms) {
   terminal_status = impl->stats.terminal_status;
   cmeta_mutex_unlock(&impl->mutex);
 
-  join_status = chttp_server_join_owner_threads(impl);
+  join_status = chttp_server_join_runtime_threads(impl);
   if (terminal_status == SALTS_OK && join_status != SALTS_OK)
     terminal_status = join_status;
   return terminal_status;
@@ -2918,7 +3037,7 @@ int chttp_server_destroy(chttp_server *server) {
   }
   cmeta_mutex_unlock(&impl->mutex);
 
-  join_status = chttp_server_join_owner_threads(impl);
+  join_status = chttp_server_join_runtime_threads(impl);
   if (join_status != SALTS_OK) return join_status;
 
   for (index = 0u; index < impl->owner_count; ++index) {
