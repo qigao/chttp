@@ -11,12 +11,16 @@ CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses S
 CHTTP depends on the installed [Salts](https://github.com/qigao/salts) SDK and selected [SaltsUtils](https://github.com/qigao/salts-utils) components.
 
 This integration branch requires the Salts #1001 candidate exporting
-`Salts::CNetManager` and `<cnet/manager.h>`; the latest published SDK alone does
+`Salts::CNetManager`, `<cnet/manager.h>` and `<cnet/handoff.h>`; the latest published SDK alone does
 not yet provide that target. Each server owner lane uses one fixed-capacity
 manager for TCP/TLS adoption and terminal attachment retirement. HTTP/1 deferred
 responses and HTTP/2 deferred streams keep their contexts until completion.
-The existing admission queue, leases, protocol state and public server API
-remain owned by CHTTP. Deploy the matching `cnet_manager` shared library with
+Each lane's bounded admission inbox and generation-checked connection credits
+now use the optional CNet handoff helper. CHTTP still chooses the final owner,
+owns its listener/threads/TLS policy and protocol state, and keeps its public
+server API. Successful publication transfers the descriptor even if the host
+wake fails; shutdown drains that inbox after the existing `listener_done`
+barrier ensures no listener wake can race backend destruction. Deploy the matching `cnet_manager` shared library with
 the candidate SDK. Reverting this adapter and its private link dependency
 restores raw CNet adoption without a protocol or data migration.
 

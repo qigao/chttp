@@ -6,6 +6,7 @@
 
 #include <cnet/websocket.h>
 #include <cnet/manager.h>
+#include <cnet/handoff.h>
 #include <salts/thread.h>
 #include <cmeta_buffer.h>
 
@@ -309,7 +310,7 @@ struct chttp_server_connection {
   chttp_server_websocket_profile *websocket_send_profile;
   uint64_t websocket_send_started_ns;
   bool retained_response_sg;
-  bool owner_lease_held;
+  cnet_handoff_ticket owner_ticket;
   chttp_server_pending_action pending_action;
 };
 
@@ -322,21 +323,15 @@ struct chttp_server_owner_lane {
   chttp_server_websocket_command *websocket_commands;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
-  cnet_accepted_stream *admissions;
-  cmeta_mutex_t admission_mutex;
+  cnet_handoff handoff;
   size_t connection_begin;
   size_t connection_count;
   size_t file_transfer_capacity;
   size_t pending_retry_cursor;
   size_t websocket_command_head;
   size_t websocket_command_count;
-  size_t admission_head;
-  size_t admission_count;
-  /* Pending admissions plus active connections; bounded by connection_count. */
-  atomic_size_t connection_leases;
   atomic_int runtime_state;
   int terminal_status;
-  bool admission_sync_initialized;
   bool network_initialized;
   bool thread_started;
   bool file_runtime_initialized;
@@ -392,41 +387,8 @@ static inline size_t chttp_server_owner_connection_end(
   return owner != NULL ? owner->connection_begin + owner->connection_count : 0u;
 }
 
-static inline size_t chttp_server_owner_lease_count(
-    const chttp_server_owner_lane *owner) {
-  return owner != NULL
-             ? atomic_load_explicit(&owner->connection_leases,
-                                    memory_order_acquire)
-             : 0u;
-}
-
-static inline bool chttp_server_owner_lease_try_acquire(
-    chttp_server_owner_lane *owner) {
-  size_t observed;
-  if (owner == NULL || owner->connection_count == 0u) return false;
-  observed = atomic_load_explicit(&owner->connection_leases, memory_order_relaxed);
-  for (;;) {
-    if (observed >= owner->connection_count) return false;
-    if (atomic_compare_exchange_weak_explicit(
-            &owner->connection_leases, &observed, observed + 1u,
-            memory_order_acq_rel, memory_order_relaxed))
-      return true;
-  }
-}
-
-static inline int chttp_server_owner_lease_release(
-    chttp_server_owner_lane *owner) {
-  size_t observed;
-  if (owner == NULL) return SALTS_EINVAL;
-  observed = atomic_load_explicit(&owner->connection_leases, memory_order_relaxed);
-  for (;;) {
-    if (observed == 0u) return SALTS_EALREADY;
-    if (atomic_compare_exchange_weak_explicit(
-            &owner->connection_leases, &observed, observed - 1u,
-            memory_order_acq_rel, memory_order_relaxed))
-      return SALTS_OK;
-  }
-}
+size_t chttp_server_owner_lease_count(const chttp_server_owner_lane *owner);
+size_t chttp_server_owner_admission_count(chttp_server_owner_lane *owner);
 
 struct chttp_server_impl {
   chttp_server_deadlines deadlines;

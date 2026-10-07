@@ -352,9 +352,7 @@ static void owner_listener_snapshot(
     chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
     if (owner == NULL) continue;
     leases[index] = chttp_server_owner_lease_count(owner);
-    cmeta_mutex_lock(&owner->admission_mutex);
-    rings[index] = owner->admission_count;
-    cmeta_mutex_unlock(&owner->admission_mutex);
+    rings[index] = chttp_server_owner_admission_count(owner);
   }
 }
 

@@ -177,12 +177,10 @@ static int owner_topology_wait_pending(
   chttp_server_owner_lane *owner;
   if (impl == NULL) return SALTS_EINVAL;
   owner = chttp_server_owner_at(impl, owner_index);
-  if (owner == NULL || !owner->admission_sync_initialized) return SALTS_EINVAL;
+  if (owner == NULL || owner->handoff.impl == NULL) return SALTS_EINVAL;
   for (;;) {
     size_t observed_admissions;
-    cmeta_mutex_lock(&owner->admission_mutex);
-    observed_admissions = owner->admission_count;
-    cmeta_mutex_unlock(&owner->admission_mutex);
+    observed_admissions = chttp_server_owner_admission_count(owner);
     if (observed_admissions == admission_count &&
         chttp_server_owner_lease_count(owner) == lease_count)
       return SALTS_OK;
@@ -259,9 +257,8 @@ spec("CHttp owner topology") {
     check_not_null(impl);
     check_equal(impl->owner_count, (size_t)1u);
     check(impl->additional_owners == NULL);
-    check_not_null(impl->owner.admissions);
-    check(impl->owner.admission_sync_initialized);
-    check_equal(impl->owner.admission_count, (size_t)0u);
+    check_not_null(impl->owner.handoff.impl);
+    check_equal(chttp_server_owner_admission_count(&impl->owner), (size_t)0u);
 
     options.owner_count = 3u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
@@ -276,9 +273,8 @@ spec("CHttp owner topology") {
       check_equal(owner->connection_begin, expected_begin[owner_index]);
       check_equal(owner->connection_count, expected_count[owner_index]);
       check_equal(owner->file_transfer_capacity, expected_count[owner_index]);
-      check_not_null(owner->admissions);
-      check(owner->admission_sync_initialized);
-      check_equal(owner->admission_count, (size_t)0u);
+      check_not_null(owner->handoff.impl);
+      check_equal(chttp_server_owner_admission_count(owner), (size_t)0u);
       check_not_null(owner->file_transfers);
       check_not_null(owner->websocket_commands);
       check_equal(owner->websocket_command_count, (size_t)0u);
@@ -329,19 +325,19 @@ spec("CHttp owner topology") {
       check_equal(owner->terminal_status, SALTS_OK);
       check(!owner->network_initialized);
       check(!owner->thread_started);
-      for (connection_index = 0u;
-           connection_index < owner->connection_count; ++connection_index)
-        check(chttp_server_owner_lease_try_acquire(owner));
-      check(!chttp_server_owner_lease_try_acquire(owner));
-      check_equal(chttp_server_owner_lease_count(owner),
-                  owner->connection_count);
-      check_equal(chttp_server_owner_lease_release(owner), SALTS_OK);
-      check_equal(chttp_server_owner_lease_count(owner),
-                  owner->connection_count - 1u);
-      check(chttp_server_owner_lease_try_acquire(owner));
-      while (chttp_server_owner_lease_count(owner) != 0u)
-        check_equal(chttp_server_owner_lease_release(owner), SALTS_OK);
-      check_equal(chttp_server_owner_lease_release(owner), SALTS_EALREADY);
+      cnet_handoff_ticket tickets[5] = {{0}}, rejected = {0};
+      for (connection_index = 0u; connection_index < owner->connection_count; ++connection_index)
+        check_equal(cnet_handoff_reserve(&owner->handoff, &tickets[connection_index]), SALTS_OK);
+      check_equal(cnet_handoff_reserve(&owner->handoff, &rejected), SALTS_ENOBUFS);
+      check_equal(chttp_server_owner_lease_count(owner), owner->connection_count);
+      const cnet_handoff_ticket stale = tickets[0];
+      check_equal(cnet_handoff_release(&owner->handoff, stale), SALTS_OK);
+      check_equal(chttp_server_owner_lease_count(owner), owner->connection_count - 1u);
+      check_equal(cnet_handoff_reserve(&owner->handoff, &tickets[0]), SALTS_OK);
+      check_equal(cnet_handoff_release(&owner->handoff, stale), SALTS_ENOENT);
+      for (connection_index = 0u; connection_index < owner->connection_count; ++connection_index)
+        check_equal(cnet_handoff_release(&owner->handoff, tickets[connection_index]), SALTS_OK);
+      check_equal(chttp_server_owner_lease_count(owner), 0u);
       check(owner_index == 0u ? owner->network == &impl->network
                               : owner->network == NULL);
       for (connection_index = expected_begin[owner_index];
