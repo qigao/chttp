@@ -9,15 +9,11 @@ salts_idl_target(
 salts_idl_target(
   TARGET chttp_service_plugin_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.schema"
-  COMPONENT "CHttpPlugin.CalcPlugin"
-  VERSION "1.0.0"
   ARTIFACT_NAME "chttp_service_plugin"
   ARTIFACTS NATIVE
   TRANSPORTS HTTP
   PROJECTION_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json"
-  SOURCES
-    chttp_service_plugin_business.c)
+    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json")
 
 # NATIVE and PLUGIN share one business implementation. The public salts_idl
 # SOURCES contract feeds PLUGIN; attach the same source explicitly to the local
