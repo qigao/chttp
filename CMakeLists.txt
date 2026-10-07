@@ -3,7 +3,7 @@ include(CMakeOptions.cmake)
 
 project(
   Chttp
-  VERSION 1.1.10
+  VERSION 2.0.0
   LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -43,7 +43,6 @@ if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
 endif()
 find_package(llhttp CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
 
 add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)

@@ -14,5 +14,5 @@ target_include_directories(chttp_common PRIVATE
   ${PROJECT_SOURCE_DIR}/vendor/cjwt/include)
 target_link_libraries(chttp_common PRIVATE
   llhttp::llhttp_static Salts::CNet Salts::Core Salts::CFlow Salts::CMeta Salts::CSerde
-  Salts::JsonCSerdeAdapter Salts::JsonParser OpenSSL::Crypto chttp_cjwt)
+  Salts::JsonCSerdeAdapter Salts::JsonParser chttp_cjwt)
 install(DIRECTORY include/http_common DESTINATION include)

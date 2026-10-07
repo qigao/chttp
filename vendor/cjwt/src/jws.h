@@ -15,7 +15,7 @@ struct sig_section {
 };
 
 typedef enum {
-    JWS_PKEY_EVP = 0,
+    JWS_PKEY_UNSUPPORTED = 0,
     JWS_PKEY_ED448_PUBLIC
 } jws_pkey_type_t;
 
@@ -23,7 +23,7 @@ struct sig_input {
     struct sig_section full;
     struct sig_section sig;
     struct sig_section key;
-    void *pkey; /* Optional pre-parsed key object (e.g. EVP_PKEY) */
+    void *pkey; /* Optional private backend key object; unused by CHttp HS256. */
     jws_pkey_type_t pkey_type;
 };
 

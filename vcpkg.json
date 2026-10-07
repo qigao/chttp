@@ -1,9 +1,8 @@
 {
   "name": "http-services",
-  "version-semver": "1.1.10",
+  "version-semver": "2.0.0",
   "dependencies": [
     "llhttp",
-    "boringssl",
     "tree-sitter",
     "tree-sitter-c"
   ],

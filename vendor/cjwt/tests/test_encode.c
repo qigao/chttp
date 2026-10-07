@@ -3,31 +3,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-static void check_hmac_round_trip(cjwt_alg_t alg, const char *issuer,
-                                  const char *key)
-{
-  cjwt_t jwt = {0};
-  cjwt_t *decoded = NULL;
-  char *output = NULL;
-  cjwt_code_t rv;
-
-  jwt.header.alg = alg;
-  jwt.iss = (char *)issuer;
-
-  rv = cjwt_encode(&jwt, (const uint8_t *)key, strlen(key), &output);
-  check_equal(rv, CJWTE_OK);
-  check_not_null(output);
-
-  rv = cjwt_decode(output, strlen(output), OPT_ALLOW_ONLY_HS_ALG,
-                   (const uint8_t *)key, strlen(key), 0, 0, &decoded);
-  check_equal(rv, CJWTE_OK);
-  check_not_null(decoded);
-  check_equal(decoded->iss, issuer);
-
-  cjwt_destroy(decoded);
-  free(output);
-}
-
 suite("cjwt encode") {
   group("alg none") {
     it("encodes and decodes without key") {
@@ -113,13 +88,4 @@ suite("cjwt encode") {
     }
   }
 
-  group("hmac") {
-    it("round-trips HS384") {
-      check_hmac_round_trip(alg_hs384, "hs384_issuer", "hs384_secret_key");
-    }
-
-    it("round-trips HS512") {
-      check_hmac_round_trip(alg_hs512, "hs512_issuer", "hs512_secret_key");
-    }
-  }
 }

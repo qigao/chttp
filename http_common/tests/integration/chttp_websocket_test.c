@@ -43,7 +43,11 @@ static native_io_backend_kind chttp_websocket_test_backend(void) {
 #if defined(_WIN32)
   return NATIVE_IO_BACKEND_IOCP;
 #elif defined(__linux__)
+#if defined(CHTTP_WEBSOCKET_TEST_IO_URING)
+  return NATIVE_IO_BACKEND_IO_URING;
+#else
   return NATIVE_IO_BACKEND_EPOLL;
+#endif
 #else
   return NATIVE_IO_BACKEND_KQUEUE;
 #endif

@@ -961,13 +961,15 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
 }
 
 int chttp_async_client_set_h2_receive_window_policy(
-    chttp_async_client *client, uint32_t stream_window,
-    uint32_t connection_window) {
+    chttp_async_client *client,
+    const chttp_h2_receive_window_policy *policy) {
   chttp_client_impl *impl = chttp_client_get(client);
   size_t index;
-  if (impl == NULL || stream_window > INT32_MAX ||
-      connection_window > INT32_MAX ||
-      (connection_window != 0u && connection_window < UINT32_C(65535)))
+  if (impl == NULL || policy == NULL || policy->size != sizeof(*policy) ||
+      policy->stream_window > INT32_MAX ||
+      policy->connection_window > INT32_MAX ||
+      (policy->connection_window != 0u &&
+       policy->connection_window < UINT32_C(65535)))
     return SALTS_EINVAL;
   if (impl->poll_active || impl->callback_active || impl->stop_active ||
       impl->stopped)
@@ -975,8 +977,9 @@ int chttp_async_client_set_h2_receive_window_policy(
   for (index = 0u; index < impl->h2_session_capacity; ++index)
     if (impl->h2_sessions[index].state != CHTTP_H2_SESSION_FREE)
       return SALTS_EBUSY;
-  impl->h2_config.local_initial_window_size = stream_window;
-  impl->h2_config.connection_receive_window_size = connection_window;
+  impl->h2_config.local_initial_window_size = policy->stream_window;
+  impl->h2_config.connection_receive_window_size =
+      policy->connection_window;
   return SALTS_OK;
 }
 

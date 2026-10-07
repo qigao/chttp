@@ -208,6 +208,26 @@ typedef struct chttp_client_config {
 } chttp_client_config;
 
 /**
+ * Explicit HTTP/2 receive-credit policy for future sessions.
+ *
+ * Zero fields preserve RFC defaults (65,535). stream_window is advertised as
+ * SETTINGS_INITIAL_WINDOW_SIZE. connection_window controls the local
+ * connection receive credit; nonzero values below 65,535 are invalid because
+ * HTTP/2 provides no negative WINDOW_UPDATE. Values must not exceed INT32_MAX.
+ *
+ * The policy affects only HTTP/2 and must be applied before the first H2
+ * session exists. It is never auto-derived from payload size or owner count.
+ */
+typedef struct chttp_h2_receive_window_policy {
+  size_t size;
+  uint32_t stream_window;
+  uint32_t connection_window;
+} chttp_h2_receive_window_policy;
+
+#define CHTTP_H2_RECEIVE_WINDOW_POLICY_INIT \
+  {sizeof(chttp_h2_receive_window_policy), 0u, 0u}
+
+/**
  * Initializes one advanced caller-driven CHTTP/CNet owner. No partial client
  * is published.
  * @param client Zero-initialized output owner.
@@ -215,6 +235,14 @@ typedef struct chttp_client_config {
  * @return `SALTS_OK`, `SALTS_EINVAL`, `SALTS_ENOMEM`, or a CNet/backend init error.
  */
 int chttp_async_client_init(chttp_async_client *client, const chttp_client_config *config);
+
+/**
+ * Replaces HTTP/2 receive-credit policy for future H2 sessions.
+ * Existing/connecting H2 sessions make this return SALTS_EBUSY.
+ */
+int chttp_async_client_set_h2_receive_window_policy(
+    chttp_async_client *client,
+    const chttp_h2_receive_window_policy *policy);
 
 /**
  * Replaces CNet stream socket policy for future TCP/TLS connections.
@@ -281,6 +309,16 @@ const char *chttp_response_view_header(const chttp_response_view *response, cons
  * a poller, executor, or worker thread.
  */
 int chttp_client_init(chttp_client *client, const chttp_client_config *config);
+
+/**
+ * Blocking-client counterpart of
+ * chttp_async_client_set_h2_receive_window_policy(). The policy is retained
+ * across internal timeout recovery/reinitialization. Returns SALTS_EBUSY while
+ * a blocking operation is active.
+ */
+int chttp_client_set_h2_receive_window_policy(
+    chttp_client *client,
+    const chttp_h2_receive_window_policy *policy);
 
 /**
  * Blocking-client counterpart of chttp_async_client_set_socket_options().

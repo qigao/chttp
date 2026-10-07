@@ -109,7 +109,7 @@ find_package(Salts CONFIG REQUIRED)
 target_link_libraries(app PRIVATE CHttp::S3)
 ```
 
-BoringSSL、XML parser 和 llhttp 等实现依赖不会以第三方类型出现在 S3 公开 API 中。
+S3 的摘要、HMAC、MD5 兼容校验和 secret clear 统一通过 Salts provider-neutral crypto API；TLS 仍由 Salts::CNet 持有。XML parser 和 llhttp 等实现依赖也不会以第三方类型出现在 S3 公开 API 中。
 
 实现边界、容量、错误与 rollback 设计见
 [`docs/S3_CHTTP_DESIGN.md`](../docs/S3_CHTTP_DESIGN.md)，迁移来源见

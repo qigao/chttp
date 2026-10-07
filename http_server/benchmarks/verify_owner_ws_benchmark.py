@@ -133,15 +133,86 @@ for workload in expected:
                 )
 
             captured = int(row["captured_command_admissions"])
-            if mode == "callback-echo" and captured != 0:
-                raise SystemExit(
-                    f"{workload}/{owners}: callback echo used captured command path"
+            profile_commands = int(row.get("profile_commands", 0))
+            profile_bytes = int(row.get("profile_bytes", 0))
+            profile_failed = int(row.get("profile_failed_commands", 0))
+            if mode == "callback-echo":
+                if captured != 0:
+                    raise SystemExit(
+                        f"{workload}/{owners}: callback echo used captured command path"
+                    )
+                if profile_commands != 0 or profile_bytes != 0 or profile_failed != 0:
+                    raise SystemExit(
+                        f"{workload}/{owners}: callback echo emitted copied-command profile"
+                    )
+                if int(row.get("server_callback_echo_send_calls", 0)) != int(
+                    row["operations"]
+                ):
+                    raise SystemExit(
+                        f"{workload}/{owners}: callback echo send calls "
+                        f"{row.get('server_callback_echo_send_calls')} "
+                        f"!= operations {row['operations']}"
+                    )
+                for field in (
+                    "client_send_p50_ns",
+                    "client_send_p95_ns",
+                    "client_receive_p50_ns",
+                    "client_receive_p95_ns",
+                    "client_cnet_receive_p50_ns",
+                    "client_message_event_p50_ns",
+                    "client_receive_return_p50_ns",
+                    "client_receive_callbacks_p50",
+                    "client_plaintext_bytes_p50",
+                    "client_message_plaintext_bytes_p50",
+                    "server_callback_echo_send_ns_per_call",
+                ):
+                    if float(row.get(field, 0)) <= 0:
+                        raise SystemExit(
+                            f"{workload}/{owners}: invalid {field}={row.get(field)}"
+                        )
+            if mode == "captured-push":
+                if captured != int(row["operations"]):
+                    raise SystemExit(
+                        f"{workload}/{owners}: captured admissions {captured} "
+                        f"!= operations {row['operations']}"
+                    )
+                if profile_commands != int(row["operations"]):
+                    raise SystemExit(
+                        f"{workload}/{owners}: profile commands {profile_commands} "
+                        f"!= operations {row['operations']}"
+                    )
+                expected_bytes = int(row["operations"]) * payload
+                if profile_bytes != expected_bytes:
+                    raise SystemExit(
+                        f"{workload}/{owners}: profile bytes {profile_bytes} "
+                        f"!= expected {expected_bytes}"
+                    )
+                if profile_failed != 0:
+                    raise SystemExit(
+                        f"{workload}/{owners}: profile failures={profile_failed}"
+                    )
+                completion_samples = int(
+                    row.get("profile_send_completion_samples", 0)
                 )
-            if mode == "captured-push" and captured != int(row["operations"]):
-                raise SystemExit(
-                    f"{workload}/{owners}: captured admissions {captured} "
-                    f"!= operations {row['operations']}"
-                )
+                if completion_samples <= 0:
+                    raise SystemExit(
+                        f"{workload}/{owners}: missing transport send-completion samples"
+                    )
+                for field in (
+                    "profile_copy_ns_per_command",
+                    "profile_enqueue_ns_per_command",
+                    "profile_wake_ns_per_command",
+                    "profile_queue_residence_ns_per_command",
+                    "profile_send_admission_ns_per_command",
+                    "profile_send_completion_ns_per_sample",
+                    "profile_max_queue_residence_ns",
+                    "profile_max_send_admission_ns",
+                    "profile_max_send_completion_ns",
+                ):
+                    if float(row.get(field, 0)) <= 0:
+                        raise SystemExit(
+                            f"{workload}/{owners}: invalid {field}={row.get(field)}"
+                        )
 
     base = by_owner[1]
     base_rate = median_value(base, "messages_per_second")
@@ -176,6 +247,42 @@ for workload in expected:
             f"{int(sample['cross_owner_admission_handoffs'])} | {leases} | {peaks} |"
         )
     print()
+    if mode == "callback-echo":
+        print("| owners | client send p50 us | client receive p50 us | CNet receive p50 us | message event p50 us | receive callbacks p50 | plaintext bytes p50 | message bytes-at-event p50 | server callback send ns/call |")
+        print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for owners in (1, 2, 4):
+            points = by_owner[owners]
+            print(
+                f"| {owners} | "
+                f"{median_value(points, 'client_send_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_receive_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_cnet_receive_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_message_event_p50_ns')/1000.0:.1f} | "
+                f"{median_value(points, 'client_receive_callbacks_p50'):.1f} | "
+                f"{median_value(points, 'client_plaintext_bytes_p50'):.1f} | "
+                f"{median_value(points, 'client_message_plaintext_bytes_p50'):.1f} | "
+                f"{median_value(points, 'server_callback_echo_send_ns_per_call'):.1f} |"
+            )
+        print()
+
+    if mode == "captured-push":
+        print("| owners | copy ns/cmd | enqueue ns/cmd | wake ns/cmd | queue residence ns/cmd | send admission ns/cmd | send completion ns/sample | max queue ns | max send admission ns | max send completion ns |")
+        print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for owners in (1, 2, 4):
+            points = by_owner[owners]
+            print(
+                f"| {owners} | "
+                f"{median_value(points, 'profile_copy_ns_per_command'):.1f} | "
+                f"{median_value(points, 'profile_enqueue_ns_per_command'):.1f} | "
+                f"{median_value(points, 'profile_wake_ns_per_command'):.1f} | "
+                f"{median_value(points, 'profile_queue_residence_ns_per_command'):.1f} | "
+                f"{median_value(points, 'profile_send_admission_ns_per_command'):.1f} | "
+                f"{median_value(points, 'profile_send_completion_ns_per_sample'):.1f} | "
+                f"{int(median_value(points, 'profile_max_queue_residence_ns'))} | "
+                f"{int(median_value(points, 'profile_max_send_admission_ns'))} | "
+                f"{int(median_value(points, 'profile_max_send_completion_ns'))} |"
+            )
+        print()
 
 print(
     "Correctness gate: fixed equal work, verified WS/WSS setup, zero "

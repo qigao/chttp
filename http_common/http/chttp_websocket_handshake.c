@@ -4,7 +4,7 @@
 #include <base64_utils.h>
 
 #include <llhttp.h>
-#include <openssl/evp.h>
+#include <salts_crypto.h>
 #include <salts/random.h>
 #include <vstr.h>
 
@@ -48,18 +48,15 @@ static bool chttp_websocket_content_length_zero(vstr value) {
 
 int chttp_websocket_accept_compute(const char *key, char *output, size_t output_capacity) {
   unsigned char source[CHTTP_WEBSOCKET_ACCEPT_SOURCE_BYTES];
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int digest_size = 0u;
+  unsigned char digest[SALTS_SHA1_DIGEST_BYTES];
   if (key == NULL || output == NULL || strlen(key) != CHTTP_WEBSOCKET_KEY_BYTES ||
       output_capacity < CHTTP_WEBSOCKET_ACCEPT_CAPACITY)
     return SALTS_EINVAL;
   memcpy(source, key, CHTTP_WEBSOCKET_KEY_BYTES);
   memcpy(source + CHTTP_WEBSOCKET_KEY_BYTES, CHTTP_WEBSOCKET_GUID,
          sizeof(CHTTP_WEBSOCKET_GUID) - 1u);
-  if (EVP_Digest(source, sizeof(source), digest, &digest_size, EVP_sha1(), NULL) != 1 ||
-      digest_size != CHTTP_WEBSOCKET_SHA1_BYTES)
-    return SALTS_EIO;
-  if (tn_base64_encode_buf_ex(digest, digest_size, output, output_capacity) != TN_BASE64_OK)
+  if (salts_sha1(source, sizeof(source), digest) != SALTS_OK) return SALTS_EIO;
+  if (tn_base64_encode_buf_ex(digest, sizeof(digest), output, output_capacity) != TN_BASE64_OK)
     return SALTS_EMSGSIZE;
   return strlen(output) == CHTTP_WEBSOCKET_ACCEPT_BYTES ? SALTS_OK : SALTS_EPROTO;
 }
