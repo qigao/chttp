@@ -35,5 +35,11 @@ if(NOT TARGET Salts::DataBind)
   set(Chttp_NOT_FOUND_MESSAGE "SaltsUtils must provide the Salts::DataBind component")
   return()
 endif()
+if(NOT TARGET Salts::ComponentPlugin)
+  set(Chttp_FOUND FALSE)
+  set(Chttp_NOT_FOUND_MESSAGE
+    "Salts SDK must provide Salts::ComponentPlugin for CHttp::Service")
+  return()
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/ChttpTargets.cmake")
