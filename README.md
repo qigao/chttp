@@ -153,7 +153,7 @@ Local install presets derive their destination from
 packaging retains `stage/sdk/<RID>`. After changing the toolchain or SDK roots,
 reconfigure with `cmake --preset win-release-user --fresh` before building.
 
-### CMeta reflection and plugin lifetime
+### CMeta reflection and Component generation lifetime
 
 The 2.1 migration also uses the published `cmeta_*` platform/file APIs,
 `<cmeta_buffer.h>`, `<cmeta_fs.h>` and `<cmeta_uuid.h>`. Existing `mem_*`
@@ -161,24 +161,23 @@ buffer operations, `SALTS_*` error codes and `Salts::*` CMake targets keep their
 published names. Typed declarations use `cmeta_type` and `cmeta_function`.
 
 Service and RPC continue to use producer-owned CMeta Function/Data descriptors
-and exact DataBind adapters. Service mount performs admission before publishing
-a route; request workers use the cached execution binding under its retained
-plugin lease. Salts 2.x plugin types/functions use `cmeta_plugin_*` and
-`CMETA_PLUGIN_*`; the runtime headers remain `<salts/plugin.h>` and the target
-remains `Salts::Plugin`.
+and exact DataBind adapters. Component-backed Service mount performs admission
+before publishing a route: it acquires one `Salts::ComponentPlugin` generation
+scope, resolves an explicitly named `chttp_service_operation_provider`, copies
+the admitted native binding/execution into the mounted method record, and
+performs no Component or Plugin lookup on request/deferred hot paths.
 
-Service method slots use the CMeta cleanup obligation and Plugin lease adapter
-from `<salts/plugin_scope.h>`. Each successful acquisition arms exactly one
-obligation. Failed mount and Service destruction share its discharge path;
-cleanup runs after dependent CFlow state is destroyed. The registry must remain
-at a stable address until Service destruction, after server/executor drain.
-Lease release invariant violations fail fast instead of being silently ignored.
+The Component generation is the outer module-lifetime authority. It retains the
+underlying Plugin lease while mounted Service scopes and other admitted users
+may still reach provider metadata/code. Service destruction first waits for
+accepted deferred invocations, destroys dependent CFlow state, then releases
+its generation scope. A draining generation cannot stop/release provider
+instances or Plugin leases until that scope is gone.
 
-Rebuild Service consumers and generated plugins together against matching
-SDKs; old `salts_plugin_*` source names and earlier reflection/plugin ABI epochs
-are not accepted. HTTP/RPC formats, export IDs and route semantics are unchanged.
-The Service HTTP test covers rejected export cleanup, successful mount retention,
-stop/admission closure and final unload.
+The integration branch intentionally removes the former Service-private
+Plugin-registry/catalog/lease mount path rather than keeping a fallback. HTTP
+projection, MethodPlan/native ownership semantics, route behavior, and exact
+execution ABI remain unchanged.
 
 Always restore the latest Salts and SaltsUtils packages together, then regenerate
 IDL bindings and rebuild consumers against those SDKs. CMake does not pin or
