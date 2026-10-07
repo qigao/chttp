@@ -2685,6 +2685,17 @@ static void chttp_server_owner_worker(void *user) {
   if (status != SALTS_OK)
     chttp_server_request_global_stop(server, status);
 
+  /*
+   * Listener admission can enqueue and wake this owner from a different
+   * thread. Keep every owner CNet client alive until the listener control
+   * thread has stopped accepting, closed/destroyed the listener, and published
+   * listener_done. This removes the enqueue -> wake versus owner teardown race.
+   */
+  cmeta_mutex_lock(&server->mutex);
+  while (!server->listener_done)
+    cmeta_cond_wait(&server->changed, &server->mutex);
+  cmeta_mutex_unlock(&server->mutex);
+
   if (chttp_server_owner_runtime_state_get(owner) ==
       CHTTP_SERVER_OWNER_RUNTIME_READY) {
     const int transition_status = chttp_server_owner_runtime_transition(
