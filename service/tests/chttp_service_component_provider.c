@@ -15,12 +15,6 @@ static int chttp_component_state;
 static bool chttp_component_get_operation(
     void *self,
     chttp_service_component_operation *out) {
-  DataBindNativeTypeBinding request_native =
-      DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
-  DataBindNativeTypeBinding response_native =
-      DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
-  DataBindServiceNativeBinding native =
-      DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
   const DataBindNativeExecution *execution;
   DataBindError error = DATA_BIND_ERROR_INIT;
 
@@ -31,7 +25,7 @@ static bool chttp_component_get_operation(
       (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
 
   if (databind_11_CHttpPlugin_4_Calc_3_Add__databind_native_binding(
-          &request_native, &response_native, &native, &error) != DATA_BIND_OK)
+          &out->request, &out->response, &out->native, &error) != DATA_BIND_OK)
     return false;
 
   execution =
@@ -39,7 +33,6 @@ static bool chttp_component_get_operation(
   if (execution == NULL || !data_bind_native_execution_valid(execution))
     return false;
 
-  out->native = native;
   out->execution = *execution;
   return chttp_service_component_operation_valid(out);
 }
