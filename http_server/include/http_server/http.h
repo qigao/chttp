@@ -230,8 +230,11 @@ typedef struct chttp_server_websocket_options {
  * `:segment` parameters, and exclude the query string. The server invokes
  * handlers serially when owner_count=1. With explicit owner_count>1, handlers
  * for different fixed-owner connections may run concurrently; one connection
- * and one HTTP/2 connection remain owner-affine. A handler must not block or
- * call stop/destroy. Session capacity zero disables Sessions; otherwise the Cookie
+ * and one HTTP/2 connection remain owner-affine. Listener accept/admission is
+ * progressed by one bounded control-plane thread independent of these owners;
+ * it never runs HTTP/TLS/H2 callbacks and is not included in owner_count.
+ * A handler must not block or call stop/destroy. Session capacity zero disables
+ * Sessions; otherwise the Cookie
  * contains only a CSPRNG id and values stay in the bounded in-memory store.
  */
 typedef struct chttp_server_config {
@@ -296,10 +299,11 @@ typedef struct chttp_server_socket_options {
   {sizeof(chttp_server_socket_options), CNET_STREAM_SOCKET_OPTIONS_INIT, CNET_LISTENER_OPTIONS_INIT}
 
 /**
- * Versioned pre-start execution policy. owner_count=1 preserves the existing
- * serialized callback/runtime model. owner_count>1 enables fixed owner-affine
- * connection execution; connections never migrate between owners and callbacks
- * on different owners may execute concurrently.
+ * Versioned pre-start execution policy. owner_count=1 preserves serialized
+ * application callbacks on one fixed connection owner. owner_count>1 enables
+ * fixed owner-affine connection execution; connections never migrate between
+ * owners and callbacks on different owners may execute concurrently.
+ * The dedicated listener/admission control-plane thread is not counted here.
  */
 typedef struct chttp_server_execution_options {
   size_t size;

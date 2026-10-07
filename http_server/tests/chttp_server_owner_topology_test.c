@@ -371,6 +371,11 @@ spec("CHttp owner topology") {
     check(impl->owner.network_initialized);
     check(impl->thread_started);
     check(impl->owner.thread_started);
+    check(impl->listener_initialized);
+    check(impl->listener_thread_started);
+    check(impl->listener_startup_reported);
+    check(impl->listener_ready);
+    check(!impl->listener_done);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check(port != 0u);
 
@@ -381,6 +386,8 @@ spec("CHttp owner topology") {
     check(!impl->network_initialized);
     check(!impl->owner.network_initialized);
     check(!impl->listener_initialized);
+    check(!impl->listener_thread_started);
+    check(impl->listener_done);
     check(!impl->thread_started);
     check(!impl->owner.thread_started);
 
@@ -677,6 +684,10 @@ spec("CHttp owner topology") {
     check(!second_impl->network_initialized);
     check(!second_impl->owner.network_initialized);
     check(!second_impl->listener_initialized);
+    check(!second_impl->listener_thread_started);
+    check(!second_impl->listener_startup_reported);
+    check(!second_impl->listener_ready);
+    check(!second_impl->listener_done);
     check(!second_impl->thread_started);
     check(!second_impl->owner.thread_started);
 

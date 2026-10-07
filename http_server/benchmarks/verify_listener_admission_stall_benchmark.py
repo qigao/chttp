@@ -76,6 +76,11 @@ for work in sorted(expected_work):
                 raise SystemExit(
                     f"work={work}/owners={owners}: stall connection left owner0"
                 )
+            if row.get("admitted_while_stalled") is not True:
+                raise SystemExit(
+                    f"work={work}/owners={owners}: probe admission did not complete "
+                    "while owner0 remained gated"
+                )
             if int(row.get("cross_owner_data_plane_hops", -1)) != 0:
                 raise SystemExit(
                     f"work={work}/owners={owners}: unexpected data-plane hop"
@@ -182,14 +187,12 @@ print(
     f"owners=2 {two:.0f} ns; owners=4 {four:.0f} ns"
 )
 print(
-    "- Interpretation: the probe socket and request are queued before the owner0 "
-    "handler gate is released. Owner lease growth is the admission witness. "
-    "If admission latency continues to track owner0 CPU work as owner_count grows, "
-    "the listener control plane is coupled to the primary owner rather than being "
-    "limited by owner-selection balance."
+    "- Correctness contract: the probe owner lease is acquired while owner0 remains "
+    "blocked at the handler gate. The calibrated application CPU work starts only "
+    "after this admission witness succeeds."
 )
 print(
-    "- This gate intentionally does not impose a performance threshold: it can "
-    "reproduce or falsify #220 without converting noisy timing into a correctness "
-    "failure."
+    "- Timing is diagnostic rather than a pass/fail threshold: isolated listener "
+    "admission should remain near the zero-work control instead of scaling with the "
+    "later 50us..5ms owner0 CPU burn."
 )

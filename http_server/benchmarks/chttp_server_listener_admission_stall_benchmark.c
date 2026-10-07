@@ -537,6 +537,16 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
             &stall_route.entered, sequence) != 0)
       goto cleanup;
 
+    owner_listener_snapshot(impl, owner_count, before, before_rings);
+    if (owner_listener_sum(before, owner_count) != 1u) {
+      fprintf(stderr,
+              "unexpected leases before isolated admission owners=%zu work_ns=%llu sample=%zu leases=%zu\n",
+              owner_count, (unsigned long long)target_work_ns, index,
+              owner_listener_sum(before, owner_count));
+      goto cleanup;
+    }
+
+    admission_started = cmeta_hrtime();
     if (owner_listener_connect(
             port, &probe_socket, &connect_latencies[index]) != 0)
       goto cleanup;
@@ -545,23 +555,17 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       goto cleanup;
     }
 
-    owner_listener_snapshot(impl, owner_count, before, before_rings);
-    if (owner_listener_sum(before, owner_count) != 1u) {
-      fprintf(stderr,
-              "probe admitted before owner0 stall release owners=%zu work_ns=%llu sample=%zu leases=%zu\n",
-              owner_count, (unsigned long long)target_work_ns, index,
-              owner_listener_sum(before, owner_count));
-      owner_listener_close(probe_socket);
-      goto cleanup;
-    }
-
-    response_started = cmeta_hrtime();
-    admission_started = response_started;
-    atomic_store_explicit(
-        &stall_route.armed, sequence, memory_order_release);
-
+    /*
+     * Post-fix contract: listener admission is a separate control plane.
+     * The probe lease must be acquired while owner0 is still blocked at the
+     * handler gate. Only after this witness succeeds may the benchmark release
+     * owner0 and run the calibrated application CPU work.
+     */
     if (owner_listener_wait_total(
             impl, owner_count, 2u, after, after_rings, peak_rings) != 0) {
+      fprintf(stderr,
+              "listener admission remained blocked by owner0 owners=%zu work_ns=%llu sample=%zu\n",
+              owner_count, (unsigned long long)target_work_ns, index);
       owner_listener_close(probe_socket);
       goto cleanup;
     }
@@ -573,6 +577,10 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       goto cleanup;
     }
     ++admissions[assigned];
+
+    response_started = cmeta_hrtime();
+    atomic_store_explicit(
+        &stall_route.armed, sequence, memory_order_release);
 
     if (owner_listener_receive_ok(probe_socket) != 0) {
       owner_listener_close(probe_socket);
@@ -610,6 +618,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       "\"calibrated_work_ns\":%llu,"
       "\"burn_iterations\":%zu,"
       "\"stall_owner\":0,"
+      "\"admitted_while_stalled\":true,"
       "\"accepted_connections\":%llu,"
       "\"rejected_connections\":%llu,"
       "\"owner0_admissions\":%zu,"
@@ -711,7 +720,7 @@ int main(void) {
       "\"benchmark\":\"chttp_server_listener_admission_stall\","
       "\"commit\":\"%s\","
       "\"samples\":%zu,"
-      "\"note\":\"owner0 handler is gated until a new probe socket/request is queued; lease growth measures listener admission after release\"}\n",
+      "\"note\":\"owner0 handler remains gated until probe lease growth proves isolated listener admission; calibrated CPU work begins only after admission\"}\n",
       getenv("GITHUB_SHA") != NULL ? getenv("GITHUB_SHA") : "unknown",
       samples);
 
