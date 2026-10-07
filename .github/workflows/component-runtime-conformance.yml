@@ -1,0 +1,78 @@
+name: Component runtime conformance
+
+on:
+  push:
+    branches:
+      - feature/component-runtime-conformance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-component-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  service-component:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout CHttp integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/component-runtime-conformance
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up released SDK graph and vcpkg cache
+        uses: ./.github/actions/setup-salts-sdk
+        with:
+          with-turbowasm: "false"
+
+      - name: Checkout Salts Component integration branch
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: feature/cmeta-pattern-component-runtime
+          path: .integration/salts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and install Salts Component integration SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-component-sdk"
+          cmake --preset release-linux-ninja             -S .integration/salts             -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF
+          cmake --build .integration/salts/build/linux-gcc-release -j2
+          cmake --install .integration/salts/build/linux-gcc-release             --prefix "$salts_root"
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$salts_root/include/salts/component_plugin.h"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+
+      - name: Configure CHttp against Component integration SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset ci-linux-dev-user             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF
+
+      - name: Build Component Service conformance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-gcc-debug --target             chttp_service_http_test -j2
+
+      - name: Run Component Service conformance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/linux-gcc-debug             -R '^(chttp_service_http_test|chttp_service_hot_path_boundary_contract)$'             --no-tests=error --output-on-failure
+
+      - name: Verify exact integration branch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "feature/component-runtime-conformance"
