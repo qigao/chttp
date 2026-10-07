@@ -5,7 +5,7 @@
  */
 #include "jws.h"
 
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -21,11 +21,11 @@ cjwt_code_t jws_verify_signature(const cjwt_t *jwt, const struct sig_input *in)
     if (!in->key.data || in->key.len == 0) return CJWTE_SIGNATURE_MISSING_KEY;
     if (in->sig.len != sizeof(mac)) return CJWTE_SIGNATURE_VALIDATION_FAILED;
 
-    status = salts_hmac_sha256(in->key.data, in->key.len,
+    status = cmeta_hmac_sha256(in->key.data, in->key.len,
                                in->full.data, in->full.len, mac);
     if (status == SALTS_OK)
-        status = salts_crypto_equal(in->sig.data, mac, sizeof(mac), &equal);
-    salts_crypto_clear(mac, sizeof(mac));
+        status = cmeta_crypto_equal(in->sig.data, mac, sizeof(mac), &equal);
+    cmeta_crypto_clear(mac, sizeof(mac));
     return status == SALTS_OK && equal ? CJWTE_OK
                                        : CJWTE_SIGNATURE_VALIDATION_FAILED;
 }
@@ -46,9 +46,9 @@ cjwt_code_t jws_sign(const cjwt_alg_t alg, const uint8_t *full, size_t full_len,
 
     output = (uint8_t *)malloc(SALTS_SHA256_DIGEST_BYTES);
     if (!output) return CJWTE_OUT_OF_MEMORY;
-    status = salts_hmac_sha256(key, key_len, full, full_len, output);
+    status = cmeta_hmac_sha256(key, key_len, full, full_len, output);
     if (status != SALTS_OK) {
-        salts_crypto_clear(output, SALTS_SHA256_DIGEST_BYTES);
+        cmeta_crypto_clear(output, SALTS_SHA256_DIGEST_BYTES);
         free(output);
         return CJWTE_SIGNATURE_VALIDATION_FAILED;
     }

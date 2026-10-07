@@ -1,6 +1,6 @@
 #include "s3_internal.h"
 
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <cmeta_fs.h>
 #include <cmeta_uuid.h>
@@ -992,14 +992,14 @@ int s3_put_object_multipart_file(s3_client *client, const char *bucket, const ch
   if (status != SALTS_OK) goto failed;
   if (cmeta_fs_unlink(options->checkpoint_path) != SALTS_OK)
     status = s3_multipart_error(out_error, SALTS_EIO, "multipart-checkpoint-remove");
-  salts_crypto_clear(buffer, part_size);
+  cmeta_crypto_clear(buffer, part_size);
   free(buffer);
   (void)s3_multipart_destroy(&upload);
   return status;
 
 failed:
   if (file != SALTS_INVALID_FILE) (void)cmeta_fs_close(file);
-  salts_crypto_clear(buffer, part_size);
+  cmeta_crypto_clear(buffer, part_size);
   free(buffer);
   return s3_multipart_file_failure(client, &upload, options->checkpoint_path,
                                    options->preserve_on_failure && checkpoint_available, status,

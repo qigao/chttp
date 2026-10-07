@@ -1,6 +1,6 @@
 #include "s3_internal.h"
 
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -434,7 +434,7 @@ void s3_request_plan_destroy(s3_request_plan *plan) {
   tstr_free(plan->payload_sha256);
   for (index = 0u; index < plan->header_count; ++index) {
     if (plan->headers[index].value != NULL)
-      salts_crypto_clear((void *)plan->headers[index].value,
+      cmeta_crypto_clear((void *)plan->headers[index].value,
                       tstr_len((tstr)plan->headers[index].value));
     tstr_free((tstr)plan->headers[index].name);
     tstr_free((tstr)plan->headers[index].value);

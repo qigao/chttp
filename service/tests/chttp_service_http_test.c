@@ -1626,10 +1626,10 @@ spec("CHttp::Service generated HTTP MethodPlan") {
             &request_thread, chttp_service_request_thread, &request_args),
         SALTS_OK);
 
-    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(
                &invoke_gate.started, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       cmeta_thread_yield();
     check_equal(
         atomic_load_explicit(&invoke_gate.started, memory_order_acquire), 1);
@@ -1971,9 +1971,9 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(
         cflow_executor_try_post_task(&executor, &plugin_gate_task),
         CFLOW_ADMISSION_ACCEPTED);
-    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&plugin_gate.started, memory_order_acquire) == 0 &&
-           salts_monotonic_ms() < deadline)
+           cmeta_monotonic_ms() < deadline)
       cmeta_thread_yield();
     check_equal(
         atomic_load_explicit(&plugin_gate.started, memory_order_acquire), 1);
@@ -1994,12 +1994,12 @@ spec("CHttp::Service generated HTTP MethodPlan") {
             &plugin_request),
         SALTS_OK);
 
-    deadline = salts_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     do {
       check_true(cflow_executor_get_stats(&executor, &executor_stats));
       if (executor_stats.pending > executor_pending_baseline) break;
       cmeta_thread_yield();
-    } while (salts_monotonic_ms() < deadline);
+    } while (cmeta_monotonic_ms() < deadline);
     check_true(executor_stats.pending > executor_pending_baseline);
 
     /*

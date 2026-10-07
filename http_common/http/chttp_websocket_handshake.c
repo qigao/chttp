@@ -4,7 +4,7 @@
 #include <base64_utils.h>
 
 #include <llhttp.h>
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 #include <salts/random.h>
 #include <vstr.h>
 
@@ -55,7 +55,7 @@ int chttp_websocket_accept_compute(const char *key, char *output, size_t output_
   memcpy(source, key, CHTTP_WEBSOCKET_KEY_BYTES);
   memcpy(source + CHTTP_WEBSOCKET_KEY_BYTES, CHTTP_WEBSOCKET_GUID,
          sizeof(CHTTP_WEBSOCKET_GUID) - 1u);
-  if (salts_sha1(source, sizeof(source), digest) != SALTS_OK) return SALTS_EIO;
+  if (cmeta_sha1(source, sizeof(source), digest) != SALTS_OK) return SALTS_EIO;
   if (tn_base64_encode_buf_ex(digest, sizeof(digest), output, output_capacity) != TN_BASE64_OK)
     return SALTS_EMSGSIZE;
   return strlen(output) == CHTTP_WEBSOCKET_ACCEPT_BYTES ? SALTS_OK : SALTS_EPROTO;

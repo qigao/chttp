@@ -2,7 +2,7 @@
 
 #include <base64_utils.h>
 
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -40,10 +40,10 @@ static int s3_sse_customer_headers(const s3_sse_options *options, size_t max_hea
   status = s3_sse_base64(options->customer_key, options->customer_key_size, max_header_bytes,
                          &headers->owned_values[0]);
   if (status == SALTS_OK)
-    status = salts_md5(options->customer_key, options->customer_key_size, digest);
+    status = cmeta_md5(options->customer_key, options->customer_key_size, digest);
   if (status == SALTS_OK)
     status = s3_sse_base64(digest, sizeof(digest), max_header_bytes, &headers->owned_values[1]);
-  salts_crypto_clear(digest, sizeof(digest));
+  cmeta_crypto_clear(digest, sizeof(digest));
   if (status != SALTS_OK) return status;
   headers->items[0] = (chttp_header){"X-Amz-Server-Side-Encryption-Customer-Algorithm", "AES256"};
   headers->items[1] =
@@ -102,7 +102,7 @@ void s3_sse_headers_destroy(s3_sse_headers *headers) {
   for (index = 0u; index < sizeof(headers->owned_values) / sizeof(headers->owned_values[0]);
        ++index) {
     if (headers->owned_values[index] != NULL) {
-      salts_crypto_clear(headers->owned_values[index], strlen(headers->owned_values[index]));
+      cmeta_crypto_clear(headers->owned_values[index], strlen(headers->owned_values[index]));
       free(headers->owned_values[index]);
     }
   }
