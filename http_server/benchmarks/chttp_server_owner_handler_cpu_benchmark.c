@@ -1,6 +1,7 @@
 #include "chttp_server_runtime.h"
 
 #include <http_server/http.h>
+#include <cflow/executor.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
 
@@ -37,11 +38,30 @@ enum {
   OWNER_CPU_WARMUP = 2,
   OWNER_CPU_TIMEOUT_MS = 10000,
   OWNER_CPU_MAX_OWNERS = 4,
-  OWNER_CPU_MAX_REQUESTS = 128
+  OWNER_CPU_MAX_REQUESTS = 128,
+  OWNER_CPU_DEFERRED_JOBS = 16,
+  OWNER_CPU_DEFERRED_QUEUE_CAPACITY = 16
 };
+
+typedef enum owner_cpu_mode {
+  OWNER_CPU_MODE_INLINE = 0,
+  OWNER_CPU_MODE_DEFERRED = 1
+} owner_cpu_mode;
+
+typedef struct owner_cpu_deferred_job {
+  atomic_int in_use;
+  size_t burn_iterations;
+  chttp_server_deferred deferred;
+  atomic_uint *errors;
+} owner_cpu_deferred_job;
 
 typedef struct owner_cpu_route {
   size_t burn_iterations;
+  owner_cpu_mode mode;
+  cflow_executor *executor;
+  owner_cpu_deferred_job *jobs;
+  size_t job_count;
+  atomic_uint *deferred_errors;
 } owner_cpu_route;
 
 typedef struct owner_cpu_barrier {
@@ -183,16 +203,109 @@ static chttp_server_config owner_cpu_server_config(void) {
       .buffer_capacity_bytes = 2u * 1024u * 1024u};
 }
 
+static void owner_cpu_deferred_job_release(owner_cpu_deferred_job *job) {
+  if (job == NULL) return;
+  job->deferred = (chttp_server_deferred){0};
+  job->burn_iterations = 0u;
+  job->errors = NULL;
+  atomic_store_explicit(&job->in_use, 0, memory_order_release);
+}
+
+static void owner_cpu_deferred_job_run(void *user) {
+  static const char body[] = "ok";
+  owner_cpu_deferred_job *job = (owner_cpu_deferred_job *)user;
+  chttp_server_deferred_response reply = {
+      .size = sizeof(reply),
+      .status_code = 200u,
+      .content_type = "text/plain",
+      .body = body,
+      .body_size = sizeof(body) - 1u};
+  int status;
+
+  if (job == NULL) return;
+  if (job->burn_iterations != 0u)
+    (void)owner_cpu_burn(job->burn_iterations);
+  status = chttp_server_deferred_reply(&job->deferred, &reply);
+  if (status != SALTS_OK && job->errors != NULL)
+    atomic_fetch_add_explicit(job->errors, 1u, memory_order_relaxed);
+  owner_cpu_deferred_job_release(job);
+}
+
+static owner_cpu_deferred_job *owner_cpu_deferred_job_claim(
+    owner_cpu_route *route) {
+  size_t index;
+  if (route == NULL || route->jobs == NULL) return NULL;
+  for (index = 0u; index < route->job_count; ++index) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(
+            &route->jobs[index].in_use, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire))
+      return &route->jobs[index];
+  }
+  return NULL;
+}
+
 static int owner_cpu_handler(void *user,
                              const chttp_server_request_view *request,
                              chttp_server_response *response) {
   static const char body[] = "ok";
+  static const char unavailable[] = "Service Unavailable";
   owner_cpu_route *route = (owner_cpu_route *)user;
+  owner_cpu_deferred_job *job;
+  cflow_executor_task task;
+  cflow_admission_status admission;
+  int status;
   (void)request;
+
   if (route == NULL) return SALTS_EINVAL;
-  if (route->burn_iterations != 0u)
-    (void)owner_cpu_burn(route->burn_iterations);
-  return chttp_server_reply(response, 200u, "text/plain", body, sizeof(body) - 1u);
+  if (route->mode == OWNER_CPU_MODE_INLINE) {
+    if (route->burn_iterations != 0u)
+      (void)owner_cpu_burn(route->burn_iterations);
+    return chttp_server_reply(
+        response, 200u, "text/plain", body, sizeof(body) - 1u);
+  }
+
+  if (route->executor == NULL || route->jobs == NULL ||
+      route->job_count == 0u || route->deferred_errors == NULL)
+    return SALTS_EINVAL;
+
+  job = owner_cpu_deferred_job_claim(route);
+  if (job == NULL) {
+    atomic_fetch_add_explicit(
+        route->deferred_errors, 1u, memory_order_relaxed);
+    return chttp_server_reply(
+        response, 503u, "text/plain",
+        unavailable, sizeof(unavailable) - 1u);
+  }
+
+  job->burn_iterations = route->burn_iterations;
+  job->errors = route->deferred_errors;
+  status = chttp_server_response_defer(response, &job->deferred);
+  if (status != SALTS_OK) {
+    owner_cpu_deferred_job_release(job);
+    return status;
+  }
+
+  task = (cflow_executor_task){
+      .run = owner_cpu_deferred_job_run,
+      .user = job};
+  admission = cflow_executor_try_post_task(route->executor, &task);
+  if (admission != CFLOW_ADMISSION_ACCEPTED) {
+    chttp_server_deferred_response rejected = {
+        .size = sizeof(rejected),
+        .status_code = 503u,
+        .content_type = "text/plain",
+        .body = unavailable,
+        .body_size = sizeof(unavailable) - 1u};
+    atomic_fetch_add_explicit(
+        route->deferred_errors, 1u, memory_order_relaxed);
+    status = chttp_server_deferred_reply(&job->deferred, &rejected);
+    if (status != SALTS_OK)
+      atomic_fetch_add_explicit(
+          route->deferred_errors, 1u, memory_order_relaxed);
+    owner_cpu_deferred_job_release(job);
+  }
+  return SALTS_OK;
 }
 
 static int owner_cpu_socket_timeout(owner_cpu_socket socket_value) {
@@ -362,7 +475,8 @@ static void owner_cpu_client_main(void *user) {
 }
 
 static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
-                         size_t requests_per_connection) {
+                         size_t requests_per_connection,
+                         owner_cpu_mode mode) {
   chttp_server server = {0};
   chttp_server_config config = owner_cpu_server_config();
   chttp_server_execution_options execution =
@@ -371,6 +485,10 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   chttp_server_impl *impl = NULL;
   owner_cpu_route fast_route = {0};
   owner_cpu_route slow_route = {0};
+  cflow_executor executor = {0};
+  bool executor_initialized = false;
+  owner_cpu_deferred_job deferred_jobs[OWNER_CPU_DEFERRED_JOBS];
+  atomic_uint deferred_errors;
   owner_cpu_socket sockets[OWNER_CPU_CONNECTIONS];
   size_t leases[OWNER_CPU_MAX_OWNERS] = {0};
   size_t before[OWNER_CPU_MAX_OWNERS] = {0};
@@ -401,11 +519,26 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index)
     sockets[index] = OWNER_CPU_INVALID_SOCKET;
   memset(clients, 0, sizeof(clients));
+  memset(deferred_jobs, 0, sizeof(deferred_jobs));
   atomic_init(&barrier.ready, 0);
   atomic_init(&barrier.start, 0);
+  atomic_init(&deferred_errors, 0u);
+  for (index = 0u; index < OWNER_CPU_DEFERRED_JOBS; ++index)
+    atomic_init(&deferred_jobs[index].in_use, 0);
 
   slow_route.burn_iterations =
       owner_cpu_calibrate(target_work_ns, &calibrated_work_ns);
+  slow_route.mode = mode;
+  if (mode == OWNER_CPU_MODE_DEFERRED) {
+    if (!cflow_executor_worker_init_with_capacity(
+            &executor, owner_count, OWNER_CPU_DEFERRED_QUEUE_CAPACITY))
+      goto cleanup;
+    executor_initialized = true;
+    slow_route.executor = &executor;
+    slow_route.jobs = deferred_jobs;
+    slow_route.job_count = OWNER_CPU_DEFERRED_JOBS;
+    slow_route.deferred_errors = &deferred_errors;
+  }
 
   if (chttp_server_init(&server, &config) != SALTS_OK) goto cleanup;
   execution.owner_count = owner_count;
@@ -477,6 +610,10 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
 
   wall_ns = cmeta_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
+  if (executor_initialized && !cflow_executor_wait_idle(&executor))
+    goto cleanup;
+  if (atomic_load_explicit(&deferred_errors, memory_order_acquire) != 0u)
+    goto cleanup;
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK ||
       stats.rejected_connections != 0u)
     goto cleanup;
@@ -484,6 +621,7 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   printf(
       "{\"kind\":\"measurement\","
       "\"benchmark\":\"chttp_server_owner_handler_cpu\","
+      "\"mode\":\"%s\","
       "\"owners\":%zu,"
       "\"connections\":%u,"
       "\"requests_per_connection\":%zu,"
@@ -508,8 +646,11 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
       "\"slow_p99_ns\":%llu,"
       "\"accepted_connections\":%llu,"
       "\"rejected_connections\":%llu,"
+      "\"deferred_errors\":%u,"
+      "\"worker_count\":%zu,"
       "\"cross_owner_data_plane_hops\":0,"
       "\"errors\":0}\n",
+      mode == OWNER_CPU_MODE_DEFERRED ? "deferred" : "inline",
       owner_count, OWNER_CPU_CONNECTIONS, requests_per_connection,
       (unsigned long long)target_work_ns,
       (unsigned long long)calibrated_work_ns,
@@ -530,7 +671,9 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
       (unsigned long long)owner_cpu_percentile(slow_latencies, slow_count, 95u),
       (unsigned long long)owner_cpu_percentile(slow_latencies, slow_count, 99u),
       (unsigned long long)stats.accepted_connections,
-      (unsigned long long)stats.rejected_connections);
+      (unsigned long long)stats.rejected_connections,
+      atomic_load_explicit(&deferred_errors, memory_order_acquire),
+      mode == OWNER_CPU_MODE_DEFERRED ? owner_count : 0u);
   fflush(stdout);
   result = 0;
 
@@ -545,6 +688,8 @@ cleanup_threads:
   }
 
 cleanup:
+  if (executor_initialized)
+    (void)cflow_executor_wait_idle(&executor);
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
     if (sockets[index] != OWNER_CPU_INVALID_SOCKET) {
       owner_cpu_close(sockets[index]);
@@ -555,6 +700,8 @@ cleanup:
     (void)chttp_server_stop(&server, OWNER_CPU_TIMEOUT_MS);
     (void)chttp_server_destroy(&server);
   }
+  if (executor_initialized)
+    cflow_executor_destroy(&executor);
   return result;
 }
 
@@ -565,6 +712,9 @@ int main(void) {
       UINT64_C(1000000), UINT64_C(5000000)};
   const size_t requests =
       owner_cpu_env_count("CHTTP_OWNER_CPU_REQUESTS", OWNER_CPU_DEFAULT_REQUESTS);
+  static const owner_cpu_mode modes[] = {
+      OWNER_CPU_MODE_INLINE, OWNER_CPU_MODE_DEFERRED};
+  size_t mode_index;
   size_t work_index;
   size_t owner_index;
   int result = 0;
@@ -585,14 +735,20 @@ int main(void) {
       getenv("GITHUB_SHA") != NULL ? getenv("GITHUB_SHA") : "unknown",
       OWNER_CPU_CONNECTIONS, requests);
 
-  for (work_index = 0u; work_index < sizeof(work_ns) / sizeof(work_ns[0]); ++work_index) {
-    for (owner_index = 0u; owner_index < sizeof(owners) / sizeof(owners[0]); ++owner_index) {
-      if (owner_cpu_run(owners[owner_index], work_ns[work_index], requests) != 0) {
-        fprintf(stderr,
-                "owner handler CPU benchmark failed owners=%zu target_work_ns=%llu\n",
-                owners[owner_index], (unsigned long long)work_ns[work_index]);
-        result = 3;
-        goto cleanup;
+  for (mode_index = 0u; mode_index < sizeof(modes) / sizeof(modes[0]); ++mode_index) {
+    for (work_index = 0u; work_index < sizeof(work_ns) / sizeof(work_ns[0]); ++work_index) {
+      for (owner_index = 0u; owner_index < sizeof(owners) / sizeof(owners[0]); ++owner_index) {
+        if (owner_cpu_run(
+                owners[owner_index], work_ns[work_index], requests,
+                modes[mode_index]) != 0) {
+          fprintf(
+              stderr,
+              "owner handler CPU benchmark failed mode=%s owners=%zu target_work_ns=%llu\n",
+              modes[mode_index] == OWNER_CPU_MODE_DEFERRED ? "deferred" : "inline",
+              owners[owner_index], (unsigned long long)work_ns[work_index]);
+          result = 3;
+          goto cleanup;
+        }
       }
     }
   }
