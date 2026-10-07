@@ -457,6 +457,7 @@ struct chttp_server_impl {
   cmeta_mutex_t mutex;
   cmeta_cond_t changed;
   cmeta_thread_t thread;
+  cmeta_thread_t listener_thread;
   chttp_server_stats stats;
   chttp_server_websocket_profile *websocket_profile;
   size_t admission_cursor;
@@ -466,6 +467,7 @@ struct chttp_server_impl {
   size_t finished_owner_count;
   uint16_t startup_port;
   int startup_status;
+  int listener_terminal_status;
   atomic_size_t buffer_bytes;
   atomic_size_t peak_buffer_bytes;
   _Atomic uint64_t rejected_buffer_allocations;
@@ -475,6 +477,10 @@ struct chttp_server_impl {
   bool session_sync_initialized;
   bool network_initialized;
   bool listener_initialized;
+  bool listener_thread_started;
+  bool listener_startup_reported;
+  bool listener_ready;
+  bool listener_done;
   bool tls_initialized;
   bool thread_started;
   bool start_called;
