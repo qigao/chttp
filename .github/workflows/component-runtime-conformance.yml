@@ -1,4 +1,5 @@
 name: Component runtime conformance
+# Re-run marker: current Component integration head
 
 on:
   push:
