@@ -33,12 +33,13 @@ publication. Omit both inputs to retain the published-SDK release workflow.
 The macOS SDK profile inherits `GccMac` (GCC 15), matching the producer SDK's
 thread-local runtime ABI; Apple Clang's native TLS cannot link the GCC-built
 TinyTest runtime's emulated TLS symbols.
-Native asynchronous file upload/download and static-file responses currently
-require Windows IOCP or Linux io_uring. macOS kqueue/poll do not provide the
-regular-file operations required by CFlow, so those paths remain unsupported
-(`SALTS_ENOTSUP`); there is no implicit synchronous or thread-pool fallback.
+Native asynchronous file upload/download and static-file responses select
+Windows IOCP, Linux io_uring, or macOS Darwin AIO. The macOS path requires the
+matching candidate SDK exposing `CFLOW_IO_NATIVE_DARWIN_AIO`; kqueue/poll remain
+unsupported for regular files. There is no implicit synchronous or thread-pool
+fallback. File completions retain the same bounded runtime and owner callbacks.
 See [HTTP file transfer semantics](docs/HTTP.md) and the
-[CFlow backend contract](https://github.com/qigao/salts/blob/4ebdaf4003394ae481747b6087bd6e19e38c40f3/cflow/README.md#native-socket-byte-pipe-and-regular-file-io).
+[CFlow backend contract](https://github.com/qigao/salts/blob/488b88e4cce9aae4479f63c403ab78911b7c51f8/cflow/README.md#macos-file-backend-design).
 
 The manifest includes Lua and QuickJS because the installed SaltsUtils package
 exports those dependencies; it does not introduce another HTTP or TLS provider.
