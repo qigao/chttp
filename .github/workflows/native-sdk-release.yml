@@ -166,7 +166,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install nasm ninja
+          brew install nasm ninja gcc@15
           test -n "${VCPKG_ROOT:-}"
           test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
@@ -203,10 +203,10 @@ jobs:
           prefix="$GITHUB_WORKSPACE/stage/sdk/${{ steps.env.outputs.rid }}"
           export QIGAO_SDK_RID="${{ steps.env.outputs.rid }}"
           export QIGAO_TARGET_TRIPLET="${{ steps.env.outputs.triplet }}" QIGAO_HOST_TRIPLET="${{ steps.env.outputs.triplet }}"
-          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
-          cmake --build --preset ci-sdk-release-user --parallel 2
-          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
-          cmake --build --preset install-ci-sdk-release-user
+          cmake --preset ci-macos-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
+          cmake --build --preset ci-macos-sdk-release-user --parallel 2
+          ctest --preset ci-macos-sdk-release-user --output-on-failure --no-tests=error
+          cmake --build --preset install-ci-macos-sdk-release-user
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
           cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}

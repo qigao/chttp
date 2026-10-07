@@ -30,6 +30,9 @@ Salts CI dispatch with retained SDK artifacts. Linux, Windows and macOS use the
 selected artifact and run the formal CTest suite; SaltsUtils still resolves from
 the package feed. Candidate mode skips cross compilation, packaging and
 publication. Omit both inputs to retain the published-SDK release workflow.
+The macOS SDK profile inherits `GccMac` (GCC 15), matching the producer SDK's
+thread-local runtime ABI; Apple Clang's native TLS cannot link the GCC-built
+TinyTest runtime's emulated TLS symbols.
 
 The manifest includes Lua and QuickJS because the installed SaltsUtils package
 exports those dependencies; it does not introduce another HTTP or TLS provider.

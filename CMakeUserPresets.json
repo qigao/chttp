@@ -354,6 +354,10 @@
             }
         },
         {
+            "name": "ci-macos-sdk-release-user",
+            "inherits": ["GccMac", "ci-sdk-release-user"]
+        },
+        {
             "name": "ci-android-sdk-release-user",
             "inherits": "ci-sdk-release-user",
             "binaryDir": "${sourceDir}/build/android-native-sdk",
@@ -393,6 +397,15 @@
         }
     ],
     "buildPresets": [
+        {
+            "name": "ci-macos-sdk-release-user",
+            "configurePreset": "ci-macos-sdk-release-user"
+        },
+        {
+            "name": "install-ci-macos-sdk-release-user",
+            "configurePreset": "ci-macos-sdk-release-user",
+            "targets": ["install"]
+        },
         {
             "name": "win-dev-user",
             "configurePreset": "win-dev-user"
@@ -593,6 +606,11 @@
         }
     ],
     "testPresets": [
+        {
+            "name": "ci-macos-sdk-release-user",
+            "configurePreset": "ci-macos-sdk-release-user",
+            "inherits": "base-test"
+        },
         {
             "name": "ci-sdk-release-user",
             "configurePreset": "ci-sdk-release-user",
