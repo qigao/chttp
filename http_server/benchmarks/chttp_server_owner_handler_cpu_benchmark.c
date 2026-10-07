@@ -1,9 +1,9 @@
 #include "chttp_server_runtime.h"
 
 #include <http_server/http.h>
-#include <cflow/executor.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
+#include <salts/thread_pool.h>
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -65,7 +65,7 @@ typedef struct owner_cpu_deferred_job {
 typedef struct owner_cpu_route {
   size_t burn_iterations;
   owner_cpu_mode mode;
-  cflow_executor *executor;
+  cmeta_threadpool_t *pool;
   owner_cpu_deferred_job *jobs;
   size_t job_count;
   atomic_uint *deferred_errors;
@@ -285,8 +285,6 @@ static int owner_cpu_handler(void *user,
   static const char unavailable[] = "Service Unavailable";
   owner_cpu_route *route = (owner_cpu_route *)user;
   owner_cpu_deferred_job *job;
-  cflow_executor_task task;
-  cflow_admission_status admission;
   int status;
   (void)request;
 
@@ -298,7 +296,7 @@ static int owner_cpu_handler(void *user,
         response, 200u, "text/plain", body, sizeof(body) - 1u);
   }
 
-  if (route->executor == NULL || route->jobs == NULL ||
+  if (route->pool == NULL || route->jobs == NULL ||
       route->job_count == 0u || route->deferred_errors == NULL)
     return SALTS_EINVAL;
 
@@ -319,12 +317,13 @@ static int owner_cpu_handler(void *user,
    * reserve bounded worker capacity before transferring the HTTP request,
    * then publish READY only after response_defer succeeds. The accepted worker
    * may start immediately but cannot touch the deferred handle while WAITING.
+   *
+   * Use the same application-owned bounded threadpool surface as the repository
+   * deferred Web example. CHttp owns no hidden worker pool.
    */
-  task = (cflow_executor_task){
-      .run = owner_cpu_deferred_job_run,
-      .user = job};
-  admission = cflow_executor_try_post_task(route->executor, &task);
-  if (admission != CFLOW_ADMISSION_ACCEPTED) {
+  status = cmeta_threadpool_try_submit(
+      route->pool, owner_cpu_deferred_job_run, job);
+  if (status != SALTS_OK) {
     atomic_fetch_add_explicit(
         route->deferred_errors, 1u, memory_order_relaxed);
     owner_cpu_deferred_job_release(job);
@@ -522,8 +521,7 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   chttp_server_impl *impl = NULL;
   owner_cpu_route fast_route = {0};
   owner_cpu_route slow_route = {0};
-  cflow_executor executor = {0};
-  bool executor_initialized = false;
+  cmeta_threadpool_t *pool = NULL;
   owner_cpu_deferred_job deferred_jobs[OWNER_CPU_DEFERRED_JOBS];
   atomic_uint deferred_errors;
   owner_cpu_socket sockets[OWNER_CPU_CONNECTIONS];
@@ -569,11 +567,12 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
       owner_cpu_calibrate(target_work_ns, &calibrated_work_ns);
   slow_route.mode = mode;
   if (mode == OWNER_CPU_MODE_DEFERRED) {
-    if (!cflow_executor_worker_init_with_capacity(
-            &executor, owner_count, OWNER_CPU_DEFERRED_QUEUE_CAPACITY))
-      goto cleanup;
-    executor_initialized = true;
-    slow_route.executor = &executor;
+    const cmeta_threadpool_config_t pool_config = {
+        .num_threads = owner_count,
+        .queue_capacity = OWNER_CPU_DEFERRED_QUEUE_CAPACITY};
+    pool = cmeta_threadpool_create_with_config(&pool_config);
+    if (pool == NULL) goto cleanup;
+    slow_route.pool = pool;
     slow_route.jobs = deferred_jobs;
     slow_route.job_count = OWNER_CPU_DEFERRED_JOBS;
     slow_route.deferred_errors = &deferred_errors;
@@ -649,8 +648,6 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
 
   wall_ns = cmeta_hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
-  if (executor_initialized && !cflow_executor_wait_idle(&executor))
-    goto cleanup;
   if (atomic_load_explicit(&deferred_errors, memory_order_acquire) != 0u)
     goto cleanup;
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK ||
@@ -727,8 +724,6 @@ cleanup_threads:
   }
 
 cleanup:
-  if (executor_initialized)
-    (void)cflow_executor_wait_idle(&executor);
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
     if (sockets[index] != OWNER_CPU_INVALID_SOCKET) {
       owner_cpu_close(sockets[index]);
@@ -737,10 +732,20 @@ cleanup:
   }
   if (server.impl != NULL) {
     (void)chttp_server_stop(&server, OWNER_CPU_TIMEOUT_MS);
-    (void)chttp_server_destroy(&server);
   }
-  if (executor_initialized)
-    cflow_executor_destroy(&executor);
+  if (pool != NULL) {
+    const int shutdown_status = cmeta_threadpool_shutdown_with_policy(
+        pool, SALTS_THREADPOOL_SHUTDOWN_DRAIN);
+    const int wait_status =
+        shutdown_status == SALTS_OK
+            ? cmeta_threadpool_wait_status(pool)
+            : shutdown_status;
+    if (result == 0 && wait_status != SALTS_OK) result = 1;
+    cmeta_threadpool_destroy(pool);
+    pool = NULL;
+  }
+  if (server.impl != NULL)
+    (void)chttp_server_destroy(&server);
   return result;
 }
 
