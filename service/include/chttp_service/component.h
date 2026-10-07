@@ -1,6 +1,7 @@
 #ifndef CHTTP_SERVICE_COMPONENT_H
 #define CHTTP_SERVICE_COMPONENT_H
 
+#include <data_bind_binding_plan.h>
 #include <data_bind_native_binding.h>
 #include <cmeta/interface.h>
 #include <cmeta/object_interface.h>
@@ -24,7 +25,11 @@ static inline bool chttp_service_component_operation_valid(
     const chttp_service_component_operation *operation) {
   return operation != NULL &&
          operation->size == sizeof(*operation) &&
-         data_bind_service_native_binding_valid(&operation->native) &&
+         operation->native.size == sizeof(operation->native) &&
+         operation->native.abi_version == DATA_BIND_BINDING_PLAN_ABI_VERSION &&
+         cmeta_function_desc_valid(operation->native.function) &&
+         operation->native.request != NULL &&
+         operation->native.response != NULL &&
          data_bind_native_execution_valid(&operation->execution);
 }
 
