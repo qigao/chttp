@@ -15,6 +15,8 @@ on:
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
       - ".github/actions/setup-salts-sdk/**"
+      - ".github/actions/setup-sccache/**"
+      - ".github/actions/finish-sccache/**"
   push:
     tags:
       - "v*"
@@ -83,6 +85,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh linux-x64
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: linux-x64-gcc-release
       - name: Configure, build and install
         shell: bash
         run: |
@@ -106,6 +113,9 @@ jobs:
           path: stage/sdk
           if-no-files-found: error
           compression-level: 9
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
 
   macos:
     name: macOS SDK
@@ -146,6 +156,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh "${{ steps.env.outputs.rid }}"
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: ${{ steps.env.outputs.rid }}-appleclang-release
       - name: Configure, build and install
         shell: bash
         run: |
@@ -170,6 +185,9 @@ jobs:
           path: stage/sdk
           if-no-files-found: error
           compression-level: 9
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
 
   windows:
     name: Windows x64 SDK
@@ -209,6 +227,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: windows-x64-msvc-release
       - name: Configure, build and install
         shell: cmd
         run: |
@@ -246,6 +269,9 @@ jobs:
           path: stage/sdk
           if-no-files-found: error
           compression-level: 9
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
 
   android:
     name: Android arm64-v8a SDK
@@ -280,6 +306,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh android-arm64-v8a
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: android-arm64-v8a-clang-release
       - name: Configure, build and install
         shell: bash
         run: |
@@ -304,6 +335,9 @@ jobs:
           path: stage/sdk
           if-no-files-found: error
           compression-level: 9
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
 
   ios:
     name: iOS SDK / ${{ matrix.name }}
@@ -345,6 +379,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh "${{ matrix.rid }}"
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: ${{ matrix.rid }}-appleclang-release
 
       - name: Configure, build and install
         shell: bash
@@ -380,6 +419,9 @@ jobs:
           path: stage/sdk
           if-no-files-found: error
           compression-level: 9
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
 
   pack:
     name: Pack CHttp.Native

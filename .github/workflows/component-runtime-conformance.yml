@@ -121,6 +121,12 @@ jobs:
           echo "DATABIND_ROOT=$root" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
 
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: linux-x64-gcc-release
+
       - name: Configure the complete conformance graph
         shell: bash
         env:
@@ -151,6 +157,10 @@ jobs:
           cmake --build --preset ci-component-installed-user -j2
           ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
+
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
 
       - name: Record acceptance identities
         if: always()

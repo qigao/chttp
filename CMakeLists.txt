@@ -16,7 +16,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 if(MSVC)
-  add_compile_options(/experimental:c11atomics)
+  # MSVC accepts either prefix; sccache treats unknown slash options as inputs.
+  add_compile_options(-experimental:c11atomics)
 endif()
 
 include(CTest)
@@ -39,6 +40,20 @@ find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+if(MSVC AND CMAKE_C_COMPILER_LAUNCHER MATCHES "sccache")
+  # The installed SDK also exports the atomics option. Preserve its language
+  # condition and semantics while avoiding sccache's unknown slash flag parser.
+  foreach(chttp_atomic_target IN ITEMS Salts::Platform Salts::Core)
+    get_target_property(chttp_atomic_options ${chttp_atomic_target}
+                        INTERFACE_COMPILE_OPTIONS)
+    if(chttp_atomic_options)
+      string(REPLACE "/experimental:c11atomics" "-experimental:c11atomics"
+             chttp_atomic_options "${chttp_atomic_options}")
+      set_property(TARGET ${chttp_atomic_target} PROPERTY
+                   INTERFACE_COMPILE_OPTIONS "${chttp_atomic_options}")
+    endif()
+  endforeach()
+endif()
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
 endif()

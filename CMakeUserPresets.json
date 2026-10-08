@@ -75,7 +75,10 @@
         {
             "name": "vcpkg-cache-ci",
             "hidden": true,
-            "inherits": "vcpkg-cache",
+            "inherits": [
+                "vcpkg-cache",
+                "ci-compiler-cache"
+            ],
             "environment": {
                 "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
                 "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",

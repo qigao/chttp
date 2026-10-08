@@ -34,6 +34,11 @@ jobs:
         uses: ./.github/actions/setup-salts-sdk
         with:
           with-turbowasm: "true"
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: linux-x64-gcc-debug
       - name: Configure exact Chttp head
         shell: bash
         run: |
@@ -174,6 +179,9 @@ jobs:
           ctest --test-dir build/linux-gcc-debug \
             -R '^openapi_databind_http_provider$' \
             --no-tests=error --output-on-failure
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash

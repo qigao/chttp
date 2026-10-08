@@ -1,0 +1,15 @@
+name: Finish CHttp compiler cache
+description: Report compilation cache statistics and stop the server before cache upload.
+runs:
+  using: composite
+  steps:
+    - name: Report and flush compiler cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          printf '### sccache\n\n```text\n'
+          sccache --show-stats
+          printf '```\n'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+        sccache --stop-server

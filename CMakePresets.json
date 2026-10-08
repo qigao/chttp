@@ -6,6 +6,16 @@
     ],
     "configurePresets": [
         {
+            "name": "ci-compiler-cache",
+            "hidden": true,
+            "description": "Use the CI launcher environment; embed MSVC debug information for sccache",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER_LAUNCHER": "$penv{CMAKE_C_COMPILER_LAUNCHER}",
+                "CMAKE_CXX_COMPILER_LAUNCHER": "$penv{CMAKE_CXX_COMPILER_LAUNCHER}",
+                "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>"
+            }
+        },
+        {
             "name": "base-win-dev-user",
             "hidden": true,
             "displayName": "Developer Build (Windows, Base)",

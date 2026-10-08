@@ -1,0 +1,54 @@
+name: Set up CHttp compiler cache
+description: Restore a platform and configuration scoped sccache disk cache.
+inputs:
+  cache-scope:
+    description: Target platform, compiler and configuration (for example linux-x64-gcc-debug).
+    required: true
+  version:
+    description: Pinned upstream sccache release.
+    default: v0.18.0
+runs:
+  using: composite
+  steps:
+    - name: Prepare compiler cache environment
+      shell: bash
+      env:
+        CACHE_SCOPE: ${{ inputs.cache-scope }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$CACHE_SCOPE" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+          echo "invalid compiler cache scope: $CACHE_SCOPE" >&2
+          exit 1
+        fi
+        echo "SCCACHE_DIR=$RUNNER_TEMP/chttp-sccache/$CACHE_SCOPE" >> "$GITHUB_ENV"
+        echo "SCCACHE_CACHE_SIZE=1G" >> "$GITHUB_ENV"
+        # Keep statistics through long test/benchmark steps until explicit stop.
+        echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+        # Preprocess every request so newly generated or restored SDK headers
+        # also participate in the compilation cache key.
+        echo "SCCACHE_DIRECT=false" >> "$GITHUB_ENV"
+        echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+        echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+
+    - name: Install sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+      with:
+        version: ${{ inputs.version }}
+        # The finish action reports statistics before stopping the server.
+        disable_annotations: "true"
+
+    - name: Restore compiler cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/chttp-sccache/${{ inputs.cache-scope }}
+        key: chttp-sccache-v1-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          chttp-sccache-v1-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-
+
+    - name: Start compiler cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        sccache --start-server
+        sccache --zero-stats

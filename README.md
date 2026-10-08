@@ -130,6 +130,44 @@ restore's `project.assets.json`, so older cached payloads cannot select an SDK.
 CI presets inherit the cache environment supplied by the setup action; native
 packaging uses `ci-sdk-release-user` and its Android/iOS variants.
 
+CI also uses [sccache](https://github.com/mozilla/sccache/tree/v0.18.0)
+through `.github/actions/setup-sccache` and the hidden `ci-compiler-cache`
+preset for GCC, Clang (including Apple/NDK Clang) and MSVC. The pinned Mozilla
+setup action installs the Apache-2.0 tool and verifies its download checksum;
+it is a CI tool, not a library or an SDK dependency. vcpkg binary caches and
+same-run build artifacts do not reuse CHTTP compilation results across commits;
+sccache provides that layer without persisting a CMake build tree. A GCC/Clang
+only cache would leave MSVC uncovered; retaining the existing caches alone
+would continue recompiling every translation unit on a fresh runner.
+
+The disk cache is limited to 1 GiB per scope and stored with `actions/cache`.
+Restore prefixes isolate the runner OS/architecture, sccache version, target
+platform, compiler and Debug/Release configuration. Each job/run/attempt writes
+a distinct snapshot; the restore prefix deliberately excludes the commit so
+later commits can reuse unchanged compilation units. Compiler identity,
+preprocessed input and compilation flags determine sccache hits, including
+separate sanitizer flags within the Debug scope. Direct preprocessor caching
+is disabled so newly generated or restored SDK headers are considered on every
+request. MSVC uses embedded debug information (`/Z7`) for Debug/RelWithDebInfo
+under CMake 3.25's `CMP0141` policy; local presets retain their existing settings.
+The existing MSVC C11 atomics option uses the equivalent
+`-experimental:c11atomics` spelling because sccache 0.18 does not recognize its
+slash spelling and classifies it as an extra input file. MSVC supports
+[both option prefixes](https://learn.microsoft.com/en-us/cpp/build/reference/compiler-options).
+With an MSVC sccache launcher, CHTTP also normalizes that spelling on the
+imported `Salts::Platform` and `Salts::Core` targets in memory, preserving their
+language conditions and leaving installed SDK files untouched. This adapter
+can be removed once the SDK exports the dash spelling or the pinned sccache
+release recognizes the slash option.
+
+CMake still configures on every run, SDK restore still resolves the latest
+packages, and the existing test and artifact steps always execute regardless
+of cache hits. The finish action reports hits, misses and uncacheable requests
+in the job summary and stops sccache before the snapshot is uploaded. Actual
+speedups depend on unchanged inputs and must be measured from CI statistics.
+To roll back, remove the setup/finish steps and the `ci-compiler-cache`
+inheritance; the dependency and artifact cache layers remain independent.
+
 For a local Windows restore, use PowerShell 7, put .NET SDK 8 on `PATH`, set `GITHUB_TOKEN`, then
 run `./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64 -Local` in the same
 PowerShell session used for the build. It sets `SALTS_ROOT` and

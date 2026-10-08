@@ -32,6 +32,11 @@ jobs:
           persist-credentials: false
       - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: linux-x64-gcc-debug
       - name: Verify SaltsUtils component export
         shell: bash
         run: |
@@ -111,6 +116,9 @@ jobs:
           "$RUNNER_TEMP/chttp-web-consumer-build/chttp_web_consumer"
           "$RUNNER_TEMP/chttp-service-consumer-build/chttp_service_consumer"
           "$RUNNER_TEMP/chttp-rpc-service-consumer-build/chttp_rpc_service_consumer"
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash

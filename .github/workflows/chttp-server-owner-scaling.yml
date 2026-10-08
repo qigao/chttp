@@ -10,6 +10,8 @@ on:
       - "http_server/benchmarks/**"
       - "CMakeLists.txt"
       - ".github/workflows/chttp-server-owner-scaling.yml"
+      - ".github/actions/setup-sccache/**"
+      - ".github/actions/finish-sccache/**"
   pull_request:
     branches: [master]
     paths:
@@ -18,6 +20,8 @@ on:
       - "http_server/benchmarks/**"
       - "CMakeLists.txt"
       - ".github/workflows/chttp-server-owner-scaling.yml"
+      - ".github/actions/setup-sccache/**"
+      - ".github/actions/finish-sccache/**"
 
 env:
   CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -45,6 +49,11 @@ jobs:
       - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
 
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: linux-x64-gcc-release
       - name: Configure release benchmark
         shell: bash
         run: |
@@ -145,6 +154,9 @@ jobs:
           path: benchmark-results/
           if-no-files-found: error
 
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
       - name: Verify exact head and clean tracked source
         shell: bash
         run: |

@@ -10,6 +10,8 @@ on:
       - "http_common/tests/chttp_h2_proto_test.c"
       - "http_server/benchmarks/**"
       - ".github/workflows/chttp-h2-flow-window.yml"
+      - ".github/actions/setup-sccache/**"
+      - ".github/actions/finish-sccache/**"
   workflow_dispatch:
 
 env:
@@ -38,6 +40,11 @@ jobs:
       - name: Set up Salts SDKs
         uses: ./.github/actions/setup-salts-sdk
 
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: linux-x64-gcc-release
       - name: Configure release benchmark
         shell: bash
         run: |
@@ -110,6 +117,9 @@ jobs:
           path: benchmark-results/
           if-no-files-found: error
 
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
       - name: Verify exact head and clean tracked source
         if: always()
         shell: bash
