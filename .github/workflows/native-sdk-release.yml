@@ -224,6 +224,7 @@ jobs:
         run: |
           set -euo pipefail
           brew install nasm ninja gcc@15
+          echo "QIGAO_APPLE_CLANG=$(xcrun --find clang)" >> "$GITHUB_ENV"
           test -n "${VCPKG_ROOT:-}"
           test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
