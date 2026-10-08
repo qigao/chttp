@@ -213,6 +213,7 @@ target_compile_definitions(chttp_service_http_test PRIVATE
   GENERATED_CHTTP_SERVICE_COMPONENT_SECOND_PATH="$<TARGET_FILE:chttp_service_component_provider_second>")
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
+set_tests_properties(chttp_service_http_test PROPERTIES TIMEOUT 180)
 
 set_target_properties(chttp_service_http_test PROPERTIES
   FOLDER "service/tests"

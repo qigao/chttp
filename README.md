@@ -226,3 +226,38 @@ Additional technical references:
 ---
 
 **Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
+
+## Component runtime candidate qualification
+
+The integration-only `Component runtime conformance` workflow checks out the
+consumer event SHA and restores the exact Salts 3.0 prerelease
+`3.0.0-cmeta.06fa2b10b418f997c38f123ddefa00e448897617` for `linux-x64`.
+It verifies package SHA256
+`682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca`
+and the SDK commit/RID/profile manifest before configuration. SaltsUtils source
+`9de20e8aa3d333543f4c691150300b0dbfd07b8c` is rebuilt against that SDK;
+the workflow does not use stable first-party binaries for this candidate.
+
+The HTTP test publishes a second DSO while old deferred work is queued. It checks different response bodies from the old/new mounted routes, BUSY destruction/drain/unload, and ordered retirement. Component scopes belong to mounted method records and survive until Service destruction; closing Component admission does not invalidate existing routes.
+
+With the workflow's installed dependency roots and shared vcpkg/re2c environment,
+run the complete configured build and CTest suites, then verify the installed
+consumer independently:
+
+```sh
+cmake --preset ci-component-release-user
+cmake --build --preset ci-component-release-user -j2
+ctest --preset ci-component-release-user --no-tests=error --output-on-failure
+cmake --build --preset install-ci-component-release-user -j2
+cd service/tests/installed
+cmake --preset ci-component-installed-user
+cmake --build --preset ci-component-installed-user -j2
+ctest --preset ci-component-installed-user --no-tests=error --output-on-failure
+```
+
+CI selects Component and adjacent business suites from the full configured graph
+and uploads consumer/dependency identities, JUnit results, and CTest logs as
+`component-acceptance-linux-x64`. The root CTest command above runs the broader
+suite. A green Linux Release run establishes only this profile's acceptance;
+sanitizer qualification and Windows/macOS downstream runs remain separate release
+gates. This workflow neither merges nor publishes a stable release.

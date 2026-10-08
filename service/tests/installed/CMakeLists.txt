@@ -14,3 +14,4 @@ target_compile_features(chttp_service_consumer PRIVATE c_std_11)
 
 enable_testing()
 add_test(NAME chttp_service_installed_lifecycle COMMAND chttp_service_consumer)
+set_tests_properties(chttp_service_installed_lifecycle PROPERTIES TIMEOUT 60)
