@@ -31,7 +31,7 @@ set_target_properties(chttp_server_execution_options_test PROPERTIES
 
 
 add_executable(chttp_server_owner_topology_test chttp_server_owner_topology_test.c)
-target_link_libraries(chttp_server_owner_topology_test PRIVATE CHttp::Client CHttp::Server Salts::CNetManager Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_server_owner_topology_test PRIVATE CHttp::Client CHttp::Server Salts::CNet Salts::CFlow Salts::TinyTest)
 target_include_directories(
   chttp_server_owner_topology_test
   PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
