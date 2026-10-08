@@ -1,15 +1,7 @@
+# PRs use native-sdk-release.yml for the complete build, CTest and install graph.
 name: CHttp H2 flow-window attribution
 
 on:
-  pull_request:
-    branches: [master]
-    paths:
-      - "http_common/http/chttp_h2_proto.*"
-      - "http_client/src/chttp_client.c"
-      - "http_client/src/chttp_client_internal.h"
-      - "http_common/tests/chttp_h2_proto_test.c"
-      - "http_server/benchmarks/**"
-      - ".github/workflows/chttp-h2-flow-window.yml"
   workflow_dispatch:
 
 env:

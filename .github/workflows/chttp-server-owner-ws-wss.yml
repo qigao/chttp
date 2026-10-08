@@ -1,11 +1,7 @@
+# PRs use native-sdk-release.yml for the complete build, CTest and install graph.
 name: CHttp server post-fix WSS attribution
 
 on:
-  pull_request:
-    branches: [master]
-    paths:
-      - "http_server/benchmarks/**"
-      - ".github/workflows/chttp-server-owner-ws-wss.yml"
   workflow_dispatch:
 
 env:

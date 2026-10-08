@@ -261,3 +261,13 @@ Additional technical references:
 ---
 
 **Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
+
+### #1001 candidate CI
+
+Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the successful
+Salts producer run and commit used by branch/PR host qualification. The restore
+action validates run provenance and the SDK manifest before use. Linux, Windows
+and macOS build the full configured graph, run CTest and install the SDK.
+Candidate runs skip cross packaging and publication; tags cannot select a
+candidate. Remove the temporary pin after the required SDK is published and
+validate the ordinary released dependency graph before releasing this project.

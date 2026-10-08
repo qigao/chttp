@@ -13,17 +13,6 @@ on:
         type: string
         default: ''
   pull_request:
-    paths:
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "CMakeOptions.cmake"
-      - "CMakePresets.json"
-      - "CMakeUserPresets.json"
-      - "presets/**"
-      - "packaging/nuget/**"
-      - "vcpkg.json"
-      - ".github/workflows/native-sdk-release.yml"
-      - ".github/actions/setup-salts-sdk/**"
   push:
     tags:
       - "v*"
@@ -41,21 +30,35 @@ jobs:
   metadata:
     runs-on: ubuntu-latest
     outputs:
+      candidate_run_id: ${{ steps.candidate.outputs.run_id }}
+      candidate_sha: ${{ steps.candidate.outputs.commit }}
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - name: Validate candidate selection
+      - name: Resolve candidate SDK
+        id: candidate
         shell: pwsh
         env:
           CANDIDATE_RUN: ${{ inputs.salts_candidate_run_id }}
           CANDIDATE_SHA: ${{ inputs.salts_candidate_sha }}
         run: |
-          if ($env:CANDIDATE_RUN -or $env:CANDIDATE_SHA) {
-            if ($env:CANDIDATE_RUN -notmatch '^[1-9][0-9]*$' -or $env:CANDIDATE_SHA -notmatch '^[0-9a-f]{40}$') {
-              throw 'Specify both the candidate run ID and full source SHA'
-            }
+          $ErrorActionPreference = 'Stop'
+          $run = $env:CANDIDATE_RUN
+          $sha = $env:CANDIDATE_SHA
+          if (-not $run -and -not $sha -and $env:GITHUB_REF_TYPE -ne 'tag') {
+            $pin = Get-Content cmake/ci/salts-candidate.json -Raw | ConvertFrom-Json
+            $run = $pin.run_id
+            $sha = $pin.commit
           }
+          if ($run -or $sha) {
+            if ($run -notmatch '^[1-9][0-9]*$' -or $sha -notmatch '^[0-9a-f]{40}$') {
+              throw 'Specify both a candidate run ID and full commit SHA'
+            }
+            if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Release tags cannot consume candidate SDKs' }
+          }
+          "run_id=$run" >> $env:GITHUB_OUTPUT
+          "commit=$sha" >> $env:GITHUB_OUTPUT
       - id: version
         shell: bash
         run: |
@@ -106,11 +109,11 @@ jobs:
           test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
       - name: Select candidate Salts SDK
-        if: inputs.salts_candidate_run_id != ''
+        if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
-          run-id: ${{ inputs.salts_candidate_run_id }}
-          commit: ${{ inputs.salts_candidate_sha }}
+          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
+          commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: linux-x64
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK graph
@@ -184,11 +187,11 @@ jobs:
           echo "triplet=$triplet" >> "$GITHUB_OUTPUT"
 
       - name: Select candidate Salts SDK
-        if: inputs.salts_candidate_run_id != ''
+        if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
-          run-id: ${{ inputs.salts_candidate_run_id }}
-          commit: ${{ inputs.salts_candidate_sha }}
+          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
+          commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: ${{ steps.env.outputs.rid }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK graph
@@ -262,11 +265,11 @@ jobs:
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
 
       - name: Select candidate Salts SDK
-        if: inputs.salts_candidate_run_id != ''
+        if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
-          run-id: ${{ inputs.salts_candidate_run_id }}
-          commit: ${{ inputs.salts_candidate_sha }}
+          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
+          commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: windows-x64
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore native SDK graph
@@ -315,7 +318,7 @@ jobs:
           compression-level: 9
 
   android:
-    if: inputs.salts_candidate_run_id == ''
+    if: needs.metadata.outputs.candidate_run_id == ''
     name: Android arm64-v8a SDK
     needs: metadata
     runs-on: ubuntu-24.04
@@ -374,7 +377,7 @@ jobs:
           compression-level: 9
 
   ios:
-    if: inputs.salts_candidate_run_id == ''
+    if: needs.metadata.outputs.candidate_run_id == ''
     name: iOS SDK / ${{ matrix.name }}
     needs: metadata
     runs-on: macos-15
@@ -451,7 +454,7 @@ jobs:
           compression-level: 9
 
   pack:
-    if: inputs.salts_candidate_run_id == ''
+    if: needs.metadata.outputs.candidate_run_id == ''
     name: Pack CHttp.Native
     needs: [metadata, linux, macos, windows, android, ios]
     runs-on: ubuntu-latest
@@ -525,7 +528,7 @@ jobs:
 
   publish:
     name: Publish package and GitHub Release
-    if: inputs.salts_candidate_run_id == '' && inputs.salts_candidate_sha == '' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
+    if: needs.metadata.outputs.candidate_run_id == '' && needs.metadata.outputs.candidate_sha == '' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
     needs: [metadata, pack]
     runs-on: ubuntu-latest
     permissions:
