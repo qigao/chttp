@@ -130,6 +130,24 @@ restore's `project.assets.json`, so older cached payloads cannot select an SDK.
 CI presets inherit the cache environment supplied by the setup action; native
 packaging uses `ci-sdk-release-user` and its Android/iOS variants.
 
+Native SDK CI follows the Salts matrix layout: `native-sdk-release.yml` owns
+metadata, packaging and publication, and calls the reusable `native-build.yml`.
+Its five entries select the runner, target and host triplets, compiler, user
+preset and artifact for Linux x64, macOS, Windows x64, Android arm64-v8a and iOS
+arm64. The matrix uses `fail-fast: false` so a failed platform does not cancel
+other platforms; packaging waits for the whole matrix to succeed and consumes
+that run's existing `chttp-sdk-*` artifacts. macOS still resolves its RID from
+the runner architecture; Windows still builds inside `VsDevCmd.bat`.
+
+This replaces duplicated platform jobs with one build definition while keeping
+the existing SDK graphs, dependency restore, manifests, release triggers and
+publication conditions. Runtime qualification and benchmark workflows retain
+their configured tests and workloads. SDK profiles do not enable runtime tests
+for cross-compilation. Each matrix entry restores its own compiler-cache scope;
+cache hits never skip configure, build or installation. To revert the layout,
+restore the five platform jobs and their package dependencies in
+`native-sdk-release.yml`; no preset or package format migration is required.
+
 CI also uses [sccache](https://github.com/mozilla/sccache/tree/v0.18.0)
 through `.github/actions/setup-sccache` and the hidden `ci-compiler-cache`
 preset for GCC, Clang (including Apple/NDK Clang) and MSVC. The pinned Mozilla

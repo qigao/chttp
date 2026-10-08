@@ -1,0 +1,261 @@
+name: Build native SDK profiles
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }} SDK
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            family: linux
+            rid: linux-x64
+            target: x64-linux
+            host: x64-linux
+            compiler: gcc
+            preset: ci-sdk-release-user
+            artifact: linux-x64
+          - name: macOS
+            runner: macos-15
+            family: macos
+            rid: macos
+            target: ''
+            host: ''
+            compiler: appleclang
+            preset: ci-sdk-release-user
+            artifact: macos
+          - name: Windows x64
+            runner: windows-latest
+            family: windows
+            rid: windows-x64
+            target: ''
+            host: ''
+            compiler: msvc
+            preset: ci-sdk-release-user
+            artifact: windows-x64
+          - name: Android arm64-v8a
+            runner: ubuntu-24.04
+            family: android
+            rid: android-arm64-v8a
+            target: arm64-android
+            host: x64-linux
+            compiler: clang
+            preset: ci-android-sdk-release-user
+            artifact: android-arm64-v8a
+          - name: iOS device arm64
+            runner: macos-15
+            family: ios
+            rid: ios-arm64
+            target: arm64-ios
+            host: arm64-osx
+            sysroot: iphoneos
+            compiler: appleclang
+            preset: ci-ios-sdk-release-user
+            artifact: ios-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select iOS cache namespace
+        if: matrix.family == 'ios'
+        shell: bash
+        run: echo "X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache" >> "$GITHUB_ENV"
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Prepare Linux toolchain
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm
+      - name: Prepare Apple toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install nasm ninja
+      - name: Prepare Windows toolchain
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install nasm ninja -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "failed to install build tools" }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) { throw "canonical VCPKG_ROOT unavailable" }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_REPOSITORY_ROOT) -or
+              -not (Test-Path -LiteralPath (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT "cmake/QigaoVcpkgToolchain.cmake") -PathType Leaf)) {
+            throw "canonical qigao vcpkg toolchain unavailable"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_BINARY_SOURCES) -or $env:VCPKG_BINARY_SOURCES -notmatch "nugetconfig") {
+            throw "shared vcpkg NuGet cache unavailable"
+          }
+          if ($env:VCPKG_NUGET_REPOSITORY -ne "https://github.com/qigao/vcpkg-cache") {
+            throw "unexpected vcpkg cache repository: $env:VCPKG_NUGET_REPOSITORY"
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+
+      - name: Resolve Unix SDK profile
+        if: matrix.family != 'windows'
+        id: unix
+        shell: bash
+        env:
+          SDK_FAMILY: ${{ matrix.family }}
+          SDK_RID: ${{ matrix.rid }}
+          TARGET_TRIPLET: ${{ matrix.target }}
+          HOST_TRIPLET: ${{ matrix.host }}
+        run: |
+          set -euo pipefail
+          test -n "${VCPKG_ROOT:-}"
+          test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
+          test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
+          case "${VCPKG_BINARY_SOURCES:-}" in
+            *nugetconfig*) ;;
+            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+          esac
+          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
+          case "$SDK_FAMILY" in
+            macos)
+              case "$RUNNER_ARCH" in
+                X64) SDK_RID=macos-x64; TARGET_TRIPLET=x64-osx ;;
+                ARM64) SDK_RID=macos-arm64; TARGET_TRIPLET=arm64-osx ;;
+                *) echo "unsupported RUNNER_ARCH=$RUNNER_ARCH" >&2; exit 1 ;;
+              esac
+              HOST_TRIPLET="$TARGET_TRIPLET"
+              ;;
+            android) test -n "${ANDROID_NDK_HOME:-}" ;;
+            ios) test "$(uname -m)" = arm64 ;;
+          esac
+          echo "rid=$SDK_RID" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET_TRIPLET" >> "$GITHUB_OUTPUT"
+          echo "host=$HOST_TRIPLET" >> "$GITHUB_OUTPUT"
+      - name: Resolve Windows SDK profile
+        if: matrix.family == 'windows'
+        id: windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          "rid=windows-x64" >> $env:GITHUB_OUTPUT
+          "target=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_OUTPUT
+          "host=$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" >> $env:GITHUB_OUTPUT
+
+      - name: Restore Unix SDK graph
+        if: matrix.family != 'windows'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_RID: ${{ steps.unix.outputs.rid }}
+        run: bash cmake/ci/restore-native-sdks.sh "$SDK_RID"
+      - name: Restore Windows SDK graph
+        if: matrix.family == 'windows'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
+      - name: Set up compiler cache
+        id: compiler-cache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-scope: ${{ steps.unix.outputs.rid || steps.windows.outputs.rid }}-${{ matrix.compiler }}-release
+
+      - name: Configure, build and install Unix SDK
+        if: matrix.family != 'windows'
+        shell: bash
+        env:
+          QIGAO_SDK_RID: ${{ steps.unix.outputs.rid }}
+          QIGAO_TARGET_TRIPLET: ${{ steps.unix.outputs.target }}
+          QIGAO_HOST_TRIPLET: ${{ steps.unix.outputs.host }}
+          QIGAO_IOS_SYSROOT: ${{ matrix.sysroot }}
+          SDK_PRESET: ${{ matrix.preset }}
+          SDK_FAMILY: ${{ matrix.family }}
+          SDK_VERSION: ${{ inputs.version }}
+        run: |
+          set -euxo pipefail
+          cmake --preset "$SDK_PRESET"
+          cmake --build --preset "$SDK_PRESET" --parallel 2
+          cmake --build --preset "install-$SDK_PRESET"
+          prefix="$GITHUB_WORKSPACE/stage/sdk/$QIGAO_SDK_RID"
+          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          if [[ "$SDK_FAMILY" == ios ]]; then
+            test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            test -f "$prefix/include/chttp_service/service.h"
+            test -f "$prefix/include/chttp_rpc_service/service.h"
+            grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+          fi
+          {
+            printf 'version=%s\ncommit=%s\nos=%s\n' "$SDK_VERSION" "$GITHUB_SHA" "$SDK_FAMILY"
+            case "$SDK_FAMILY" in
+              linux) echo 'arch=x64' ;;
+              macos) echo "arch=$RUNNER_ARCH" ;;
+              android) printf 'abi=arm64-v8a\napi=android-26\n' ;;
+              ios) printf 'rid=%s\ntriplet=%s\n' "$QIGAO_SDK_RID" "$QIGAO_TARGET_TRIPLET" ;;
+            esac
+            echo 'profile=release'
+          } > "$prefix/chttp-sdk-manifest.txt"
+      - name: Configure, build and install Windows SDK
+        if: matrix.family == 'windows'
+        shell: cmd
+        env:
+          QIGAO_SDK_RID: ${{ steps.windows.outputs.rid }}
+          QIGAO_TARGET_TRIPLET: ${{ steps.windows.outputs.target }}
+          QIGAO_HOST_TRIPLET: ${{ steps.windows.outputs.host }}
+          SDK_PRESET: ${{ matrix.preset }}
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
+          cmake --preset "%SDK_PRESET%"
+          if errorlevel 1 exit /b 1
+          cmake --build --preset "%SDK_PRESET%" --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --build --preset "install-%SDK_PRESET%"
+          if errorlevel 1 exit /b 1
+      - name: Record Windows SDK manifest
+        if: matrix.family == 'windows'
+        shell: pwsh
+        env:
+          SDK_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $config = Join-Path $prefix "lib\cmake\Chttp\ChttpConfig.cmake"
+          if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "missing $config" }
+          @(
+            "version=$env:SDK_VERSION"
+            "commit=$env:GITHUB_SHA"
+            "os=windows"
+            "arch=x64"
+            "profile=release"
+          ) | Set-Content -LiteralPath (Join-Path $prefix "chttp-sdk-manifest.txt")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chttp-sdk-${{ matrix.artifact }}
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+      - name: Finish compiler cache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: ./.github/actions/finish-sccache
