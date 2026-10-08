@@ -148,6 +148,11 @@ cache hits never skip configure, build or installation. To revert the layout,
 restore the five platform jobs and their package dependencies in
 `native-sdk-release.yml`; no preset or package format migration is required.
 
+For a build-only manual CI run, set the workflow's `build_only` input to `true`.
+All five SDK builds and NuGet packaging still run; publication is skipped.
+The input defaults to `false` to preserve existing manual release behavior;
+version-tag pushes retain their release behavior.
+
 CI also uses [sccache](https://github.com/mozilla/sccache/tree/v0.18.0)
 through `.github/actions/setup-sccache` and the hidden `ci-compiler-cache`
 preset for GCC, Clang (including Apple/NDK Clang) and MSVC. The pinned Mozilla
