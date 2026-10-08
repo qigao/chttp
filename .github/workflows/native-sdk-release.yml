@@ -149,7 +149,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: 98e1ad5848766043e52e0299f2a529505960bcd0
+          ref: e1beece2094aaade9765a1ded1c800c43e636f6c
           path: _deps/salts-utils
           persist-credentials: false
       - name: Restore shared host re2c
@@ -258,7 +258,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: 98e1ad5848766043e52e0299f2a529505960bcd0
+          ref: e1beece2094aaade9765a1ded1c800c43e636f6c
           path: _deps/salts-utils
           persist-credentials: false
       - name: Restore shared host re2c
@@ -366,7 +366,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: 98e1ad5848766043e52e0299f2a529505960bcd0
+          ref: e1beece2094aaade9765a1ded1c800c43e636f6c
           path: _deps/salts-utils
           persist-credentials: false
       - name: Restore shared host re2c
