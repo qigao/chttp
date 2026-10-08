@@ -6,6 +6,10 @@
 #include <salts/component_plugin_abi.h>
 #include <salts/plugin_decl.h>
 
+#ifndef CHTTP_COMPONENT_PLUGIN_ID
+#define CHTTP_COMPONENT_PLUGIN_ID "test.chttp.component-provider"
+#endif
+
 #define CHTTP_COMPONENT_PROVIDER_EXPORT "component-provider"
 
 cmeta_component(CHttpPlugin_Calc_Add,
@@ -120,7 +124,7 @@ static salts_component_provider chttp_component_provider = {
 
 CMETA_PLUGIN_DECLARE(
     chttp_component_fixture,
-    "test.chttp.component-provider",
+    CHTTP_COMPONENT_PLUGIN_ID,
     (1,0,0),
     CHTTP_COMPONENT_EXPORTS,
     CMETA_PLUGIN_PASSIVE());

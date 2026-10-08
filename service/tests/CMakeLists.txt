@@ -42,6 +42,24 @@ set_target_properties(chttp_service_component_provider_fixture PROPERTIES
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
 
+# Link a separate business implementation into the second DSO. Generated ABI
+# and wire bindings stay identical; its result identifies the owning generation.
+add_library(chttp_service_component_provider_second SHARED
+  chttp_service_component_provider.c
+  chttp_service_component_second_business.c)
+target_link_libraries(chttp_service_component_provider_second PRIVATE
+  chttp_service_plugin_fixture_native Salts::ComponentPluginABI Salts::PluginABI)
+target_include_directories(chttp_service_component_provider_second PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+  "${chttp_service_plugin_fixture_GENERATED_DIR}")
+target_compile_definitions(chttp_service_component_provider_second PRIVATE
+  CHTTP_COMPONENT_PLUGIN_ID="test.chttp.component-provider.2")
+add_dependencies(chttp_service_component_provider_second
+  chttp_service_plugin_fixture_idl_codegen)
+set_target_properties(chttp_service_component_provider_second PROPERTIES
+  FOLDER "service/tests/fixtures" C_STANDARD 11
+  C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
 salts_idl_target(
   TARGET chttp_service_cflow_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow.schema"
@@ -187,10 +205,12 @@ target_include_directories(chttp_service_http_test PRIVATE
 add_dependencies(chttp_service_http_test
   chttp_service_http_fixture_idl_codegen
   chttp_service_plugin_fixture_native
-  chttp_service_component_provider_fixture)
+  chttp_service_component_provider_fixture
+  chttp_service_component_provider_second)
 
 target_compile_definitions(chttp_service_http_test PRIVATE
-  GENERATED_CHTTP_SERVICE_COMPONENT_PROVIDER_PATH="$<TARGET_FILE:chttp_service_component_provider_fixture>")
+  GENERATED_CHTTP_SERVICE_COMPONENT_PROVIDER_PATH="$<TARGET_FILE:chttp_service_component_provider_fixture>"
+  GENERATED_CHTTP_SERVICE_COMPONENT_SECOND_PATH="$<TARGET_FILE:chttp_service_component_provider_second>")
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
 

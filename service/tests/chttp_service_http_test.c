@@ -808,6 +808,8 @@ typedef struct chttp_service_request_thread_args {
   _Atomic int completed;
   int status;
   unsigned int http_status;
+  unsigned char body[4];
+  size_t body_size;
 } chttp_service_request_thread_args;
 
 static void chttp_service_request_thread(void *user) {
@@ -820,8 +822,13 @@ static void chttp_service_request_thread(void *user) {
   if (args->status == SALTS_OK) {
     args->status =
         chttp_service_test_call(&client, args->uri, args->target, &response);
-    if (args->status == SALTS_OK)
+    if (args->status == SALTS_OK) {
       args->http_status = response.status_code;
+      args->body_size = response.body_size;
+      if (response.body_size <= sizeof(args->body))
+        memcpy(args->body, response.body, response.body_size);
+      else args->status = SALTS_EINVAL;
+    }
     chttp_response_destroy(&response);
     if (chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS) !=
             SALTS_OK &&
@@ -1801,7 +1808,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     data_bind_free(contract);
   }
 
-  it("pins one Component generation across deferred Service work") {
+  it("keeps deferred HTTP work and mounted routes in their owning DSO generation") {
     DataBind *contract = NULL;
     DataBindError bind_error = DATA_BIND_ERROR_INIT;
     DataBindBindingPlanDiagnostic diagnostic =
@@ -1816,8 +1823,18 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     DataBindHttpMethodPlan *method_plan = NULL;
 
     cmeta_plugin_registry registry = {0};
-    const cmeta_plugin_registry_config registry_config = {.capacity = 1u};
+    const cmeta_plugin_registry_config registry_config = {.capacity = 2u};
     cmeta_plugin_ref plugin_ref = {0};
+    cmeta_plugin_ref second_plugin = {0};
+    salts_component_plugin_generation second_generation = {0};
+    salts_component_deployment second_deployments[1];
+    salts_component_instance second_instances[1];
+    salts_component_dependency second_dependencies[1];
+    size_t second_order[1];
+    salts_component_plugin_module second_modules[1];
+    const salts_component_plugin_generation_storage second_storage = {
+        second_deployments, 1u, second_instances, 1u, second_dependencies, 1u,
+        second_order, 1u, second_modules, 1u};
     cmeta_plugin_lifecycle_info lifecycle = {0};
     bool quiescent = false;
 
@@ -1843,6 +1860,10 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     cflow_executor executor = {0};
     chttp_service service = {0};
+    chttp_service second_service = {0};
+    chttp_server second_server = {0};
+    uint16_t second_port = 0u;
+    char second_uri[64];
     chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
     chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
     chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
@@ -1928,7 +1949,7 @@ spec("CHttp::Service generated HTTP MethodPlan") {
 
     service_config.method_capacity = 1u;
     service_config.max_binding_value_bytes = 64u;
-    service_config.max_response_body_bytes = 2u;
+    service_config.max_response_body_bytes = 4u;
     service_config.max_call_frame_bytes = 512u;
     service_config.native_workspace_bytes = 4096u;
     service_config.native_max_depth = 16u;
@@ -1964,21 +1985,6 @@ spec("CHttp::Service generated HTTP MethodPlan") {
         chttp_service_mount_http(&service, &server, &mount),
         SALTS_OK);
     check_equal(component_runtime.active_scopes, (size_t)1u);
-
-    check_equal(
-        salts_component_plugin_runtime_close(
-            &component_runtime, &previous),
-        SALTS_COMPONENT_PLUGIN_OK);
-    check_true(previous == &generation);
-    check_equal(
-        salts_component_plugin_scope_acquire(
-            &component_runtime, &rejected_scope),
-        SALTS_COMPONENT_PLUGIN_INVALID_STATE);
-    check_false(rejected_scope.live);
-    check_equal(
-        salts_component_plugin_generation_drain(
-            &component_runtime, &generation),
-        SALTS_COMPONENT_PLUGIN_BUSY);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -2032,8 +2038,35 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     } while (cmeta_monotonic_ms() < deadline);
     check_true(executor_stats.pending > executor_pending_baseline);
 
+    /* Publish while the old request is held in the executor queue. */
+    check_equal(cmeta_plugin_registry_load(&registry,
+        GENERATED_CHTTP_SERVICE_COMPONENT_SECOND_PATH, &second_plugin),
+        CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, second_plugin), CMETA_PLUGIN_OK);
+    source.plugin = second_plugin;
+    check_equal(salts_component_plugin_generation_build(&second_generation,
+        UINT64_C(2), &registry, &second_storage, NULL, 0u, &source, 1u,
+        NULL, 0u), SALTS_COMPONENT_PLUGIN_OK);
+    check_equal(salts_component_plugin_runtime_publish(&component_runtime,
+        &second_generation, &previous), SALTS_COMPONENT_PLUGIN_OK);
+    check_true(previous == &generation);
+    check_equal(chttp_service_init(&second_service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&second_server, &server_config), SALTS_OK);
+    check_equal(chttp_service_mount_http(&second_service, &second_server, &mount), SALTS_OK);
+    check_equal(component_runtime.active_scopes, (size_t)2u);
+    check_equal(chttp_server_start(&second_server), SALTS_OK);
+    check_equal(chttp_server_port(&second_server, &second_port), SALTS_OK);
+    check_greater(snprintf(second_uri, sizeof(second_uri), "tcp://127.0.0.1:%u",
+                          (unsigned int)second_port), 0);
+    check_equal(salts_component_plugin_runtime_close(&component_runtime, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+    check_true(previous == &second_generation);
+    check_equal(salts_component_plugin_scope_acquire(&component_runtime, &rejected_scope),
+                SALTS_COMPONENT_PLUGIN_INVALID_STATE);
+    check_false(rejected_scope.live);
+
     check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
-    check_equal(component_runtime.active_scopes, (size_t)1u);
+    check_equal(component_runtime.active_scopes, (size_t)2u);
     check_equal(
         salts_component_plugin_generation_drain(
             &component_runtime, &generation),
@@ -2051,6 +2084,19 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(component_request.http_status, 201u);
     check_true(cflow_executor_wait_idle(&executor));
 
+    check_equal(component_request.body_size, (size_t)2u);
+    check_equal(component_request.body, "11", 2u);
+    check_equal(chttp_service_test_call(&client, second_uri,
+        "/plugin/3?right=4&scale=2", &response), SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body, "111", 3u);
+    chttp_response_destroy(&response);
+    /* Runtime admission is closed; both already mounted routes remain valid. */
+    check_equal(chttp_service_test_call(&client, uri,
+        "/plugin/3?right=4&scale=2", &response), SALTS_OK);
+    check_equal(response.body, "11", 2u);
+    chttp_response_destroy(&response);
+
     check_equal(
         chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
         SALTS_OK);
@@ -2061,12 +2107,24 @@ spec("CHttp::Service generated HTTP MethodPlan") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
 
     check_equal(chttp_service_destroy(&service), SALTS_OK);
-    check_equal(component_runtime.active_scopes, (size_t)0u);
+    check_equal(component_runtime.active_scopes, (size_t)1u);
 
     check_equal(
         salts_component_plugin_generation_drain(
             &component_runtime, &generation),
         SALTS_COMPONENT_PLUGIN_OK);
+    check_equal(chttp_server_stop(&second_server, CHTTP_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(chttp_server_destroy(&second_server), SALTS_OK);
+    check_equal(chttp_service_destroy(&second_service), SALTS_OK);
+    check_equal(component_runtime.active_scopes, (size_t)0u);
+    check_equal(salts_component_plugin_generation_drain(&component_runtime,
+        &second_generation), SALTS_COMPONENT_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_request_stop(&registry, second_plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(&registry, second_plugin, &quiescent), CMETA_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(cmeta_plugin_registry_unload(&registry, second_plugin), CMETA_PLUGIN_OK);
+
     check_equal(
         salts_component_plugin_runtime_destroy(&component_runtime),
         SALTS_COMPONENT_PLUGIN_OK);
