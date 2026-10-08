@@ -2,12 +2,10 @@
 
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
-#include <data_bind_plugin_execution.h>
 
 #include <cserde/cserde.h>
 #include <cflow/plan.h>
 #include <cmeta/data.h>
-#include <salts/plugin_scope.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -28,12 +26,8 @@ typedef struct chttp_service_method_record {
   cflow_executor *executor;
   cflow_plan cflow_plan;
 
-  cmeta_plugin_lease plugin_lease;
-  cmeta_plugin_cleanup_lease plugin_owner;
-  cmeta_cleanup plugin_cleanup;
-  DataBindPluginOperationBinding plugin_operation;
-  DataBindServiceNativeBinding plugin_native;
-  DataBindNativeExecution plugin_execution;
+  salts_component_plugin_scope component_scope;
+  chttp_service_component_operation component_operation;
 
   size_t request_bytes;
   size_t response_bytes;
@@ -1043,96 +1037,43 @@ static int chttp_service_cflow_admit(
              : SALTS_ENOTSUP;
 }
 
-static int chttp_service_plugin_resolve(
+static int chttp_service_component_resolve(
     chttp_service_method_record *record,
-    cmeta_plugin_registry *registry,
-    cmeta_plugin_ref ref,
-    const char *export_id) {
-  const cmeta_plugin_manifest *manifest = NULL;
-  const cmeta_plugin_export *catalog_entry = NULL;
-  const cmeta_plugin_export *function_entry = NULL;
-  data_bind_plugin_catalog *catalog = NULL;
-  DataBindPluginOperationBinding operation =
-      DATA_BIND_PLUGIN_OPERATION_BINDING_INIT;
-  DataBindNativeExecution execution =
-      (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-  DataBindError error = DATA_BIND_ERROR_INIT;
-  size_t count;
-  size_t i;
-  int found = 0;
-
-  if (record == NULL || registry == NULL ||
-      !cmeta_plugin_ref_valid(ref) ||
-      export_id == NULL || export_id[0] == '\0')
+    salts_component_plugin_runtime *runtime,
+    const char *component_id) {
+  salts_component_service service = {0};
+  chttp_service_operation_provider provider =
+      chttp_service_operation_provider_bind(NULL, NULL);
+  if (record == NULL || runtime == NULL ||
+      component_id == NULL || component_id[0] == '\0')
     return SALTS_EINVAL;
 
-  if (cmeta_plugin_registry_acquire(
-          registry, ref, &record->plugin_lease, &manifest) != CMETA_PLUGIN_OK)
+  record->component_operation =
+      (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
+
+  if (salts_component_plugin_scope_acquire(
+          runtime, &record->component_scope) !=
+      SALTS_COMPONENT_PLUGIN_OK)
     return SALTS_EINVAL;
 
-  /* The fixed-capacity method slot owns the lease from acquisition onward.
-   * Mount rollback and Service destruction discharge the same obligation;
-   * its owner and lease addresses remain stable until then. */
-  record->plugin_owner.registry = registry;
-  record->plugin_owner.lease = &record->plugin_lease;
-  if (cmeta_plugin_cleanup_arm(
-          &record->plugin_cleanup, &record->plugin_owner) != CMETA_OK)
-    abort();
-
-  if (manifest == NULL ||
-      cmeta_plugin_manifest_find_export(
-          manifest, DATA_BIND_PLUGIN_CATALOG_EXPORT_ID,
-          &catalog_entry) != CMETA_PLUGIN_OK ||
-      catalog_entry == NULL ||
-      cmeta_plugin_export_require_interface(
-          catalog_entry,
-          DATA_BIND_PLUGIN_CATALOG_CONTRACT_ID,
-          DATA_BIND_PLUGIN_CATALOG_CONTRACT_VERSION,
-          0u,
-          data_bind_plugin_catalog_interface()) != CMETA_PLUGIN_OK) {
+  if (salts_component_plugin_scope_find_service_from(
+          &record->component_scope,
+          component_id,
+          chttp_service_operation_provider_interface(),
+          &service) != SALTS_COMPONENT_PLUGIN_OK)
     return SALTS_EINVAL;
-  }
 
-  catalog =
-      (data_bind_plugin_catalog *)catalog_entry->value.interface.value;
-  if (!data_bind_plugin_catalog_valid(catalog)) {
+  if (chttp_service_operation_provider_borrow_from_object(
+          service.object, service.interfaces, &provider) != CMETA_OK ||
+      !chttp_service_operation_provider_valid(&provider) ||
+      !chttp_service_operation_provider_get_operation(
+          &provider, &record->component_operation) ||
+      !chttp_service_component_operation_valid(
+          &record->component_operation))
     return SALTS_EINVAL;
-  }
 
-  count = data_bind_plugin_catalog_operation_count(catalog);
-  for (i = 0u; i < count; ++i) {
-    DataBindPluginOperationBinding candidate =
-        DATA_BIND_PLUGIN_OPERATION_BINDING_INIT;
-    error = (DataBindError)DATA_BIND_ERROR_INIT;
-    if (data_bind_plugin_catalog_operation_at(
-            catalog, i, &candidate, &error) != DATA_BIND_OK ||
-        !data_bind_plugin_operation_binding_valid(&candidate))
-      continue;
-    if (strcmp(candidate.export_id, export_id) != 0)
-      continue;
-    if (found) return SALTS_EINVAL;
-    operation = candidate;
-    found = 1;
-  }
-
-  if (!found ||
-      cmeta_plugin_manifest_find_export(
-          manifest, export_id, &function_entry) != CMETA_PLUGIN_OK ||
-      function_entry == NULL ||
-      !data_bind_plugin_operation_execution_admit(
-          &operation, function_entry, &execution)) {
-    return SALTS_EINVAL;
-  }
-
-  record->plugin_operation = operation;
-  record->plugin_execution = execution;
-  if (!data_bind_plugin_operation_native_binding(
-          &record->plugin_operation, &record->plugin_native)) {
-    return SALTS_EINVAL;
-  }
-
-  record->native_binding = &record->plugin_native;
-  record->execution = &record->plugin_execution;
+  record->native_binding = &record->component_operation.native;
+  record->execution = &record->component_operation.execution;
   return SALTS_OK;
 }
 
@@ -1140,7 +1081,10 @@ static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
-  cmeta_cleanup_run(&record->plugin_cleanup);
+  if (record->component_scope.live &&
+      salts_component_plugin_scope_release(
+          &record->component_scope) != SALTS_COMPONENT_PLUGIN_OK)
+    abort();
   memset(record, 0, sizeof(*record));
 }
 
@@ -1506,7 +1450,7 @@ static int chttp_service_http_execute_deferred(
       ((record->execution_mode ==
             CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
         record->execution_mode ==
-            CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN) &&
+            CHTTP_SERVICE_EXECUTION_DEFERRED_COMPONENT) &&
        record->execution == NULL) ||
       (record->execution_mode ==
            CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
@@ -1696,7 +1640,7 @@ static int chttp_service_http_handler(
       record->execution_mode ==
           CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW ||
       record->execution_mode ==
-          CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN)
+          CHTTP_SERVICE_EXECUTION_DEFERRED_COMPONENT)
     return chttp_service_http_execute_deferred(
         record, request, response);
   return chttp_service_http_execute(record, request, response);
@@ -1764,35 +1708,33 @@ int chttp_service_mount_http(
   size_t param_count = 0u;
   const DataBindBindingPlan *binding;
   int status;
-  int plugin_mode;
+  int component_mode;
 
   if (service == NULL || service->impl == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
       mount->method_plan == NULL)
     return SALTS_EINVAL;
 
-  plugin_mode =
-      mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+  component_mode =
+      mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_COMPONENT;
   if (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
-      !plugin_mode)
+      !component_mode)
     return SALTS_EINVAL;
 
-  if (plugin_mode) {
+  if (component_mode) {
     if (mount->native_binding != NULL || mount->execution != NULL ||
         mount->cflow_projection != NULL ||
         mount->executor == NULL ||
         !cflow_executor_valid(mount->executor) ||
-        mount->plugin_registry == NULL ||
-        !cmeta_plugin_ref_valid(mount->plugin_ref) ||
-        mount->plugin_export_id == NULL ||
-        mount->plugin_export_id[0] == '\0')
+        mount->component_runtime == NULL ||
+        mount->component_id == NULL ||
+        mount->component_id[0] == '\0')
       return SALTS_EINVAL;
   } else {
-    if (mount->plugin_registry != NULL ||
-        cmeta_plugin_ref_valid(mount->plugin_ref) ||
-        mount->plugin_export_id != NULL ||
+    if (mount->component_runtime != NULL ||
+        mount->component_id != NULL ||
         mount->native_binding == NULL)
       return SALTS_EINVAL;
     if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
@@ -1826,10 +1768,9 @@ int chttp_service_mount_http(
   record->execution_mode = mount->execution_mode;
   record->executor = mount->executor;
 
-  if (plugin_mode) {
-    status = chttp_service_plugin_resolve(
-        record, mount->plugin_registry, mount->plugin_ref,
-        mount->plugin_export_id);
+  if (component_mode) {
+    status = chttp_service_component_resolve(
+        record, mount->component_runtime, mount->component_id);
     if (status != SALTS_OK) {
       chttp_service_method_release(record);
       return status;
@@ -1925,7 +1866,7 @@ int chttp_service_destroy(chttp_service *service) {
    * Destruction is all-or-nothing. A stopped/destroyed Server prevents new
    * route admission; any accepted deferred task must finish/cancel and run its
    * finalizer before method storage, cached borrowed descriptors/execution, a
-   * CFlow Plan, or a mount-owned Plugin lease may be released.
+   * CFlow Plan, or a mount-owned Component generation scope may be released.
    */
   for (i = 0u; i < impl->method_count; ++i) {
     if (atomic_load_explicit(

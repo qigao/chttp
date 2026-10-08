@@ -1,0 +1,41 @@
+{
+  "version": 6,
+  "include": [
+    "../../../CMakeUserPresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "ci-component-installed-user",
+      "inherits": "ci-component-release-user",
+      "binaryDir": "${sourceDir}/build/component-installed",
+      "cacheVariables": {
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/../../..",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
+      },
+      "environment": {
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+        "HTTP_SERVICES_ROOT": "${sourceDir}/../../../stage/sdk/linux-x64",
+        "LD_LIBRARY_PATH": "$env{HTTP_SERVICES_ROOT}/lib${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$penv{LD_LIBRARY_PATH}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ci-component-installed-user",
+      "configurePreset": "ci-component-installed-user"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ci-component-installed-user",
+      "configurePreset": "ci-component-installed-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

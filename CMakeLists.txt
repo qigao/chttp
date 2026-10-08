@@ -35,12 +35,16 @@ unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
+find_package(Salts 3 CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
+endif()
+if(NOT TARGET Salts::ComponentPlugin)
+  message(FATAL_ERROR
+    "Salts SDK must provide Salts::ComponentPlugin for CHttp::Service")
 endif()
 find_package(llhttp CONFIG REQUIRED)
 

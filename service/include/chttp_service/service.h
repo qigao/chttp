@@ -7,7 +7,8 @@
 #include <data_bind_native.h>
 #include <data_bind_native_binding.h>
 #include <cflow/executor.h>
-#include <salts/plugin.h>
+#include <salts/component_plugin.h>
+#include <chttp_service/component.h>
 #include <cflow/function_projection.h>
 
 #include <stddef.h>
@@ -51,11 +52,11 @@ typedef enum chttp_service_execution_mode {
    */
   CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW = 2,
   /**
-   * Resolve one generated Plugin Service capability at mount, retain a
-   * dedicated Plugin lease, then execute the admitted exact native adapter on
-   * the borrowed bounded executor.
+   * Acquire one published Component generation at mount, resolve one typed
+   * Service operation capability, then execute the already-admitted exact
+   * native adapter on the borrowed bounded executor.
    */
-  CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN = 3
+  CHTTP_SERVICE_EXECUTION_DEFERRED_COMPONENT = 3
 } chttp_service_execution_mode;
 
 /**
@@ -68,9 +69,10 @@ typedef enum chttp_service_execution_mode {
  *   DIRECT modes;
  * - cflow_projection owns the producer-admitted Request -> Response capability
  *   for DEFERRED_CFLOW;
- * - Plugin registry/ref/export identity are control-plane inputs only for
- *   DEFERRED_PLUGIN. Mount resolves and caches the canonical
- *   DataBindNativeExecution while holding its own DSO lease.
+ * - Component runtime/component identity are control-plane inputs only for
+ *   DEFERRED_COMPONENT. Mount acquires one generation scope, resolves the
+ *   typed operation capability once, and caches its canonical
+ *   DataBindServiceNativeBinding + DataBindNativeExecution.
  *
  * Mount validates the selected execution capability against MethodPlan/native
  * identity and the canonical generated Service ownership shape: VALUE status
@@ -104,24 +106,22 @@ typedef struct chttp_service_http_mount {
   const cflow_function_typed_adapter_projection *cflow_projection;
 
   /**
-   * DEFERRED_PLUGIN control-plane inputs.
+   * DEFERRED_COMPONENT control-plane inputs.
    *
-   * Mount acquires an independent lease from plugin_registry/plugin_ref,
-   * resolves plugin_export_id through the generated DataBind Service catalog,
-   * admits the matching FUNCTION export to DataBindNativeExecution, and keeps
-   * the lease until Service destruction. The registry must remain at a stable
-   * address through destruction; failed mount releases its acquired lease.
+   * Mount acquires one ComponentPlugin generation scope from component_runtime,
+   * resolves exactly component_id as chttp_service_operation_provider, copies
+   * its already-admitted native operation metadata into the method record, and
+   * retains the generation scope until Service destruction.
    *
-   * Non-Plugin modes require these fields to remain zero/NULL.
+   * Other modes require these fields to remain NULL.
    */
-  cmeta_plugin_registry *plugin_registry;
-  cmeta_plugin_ref plugin_ref;
-  const char *plugin_export_id;
+  salts_component_plugin_runtime *component_runtime;
+  const char *component_id;
 } chttp_service_http_mount;
 
 #define CHTTP_SERVICE_HTTP_MOUNT_INIT \
   { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u, \
-    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, {0u, 0u}, NULL }
+    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, NULL }
 
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
@@ -159,9 +159,9 @@ int chttp_service_init(
  * INLINE_DIRECT requires execution and no executor/projection.
  * DEFERRED_DIRECT requires execution + executor and no projection.
  * DEFERRED_CFLOW requires executor + cflow_projection and no direct execution.
- * DEFERRED_PLUGIN requires executor + plugin_registry + plugin_ref +
- * plugin_export_id, and derives native_binding/execution under a mount-owned
- * Plugin lease.
+ * DEFERRED_COMPONENT requires executor + component_runtime + component_id,
+ * acquires one generation scope, and derives native_binding/execution from the
+ * typed Component capability.
  *
  * Deferred modes keep request/CNet views callback-scoped: only the already
  * materialized native request frame crosses to the worker.
@@ -181,7 +181,7 @@ int chttp_service_mount_http(
  * until its task finalizer has destroyed request/response/error native values.
  * If any deferred invocation is still live, this call returns SALTS_EBUSY
  * without releasing any method storage, CFlow Plan, borrowed descriptor/
- * execution pointer, or mount-owned Plugin lease. The caller may retry after
+ * execution pointer, or mount-owned Component generation scope. The caller may retry after
  * executor quiescence.
  *
  * This is a domain-lifetime gate only. Native value ownership and destruction

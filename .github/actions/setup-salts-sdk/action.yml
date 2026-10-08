@@ -1,6 +1,10 @@
 name: Set up Salts SDKs
 description: Restore the current Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
 inputs:
+  restore-sdks:
+    description: Restore the released SDK graph; candidate qualification supplies its own graph.
+    required: false
+    default: "true"
   with-turbowasm:
     description: Restore the latest released TurboWasm Component SDK for WASM qualification.
     required: false
@@ -33,6 +37,7 @@ runs:
         test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
 
     - name: Restore Salts SDK graph
+      if: inputs.restore-sdks == 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}

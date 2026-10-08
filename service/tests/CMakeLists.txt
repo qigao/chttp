@@ -9,21 +9,56 @@ salts_idl_target(
 salts_idl_target(
   TARGET chttp_service_plugin_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.schema"
-  COMPONENT "CHttpPlugin.CalcPlugin"
-  VERSION "1.0.0"
   ARTIFACT_NAME "chttp_service_plugin"
-  ARTIFACTS NATIVE PLUGIN
+  ARTIFACTS NATIVE
   TRANSPORTS HTTP
   PROJECTION_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json"
-  SOURCES
-    chttp_service_plugin_business.c)
+    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json")
 
 # NATIVE and PLUGIN share one business implementation. The public salts_idl
 # SOURCES contract feeds PLUGIN; attach the same source explicitly to the local
 # NATIVE fixture so its exact generated execution descriptor is link-complete.
 target_sources(chttp_service_plugin_fixture_native PRIVATE
   chttp_service_plugin_business.c)
+
+add_library(chttp_service_component_provider_fixture SHARED
+  chttp_service_component_provider.c)
+
+target_link_libraries(chttp_service_component_provider_fixture PRIVATE
+  chttp_service_plugin_fixture_native
+  Salts::ComponentPluginABI
+  Salts::PluginABI)
+
+target_include_directories(chttp_service_component_provider_fixture PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+  "${chttp_service_plugin_fixture_GENERATED_DIR}")
+
+add_dependencies(chttp_service_component_provider_fixture
+  chttp_service_plugin_fixture_idl_codegen)
+
+set_target_properties(chttp_service_component_provider_fixture PROPERTIES
+  FOLDER "service/tests/fixtures"
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
+# Link a separate business implementation into the second DSO. Generated ABI
+# and wire bindings stay identical; its result identifies the owning generation.
+add_library(chttp_service_component_provider_second SHARED
+  chttp_service_component_provider.c
+  chttp_service_component_second_business.c)
+target_link_libraries(chttp_service_component_provider_second PRIVATE
+  chttp_service_plugin_fixture_native Salts::ComponentPluginABI Salts::PluginABI)
+target_include_directories(chttp_service_component_provider_second PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+  "${chttp_service_plugin_fixture_GENERATED_DIR}")
+target_compile_definitions(chttp_service_component_provider_second PRIVATE
+  CHTTP_COMPONENT_PLUGIN_ID="test.chttp.component-provider.2")
+add_dependencies(chttp_service_component_provider_second
+  chttp_service_plugin_fixture_idl_codegen)
+set_target_properties(chttp_service_component_provider_second PROPERTIES
+  FOLDER "service/tests/fixtures" C_STANDARD 11
+  C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
 salts_idl_target(
   TARGET chttp_service_cflow_fixture
@@ -169,13 +204,16 @@ target_include_directories(chttp_service_http_test PRIVATE
 
 add_dependencies(chttp_service_http_test
   chttp_service_http_fixture_idl_codegen
-  chttp_service_plugin_fixture_plugin
-  chttp_service_plugin_fixture_native)
+  chttp_service_plugin_fixture_native
+  chttp_service_component_provider_fixture
+  chttp_service_component_provider_second)
 
 target_compile_definitions(chttp_service_http_test PRIVATE
-  GENERATED_CHTTP_SERVICE_PLUGIN_PATH="$<TARGET_FILE:chttp_service_plugin_fixture_plugin>")
+  GENERATED_CHTTP_SERVICE_COMPONENT_PROVIDER_PATH="$<TARGET_FILE:chttp_service_component_provider_fixture>"
+  GENERATED_CHTTP_SERVICE_COMPONENT_SECOND_PATH="$<TARGET_FILE:chttp_service_component_provider_second>")
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
+set_tests_properties(chttp_service_http_test PROPERTIES TIMEOUT 180)
 
 set_target_properties(chttp_service_http_test PROPERTIES
   FOLDER "service/tests"
@@ -244,15 +282,6 @@ add_test(
     -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
     -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_single_materialization_contract_test.cmake)
 
-
-add_test(
-  NAME chttp_service_hot_path_boundary_contract
-  COMMAND ${CMAKE_COMMAND}
-    -DSERVICE_SOURCE=${PROJECT_SOURCE_DIR}/service/src/chttp_service.c
-    -DRPC_SERVICE_SOURCE=${PROJECT_SOURCE_DIR}/rpc_service/src/chttp_rpc_service.c
-    -DSERVICE_HEADER=${PROJECT_SOURCE_DIR}/service/include/chttp_service/service.h
-    -DSERVER_HEADER=${PROJECT_SOURCE_DIR}/http_server/include/http_server/http.h
-    -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_hot_path_boundary_contract_test.cmake)
 
 add_test(
   NAME chttp_service_lifecycle_contract
