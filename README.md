@@ -235,7 +235,7 @@ consumer event SHA and restores the exact Salts 3.0 prerelease
 It verifies package SHA256
 `682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca`
 and the SDK commit/RID/profile manifest before configuration. SaltsUtils source
-`9de20e8aa3d333543f4c691150300b0dbfd07b8c` is rebuilt against that SDK;
+`1c00cab3c5fe4722d4c8488a47f0ada6ec2f3e6b` is rebuilt against that SDK;
 the workflow does not use stable first-party binaries for this candidate.
 
 The HTTP test publishes a second DSO while old deferred work is queued. It checks different response bodies from the old/new mounted routes, BUSY destruction/drain/unload, and ordered retirement. Component scopes belong to mounted method records and survive until Service destruction; closing Component admission does not invalidate existing routes.
