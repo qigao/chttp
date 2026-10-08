@@ -10,9 +10,12 @@ CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses S
 
 CHTTP depends on the installed [Salts](https://github.com/qigao/salts) SDK and selected [SaltsUtils](https://github.com/qigao/salts-utils) components.
 
-This integration branch requires the Salts #1001 candidate exporting
-`Salts::CNetManager`, `<cnet/manager.h>` and `<cnet/handoff.h>`; the latest published SDK alone does
-not yet provide that target. Each server owner lane uses one fixed-capacity
+This integration branch requires the unified Salts CNet candidate tracked by
+[Salts #1050](https://github.com/qigao/salts/issues/1050) and
+[PR #1067](https://github.com/qigao/salts/pull/1067):
+`Salts::CNet` exports `<cnet/manager.h>` and `<cnet/handoff.h>` from the
+**same CNet shared library**, without `Salts::CNetManager` or a second manager DLL.
+Until that SDK is released, the branch must use a matching tested candidate. Each server owner lane uses one fixed-capacity
 manager for TCP/TLS adoption and terminal attachment retirement. HTTP/1 deferred
 responses and HTTP/2 deferred streams keep their contexts until completion.
 Each lane's bounded admission inbox and generation-checked connection credits
@@ -20,9 +23,9 @@ now use the optional CNet handoff helper. CHTTP still chooses the final owner,
 owns its listener/threads/TLS policy and protocol state, and keeps its public
 server API. Successful publication transfers the descriptor even if the host
 wake fails; shutdown drains that inbox after the existing `listener_done`
-barrier ensures no listener wake can race backend destruction. Deploy the matching `cnet_manager` shared library with
-the candidate SDK. Reverting this adapter and its private link dependency
-restores raw CNet adoption without a protocol or data migration.
+barrier ensures no listener wake can race backend destruction. Rebuild consumers against the unified `Salts::CNet` SDK; do not retain or load
+the old `cnet_manager` DLL from an earlier installation. Raw CNet adoption
+remains available without initializing the manager.
 
 For host integration acceptance, dispatch `native-sdk-release.yml` with both
 `salts_candidate_run_id` and `salts_candidate_sha`. The run must be a successful
@@ -264,7 +267,7 @@ Additional technical references:
 
 ### #1001 candidate CI
 
-Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
+Until the unified CNet SDK is published, `cmake/ci/salts-candidate.json` identifies the Salts candidate commit used by branch/PR host qualification. CI resolves a
 successful producer run for that exact SHA; dispatch accepts a SHA override.
 The selected run must retain all three host SDK artifacts. Missing successful
 SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
