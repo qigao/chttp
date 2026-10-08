@@ -83,6 +83,10 @@ jobs:
           test -n "$version"
           tag="v$version"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "Publication is deferred while the SaltsUtils integration source is unfinished" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
           else
             test "${{ github.event_name }}" = "pull_request" || test "${{ github.event_name }}" = "workflow_dispatch"
@@ -141,7 +145,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh linux-x64
-      - name: Configure, build and install
+      - name: Checkout unfinished SaltsUtils integration
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: 98e1ad5848766043e52e0299f2a529505960bcd0
+          path: _deps/salts-utils
+          persist-credentials: false
+      - name: Restore shared host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - name: Build development Utils with released Salts 3
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QIGAO_SDK_RID: linux-x64
+          QIGAO_TARGET_TRIPLET: x64-linux
+          QIGAO_HOST_TRIPLET: x64-linux
+        working-directory: _deps/salts-utils
+        run: |
+          set -euo pipefail
+          cmake --preset ci-sdk-release-user
+          cmake --build --preset ci-sdk-release-user --parallel 2
+          cmake --build --preset install-ci-sdk-release-user --parallel 2
+          root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/linux-x64"
+          echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_HOST_ROOT=$root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib" >> "$GITHUB_ENV"
+          cat "$SALTS_ROOT/salts-sdk-manifest.txt" >> "$GITHUB_STEP_SUMMARY"
+      - name: Configure CHttp, build and install
         shell: bash
         run: |
           set -euxo pipefail
@@ -222,7 +253,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh "${{ steps.env.outputs.rid }}"
-      - name: Configure, build and install
+      - name: Checkout unfinished SaltsUtils integration
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: 98e1ad5848766043e52e0299f2a529505960bcd0
+          path: _deps/salts-utils
+          persist-credentials: false
+      - name: Restore shared host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - name: Build development Utils with released Salts 3
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QIGAO_SDK_RID: ${{ steps.env.outputs.rid }}
+          QIGAO_TARGET_TRIPLET: ${{ steps.env.outputs.triplet }}
+          QIGAO_HOST_TRIPLET: ${{ steps.env.outputs.triplet }}
+        working-directory: _deps/salts-utils
+        run: |
+          set -euo pipefail
+          cmake --preset ci-macos-release-user
+          cmake --build --preset ci-macos-release-user --parallel 2
+          cmake --build --preset install-ci-macos-release-user --parallel 2
+          root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/${{ steps.env.outputs.rid }}"
+          echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_HOST_ROOT=$root" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/${{ steps.env.outputs.triplet }}/lib" >> "$GITHUB_ENV"
+          cat "$SALTS_ROOT/salts-sdk-manifest.txt" >> "$GITHUB_STEP_SUMMARY"
+      - name: Configure CHttp, build and install
         shell: bash
         run: |
           set -euxo pipefail
@@ -303,7 +361,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
-      - name: Configure, build and install
+      - name: Checkout unfinished SaltsUtils integration
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: 98e1ad5848766043e52e0299f2a529505960bcd0
+          path: _deps/salts-utils
+          persist-credentials: false
+      - name: Restore shared host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - name: Build development Utils with released Salts 3
+        shell: cmd
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        working-directory: _deps/salts-utils
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "QIGAO_SDK_RID=windows-x64"
+          set "QIGAO_TARGET_TRIPLET=%QIGAO_VCPKG_WINDOWS_TRIPLET%"
+          set "QIGAO_HOST_TRIPLET=%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET%"
+          cmake --preset ci-sdk-release-user
+          if errorlevel 1 exit /b 1
+          cmake --build --preset ci-sdk-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --build --preset install-ci-sdk-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          echo SALTS_UTILS_ROOT=%GITHUB_WORKSPACE%\_deps\salts-utils\stage\sdk\windows-x64>> "%GITHUB_ENV%"
+          echo SALTS_UTILS_HOST_ROOT=%GITHUB_WORKSPACE%\_deps\salts-utils\stage\sdk\windows-x64>> "%GITHUB_ENV%"
+      - name: Configure CHttp, build and install
         shell: cmd
         run: |
           set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"

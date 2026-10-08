@@ -187,7 +187,7 @@ Local install presets derive their destination from
 packaging retains `stage/sdk/<RID>`. After changing the toolchain or SDK roots,
 reconfigure with `cmake --preset win-release-user --fresh` before building.
 
-### CMeta reflection and plugin lifetime
+### CMeta reflection and Component generation lifetime
 
 The 2.1 migration also uses the published `cmeta_*` platform/file APIs,
 `<cmeta_buffer.h>`, `<cmeta_fs.h>` and `<cmeta_uuid.h>`. Existing `mem_*`
@@ -195,24 +195,23 @@ buffer operations, `SALTS_*` error codes and `Salts::*` CMake targets keep their
 published names. Typed declarations use `cmeta_type` and `cmeta_function`.
 
 Service and RPC continue to use producer-owned CMeta Function/Data descriptors
-and exact DataBind adapters. Service mount performs admission before publishing
-a route; request workers use the cached execution binding under its retained
-plugin lease. Salts 2.x plugin types/functions use `cmeta_plugin_*` and
-`CMETA_PLUGIN_*`; the runtime headers remain `<salts/plugin.h>` and the target
-remains `Salts::Plugin`.
+and exact DataBind adapters. Component-backed Service mount performs admission
+before publishing a route: it acquires one `Salts::ComponentPlugin` generation
+scope, resolves an explicitly named `chttp_service_operation_provider`, copies
+the admitted native binding/execution into the mounted method record, and
+performs no Component or Plugin lookup on request/deferred hot paths.
 
-Service method slots use the CMeta cleanup obligation and Plugin lease adapter
-from `<salts/plugin_scope.h>`. Each successful acquisition arms exactly one
-obligation. Failed mount and Service destruction share its discharge path;
-cleanup runs after dependent CFlow state is destroyed. The registry must remain
-at a stable address until Service destruction, after server/executor drain.
-Lease release invariant violations fail fast instead of being silently ignored.
+The Component generation is the outer module-lifetime authority. It retains the
+underlying Plugin lease while mounted Service scopes and other admitted users
+may still reach provider metadata/code. Service destruction first waits for
+accepted deferred invocations, destroys dependent CFlow state, then releases
+its generation scope. A draining generation cannot stop/release provider
+instances or Plugin leases until that scope is gone.
 
-Rebuild Service consumers and generated plugins together against matching
-SDKs; old `salts_plugin_*` source names and earlier reflection/plugin ABI epochs
-are not accepted. HTTP/RPC formats, export IDs and route semantics are unchanged.
-The Service HTTP test covers rejected export cleanup, successful mount retention,
-stop/admission closure and final unload.
+The integration branch intentionally removes the former Service-private
+Plugin-registry/catalog/lease mount path rather than keeping a fallback. HTTP
+projection, MethodPlan/native ownership semantics, route behavior, and exact
+execution ABI remain unchanged.
 
 Always restore the latest Salts and SaltsUtils packages together, then regenerate
 IDL bindings and rebuild consumers against those SDKs. CMake does not pin or
@@ -262,15 +261,21 @@ Additional technical references:
 
 **Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
 
-### #1001 candidate CI
+## Salts 3 integration qualification
 
-Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
-successful producer run for that exact SHA; dispatch accepts a SHA override.
-The selected run must retain all three host SDK artifacts. Missing successful
-SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
-(which retains packages without publishing). The restore action validates run
-provenance and the SDK manifest before use. Linux, Windows
-and macOS build the full configured graph, run CTest and install the SDK.
-Candidate runs skip cross packaging and publication; tags cannot select a
-candidate. Remove the temporary pin after the required SDK is published and
-validate the ordinary released dependency graph before releasing this project.
+This development branch requires a complete Salts 3.x SDK in both the source
+build and installed CHttp package. Component service mounts replace the former
+Plugin mount inputs with `component_runtime` and `component_id`; mounted routes
+pin one generation until all deferred work has completed and Service destruction
+releases its scope. Regenerate and rebuild consumers and provider DSOs with the
+matching SDK and DataBind host tools. Rollback restores the complete old SDK,
+CHttp library/provider set and generated artifacts.
+
+The existing Component runtime workflow builds the complete configured graph,
+runs the Component, adjacent business and installed Service CTest suites, and
+records SDK/source identities. It uses the latest released Salts 3.x SDK and
+explicitly rebuilds the unfinished SaltsUtils integration source revision against
+that SDK. This qualifies development integration only: SaltsUtils publication and
+CHttp release/version selection remain deferred. Linux acceptance does not prove
+Windows/macOS, sanitizers, or optional WASM integration.
+

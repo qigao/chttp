@@ -213,22 +213,10 @@ foreach(FORBIDDEN_PLUGIN_HOT
   endif()
 endforeach()
 
-foreach(REQUIRED_PLUGIN_CONTROL
-    "cmeta_plugin_registry_acquire"
-    "DATA_BIND_PLUGIN_CATALOG_EXPORT_ID"
-    "data_bind_plugin_operation_execution_admit"
-    "cmeta_cleanup_run(&record->plugin_cleanup)")
-  string(FIND "${SERVICE_TEXT}" "${REQUIRED_PLUGIN_CONTROL}" POS)
-  if(POS EQUAL -1)
-    message(FATAL_ERROR
-      "Plugin mount/release control plane is missing: ${REQUIRED_PLUGIN_CONTROL}")
-  endif()
-endforeach()
-
-# Plugin lifetime is exercised by chttp_service_http_test's generated Plugin
-# Service case: in-flight work blocks destruction/unload, and final destruction
-# releases the mount-owned lease. Function-name positions cannot prove lifetime
-# behavior through the structured cleanup adapter.
+# Component generation retention and teardown are exercised by the formal
+# chttp_service_http_test: held old/new DSO requests, closed admission, BUSY
+# destruction/drain, and release after invocation cleanup. Source marker positions
+# do not establish these runtime lifetime properties.
 
 string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" CFLOW_RUN_START)
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_execute_deferred(" CFLOW_RUN_END)
