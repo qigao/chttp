@@ -14,6 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 typedef struct chttp_client_impl chttp_client_impl;
 
 enum {
@@ -96,6 +100,8 @@ static cflow_io_native_backend_kind chttp_file_backend(void) {
   return CFLOW_IO_NATIVE_IOCP;
 #elif defined(__linux__)
   return CFLOW_IO_NATIVE_IO_URING;
+#elif defined(__APPLE__) && TARGET_OS_OSX
+  return CFLOW_IO_NATIVE_DARWIN_AIO;
 #else
   return CFLOW_IO_NATIVE_POLL;
 #endif

@@ -336,9 +336,10 @@ response，同时删除临时文件并保留原目标。sink 模式的 response 
 `body_size` 仍是成功消费的累计字节数。
 
 每个 client/server owner 懒创建一个有硬容量的共享 CFlow file runtime。正文 read/write 通过
-IOCP 或 io_uring 原生异步操作完成；completion callback 仍只在 CHTTP owner 上执行。Windows
+Windows IOCP、Linux io_uring 或 macOS Darwin AIO 原生异步操作完成；completion callback
+仍只在 CHTTP owner 上执行。Windows
 IOCP 不提供异步 flush，因此下载完成关闭异步句柄后，仅 durability barrier 使用同步
-`cmeta_fs_fsync`；Linux io_uring 使用异步 flush。不支持 regular-file async I/O 的 backend 在
+`cmeta_fs_fsync`；Linux io_uring 与 macOS Darwin AIO 使用异步 flush。不支持 regular-file async I/O 的 backend 在
 file open 前返回 `SALTS_ENOTSUP`，不会把正文数据路径静默降级为同步读写。
 
 H1 在文件 write completion 前不再提交 receive。H2 在 write completion 前不归还该 DATA 的

@@ -18,12 +18,13 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="*" Condition="'$(UseSaltsCandidate)' != 'true'" />
     <PackageReference Include="SaltsUtils.Native" Version="*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project
-dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
+$useCandidate = -not [string]::IsNullOrWhiteSpace($env:SALTS_CANDIDATE_ROOT)
+dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate "-p:UseSaltsCandidate=$($useCandidate.ToString().ToLowerInvariant())"
 if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDKs" }
 $assets = Get-Content -LiteralPath (Join-Path $restoreRoot "obj/project.assets.json") -Raw | ConvertFrom-Json -AsHashtable
 function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
@@ -33,7 +34,7 @@ function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
   return Join-Path (Join-Path $packages $assets.libraries[$keys[0]].path) "sdk/$rid"
 }
 
-$saltsRoot = Get-RestoredSdkRoot "salts.native" $Rid
+$saltsRoot = if ($useCandidate) { $env:SALTS_CANDIDATE_ROOT } else { Get-RestoredSdkRoot "salts.native" $Rid }
 $utilsRoot = Get-RestoredSdkRoot "saltsutils.native" $Rid
 foreach ($p in @(
   (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),

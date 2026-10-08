@@ -448,9 +448,7 @@ static void owner_ws_sample_pressure(chttp_server_impl *impl,
     if (owner == NULL) continue;
     if (capture_leases)
       pressure->owner_leases[index] = chttp_server_owner_lease_count(owner);
-    cmeta_mutex_lock(&owner->admission_mutex);
-    ring = owner->admission_count;
-    cmeta_mutex_unlock(&owner->admission_mutex);
+    ring = chttp_server_owner_admission_count(owner);
     cmeta_mutex_lock(&impl->mutex);
     commands = owner->websocket_command_count;
     cmeta_mutex_unlock(&impl->mutex);

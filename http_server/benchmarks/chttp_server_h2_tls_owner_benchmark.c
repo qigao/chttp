@@ -469,9 +469,7 @@ static void owner_proto_sample_pressure(chttp_server_impl *impl,
     size_t ring;
     if (owner == NULL) continue;
     leases = chttp_server_owner_lease_count(owner);
-    cmeta_mutex_lock(&owner->admission_mutex);
-    ring = owner->admission_count;
-    cmeta_mutex_unlock(&owner->admission_mutex);
+    ring = chttp_server_owner_admission_count(owner);
     pressure->owner_leases[index] = leases;
     if (leases > pressure->peak_owner_leases[index])
       pressure->peak_owner_leases[index] = leases;

@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 enum {
   CHTTP_SERVER_ERROR_RESPONSE_BYTES = 256,
   CHTTP_SERVER_COOKIE_NAME_BYTES = 64,
@@ -35,6 +39,21 @@ static void chttp_server_on_body_close(void *user, chttp_body_sink *sink, int st
 static int chttp_server_response_stream_next(chttp_server_connection *connection);
 static void chttp_server_h1_file_ready(void *user);
 static bool chttp_server_should_stop(chttp_server_impl *server);
+
+size_t chttp_server_owner_lease_count(const chttp_server_owner_lane *owner) {
+  cnet_handoff_snapshot snapshot;
+  if (owner == NULL || owner->handoff.impl == NULL) return 0u;
+  if (cnet_handoff_get_snapshot((cnet_handoff *)&owner->handoff, &snapshot) != SALTS_OK)
+    return SIZE_MAX;
+  return snapshot.reserved + snapshot.queued + snapshot.taken;
+}
+
+size_t chttp_server_owner_admission_count(chttp_server_owner_lane *owner) {
+  cnet_handoff_snapshot snapshot;
+  if (owner == NULL || owner->handoff.impl == NULL) return 0u;
+  return cnet_handoff_get_snapshot(&owner->handoff, &snapshot) == SALTS_OK
+             ? snapshot.queued : SIZE_MAX;
+}
 
 void chttp_server_deadline_start(chttp_server_request_state *state, uint32_t budget_ms) {
   if (budget_ms == 0) {
@@ -91,6 +110,8 @@ static cflow_io_native_backend_kind chttp_server_file_backend(void) {
   return CFLOW_IO_NATIVE_IOCP;
 #elif defined(__linux__)
   return CFLOW_IO_NATIVE_IO_URING;
+#elif defined(__APPLE__) && TARGET_OS_OSX
+  return CFLOW_IO_NATIVE_DARWIN_AIO;
 #else
   return CFLOW_IO_NATIVE_POLL;
 #endif
@@ -633,34 +654,19 @@ static void chttp_server_owner_storage_release(
     chttp_server_impl *server, chttp_server_owner_lane *owner) {
   size_t index;
   if (server == NULL || owner == NULL) return;
-  if (owner->admission_sync_initialized) {
-    cmeta_mutex_lock(&owner->admission_mutex);
-    while (owner->admission_count != 0u && owner->admissions != NULL) {
-      cnet_accepted_stream *accepted =
-          &owner->admissions[owner->admission_head];
-      (void)cnet_accepted_stream_close(accepted);
-      owner->admission_head =
-          (owner->admission_head + 1u) % owner->connection_count;
-      --owner->admission_count;
-    }
-    cmeta_mutex_unlock(&owner->admission_mutex);
-    cmeta_mutex_destroy(&owner->admission_mutex);
-    owner->admission_sync_initialized = false;
-  }
+  /* Storage is released before startup or after joining all runtime threads.
+   * Active credit obligations are rejected by server_destroy before this call. */
+  if (owner->handoff.impl != NULL) (void)cnet_handoff_destroy(&owner->handoff);
   if (owner->websocket_commands != NULL)
     for (index = 0u; index < server->config.network.command_capacity; ++index)
       free(owner->websocket_commands[index].data);
-  free(owner->admissions);
   free(owner->file_transfers);
   free(owner->websocket_commands);
-  owner->admissions = NULL;
   owner->file_transfers = NULL;
   owner->websocket_commands = NULL;
   owner->file_transfer_capacity = 0u;
   owner->websocket_command_head = 0u;
   owner->websocket_command_count = 0u;
-  owner->admission_head = 0u;
-  owner->admission_count = 0u;
 }
 
 static int chttp_server_owner_storage_prepare(
@@ -701,17 +707,16 @@ static int chttp_server_owner_storage_prepare(
       .connection_count = connection_count,
       .file_transfer_capacity = file_transfer_capacity,
       .terminal_status = SALTS_OK};
-  atomic_init(&owner->connection_leases, 0u);
   atomic_init(&owner->runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
-  cmeta_mutex_init(&owner->admission_mutex);
-  owner->admission_sync_initialized = true;
-  owner->admissions =
-      (cnet_accepted_stream *)calloc(connection_count, sizeof(*owner->admissions));
+  const cnet_handoff_config handoff_config = {sizeof(handoff_config),
+      CNET_HANDOFF_VERSION, connection_count, connection_count};
+  const int handoff_status = cnet_handoff_init(&owner->handoff, &handoff_config);
+  if (handoff_status != SALTS_OK) return handoff_status;
   owner->file_transfers = (chttp_file_transfer **)calloc(
       file_transfer_capacity, sizeof(*owner->file_transfers));
   owner->websocket_commands = (chttp_server_websocket_command *)calloc(
       server->config.network.command_capacity, sizeof(*owner->websocket_commands));
-  if (owner->admissions == NULL || owner->file_transfers == NULL ||
+  if (owner->file_transfers == NULL ||
       owner->websocket_commands == NULL) {
     chttp_server_owner_storage_release(server, owner);
     return SALTS_ENOMEM;
@@ -753,6 +758,7 @@ static int chttp_server_owner_topology_configure(
   free(server->additional_owners);
 
   server->owner = primary;
+  primary = (chttp_server_owner_lane){0};
   server->additional_owners = additional;
   server->owner_count = owner_count;
 
@@ -888,10 +894,7 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       .connection_count = config->network.connection_capacity,
       .file_transfer_capacity = file_transfer_capacity,
       .terminal_status = SALTS_OK};
-  atomic_init(&impl->owner.connection_leases, 0u);
   atomic_init(&impl->owner.runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
-  cmeta_mutex_init(&impl->owner.admission_mutex);
-  impl->owner.admission_sync_initialized = true;
   impl->owner_count = 1u;
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {
@@ -941,10 +944,14 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
         (chttp_server_middleware *)calloc(config->middleware_capacity, sizeof(*impl->middleware));
   impl->connections = (chttp_server_connection *)calloc(config->network.connection_capacity,
                                                         sizeof(*impl->connections));
-  impl->owner.admissions =
-      (cnet_accepted_stream *)calloc(
-          config->network.connection_capacity,
-          sizeof(*impl->owner.admissions));
+  const cnet_handoff_config handoff_config = {sizeof(handoff_config),
+      CNET_HANDOFF_VERSION, config->network.connection_capacity,
+      config->network.connection_capacity};
+  status = cnet_handoff_init(&impl->owner.handoff, &handoff_config);
+  if (status != SALTS_OK) {
+    chttp_server_impl_free(impl);
+    return status;
+  }
   impl->owner.file_transfers =
       (chttp_file_transfer **)calloc(file_transfer_capacity,
                                      sizeof(*impl->owner.file_transfers));
@@ -956,7 +963,7 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       impl->route_paths == NULL ||
       (route_middleware_count != 0u && impl->route_middleware == NULL) ||
       (config->middleware_capacity != 0u && impl->middleware == NULL) ||
-      impl->connections == NULL || impl->owner.admissions == NULL ||
+      impl->connections == NULL ||
       impl->owner.file_transfers == NULL ||
       impl->owner.websocket_commands == NULL) {
     chttp_server_impl_free(impl);
@@ -1248,9 +1255,9 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     } else {
       connection->deferred_disconnected = true;
     }
-    if (connection->owner_lease_held) {
-      (void)chttp_server_owner_lease_release(connection->owner);
-      connection->owner_lease_held = false;
+    if (connection->owner_ticket.slot != 0u) {
+      (void)cnet_handoff_release(&connection->owner->handoff, connection->owner_ticket);
+      connection->owner_ticket = (cnet_handoff_ticket){0};
     }
     chttp_server_stats_connection_close(connection->server);
   }
@@ -1880,6 +1887,24 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
   return status;
 }
 
+/* HTTP deferred requests retain their context after transport terminal. The
+ * owner releases the extra hold only when HTTP/1 and HTTP/2 have both finished. */
+static int chttp_server_manager_progress(chttp_server_owner_lane *owner) {
+  size_t work;
+  const size_t end = chttp_server_owner_connection_end(owner);
+  for (size_t i = owner->connection_begin; i < end; ++i) {
+    chttp_server_connection *connection = &owner->server->connections[i];
+    if (connection->managed.slot == 0u || connection->active ||
+        chttp_server_deferred_token_state(atomic_load_explicit(
+            &connection->deferred_token, memory_order_acquire)) != CHTTP_SERVER_DEFERRED_IDLE ||
+        chttp_h2_server_connection_has_deferred(connection->h2)) continue;
+    const int status = cnet_manager_release_context(&owner->manager, connection->managed);
+    if (status != SALTS_OK) return status;
+    connection->managed = (cnet_managed_connection){0};
+  }
+  return cnet_manager_advance(&owner->manager, owner->connection_count, &work);
+}
+
 static chttp_server_connection *chttp_server_free_connection(
     chttp_server_owner_lane *owner) {
   chttp_server_impl *server;
@@ -1894,7 +1919,7 @@ static chttp_server_connection *chttp_server_free_connection(
       end > server->config.network.connection_capacity)
     return NULL;
   for (index = owner->connection_begin; index < end; ++index)
-    if (!server->connections[index].active &&
+    if (!server->connections[index].active && server->connections[index].managed.slot == 0u &&
         chttp_server_deferred_token_state(atomic_load_explicit(
             &server->connections[index].deferred_token, memory_order_acquire)) ==
             CHTTP_SERVER_DEFERRED_IDLE &&
@@ -1904,59 +1929,28 @@ static chttp_server_connection *chttp_server_free_connection(
 }
 
 static int chttp_server_owner_admission_enqueue(
-    chttp_server_owner_lane *owner, cnet_accepted_stream *accepted) {
-  size_t index;
-  if (owner == NULL || accepted == NULL || owner->admissions == NULL ||
-      !owner->admission_sync_initialized || owner->connection_count == 0u)
-    return SALTS_EINVAL;
-  cmeta_mutex_lock(&owner->admission_mutex);
+    chttp_server_owner_lane *owner, cnet_handoff_ticket ticket,
+    cnet_accepted_stream *accepted) {
   if (chttp_server_owner_runtime_state_get(owner) !=
-      CHTTP_SERVER_OWNER_RUNTIME_READY) {
-    cmeta_mutex_unlock(&owner->admission_mutex);
+      CHTTP_SERVER_OWNER_RUNTIME_READY)
     return SALTS_ESHUTDOWN;
-  }
-  if (owner->admission_count >= owner->connection_count) {
-    cmeta_mutex_unlock(&owner->admission_mutex);
-    return SALTS_ENOBUFS;
-  }
-  index = (owner->admission_head + owner->admission_count) %
-          owner->connection_count;
-  owner->admissions[index] = *accepted;
-  *accepted = (cnet_accepted_stream)CNET_ACCEPTED_STREAM_INIT;
-  ++owner->admission_count;
-  cmeta_mutex_unlock(&owner->admission_mutex);
-  return SALTS_OK;
+  return cnet_handoff_publish(&owner->handoff, ticket, accepted);
 }
 
-static int chttp_server_owner_admission_dequeue(
-    chttp_server_owner_lane *owner, cnet_accepted_stream *out_accepted) {
-  if (out_accepted == NULL) return SALTS_EINVAL;
-  *out_accepted = (cnet_accepted_stream)CNET_ACCEPTED_STREAM_INIT;
-  if (owner == NULL || owner->admissions == NULL ||
-      !owner->admission_sync_initialized || owner->connection_count == 0u)
-    return SALTS_EINVAL;
-  cmeta_mutex_lock(&owner->admission_mutex);
-  if (owner->admission_count == 0u) {
-    cmeta_mutex_unlock(&owner->admission_mutex);
-    return SALTS_ENOENT;
-  }
-  *out_accepted = owner->admissions[owner->admission_head];
-  owner->admissions[owner->admission_head] =
-      (cnet_accepted_stream)CNET_ACCEPTED_STREAM_INIT;
-  owner->admission_head =
-      (owner->admission_head + 1u) % owner->connection_count;
-  --owner->admission_count;
-  cmeta_mutex_unlock(&owner->admission_mutex);
-  return SALTS_OK;
-}
-
-static void chttp_server_owner_admission_cancel(
+static int chttp_server_owner_admission_cancel(
     chttp_server_owner_lane *owner) {
   cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
-  while (chttp_server_owner_admission_dequeue(owner, &accepted) == SALTS_OK) {
-    (void)cnet_accepted_stream_close(&accepted);
-    (void)chttp_server_owner_lease_release(owner);
+  cnet_handoff_ticket ticket;
+  int first_status = SALTS_OK;
+  int status = cnet_handoff_seal(&owner->handoff);
+  if (status != SALTS_OK) return status;
+  while ((status = cnet_handoff_take(&owner->handoff, &ticket, &accepted)) == SALTS_OK) {
+    const int close_status = cnet_accepted_stream_close(&accepted);
+    const int release_status = cnet_handoff_release(&owner->handoff, ticket);
+    if (first_status == SALTS_OK && close_status != SALTS_OK) first_status = close_status;
+    if (first_status == SALTS_OK && release_status != SALTS_OK) first_status = release_status;
   }
+  return first_status != SALTS_OK ? first_status : status == SALTS_ENOENT ? SALTS_OK : status;
 }
 
 static void chttp_server_stats_rejected_connection(chttp_server_impl *server) {
@@ -1965,10 +1959,12 @@ static void chttp_server_stats_rejected_connection(chttp_server_impl *server) {
   cmeta_mutex_unlock(&server->mutex);
 }
 
-static chttp_server_owner_lane *chttp_server_admission_owner(
-    chttp_server_impl *server) {
+static int chttp_server_admission_owner(
+    chttp_server_impl *server, cnet_handoff_ticket *ticket,
+    chttp_server_owner_lane **out_owner) {
   size_t offset;
-  if (server == NULL || server->owner_count == 0u) return NULL;
+  *out_owner = NULL;
+  if (server == NULL || server->owner_count == 0u) return SALTS_EINVAL;
   for (offset = 0u; offset < server->owner_count; ++offset) {
     const size_t index =
         (server->admission_cursor + offset) % server->owner_count;
@@ -1977,11 +1973,14 @@ static chttp_server_owner_lane *chttp_server_admission_owner(
         chttp_server_owner_runtime_state_get(owner) !=
             CHTTP_SERVER_OWNER_RUNTIME_READY)
       continue;
-    if (!chttp_server_owner_lease_try_acquire(owner)) continue;
+    const int status = cnet_handoff_reserve(&owner->handoff, ticket);
+    if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN) continue;
+    if (status != SALTS_OK) return status;
     server->admission_cursor = (index + 1u) % server->owner_count;
-    return owner;
+    *out_owner = owner;
+    return SALTS_OK;
   }
-  return NULL;
+  return SALTS_ENOBUFS;
 }
 
 static int chttp_server_listener_progress(chttp_server_impl *server) {
@@ -1991,6 +1990,7 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
        attempts < server->config.network.connection_capacity;
        ++attempts) {
     cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
+    cnet_handoff_ticket ticket = {0};
     chttp_server_owner_lane *owner;
     cnet_client *network;
     int status;
@@ -2003,16 +2003,17 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
     }
     if (status != SALTS_OK) return status;
 
-    owner = chttp_server_admission_owner(server);
-    if (owner == NULL) {
+    status = chttp_server_admission_owner(server, &ticket, &owner);
+    if (status != SALTS_OK) {
       (void)cnet_accepted_stream_close(&accepted);
+      if (status != SALTS_ENOBUFS) return status;
       chttp_server_stats_rejected_connection(server);
       continue;
     }
-    status = chttp_server_owner_admission_enqueue(owner, &accepted);
+    status = chttp_server_owner_admission_enqueue(owner, ticket, &accepted);
     if (status != SALTS_OK) {
       (void)cnet_accepted_stream_close(&accepted);
-      (void)chttp_server_owner_lease_release(owner);
+      (void)cnet_handoff_release(&owner->handoff, ticket);
       if (status != SALTS_ESHUTDOWN)
         chttp_server_stats_rejected_connection(server);
       if (status == SALTS_ENOBUFS) continue;
@@ -2021,7 +2022,14 @@ static int chttp_server_listener_progress(chttp_server_impl *server) {
       return status;
     }
     network = chttp_server_owner_network(owner);
-    if (network != NULL) (void)cnet_client_wake(network);
+    if (network == NULL) return SALTS_EPROTO;
+    {
+      status = cnet_client_wake(network);
+      /* Publication already transferred the descriptor and credit. On wake
+       * failure stop admission and let the owner cancel its inbox after the
+       * listener_done barrier; never close/release the published item here. */
+      if (status != SALTS_OK) return status;
+    }
   }
   return SALTS_OK;
 }
@@ -2047,7 +2055,6 @@ static void chttp_server_connection_activate(
   connection->deferred_response_writing = false;
   connection->retained_response_paused = false;
   connection->retained_response_sg = false;
-  connection->owner_lease_held = true;
   connection->retained_response_sg_body_size = 0u;
   connection->pending_action = CHTTP_SERVER_PENDING_NONE;
   connection->outbound_size = 0u;
@@ -2066,15 +2073,20 @@ static int chttp_server_admission_progress(
     return SALTS_EINVAL;
   network = chttp_server_owner_network(owner);
   if (network == NULL) return SALTS_EINVAL;
+  {
+    const int status = chttp_server_manager_progress(owner);
+    if (status != SALTS_OK) return status;
+  }
   for (;;) {
     chttp_server_connection *connection = chttp_server_free_connection(owner);
     cnet_accepted_stream accepted = CNET_ACCEPTED_STREAM_INIT;
+    cnet_handoff_ticket ticket = {0};
     cnet_observer observer;
     cnet_connection handle = {0};
     cnet_stream_peer peer;
     int status;
     if (connection == NULL) return SALTS_OK;
-    status = chttp_server_owner_admission_dequeue(owner, &accepted);
+    status = cnet_handoff_take(&owner->handoff, &ticket, &accepted);
     if (status == SALTS_ENOENT) return SALTS_OK;
     if (status != SALTS_OK) return status;
 
@@ -2085,7 +2097,7 @@ static int chttp_server_admission_progress(
       status = chttp_h2_server_connection_prepare(connection->h2);
     if (status != SALTS_OK) {
       (void)cnet_accepted_stream_close(&accepted);
-      (void)chttp_server_owner_lease_release(owner);
+      (void)cnet_handoff_release(&owner->handoff, ticket);
       chttp_server_stats_rejected_connection(server);
       return status;
     }
@@ -2095,19 +2107,24 @@ static int chttp_server_admission_progress(
                                .on_receive = chttp_server_on_receive,
                                .on_send = chttp_server_on_send,
                                .user = connection};
-    status = server->tls_initialized
-                 ? cnet_client_adopt_accepted_tls(
-                       network, &accepted, &server->tls_server, &observer, &handle)
-                 : cnet_client_adopt_accepted(
-                       network, &accepted, &observer, &handle);
+    const cnet_manager_attachment attachment = {.observer = observer, .hold_context = true};
+    status = cnet_manager_reserve(&owner->manager, &attachment, &connection->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_adopt(&owner->manager, connection->managed, &accepted,
+                                 server->tls_initialized ? &server->tls_server : NULL, &handle);
+    else
+      (void)cnet_accepted_stream_close(&accepted);
     if (status != SALTS_OK) {
-      (void)chttp_server_owner_lease_release(owner);
+      (void)cnet_handoff_release(&owner->handoff, ticket);
       chttp_server_stats_rejected_connection(server);
+      const int recycle_status = chttp_server_manager_progress(owner);
+      if (recycle_status != SALTS_OK) return recycle_status;
       if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) continue;
       return status;
     }
     chttp_server_connection_activate(
         server, owner, connection, handle, &peer);
+    connection->owner_ticket = ticket;
   }
 }
 
@@ -2305,11 +2322,14 @@ static int chttp_server_begin_shutdown(
   if (owner->connection_begin > server->config.network.connection_capacity ||
       end < owner->connection_begin || end > server->config.network.connection_capacity)
     return SALTS_EINVAL;
+  status = cnet_manager_seal(&owner->manager);
+  if (status != SALTS_OK) return status;
   if (owner == &server->owner && server->listener_initialized) {
     status = cnet_listener_close(&server->listener);
     if (status != SALTS_OK && status != SALTS_EALREADY) return status;
   }
-  chttp_server_owner_admission_cancel(owner);
+  status = chttp_server_owner_admission_cancel(owner);
+  if (status != SALTS_OK) return status;
   for (index = owner->connection_begin; index < end; ++index) {
     chttp_server_connection *connection = &server->connections[index];
     if (!connection->active) continue;
@@ -2420,6 +2440,12 @@ static int chttp_server_owner_cleanup_network(
     if (first_status == SALTS_OK && stop_status != SALTS_OK)
       first_status = stop_status;
     if (stop_status != SALTS_ETIMEDOUT && stop_status != SALTS_EBUSY) {
+      if (owner->manager.impl != NULL) {
+        int manager_status = chttp_server_manager_progress(owner);
+        if (manager_status == SALTS_OK) manager_status = cnet_manager_destroy(&owner->manager);
+        if (manager_status != SALTS_OK)
+          return first_status != SALTS_OK ? first_status : manager_status;
+      }
       const int destroy_status = cnet_client_destroy(network);
       if (first_status == SALTS_OK && destroy_status != SALTS_OK)
         first_status = destroy_status;
@@ -2459,7 +2485,9 @@ static int chttp_server_owner_worker_startup(
       network, &server->socket_options.stream);
   if (status != SALTS_OK) return status;
 
-  return SALTS_OK;
+  const cnet_manager_config manager_config = {sizeof(manager_config), CNET_MANAGER_VERSION,
+      network, owner->connection_count, owner->connection_count};
+  return cnet_manager_init(&owner->manager, &manager_config);
 }
 
 static int chttp_server_listener_cleanup(chttp_server_impl *server) {
@@ -3059,8 +3087,7 @@ int chttp_server_destroy(chttp_server *server) {
       if (cleanup_status != SALTS_OK) return cleanup_status;
     }
     if (owner->network_initialized ||
-        chttp_server_owner_lease_count(owner) != 0u ||
-        owner->admission_count != 0u)
+        chttp_server_owner_lease_count(owner) != 0u)
       return SALTS_EBUSY;
   }
   if (impl->network_initialized || impl->listener_initialized)

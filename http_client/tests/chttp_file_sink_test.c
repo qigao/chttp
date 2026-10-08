@@ -10,11 +10,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 static cflow_io_native_backend_kind chttp_file_sink_test_backend(void) {
 #if defined(_WIN32)
   return CFLOW_IO_NATIVE_IOCP;
 #elif defined(__linux__)
   return CFLOW_IO_NATIVE_IO_URING;
+#elif defined(__APPLE__) && TARGET_OS_OSX
+  return CFLOW_IO_NATIVE_DARWIN_AIO;
 #else
   return CFLOW_IO_NATIVE_POLL;
 #endif
@@ -53,7 +59,7 @@ spec("CHTTP asynchronous file sink") {
 
     check_not_null(path);
     status = cflow_io_file_runtime_init(&runtime, &runtime_config);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !(defined(__APPLE__) && TARGET_OS_OSX)
     if (status != SALTS_OK) {
       info("native async file backend unavailable at runtime: %d", status);
       check_equal(tt_remove_file(path), 0);

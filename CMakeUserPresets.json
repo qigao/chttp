@@ -348,8 +348,14 @@
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
                 "SALTS_ROOT": "$penv{SALTS_ROOT}",
                 "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/native-sdk/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/native-sdk/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+                "DYLD_LIBRARY_PATH": "$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
             }
+        },
+        {
+            "name": "ci-macos-sdk-release-user",
+            "inherits": ["GccMac", "ci-sdk-release-user"]
         },
         {
             "name": "ci-android-sdk-release-user",
@@ -391,6 +397,15 @@
         }
     ],
     "buildPresets": [
+        {
+            "name": "ci-macos-sdk-release-user",
+            "configurePreset": "ci-macos-sdk-release-user"
+        },
+        {
+            "name": "install-ci-macos-sdk-release-user",
+            "configurePreset": "ci-macos-sdk-release-user",
+            "targets": ["install"]
+        },
         {
             "name": "win-dev-user",
             "configurePreset": "win-dev-user"
@@ -591,6 +606,16 @@
         }
     ],
     "testPresets": [
+        {
+            "name": "ci-macos-sdk-release-user",
+            "configurePreset": "ci-macos-sdk-release-user",
+            "inherits": "base-test"
+        },
+        {
+            "name": "ci-sdk-release-user",
+            "configurePreset": "ci-sdk-release-user",
+            "inherits": "base-test"
+        },
         {
             "name": "win-dev-user",
             "inherits": "base-test",

@@ -4,7 +4,7 @@ add_executable(
 
 target_link_libraries(
   chttp_server_owner_benchmark
-  PRIVATE CHttp::Server Salts::Platform Salts::Core)
+  PRIVATE CHttp::Server Salts::CFlow Salts::Platform Salts::Core)
 
 target_include_directories(
   chttp_server_owner_benchmark
@@ -28,7 +28,7 @@ add_executable(
 target_link_libraries(
   chttp_server_ws_owner_benchmark
   PRIVATE CHttp::Server CHttp::Client
-          Salts::Platform Salts::Core Salts::TinyTest)
+          Salts::CFlow Salts::Platform Salts::Core Salts::TinyTest)
 
 target_include_directories(
   chttp_server_ws_owner_benchmark
@@ -53,7 +53,7 @@ add_executable(
 target_link_libraries(
   chttp_server_h2_tls_owner_benchmark
   PRIVATE CHttp::Server CHttp::Client
-          Salts::Platform Salts::Core Salts::TinyTest)
+          Salts::CFlow Salts::Platform Salts::Core Salts::TinyTest)
 
 target_include_directories(
   chttp_server_h2_tls_owner_benchmark
@@ -79,7 +79,7 @@ add_executable(
 
 target_link_libraries(
   chttp_server_owner_churn_benchmark
-  PRIVATE CHttp::Server Salts::Platform Salts::Core)
+  PRIVATE CHttp::Server Salts::CFlow Salts::Platform Salts::Core)
 
 target_include_directories(
   chttp_server_owner_churn_benchmark
@@ -103,7 +103,7 @@ add_executable(
 
 target_link_libraries(
   chttp_server_owner_handler_cpu_benchmark
-  PRIVATE CHttp::Server Salts::Platform Salts::Core)
+  PRIVATE CHttp::Server Salts::CFlow Salts::Platform Salts::Core)
 
 target_include_directories(
   chttp_server_owner_handler_cpu_benchmark
@@ -127,7 +127,7 @@ add_executable(
 
 target_link_libraries(
   chttp_server_listener_admission_stall_benchmark
-  PRIVATE CHttp::Server Salts::Platform Salts::Core)
+  PRIVATE CHttp::Server Salts::CFlow Salts::Platform Salts::Core)
 
 target_include_directories(
   chttp_server_listener_admission_stall_benchmark

@@ -10,6 +10,40 @@ CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses S
 
 CHTTP depends on the installed [Salts](https://github.com/qigao/salts) SDK and selected [SaltsUtils](https://github.com/qigao/salts-utils) components.
 
+This integration branch requires the Salts #1001 candidate exporting
+`Salts::CNetManager`, `<cnet/manager.h>` and `<cnet/handoff.h>`; the latest published SDK alone does
+not yet provide that target. Each server owner lane uses one fixed-capacity
+manager for TCP/TLS adoption and terminal attachment retirement. HTTP/1 deferred
+responses and HTTP/2 deferred streams keep their contexts until completion.
+Each lane's bounded admission inbox and generation-checked connection credits
+now use the optional CNet handoff helper. CHTTP still chooses the final owner,
+owns its listener/threads/TLS policy and protocol state, and keeps its public
+server API. Successful publication transfers the descriptor even if the host
+wake fails; shutdown drains that inbox after the existing `listener_done`
+barrier ensures no listener wake can race backend destruction. Deploy the matching `cnet_manager` shared library with
+the candidate SDK. Reverting this adapter and its private link dependency
+restores raw CNet adoption without a protocol or data migration.
+
+For host integration acceptance, dispatch `native-sdk-release.yml` with both
+`salts_candidate_run_id` and `salts_candidate_sha`. The run must be a successful
+Salts CI dispatch with retained SDK artifacts. Linux, Windows and macOS use the
+selected artifact and run the formal CTest suite; SaltsUtils still resolves from
+the package feed. Candidate mode skips cross compilation, packaging and
+publication. Omit both inputs to retain the published-SDK release workflow.
+The macOS SDK profile inherits `GccMac` (GCC 15), matching the producer SDK's
+thread-local runtime ABI; Apple Clang's native TLS cannot link the GCC-built
+TinyTest runtime's emulated TLS symbols.
+Native asynchronous file upload/download and static-file responses select
+Windows IOCP, Linux io_uring, or macOS Darwin AIO. The macOS path requires the
+matching candidate SDK exposing `CFLOW_IO_NATIVE_DARWIN_AIO`; kqueue/poll remain
+unsupported for regular files. There is no implicit synchronous or thread-pool
+fallback. File completions retain the same bounded runtime and owner callbacks.
+See [HTTP file transfer semantics](docs/HTTP.md) and the
+[CFlow backend contract](https://github.com/qigao/salts/blob/488b88e4cce9aae4479f63c403ab78911b7c51f8/cflow/README.md#macos-file-backend-design).
+
+The manifest includes Lua and QuickJS because the installed SaltsUtils package
+exports those dependencies; it does not introduce another HTTP or TLS provider.
+
 That gives the library a shared foundation:
 
 - **CNet / NativeIO** for transport, connection progress, async I/O, TLS/session ownership, and shutdown semantics.
@@ -227,3 +261,16 @@ Additional technical references:
 ---
 
 **Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
+
+### #1001 candidate CI
+
+Until CNetManager is published, `cmake/ci/salts-candidate.json` pins the Salts commit used by branch/PR host qualification. CI resolves a
+successful producer run for that exact SHA; dispatch accepts a SHA override.
+The selected run must retain all three host SDK artifacts. Missing successful
+SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
+(which retains packages without publishing). The restore action validates run
+provenance and the SDK manifest before use. Linux, Windows
+and macOS build the full configured graph, run CTest and install the SDK.
+Candidate runs skip cross packaging and publication; tags cannot select a
+candidate. Remove the temporary pin after the required SDK is published and
+validate the ordinary released dependency graph before releasing this project.

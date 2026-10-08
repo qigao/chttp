@@ -25,8 +25,7 @@ typedef int chttp_requests_test_socket;
 
 enum {
   CHTTP_REQUESTS_TEST_TIMEOUT_MS = 5000,
-  CHTTP_REQUESTS_TEST_DEADLINE_MS = 20,
-  CHTTP_REQUESTS_TEST_SERVER_HOLD_MS = 100
+  CHTTP_REQUESTS_TEST_DEADLINE_MS = 20
 };
 
 typedef struct chttp_requests_test_server {
@@ -35,7 +34,6 @@ typedef struct chttp_requests_test_server {
   size_t expected_size;
   const void *response;
   size_t response_size;
-  uint32_t hold_after_receive_ms;
   int status;
 } chttp_requests_test_server;
 
@@ -213,8 +211,6 @@ static void chttp_requests_test_serve(void *user) {
     server->status = chttp_requests_test_recv_all(accepted, received, server->expected_size);
   if (server->status == SALTS_OK && memcmp(received, server->expected, server->expected_size) != 0)
     server->status = SALTS_EPROTO;
-  if (server->status == SALTS_OK && server->hold_after_receive_ms != 0u)
-    cmeta_sleep_ms(server->hold_after_receive_ms);
   if (server->status == SALTS_OK)
     server->status =
         chttp_requests_test_send_all(accepted, server->response, server->response_size);
@@ -565,44 +561,28 @@ spec("CHTTP requests-style client") {
     check_equal(chttp_client_init(&client, &config), SALTS_OK);
     {
       chttp_requests_test_socket listener = CHTTP_REQUESTS_TEST_INVALID_SOCKET;
-      chttp_requests_test_server server = {0};
-      cmeta_thread_t thread = NULL;
       chttp_response response_value = {0};
       chttp_error error = {0};
       chttp_options options;
       char uri[64];
       char authority[64];
-      char expected[512];
       uint16_t port = 0u;
-      int expected_size;
 
       check_equal(chttp_requests_test_listener(&listener, &port), SALTS_OK);
       check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
       check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
-      expected_size = snprintf(expected, sizeof(expected),
-                               "GET /timeout HTTP/1.1\r\n"
-                               "Host: %s\r\n"
-                               "Content-Length: 0\r\n"
-                               "Connection: keep-alive\r\n"
-                               "\r\n",
-                               authority);
-      check_true(expected_size > 0 && (size_t)expected_size < sizeof(expected));
-      server =
-          (chttp_requests_test_server){.listener = listener,
-                                       .expected = expected,
-                                       .expected_size = (size_t)expected_size,
-                                       .hold_after_receive_ms = CHTTP_REQUESTS_TEST_SERVER_HOLD_MS};
-      check_equal(cmeta_thread_create(&thread, chttp_requests_test_serve, &server), SALTS_OK);
+      /* Leave the listener passive so no HTTP response can arrive. The whole
+       * call deadline may cancel before the peer receives a complete request;
+       * requiring a server thread to receive it races that valid cancellation.
+       * The subsequent round trip verifies that cancellation drained safely. */
       options = (chttp_options){.connection_uri = uri,
                                 .authority = authority,
                                 .target = "/timeout",
                                 .timeout_ms = CHTTP_REQUESTS_TEST_DEADLINE_MS};
       check_equal(chttp_get(&client, &options, &response_value, &error), SALTS_ETIMEDOUT);
       check_equal(error.status, SALTS_ETIMEDOUT);
+      check_equal(error.stage, "request-deadline");
       check_null(response_value.body);
-      check_equal(cmeta_thread_join(&thread), SALTS_OK);
-      cmeta_thread_destroy(&thread);
-      check_equal(server.status, SALTS_OK);
       chttp_requests_test_close_socket(listener);
     }
     chttp_requests_test_round_trip(&client, &recovery_case);

@@ -31,7 +31,7 @@ target_include_directories(chttp_server
           ${PROJECT_SOURCE_DIR}/vendor/cjwt/include)
 target_link_libraries(chttp_server
   PUBLIC Salts::CNet Salts::CMeta Salts::CSerde
-  PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
+  PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow Salts::CNetManager
           Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
           chttp_cjwt Salts::DateTimeParser Salts::CSTL)
 install(TARGETS chttp_server EXPORT ChttpTargets)

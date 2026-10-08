@@ -1,16 +1,9 @@
+# PRs use native-sdk-release.yml for the complete build, CTest and install graph.
 name: CHttp server owner scaling
 
 on:
   workflow_dispatch:
   push:
-    branches: [master]
-    paths:
-      - "http_server/src/**"
-      - "http_server/include/**"
-      - "http_server/benchmarks/**"
-      - "CMakeLists.txt"
-      - ".github/workflows/chttp-server-owner-scaling.yml"
-  pull_request:
     branches: [master]
     paths:
       - "http_server/src/**"

@@ -225,22 +225,10 @@ foreach(REQUIRED_PLUGIN_CONTROL
   endif()
 endforeach()
 
-string(FIND "${SERVICE_TEXT}" "static void chttp_service_method_release(" METHOD_RELEASE_START)
-string(FIND "${SERVICE_TEXT}" "static void chttp_service_invocation_release(" METHOD_RELEASE_END)
-if(METHOD_RELEASE_START LESS 0 OR METHOD_RELEASE_END LESS 0 OR
-   METHOD_RELEASE_END LESS_EQUAL METHOD_RELEASE_START)
-  message(FATAL_ERROR "Could not isolate mounted Service release ordering")
-endif()
-math(EXPR METHOD_RELEASE_LENGTH "${METHOD_RELEASE_END} - ${METHOD_RELEASE_START}")
-string(SUBSTRING "${SERVICE_TEXT}" ${METHOD_RELEASE_START}
-       ${METHOD_RELEASE_LENGTH} METHOD_RELEASE_TEXT)
-string(FIND "${METHOD_RELEASE_TEXT}" "cflow_plan_destroy" PLAN_DESTROY_POS)
-string(FIND "${METHOD_RELEASE_TEXT}" "salts_plugin_registry_release" LEASE_RELEASE_POS)
-if(PLAN_DESTROY_POS EQUAL -1 OR LEASE_RELEASE_POS EQUAL -1 OR
-   LEASE_RELEASE_POS LESS_EQUAL PLAN_DESTROY_POS)
-  message(FATAL_ERROR
-    "Mounted Service teardown must destroy dependent Plan state before releasing the Plugin lease")
-endif()
+# Plugin lifetime is exercised by chttp_service_http_test's generated Plugin
+# Service case: in-flight work blocks destruction/unload, and final destruction
+# releases the mount-owned lease. Function-name positions cannot prove lifetime
+# behavior through the structured cleanup adapter.
 
 string(FIND "${SERVICE_TEXT}" "static void chttp_service_deferred_cflow_run(" CFLOW_RUN_START)
 string(FIND "${SERVICE_TEXT}" "static int chttp_service_http_execute_deferred(" CFLOW_RUN_END)
