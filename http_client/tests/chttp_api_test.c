@@ -328,6 +328,107 @@ spec("CHTTP advanced async client API") {
     chttp_test_close_socket(listener);
   }
 
+  it("retains bounded managed H1 connections across concurrent requests and reuse") {
+    chttp_server server = {0};
+    chttp_async_client client = {0};
+    chttp_server_config server_config = {
+        .host = "127.0.0.1",
+        .port = 0u,
+        .backlog = 8u,
+        .network = {
+            .backend =
+#if defined(_WIN32)
+                NATIVE_IO_BACKEND_IOCP,
+#elif defined(__linux__)
+                NATIVE_IO_BACKEND_EPOLL,
+#else
+                NATIVE_IO_BACKEND_KQUEUE,
+#endif
+            .connection_capacity = 4u,
+            .command_capacity = 8u,
+            .request_capacity = 8u,
+            .completion_batch_capacity = 4u,
+            .event_capacity = 8u,
+            .max_send_bytes = 4096u,
+            .receive_buffer_bytes = 512u,
+            .connect_timeout_ms = 2000u,
+            .read_timeout_ms = 2000u,
+            .write_timeout_ms = 2000u},
+        .route_capacity = 1u,
+        .max_target_bytes = 128u,
+        .max_header_count = 8u,
+        .max_header_bytes = 512u,
+        .max_request_body_bytes = 128u,
+        .max_response_header_count = 8u,
+        .max_response_header_bytes = 512u,
+        .max_response_body_bytes = 256u,
+        .poll_slice_ms = 2u};
+    chttp_client_config client_config = chttp_test_config();
+    chttp_test_probe probes[3] = {{0}};
+    chttp_request requests[3] = {{0}};
+    chttp_request_options options = {0};
+    chttp_server_stats stats = {0};
+    char uri[64];
+    uint16_t port = 0u;
+    uint64_t deadline;
+    int chars;
+    size_t completions = 0u;
+
+    /* Exactly two CNet physical credits, shared by the H1 Manager. */
+    client_config.network.connection_capacity = 2u;
+    client_config.request_capacity = 2u;
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/ok", chttp_test_server_handler, NULL), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port);
+    check_true(chars > 0 && (size_t)chars < sizeof(uri));
+    check_equal(chttp_async_client_init(&client, &client_config), SALTS_OK);
+
+    options = (chttp_request_options){
+        .connection_uri = uri,
+        .authority = "127.0.0.1",
+        .target = "/ok",
+        .method = CHTTP_METHOD_GET,
+        .on_complete = chttp_test_complete};
+    options.user = &probes[0];
+    check_equal(chttp_async_client_submit(&client, &options, &requests[0]), SALTS_OK);
+    options.user = &probes[1];
+    check_equal(chttp_async_client_submit(&client, &options, &requests[1]), SALTS_OK);
+
+    deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+    while ((!probes[0].called || !probes[1].called) &&
+           cmeta_monotonic_ms() < deadline)
+      check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+    for (size_t i = 0u; i < 2u; ++i) {
+      check_equal(probes[i].called, 1);
+      check_equal(probes[i].status, SALTS_OK);
+      check_equal(probes[i].response_status, 200u);
+      check_equal(probes[i].body, "ok", 2u);
+    }
+
+    /* No new physical admission for same authority when both H1 sessions
+     * have finished their response bodies and returned to IDLE. */
+    options.user = &probes[2];
+    check_equal(chttp_async_client_submit(&client, &options, &requests[2]), SALTS_OK);
+    deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+    while (!probes[2].called && cmeta_monotonic_ms() < deadline)
+      check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+    check_equal(probes[2].called, 1);
+    check_equal(probes[2].status, SALTS_OK);
+    check_equal(probes[2].response_status, 200u);
+    check_equal(probes[2].body, "ok", 2u);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)2u);
+
+    /* Native terminal and owner-local Manager record retirement must both
+     * settle before the client can be destroyed. */
+    check_equal(chttp_async_client_stop(&client, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("streams an unknown-length H1 request and response without retaining response bytes") {
     static const char response[] = "HTTP/1.1 200 OK\r\n"
                                    "Content-Length: 5\r\n"
