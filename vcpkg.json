@@ -3,8 +3,6 @@
   "version-semver": "2.0.0",
   "dependencies": [
     "llhttp",
-    "lua",
-    "quickjs-ng",
     "tree-sitter",
     "tree-sitter-c"
   ],

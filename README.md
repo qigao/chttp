@@ -52,8 +52,11 @@ fallback. File completions retain the same bounded runtime and owner callbacks.
 See [HTTP file transfer semantics](docs/HTTP.md) and the
 [CFlow backend contract](https://github.com/qigao/salts/blob/488b88e4cce9aae4479f63c403ab78911b7c51f8/cflow/README.md#macos-file-backend-design).
 
-The manifest includes Lua and QuickJS because the installed SaltsUtils package
-exports those dependencies; it does not introduce another HTTP or TLS provider.
+CHttp directly depends only on `llhttp`, `tree-sitter`, and
+`tree-sitter-c` through its vcpkg manifest. It does not compile against or
+link the Lua or QuickJS-NG interpreter ports. Optional interpreter support
+belongs to its upstream SDKs and must not create redundant CHttp vcpkg
+dependencies.
 
 That gives the library a shared foundation:
 
