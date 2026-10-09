@@ -409,6 +409,164 @@ spec("CHttp owner topology") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
+  it("validates the CNet placement configuration before start") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_server_owner_placement_options policy =
+        (chttp_server_owner_placement_options)CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_INIT;
+    chttp_server_impl *impl;
+
+    config.network.connection_capacity = 4u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(impl->owner_placement_options.kind, CNET_OWNER_PLACE_ROUND_ROBIN);
+
+    policy.size -= 1u;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EINVAL);
+    ++policy.size;
+    policy.version = 0u;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EINVAL);
+    policy.version = CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_VERSION;
+    policy.kind = CNET_OWNER_PLACE_STRICT_KEY;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EINVAL);
+    policy.kind = (cnet_owner_placement_kind)99;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EINVAL);
+
+    execution.owner_count = 2u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    policy.kind = CNET_OWNER_PLACE_EXPLICIT;
+    policy.explicit_owner = 2u;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EINVAL);
+    policy.explicit_owner = 1u;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_OK);
+
+    /* A later topology shrink must not silently retarget the pinned Owner. */
+    execution.owner_count = 1u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_EINVAL);
+    check_equal(impl->owner_count, (size_t)2u);
+
+    policy.kind = CNET_OWNER_PLACE_LOWEST_PRESSURE;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EINVAL);
+    policy.explicit_owner = 0u;
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_OK);
+    execution.owner_count = 1u;
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    check_equal(impl->owner_count, (size_t)1u);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_EBUSY);
+    check_equal(chttp_server_stop(&server, 2000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("pins explicit admission and never spills after the chosen owner fills") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_server_owner_placement_options policy =
+        (chttp_server_owner_placement_options)CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_INIT;
+    chttp_client first = {0}, second = {0}, rejected = {0};
+    chttp_client_config client_config = owner_topology_client_config();
+    chttp_response response = {0};
+    chttp_server_impl *impl;
+    chttp_server_stats stats = {0};
+    char uri[64];
+    uint16_t port = 0u;
+
+    config.network.connection_capacity = 4u;
+    execution.owner_count = 2u;
+    policy.kind = CNET_OWNER_PLACE_EXPLICIT;
+    policy.explicit_owner = 1u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/ok", owner_topology_ok, &server), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                   (unsigned int)port) > 0);
+
+    check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&first, uri, &response), SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(owner_topology_wait_leases(impl, 0u, 1u, 2000u), SALTS_OK);
+
+    check_equal(chttp_client_init(&second, &client_config), SALTS_OK);
+    check_equal(owner_topology_get(&second, uri, &response), SALTS_OK);
+    chttp_response_destroy(&response);
+    response = (chttp_response){0};
+    check_equal(owner_topology_wait_leases(impl, 0u, 2u, 2000u), SALTS_OK);
+
+    check_equal(chttp_client_init(&rejected, &client_config), SALTS_OK);
+    check(owner_topology_get(&rejected, uri, &response) != SALTS_OK);
+    chttp_response_destroy(&response);
+    check_equal(chttp_client_destroy(&rejected, 2000u), SALTS_OK);
+    check_equal(owner_topology_wait_leases(impl, 0u, 2u, 2000u), SALTS_OK);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check_equal(stats.rejected_connections, (uint64_t)1u);
+
+    check_equal(chttp_client_destroy(&first, 2000u), SALTS_OK);
+    check_equal(chttp_client_destroy(&second, 2000u), SALTS_OK);
+    check_equal(owner_topology_wait_leases(impl, 0u, 0u, 2000u), SALTS_OK);
+    check_equal(chttp_server_stop(&server, 2000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("chooses least pressure by normalized owner-local connection credits") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_execution_options execution =
+        (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    chttp_server_owner_placement_options policy =
+        (chttp_server_owner_placement_options)CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_INIT;
+    chttp_client clients[5] = {{0}};
+    chttp_client_config client_config = owner_topology_client_config();
+    chttp_response response = {0};
+    chttp_server_impl *impl;
+    const size_t expected[5][2] = {
+        {1u, 0u}, {1u, 1u}, {2u, 1u}, {2u, 2u}, {3u, 2u}};
+    char uri[64];
+    uint16_t port = 0u;
+
+    config.network.connection_capacity = 5u; /* owner capacities 3 + 2 */
+    execution.owner_count = 2u;
+    policy.kind = CNET_OWNER_PLACE_LOWEST_PRESSURE;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+    check_equal(chttp_server_set_owner_placement(&server, &policy), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/ok", owner_topology_ok, &server), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    impl = (chttp_server_impl *)server.impl;
+    check_not_null(impl);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                   (unsigned int)port) > 0);
+
+    for (size_t i = 0u; i < 5u; ++i) {
+      check_equal(chttp_client_init(&clients[i], &client_config), SALTS_OK);
+      check_equal(owner_topology_get(&clients[i], uri, &response), SALTS_OK);
+      check_equal(response.status_code, 200u);
+      chttp_response_destroy(&response);
+      response = (chttp_response){0};
+      check_equal(
+          owner_topology_wait_leases(impl, expected[i][0], expected[i][1], 2000u),
+          SALTS_OK);
+    }
+
+    for (size_t i = 0u; i < 5u; ++i)
+      check_equal(chttp_client_destroy(&clients[i], 2000u), SALTS_OK);
+    check_equal(owner_topology_wait_leases(impl, 0u, 0u, 2000u), SALTS_OK);
+    check_equal(chttp_server_stop(&server, 2000u), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("runs two fixed owners through detached round-robin admission") {
     chttp_server server = {0};
     chttp_server_config config = owner_topology_config();
