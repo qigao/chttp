@@ -3,6 +3,7 @@
 #include "chttp_h2_session.h"
 #include "chttp_internal.h"
 #include "chttp_tls.h"
+#include <cnet/manager.h>
 
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -41,6 +42,9 @@ typedef struct chttp_slot {
   chttp_client_impl *client;
   chttp_request public_handle;
   cnet_connection connection;
+  /* H1 tcp/tls is Manager-attached; pipe IPC is an explicit separate
+   * transport outside the Manager stream-URI contract. */
+  cnet_managed_connection managed;
   chttp_response_parser response_parser;
   chttp_h2_request_state h2_request;
   unsigned char *request_data;
@@ -72,6 +76,8 @@ typedef struct chttp_slot {
 
 struct chttp_client_impl {
   cnet_client network;
+  /* Borrowed CNet owner, no separate poller, worker or Manager DLL. */
+  cnet_manager h1_manager;
   cflow_io_file_runtime file_runtime;
   chttp_slot *slots;
   chttp_h2_session *h2_sessions;
@@ -79,6 +85,7 @@ struct chttp_client_impl {
   chttp_h2_proto_config h2_config;
   size_t request_capacity;
   size_t h2_session_capacity;
+  size_t h1_manager_capacity;
   size_t completion_count;
   size_t file_sink_capacity;
   int h2_config_status;
@@ -90,6 +97,16 @@ struct chttp_client_impl {
   bool stopped;
   bool file_runtime_initialized;
 };
+
+/* Called after the CNet poll callback batch: retire consumed TCP/TLS
+ * attachments before a request slot can be reused. No network progress here.
+ * H2 and pipe:// stay on their existing explicit CNet paths. */
+static int chttp_h1_manager_progress(chttp_client_impl *impl) {
+  size_t advanced = 0u;
+  if (impl == NULL || impl->h1_manager_capacity == 0u) return SALTS_EINVAL;
+  return cnet_manager_advance(&impl->h1_manager, impl->h1_manager_capacity,
+                              &advanced);
+}
 
 static chttp_client_impl *chttp_client_get(chttp_async_client *client) {
   return client != NULL ? (chttp_client_impl *)client->impl : NULL;
@@ -930,6 +947,7 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
   }
   impl->request_capacity = config->request_capacity;
   impl->h2_session_capacity = config->network.connection_capacity;
+  impl->h1_manager_capacity = config->network.connection_capacity;
   impl->h2_config_status = chttp_h2_protocol_config(config, &impl->h2_config);
   impl->file_sink_capacity = config->network.receive_buffer_bytes;
   if (impl->h2_config_status == SALTS_OK &&
@@ -960,6 +978,23 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
     free(impl->slots);
     free(impl);
     return status;
+  }
+  {
+    const cnet_manager_config manager_config = {
+        .size = sizeof(manager_config),
+        .version = CNET_MANAGER_VERSION,
+        .client = &impl->network,
+        .record_capacity = impl->h1_manager_capacity,
+        .connection_capacity = impl->h1_manager_capacity};
+    status = cnet_manager_init(&impl->h1_manager, &manager_config);
+    if (status != SALTS_OK) {
+      (void)cnet_client_stop(&impl->network, 0u);
+      (void)cnet_client_destroy(&impl->network);
+      free(impl->h2_sessions);
+      free(impl->slots);
+      free(impl);
+      return status;
+    }
   }
   impl->admission_open = true;
   client->impl = impl;
@@ -1151,8 +1186,23 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
                                           .user = slot,
                                           .on_send = chttp_cnet_send},
                              .tls_client = chttp_tls_profile_client(slot->tls_profile)};
-  status = cnet_connect(&impl->network, &connect_options, &slot->connection);
+  if (strncmp(options->connection_uri, "pipe://", sizeof("pipe://") - 1u) == 0) {
+    /* Named-pipe IPC is a genuine separate CNet transport. The released
+     * Manager intentionally supports only tcp/tls; this is not a fallback. */
+    status = cnet_connect(&impl->network, &connect_options, &slot->connection);
+  } else {
+    const cnet_manager_attachment attachment = {
+        .observer = connect_options.observer,
+        .on_recycle = NULL,
+        .hold_context = false};
+    status = cnet_manager_reserve(&impl->h1_manager, &attachment, &slot->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_connect(
+          &impl->h1_manager, slot->managed, &connect_options, &slot->connection);
+  }
   if (status != SALTS_OK) {
+    /* A failed managed connect consumes its record; Manager.advance reclaims
+     * it without any callback after the H1 slot is released. */
     chttp_slot_release(slot);
     if (status == SALTS_ENOBUFS) {
       status = chttp_begin_idle_eviction(impl);
@@ -1230,6 +1280,10 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
     if (after_status == SALTS_OK) after_status = chttp_retry_pending_closes(impl);
     if (close_status == SALTS_OK) close_status = after_status;
   }
+  {
+    const int manager_status = chttp_h1_manager_progress(impl);
+    if (close_status == SALTS_OK) close_status = manager_status;
+  }
   chttp_h2_reap_terminal_sessions(impl);
   chttp_reap_terminal_slots(impl);
   *out_completions = impl->completion_count;
@@ -1282,6 +1336,15 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
   impl->network_stop_started = true;
   stop_status = cnet_client_stop(&impl->network, chttp_stop_remaining_ms(started_ms, timeout_ms));
   if (stop_status == SALTS_EALREADY) stop_status = SALTS_OK;
+  if (stop_status == SALTS_OK) {
+    cnet_manager_snapshot snapshot;
+    int manager_status = chttp_h1_manager_progress(impl);
+    if (manager_status == SALTS_OK)
+      manager_status = cnet_manager_get_snapshot(&impl->h1_manager, &snapshot);
+    if (manager_status == SALTS_OK && !snapshot.drained) manager_status = SALTS_EBUSY;
+    if (manager_status != SALTS_OK && first_status == SALTS_OK)
+      first_status = manager_status;
+  }
   chttp_h2_reap_terminal_sessions(impl);
   chttp_reap_terminal_slots(impl);
   if (stop_status == SALTS_OK && impl->file_runtime_initialized) {
@@ -1314,6 +1377,8 @@ int chttp_async_client_destroy(chttp_async_client *client) {
     if (status != SALTS_OK) return status;
     impl->file_runtime_initialized = false;
   }
+  status = cnet_manager_destroy(&impl->h1_manager);
+  if (status != SALTS_OK) return status;
   status = cnet_client_destroy(&impl->network);
   if (status != SALTS_OK) return status;
   for (index = 0u; index < impl->h2_session_capacity; ++index)
