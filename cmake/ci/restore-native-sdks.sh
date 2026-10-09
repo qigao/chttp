@@ -38,6 +38,7 @@ matches = [v['path'] for k, v in assets['libraries'].items()
            if k.lower().startswith(sys.argv[3].lower() + '/')]
 if len(matches) != 1:
     raise SystemExit('expected one resolved ' + sys.argv[3] + ' package')
+print(f'Resolved {sys.argv[3]}: {matches[0]} (RID={sys.argv[4]})', file=sys.stderr)
 print((pathlib.Path(sys.argv[2]) / matches[0] / 'sdk' / sys.argv[4]).resolve())
 PY
 }
@@ -48,12 +49,23 @@ else
   salts_root="$(sdk_root salts.native)"
 fi
 utils_root="$(sdk_root saltsutils.native)"
-test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
-test -f "$salts_root/include/cmeta/function.h"
-test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-test -f "$utils_root/include/data_bind_method_plan.h"
-test -f "$utils_root/include/data_bind_native_binding.h"
-grep -q "DataBindNativeExecution" "$utils_root/include/data_bind_native_binding.h"
+printf 'Resolved SDK roots (RID=%s): SALTS_ROOT=%s SALTS_UTILS_ROOT=%s\n' \
+  "$rid" "$salts_root" "$utils_root"
+for required in \
+  "$salts_root/lib/cmake/Salts/SaltsConfig.cmake" \
+  "$salts_root/include/cmeta/function.h" \
+  "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake" \
+  "$utils_root/include/data_bind_method_plan.h" \
+  "$utils_root/include/data_bind_native_binding.h"; do
+  if [ ! -f "$required" ]; then
+    echo "Restored prerelease SDK lacks required RID=$rid file: $required" >&2
+    exit 1
+  fi
+done
+grep -q "DataBindNativeExecution" "$utils_root/include/data_bind_native_binding.h" || {
+  echo "SaltsUtils SDK lacks DataBindNativeExecution (RID=$rid)" >&2
+  exit 1
+}
 printf "SALTS_ROOT=%s\n" "$salts_root" >> "$GITHUB_ENV"
 printf "SALTS_UTILS_ROOT=%s\n" "$utils_root" >> "$GITHUB_ENV"
 printf "QIGAO_NUGET_PACKAGES=%s\n" "$packages" >> "$GITHUB_ENV"

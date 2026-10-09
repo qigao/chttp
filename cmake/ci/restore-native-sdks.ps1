@@ -36,6 +36,7 @@ function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
 
 $saltsRoot = if ($useCandidate) { $env:SALTS_CANDIDATE_ROOT } else { Get-RestoredSdkRoot "salts.native" $Rid }
 $utilsRoot = Get-RestoredSdkRoot "saltsutils.native" $Rid
+Write-Host "Resolved SDK roots (RID=$Rid): SALTS_ROOT=$saltsRoot SALTS_UTILS_ROOT=$utilsRoot"
 foreach ($p in @(
   (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
   (Join-Path $saltsRoot "include\cmeta\function.h"),

@@ -13,6 +13,7 @@ salts_idl_target(
   VERSION "1.0.0"
   ARTIFACT_NAME "chttp_service_plugin"
   ARTIFACTS NATIVE PLUGIN
+  BINARY_CODEC
   TRANSPORTS HTTP
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_plugin.projection.json"
@@ -30,6 +31,7 @@ salts_idl_target(
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow.schema"
   ARTIFACT_NAME "chttp_service_cflow"
   ARTIFACTS NATIVE
+  BINARY_CODEC
   TRANSPORTS HTTP
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow.projection.json")
@@ -118,6 +120,7 @@ if(DEFINED ENV{TURBOWASM_ROOT} AND NOT "$ENV{TURBOWASM_ROOT}" STREQUAL "")
     COMPONENT "CHttpWasm.CalcWasm"
     ARTIFACT_NAME "chttp_service_wasm"
     ARTIFACTS WASM
+    BINARY_CODEC
     TRANSPORTS HTTP
     PROJECTION_CONFIG
       "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_wasm.projection.json"
@@ -187,7 +190,8 @@ salts_idl_target(
   TARGET chttp_service_generic_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_generic.schema"
   ARTIFACT_NAME "chttp_service_generic"
-  ARTIFACTS MESSAGE)
+  ARTIFACTS MESSAGE
+  BINARY_CODEC)
 
 add_executable(chttp_service_generic_cross_tu_test
   chttp_service_generic_cross_tu_test.c
