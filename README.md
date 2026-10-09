@@ -15,12 +15,12 @@ This integration branch requires the unified Salts CNet candidate tracked by
 [PR #1067](https://github.com/qigao/salts/pull/1067):
 `Salts::CNet` exports `<cnet/manager.h>` and `<cnet/handoff.h>` from the
 **same CNet shared library**, without `Salts::CNetManager` or a second manager DLL.
-This integration branch explicitly consumes the full-platform
-`Salts.Native 2.3.0-rc.1` package and floating `SaltsUtils.Native 4.3.0-*`.
-This temporarily avoids the separately published Linux-only
-`Salts.Native 2.3.0-rc.sha...` verification package taking precedence in NuGet
-prerelease selection. Missing packages or ABI-incompatible SDKs fail immediately:
-no fallback to Salts 2.2.x or SaltsUtils 4.2.x. Each server owner lane uses one fixed-capacity
+This integration branch consumes floating prerelease package families
+`Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`.
+NuGet resolves the latest matching versions on each CI run. A selected package
+must contain the expected SDK for the requested RID; missing files or
+ABI-incompatible SDKs fail immediately, with no fallback to Salts 2.2.x or
+SaltsUtils 4.2.x. Each server owner lane uses one fixed-capacity
 manager for TCP/TLS adoption and terminal attachment retirement. HTTP/1 deferred
 responses and HTTP/2 deferred streams keep their contexts until completion.
 Each lane's bounded admission inbox and generation-checked connection credits
@@ -33,8 +33,8 @@ the old `cnet_manager` DLL from an earlier installation. Raw CNet adoption
 remains available without initializing the manager.
 
 For normal PR/CI and release builds, `native-sdk-release.yml` resolves
-`Salts.Native 2.3.0-rc.1` and the latest matching `SaltsUtils.Native 4.3.0-*`
-from GitHub NuGet. To qualify one
+the latest matching `Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`
+packages from GitHub NuGet. To qualify one
 exact upstream Salts SDK artifact, use the optional `salts_candidate_sha`
 workflow dispatch input; the SHA must match a successful producer CI with
 retained Linux, Windows and macOS SDK artifacts. In that explicit mode,
@@ -275,12 +275,12 @@ Additional technical references:
 
 ### Native SDK dependency resolution
 
-Both Unix and Windows SDK restore scripts consume the same explicit
-Salts RC and floating SaltsUtils prerelease range:
+Both Unix and Windows SDK restore scripts consume the same floating
+prerelease version ranges:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Salts.Native" Version="2.3.0-rc.1" />
+  <PackageReference Include="Salts.Native" Version="2.3.0-*" />
   <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
 </ItemGroup>
 ```
@@ -293,9 +293,8 @@ rather than restore an older incompatible SDK. For exact-SHA artifact
 qualification, the upstream producer must have successful retained Linux,
 Windows and macOS SDKs; the selection is never an automatic fallback.
 
-Salts 2.3.0-rc.1 is temporarily fixed to the published full-RID RC until
-partial verification packages no longer outrank full RCs in the shared NuGet
-feed. SaltsUtils 4.3.0-* may still resolve to a newer prerelease between runs.
-CI must report the resolved package identities; repeatable bug investigations
-must record the resolved SDK SHA/version. Return to a floating Salts range
-when the upstream feed safely separates incomplete candidates.
+Both floating prerelease ranges may resolve differently between runs.
+CI reports the resolved package identities and verifies the requested
+platform's SDK layout. For reproducible failure analysis, record the actual
+resolved versions and upstream source SHAs alongside the CI run. Do not add
+an implicit fallback or a permanent exact-version dependency.
