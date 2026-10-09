@@ -143,7 +143,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           choco install nasm ninja -y --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $vswhere = Join-Path \${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsInstall)) { throw 'missing MSVC x64 toolchain' }
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
@@ -318,7 +318,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
-          test -n "\${ANDROID_NDK_HOME:-}"
+          test -n "${ANDROID_NDK_HOME:-}"
       - name: Prepare iOS toolchain
         if: matrix.family == 'ios'
         shell: bash
@@ -330,14 +330,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "\${VCPKG_ROOT:-}"
-          test -n "\${VCPKG_CACHE_REPOSITORY_ROOT:-}"
+          test -n "${VCPKG_ROOT:-}"
+          test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
-          case "\${VCPKG_BINARY_SOURCES:-}" in
+          case "${VCPKG_BINARY_SOURCES:-}" in
             *nugetconfig*) ;;
             *) echo 'shared vcpkg NuGet cache unavailable' >&2; exit 1 ;;
           esac
-          test "\${VCPKG_NUGET_REPOSITORY:-}" = 'https://github.com/qigao/vcpkg-cache'
+          test "${VCPKG_NUGET_REPOSITORY:-}" = 'https://github.com/qigao/vcpkg-cache'
       - name: Restore cross compiler object cache
         uses: ./.github/actions/setup-compiler-cache
         with:
