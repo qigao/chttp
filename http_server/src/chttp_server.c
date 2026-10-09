@@ -728,6 +728,7 @@ static int chttp_server_owner_topology_configure(
     chttp_server_impl *server, size_t owner_count) {
   chttp_server_owner_lane primary = {0};
   chttp_server_owner_lane *additional = NULL;
+  cnet_owner_placement_hint *placement_hints;
   size_t owner_index;
   size_t connection_index;
   int status;
@@ -741,6 +742,16 @@ static int chttp_server_owner_topology_configure(
     additional = (chttp_server_owner_lane *)calloc(
         owner_count - 1u, sizeof(*additional));
     if (additional == NULL) return SALTS_ENOMEM;
+  }
+  if (owner_count > SIZE_MAX / sizeof(*placement_hints)) {
+    free(additional);
+    return SALTS_ERANGE;
+  }
+  placement_hints = (cnet_owner_placement_hint *)calloc(
+      owner_count, sizeof(*placement_hints));
+  if (placement_hints == NULL) {
+    free(additional);
+    return SALTS_ENOMEM;
   }
 
   status = chttp_server_owner_storage_prepare(
@@ -756,10 +767,12 @@ static int chttp_server_owner_topology_configure(
     chttp_server_owner_storage_release(
         server, chttp_server_owner_at(server, owner_index));
   free(server->additional_owners);
+  free(server->placement_hints);
 
   server->owner = primary;
   primary = (chttp_server_owner_lane){0};
   server->additional_owners = additional;
+  server->placement_hints = placement_hints;
   server->owner_count = owner_count;
 
   if (server->connections != NULL) {
@@ -781,6 +794,7 @@ fail:
           server, &additional[owner_index - 1u]);
   }
   free(additional);
+  free(placement_hints);
   return status;
 }
 
@@ -794,6 +808,7 @@ static void chttp_server_impl_free(chttp_server_impl *impl) {
   for (index = 0u; index < impl->owner_count; ++index)
     chttp_server_owner_storage_release(impl, chttp_server_owner_at(impl, index));
   free(impl->additional_owners);
+  free(impl->placement_hints);
   free(impl->connections);
   free(impl->middleware);
   free(impl->route_middleware);
@@ -896,6 +911,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       .terminal_status = SALTS_OK};
   atomic_init(&impl->owner.runtime_state, CHTTP_SERVER_OWNER_RUNTIME_IDLE);
   impl->owner_count = 1u;
+  impl->placement_hints = (cnet_owner_placement_hint *)calloc(
+      1u, sizeof(*impl->placement_hints));
   impl->socket_options = (chttp_server_socket_options)CHTTP_SERVER_SOCKET_OPTIONS_INIT;
   if (impl->config.stream_chunk_bytes == 0u) {
     const size_t transport_chunk_bytes = config->network.max_send_bytes -
@@ -963,7 +980,7 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       impl->route_paths == NULL ||
       (route_middleware_count != 0u && impl->route_middleware == NULL) ||
       (config->middleware_capacity != 0u && impl->middleware == NULL) ||
-      impl->connections == NULL ||
+      impl->connections == NULL || impl->placement_hints == NULL ||
       impl->owner.file_transfers == NULL ||
       impl->owner.websocket_commands == NULL) {
     chttp_server_impl_free(impl);
@@ -1962,19 +1979,49 @@ static void chttp_server_stats_rejected_connection(chttp_server_impl *server) {
 static int chttp_server_admission_owner(
     chttp_server_impl *server, cnet_handoff_ticket *ticket,
     chttp_server_owner_lane **out_owner) {
-  size_t offset;
+  cnet_owner_placement_input selection;
+  size_t index;
+  size_t attempt;
+  int status;
+  if (ticket == NULL || out_owner == NULL) return SALTS_EINVAL;
   *out_owner = NULL;
-  if (server == NULL || server->owner_count == 0u) return SALTS_EINVAL;
-  for (offset = 0u; offset < server->owner_count; ++offset) {
-    const size_t index =
-        (server->admission_cursor + offset) % server->owner_count;
-    chttp_server_owner_lane *owner = chttp_server_owner_at(server, index);
-    if (owner == NULL ||
-        chttp_server_owner_runtime_state_get(owner) !=
-            CHTTP_SERVER_OWNER_RUNTIME_READY)
+  if (server == NULL || server->owner_count == 0u ||
+      server->placement_hints == NULL)
+    return SALTS_EINVAL;
+
+  /* Pure CNet decision uses a listener-owned bounded scratch array. The
+   * authoritative connection/admission credit is the handoff reservation,
+   * not a stale READY/snapshot hint. The listener is a separate control
+   * thread, so even owner0 needs a cross-thread handoff publication. */
+  for (index = 0u; index < server->owner_count; ++index) {
+    const chttp_server_owner_lane *owner = chttp_server_owner_at(server, index);
+    server->placement_hints[index] = (cnet_owner_placement_hint){
+        .eligible = owner != NULL &&
+                    chttp_server_owner_runtime_state_get(owner) ==
+                        CHTTP_SERVER_OWNER_RUNTIME_READY,
+        .pressure = 0u};
+  }
+  selection = (cnet_owner_placement_input){
+      .size = sizeof(selection),
+      .version = CNET_OWNER_PLACEMENT_VERSION,
+      .kind = CNET_OWNER_PLACE_ROUND_ROBIN,
+      .owners = server->placement_hints,
+      .owner_count = server->owner_count,
+      .sequence = server->admission_cursor};
+  for (attempt = 0u; attempt < server->owner_count; ++attempt) {
+    chttp_server_owner_lane *owner;
+    index = SIZE_MAX;
+    status = cnet_owner_placement_choose(&selection, &index);
+    if (status != SALTS_OK) return status;
+    owner = chttp_server_owner_at(server, index);
+    if (owner == NULL) return SALTS_EPROTO;
+    status = cnet_handoff_reserve(&owner->handoff, ticket);
+    if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN) {
+      /* Retry decision with only this failed candidate excluded. No
+       * descriptor or credit has been transferred by a failed reserve. */
+      server->placement_hints[index].eligible = false;
       continue;
-    const int status = cnet_handoff_reserve(&owner->handoff, ticket);
-    if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN) continue;
+    }
     if (status != SALTS_OK) return status;
     server->admission_cursor = (index + 1u) % server->owner_count;
     *out_owner = owner;

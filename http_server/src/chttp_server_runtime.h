@@ -7,6 +7,7 @@
 #include <cnet/websocket.h>
 #include <cnet/manager.h>
 #include <cnet/handoff.h>
+#include <cnet/owner_placement.h>
 #include <salts/thread.h>
 #include <cmeta_buffer.h>
 
@@ -416,6 +417,8 @@ struct chttp_server_impl {
   cnet_client network;
   chttp_server_owner_lane owner;
   chttp_server_owner_lane *additional_owners;
+  /* Listener-only scratch, allocated with the stopped owner topology. */
+  cnet_owner_placement_hint *placement_hints;
   size_t owner_count;
   cnet_listener listener;
   cnet_tls_server tls_server;

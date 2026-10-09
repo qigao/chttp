@@ -256,6 +256,7 @@ spec("CHttp owner topology") {
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
     check_equal(impl->owner_count, (size_t)1u);
+    check_not_null(impl->placement_hints);
     check(impl->additional_owners == NULL);
     check_not_null(impl->owner.handoff.impl);
     check_equal(chttp_server_owner_admission_count(&impl->owner), (size_t)0u);
@@ -263,6 +264,7 @@ spec("CHttp owner topology") {
     options.owner_count = 3u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
     check_equal(impl->owner_count, (size_t)3u);
+    check_not_null(impl->placement_hints);
     check_not_null(impl->additional_owners);
 
     for (owner_index = 0u; owner_index < impl->owner_count; ++owner_index) {
@@ -348,6 +350,7 @@ spec("CHttp owner topology") {
     options.owner_count = 1u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
     check_equal(impl->owner_count, (size_t)1u);
+    check_not_null(impl->placement_hints);
     check(impl->additional_owners == NULL);
     check_equal(impl->owner.connection_begin, (size_t)0u);
     check_equal(impl->owner.connection_count, config.network.connection_capacity);
