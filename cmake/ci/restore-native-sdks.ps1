@@ -18,8 +18,8 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" Condition="'$(UseSaltsCandidate)' != 'true'" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="2.3.0-*" Condition="'$(UseSaltsCandidate)' != 'true'" />
+    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project
@@ -36,6 +36,7 @@ function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
 
 $saltsRoot = if ($useCandidate) { $env:SALTS_CANDIDATE_ROOT } else { Get-RestoredSdkRoot "salts.native" $Rid }
 $utilsRoot = Get-RestoredSdkRoot "saltsutils.native" $Rid
+Write-Host "Resolved SDK roots (RID=$Rid): SALTS_ROOT=$saltsRoot SALTS_UTILS_ROOT=$utilsRoot"
 foreach ($p in @(
   (Join-Path $saltsRoot "lib\cmake\Salts\SaltsConfig.cmake"),
   (Join-Path $saltsRoot "include\cmeta\function.h"),

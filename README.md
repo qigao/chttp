@@ -15,7 +15,12 @@ This integration branch requires the unified Salts CNet candidate tracked by
 [PR #1067](https://github.com/qigao/salts/pull/1067):
 `Salts::CNet` exports `<cnet/manager.h>` and `<cnet/handoff.h>` from the
 **same CNet shared library**, without `Salts::CNetManager` or a second manager DLL.
-Until that SDK is released, the branch must use a matching tested candidate. Each server owner lane uses one fixed-capacity
+This integration branch consumes floating prerelease package families
+`Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`.
+NuGet resolves the latest matching versions on each CI run. A selected package
+must contain the expected SDK for the requested RID; missing files or
+ABI-incompatible SDKs fail immediately, with no fallback to Salts 2.2.x or
+SaltsUtils 4.2.x. Each server owner lane uses one fixed-capacity
 manager for TCP/TLS adoption and terminal attachment retirement. HTTP/1 deferred
 responses and HTTP/2 deferred streams keep their contexts until completion.
 Each lane's bounded admission inbox and generation-checked connection credits
@@ -27,12 +32,15 @@ barrier ensures no listener wake can race backend destruction. Rebuild consumers
 the old `cnet_manager` DLL from an earlier installation. Raw CNet adoption
 remains available without initializing the manager.
 
-For host integration acceptance, dispatch `native-sdk-release.yml` with both
-`salts_candidate_run_id` and `salts_candidate_sha`. The run must be a successful
-Salts CI dispatch with retained SDK artifacts. Linux, Windows and macOS use the
-selected artifact and run the formal CTest suite; SaltsUtils still resolves from
-the package feed. Candidate mode skips cross compilation, packaging and
-publication. Omit both inputs to retain the published-SDK release workflow.
+For normal PR/CI and release builds, `native-sdk-release.yml` resolves
+the latest matching `Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`
+packages from GitHub NuGet. To qualify one
+exact upstream Salts SDK artifact, use the optional `salts_candidate_sha`
+workflow dispatch input; the SHA must match a successful producer CI with
+retained Linux, Windows and macOS SDK artifacts. In that explicit mode,
+`SaltsUtils.Native 4.3.0-*` still resolves from NuGet while Salts comes from
+the verified candidate artifact. Candidate mode skips cross compilation,
+packaging and publication. It does not relax the dependency ABI gate.
 The macOS SDK profile inherits `GccMac` (GCC 15), matching the producer SDK's
 thread-local runtime ABI; Apple Clang's native TLS cannot link the GCC-built
 TinyTest runtime's emulated TLS symbols.
@@ -44,8 +52,11 @@ fallback. File completions retain the same bounded runtime and owner callbacks.
 See [HTTP file transfer semantics](docs/HTTP.md) and the
 [CFlow backend contract](https://github.com/qigao/salts/blob/488b88e4cce9aae4479f63c403ab78911b7c51f8/cflow/README.md#macos-file-backend-design).
 
-The manifest includes Lua and QuickJS because the installed SaltsUtils package
-exports those dependencies; it does not introduce another HTTP or TLS provider.
+CHttp directly depends only on `llhttp`, `tree-sitter`, and
+`tree-sitter-c` through its vcpkg manifest. It does not compile against or
+link the Lua or QuickJS-NG interpreter ports. Optional interpreter support
+belongs to its upstream SDKs and must not create redundant CHttp vcpkg
+dependencies.
 
 That gives the library a shared foundation:
 
@@ -265,15 +276,28 @@ Additional technical references:
 
 **Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
 
-### #1001 candidate CI
+### Native SDK dependency resolution
 
-Until the unified CNet SDK is published, `cmake/ci/salts-candidate.json` identifies the Salts candidate commit used by branch/PR host qualification. CI resolves a
-successful producer run for that exact SHA; dispatch accepts a SHA override.
-The selected run must retain all three host SDK artifacts. Missing successful
-SDK runs fail explicitly; prepare them using Salts CI with `prepare_release=true`
-(which retains packages without publishing). The restore action validates run
-provenance and the SDK manifest before use. Linux, Windows
-and macOS build the full configured graph, run CTest and install the SDK.
-Candidate runs skip cross packaging and publication; tags cannot select a
-candidate. Remove the temporary pin after the required SDK is published and
-validate the ordinary released dependency graph before releasing this project.
+Both Unix and Windows SDK restore scripts consume the same floating
+prerelease version ranges:
+
+```xml
+<ItemGroup>
+  <PackageReference Include="Salts.Native" Version="2.3.0-*" />
+  <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+</ItemGroup>
+```
+
+The Salts PackageReference is omitted only in an *explicit* exact-SHA candidate
+qualification, where the SDK is obtained from a verified upstream artifact.
+Ordinary PR builds no longer use a stale branch-default candidate pin. Missing
+matching packages, SDK headers, unsupported ABI or CTest failures must fail
+rather than restore an older incompatible SDK. For exact-SHA artifact
+qualification, the upstream producer must have successful retained Linux,
+Windows and macOS SDKs; the selection is never an automatic fallback.
+
+Both floating prerelease ranges may resolve differently between runs.
+CI reports the resolved package identities and verifies the requested
+platform's SDK layout. For reproducible failure analysis, record the actual
+resolved versions and upstream source SHAs alongside the CI run. Do not add
+an implicit fallback or a permanent exact-version dependency.

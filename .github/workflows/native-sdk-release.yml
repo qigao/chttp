@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       salts_candidate_sha:
-        description: Full Salts SHA with a successful producer CI (blank uses branch pin)
+        description: Optional SHA-qualified Salts candidate (blank resolves floating Salts 2.3.0-* / SaltsUtils 4.3.0-*)
         type: string
         default: ''
   pull_request:
@@ -46,10 +46,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $run = ''
           $sha = $env:CANDIDATE_SHA
-          if (-not $sha -and $env:GITHUB_REF_TYPE -ne 'tag') {
-            $pin = Get-Content cmake/ci/salts-candidate.json -Raw | ConvertFrom-Json
-            $sha = $pin.commit
-          }
           if ($sha) {
             if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'Specify a full lowercase Salts commit SHA' }
             if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Release tags cannot consume candidate SDKs' }
@@ -91,10 +87,19 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  linux:
-    name: Linux x64 SDK
+
+  host:
+    name: ${{ matrix.name }}
     needs: metadata
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Linux x64 SDK, family: linux, runner: ubuntu-24.04, preset: ci-sdk-release-user, artifact: chttp-sdk-linux-x64}
+          - {name: macOS SDK, family: macos, runner: macos-15, preset: ci-macos-sdk-release-user, artifact: chttp-sdk-macos}
+          - {name: Windows x64 SDK, family: windows, runner: windows-latest, preset: ci-sdk-release-user, artifact: chttp-sdk-windows-x64}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,204 +111,121 @@ jobs:
       - name: Install OpenAPI conformance test requirements
         shell: bash
         run: python -m pip install -r openapi/tests/requirements-conformance.txt
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Configure canonical vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-      - name: Prepare toolchain
-        id: env
+
+      - name: Prepare Linux toolchain
+        if: matrix.family == 'linux'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
-          test -n "${VCPKG_ROOT:-}"
-          test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
-          test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
-          case "${VCPKG_BINARY_SOURCES:-}" in
-            *nugetconfig*) ;;
-            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
-          esac
-          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
-
-      - name: Select candidate Salts SDK
-        if: needs.metadata.outputs.candidate_run_id != ''
-        uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
-        with:
-          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
-          commit: ${{ needs.metadata.outputs.candidate_sha }}
-          rid: linux-x64
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Restore native SDK graph
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-native-sdks.sh linux-x64
-      - name: Configure, build and install
-        shell: bash
-        run: |
-          set -euxo pipefail
-          prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
-          export QIGAO_SDK_RID=linux-x64 QIGAO_TARGET_TRIPLET=x64-linux QIGAO_HOST_TRIPLET=x64-linux
-          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
-          cmake --build --preset ci-sdk-release-user --parallel 2
-          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
-          cmake --build --preset install-ci-sdk-release-user
-          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
-          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
-          version=${{ needs.metadata.outputs.version }}
-          commit=${{ needs.metadata.outputs.source_commit }}
-          os=linux
-          arch=x64
-          profile=release
-          EOF
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chttp-sdk-linux-x64
-          path: stage/sdk
-          if-no-files-found: error
-          compression-level: 9
-
-  macos:
-    name: macOS SDK
-    needs: metadata
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install OpenAPI conformance test requirements
-        shell: bash
-        run: python -m pip install -r openapi/tests/requirements-conformance.txt
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Prepare toolchain
-        id: env
+      - name: Prepare macOS GCC toolchain
+        if: matrix.family == 'macos'
         shell: bash
         run: |
           set -euo pipefail
           brew install nasm ninja gcc@15
-          test -n "${VCPKG_ROOT:-}"
-          test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
-          test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
-          case "${VCPKG_BINARY_SOURCES:-}" in
-            *nugetconfig*) ;;
-            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
-          esac
-          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
-          case "$RUNNER_ARCH" in
-            X64) rid=macos-x64; triplet=x64-osx ;;
-            ARM64) rid=macos-arm64; triplet=arm64-osx ;;
-            *) echo "unsupported RUNNER_ARCH=$RUNNER_ARCH" >&2; exit 1 ;;
-          esac
-          echo "rid=$rid" >> "$GITHUB_OUTPUT"
-          echo "triplet=$triplet" >> "$GITHUB_OUTPUT"
+      - name: Prepare Windows MSVC toolchain
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nasm ninja -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsInstall)) { throw 'missing MSVC x64 toolchain' }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+      - name: Verify shared vcpkg cache contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) { throw 'missing canonical VCPKG_ROOT' }
+          $root = $env:VCPKG_CACHE_REPOSITORY_ROOT
+          if ([string]::IsNullOrWhiteSpace($root) -or
+              -not (Test-Path -LiteralPath (Join-Path $root 'cmake/QigaoVcpkgToolchain.cmake') -PathType Leaf)) {
+            throw 'missing canonical shared vcpkg toolchain'
+          }
+          if ($env:VCPKG_BINARY_SOURCES -notmatch 'nugetconfig' -or
+              $env:VCPKG_NUGET_REPOSITORY -ne 'https://github.com/qigao/vcpkg-cache') {
+            throw 'shared vcpkg NuGet binary cache is unavailable'
+          }
+      - name: Select native SDK platform
+        id: target
+        shell: pwsh
+        env:
+          FAMILY: ${{ matrix.family }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          switch ($env:FAMILY) {
+            'linux'   { $rid = 'linux-x64'; $triplet = 'x64-linux'; $hostTriplet = $triplet }
+            'macos'   {
+              switch ($env:RUNNER_ARCH) {
+                'X64'   { $rid = 'macos-x64'; $triplet = 'x64-osx' }
+                'ARM64' { $rid = 'macos-arm64'; $triplet = 'arm64-osx' }
+                default { throw "unsupported macOS RUNNER_ARCH=$env:RUNNER_ARCH" }
+              }
+              $hostTriplet = $triplet
+            }
+            'windows' {
+              $rid = 'windows-x64'
+              $triplet = $env:QIGAO_VCPKG_WINDOWS_TRIPLET
+              $hostTriplet = $env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET
+              if ([string]::IsNullOrWhiteSpace($triplet) -or [string]::IsNullOrWhiteSpace($hostTriplet)) {
+                throw 'missing Windows vcpkg toolchain triplets'
+              }
+            }
+            default { throw "unsupported family $env:FAMILY" }
+          }
+          "rid=$rid" >> $env:GITHUB_OUTPUT
+          "QIGAO_SDK_RID=$rid" >> $env:GITHUB_ENV
+          "QIGAO_TARGET_TRIPLET=$triplet" >> $env:GITHUB_ENV
+          "QIGAO_HOST_TRIPLET=$hostTriplet" >> $env:GITHUB_ENV
+      - name: Restore compiler object cache
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: ${{ matrix.family }}-${{ matrix.preset }}-${{ steps.target.outputs.rid }}
+          sdk_identity: ${{ needs.metadata.outputs.candidate_sha || 'salts-2.3-pre-utils-4.3-pre' }}
 
-      - name: Select candidate Salts SDK
+      - name: Select exact candidate Salts SDK
         if: needs.metadata.outputs.candidate_run_id != ''
         uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
         with:
           run-id: ${{ needs.metadata.outputs.candidate_run_id }}
           commit: ${{ needs.metadata.outputs.candidate_sha }}
-          rid: ${{ steps.env.outputs.rid }}
+          rid: ${{ steps.target.outputs.rid }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Restore native SDK graph
+      - name: Restore Unix native SDK graph
+        if: matrix.family != 'windows'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-native-sdks.sh "${{ steps.env.outputs.rid }}"
-      - name: Configure, build and install
-        shell: bash
-        run: |
-          set -euxo pipefail
-          prefix="$GITHUB_WORKSPACE/stage/sdk/${{ steps.env.outputs.rid }}"
-          export QIGAO_SDK_RID="${{ steps.env.outputs.rid }}"
-          export QIGAO_TARGET_TRIPLET="${{ steps.env.outputs.triplet }}" QIGAO_HOST_TRIPLET="${{ steps.env.outputs.triplet }}"
-          cmake --preset ci-macos-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
-          cmake --build --preset ci-macos-sdk-release-user --parallel 2
-          ctest --preset ci-macos-sdk-release-user --output-on-failure --no-tests=error
-          cmake --build --preset install-ci-macos-sdk-release-user
-          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
-          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
-          version=${{ needs.metadata.outputs.version }}
-          commit=${{ needs.metadata.outputs.source_commit }}
-          os=macos
-          arch=$RUNNER_ARCH
-          profile=release
-          EOF
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chttp-sdk-macos
-          path: stage/sdk
-          if-no-files-found: error
-          compression-level: 9
-
-  windows:
-    name: Windows x64 SDK
-    needs: metadata
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install OpenAPI conformance test requirements
-        shell: bash
-        run: python -m pip install -r openapi/tests/requirements-conformance.txt
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Prepare toolchain
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          choco install nasm ninja -y --no-progress
-          if ([string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) { throw "canonical VCPKG_ROOT unavailable" }
-          if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_REPOSITORY_ROOT) -or
-              -not (Test-Path -LiteralPath (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT "cmake/QigaoVcpkgToolchain.cmake") -PathType Leaf)) {
-            throw "canonical qigao vcpkg toolchain unavailable"
-          }
-          if ([string]::IsNullOrWhiteSpace($env:VCPKG_BINARY_SOURCES) -or $env:VCPKG_BINARY_SOURCES -notmatch "nugetconfig") {
-            throw "shared vcpkg NuGet cache unavailable"
-          }
-          if ($env:VCPKG_NUGET_REPOSITORY -ne "https://github.com/qigao/vcpkg-cache") {
-            throw "unexpected vcpkg cache repository: $env:VCPKG_NUGET_REPOSITORY"
-          }
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio x64 C++ toolchain not found" }
-          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
-
-      - name: Select candidate Salts SDK
-        if: needs.metadata.outputs.candidate_run_id != ''
-        uses: qigao/salts/.github/actions/restore-candidate-sdk@e56b5778aad10b37d0a2ed86a953f366eb3a30d8
-        with:
-          run-id: ${{ needs.metadata.outputs.candidate_run_id }}
-          commit: ${{ needs.metadata.outputs.candidate_sha }}
-          rid: windows-x64
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Restore native SDK graph
+        run: bash cmake/ci/restore-native-sdks.sh "${{ steps.target.outputs.rid }}"
+      - name: Restore Windows native SDK graph
+        if: matrix.family == 'windows'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
-      - name: Configure, build and install
+
+      - name: Configure, test and install Unix SDK
+        if: matrix.family != 'windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --preset "${{ matrix.preset }}" -DBUILD_TESTING=ON -DBUILD_TESTS=ON
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
+          ctest --preset "${{ matrix.preset }}" --output-on-failure --no-tests=error
+          cmake --build --preset "install-${{ matrix.preset }}"
+      - name: Configure, test and install Windows SDK
+        if: matrix.family == 'windows'
         shell: cmd
         run: |
           set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
@@ -311,165 +233,133 @@ jobs:
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
-          set "QIGAO_SDK_RID=windows-x64"
-          set "QIGAO_TARGET_TRIPLET=%QIGAO_VCPKG_WINDOWS_TRIPLET%"
-          set "QIGAO_HOST_TRIPLET=%QIGAO_VCPKG_WINDOWS_HOST_TRIPLET%"
-          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON
+          cmake --preset "${{ matrix.preset }}" -DBUILD_TESTING=ON -DBUILD_TESTS=ON
           if errorlevel 1 exit /b 1
-          cmake --build --preset ci-sdk-release-user --parallel 2
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1
-          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
+          ctest --preset "${{ matrix.preset }}" --output-on-failure --no-tests=error
           if errorlevel 1 exit /b 1
-          cmake --build --preset install-ci-sdk-release-user
+          cmake --build --preset "install-${{ matrix.preset }}"
           if errorlevel 1 exit /b 1
-      - name: Verify Windows SDK
+      - name: Verify installed SDK and write manifest
+        shell: pwsh
+        env:
+          CHTTP_VERSION: ${{ needs.metadata.outputs.version }}
+          CHTTP_SOURCE_SHA: ${{ needs.metadata.outputs.source_commit }}
+          CHTTP_FAMILY: ${{ matrix.family }}
+          CHTTP_RID: ${{ steps.target.outputs.rid }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage/sdk/$env:CHTTP_RID"
+          $config = Join-Path $prefix 'lib/cmake/Chttp/ChttpConfig.cmake'
+          if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "missing $config" }
+          $arch = if ($env:CHTTP_FAMILY -eq 'macos') { $env:RUNNER_ARCH } else { 'x64' }
+          @(
+            "version=$env:CHTTP_VERSION"
+            "commit=$env:CHTTP_SOURCE_SHA"
+            "os=$env:CHTTP_FAMILY"
+            "arch=$arch"
+            'profile=release'
+          ) | Set-Content -LiteralPath (Join-Path $prefix 'chttp-sdk-manifest.txt')
+      - name: Report ccache compilation statistics
+        if: always()
         shell: pwsh
         run: |
-          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
-          $config = Join-Path $prefix "lib\cmake\Chttp\ChttpConfig.cmake"
-          if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "missing $config" }
-          @(
-            "version=${{ needs.metadata.outputs.version }}"
-            "commit=${{ needs.metadata.outputs.source_commit }}"
-            "os=windows"
-            "arch=x64"
-            "profile=release"
-          ) | Set-Content -LiteralPath (Join-Path $prefix "chttp-sdk-manifest.txt")
-
+          $ccache = Get-Command ccache -ErrorAction SilentlyContinue
+          if ($ccache) { & $ccache.Source --show-stats }
       - uses: actions/upload-artifact@v4
         with:
-          name: chttp-sdk-windows-x64
+          name: ${{ matrix.artifact }}
           path: stage/sdk
           if-no-files-found: error
           compression-level: 9
 
-  android:
+  cross:
+    name: ${{ matrix.name }}
     if: needs.metadata.outputs.candidate_run_id == ''
-    name: Android arm64-v8a SDK
     needs: metadata
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Android arm64-v8a SDK, family: android, runner: ubuntu-24.04, rid: android-arm64-v8a, triplet: arm64-android, host_triplet: x64-linux, preset: ci-android-sdk-release-user, sysroot: ''}
+          - {name: iOS device arm64 SDK, family: ios, runner: macos-15, rid: ios-arm64, triplet: arm64-ios, host_triplet: arm64-osx, preset: ci-ios-sdk-release-user, sysroot: iphoneos}
+    env:
+      QIGAO_SDK_RID: ${{ matrix.rid }}
+      QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
+      QIGAO_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      QIGAO_IOS_SYSROOT: ${{ matrix.sysroot }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Select iOS binary cache namespace
+        if: matrix.family == 'ios'
+        shell: bash
+        run: echo "X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache" >> "$GITHUB_ENV"
+      - name: Configure canonical vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
       - name: Prepare Android toolchain
+        if: matrix.family == 'android'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
-          test -n "${VCPKG_ROOT:-}"
-          test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
-          test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
-          case "${VCPKG_BINARY_SOURCES:-}" in
-            *nugetconfig*) ;;
-            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
-          esac
-          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
           test -n "${ANDROID_NDK_HOME:-}"
-
-      - name: Restore target SDK graph
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash cmake/ci/restore-native-sdks.sh android-arm64-v8a
-      - name: Configure, build and install
-        shell: bash
-        run: |
-          set -euxo pipefail
-          prefix="$GITHUB_WORKSPACE/stage/sdk/android-arm64-v8a"
-          export QIGAO_SDK_RID=android-arm64-v8a QIGAO_TARGET_TRIPLET=arm64-android QIGAO_HOST_TRIPLET=x64-linux
-          cmake --preset ci-android-sdk-release-user
-          cmake --build --preset ci-android-sdk-release-user --parallel 2
-          cmake --build --preset install-ci-android-sdk-release-user
-          test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
-          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
-          version=${{ needs.metadata.outputs.version }}
-          commit=${{ needs.metadata.outputs.source_commit }}
-          os=android
-          abi=arm64-v8a
-          api=android-26
-          profile=release
-          EOF
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chttp-sdk-android-arm64-v8a
-          path: stage/sdk
-          if-no-files-found: error
-          compression-level: 9
-
-  ios:
-    if: needs.metadata.outputs.candidate_run_id == ''
-    name: iOS SDK / ${{ matrix.name }}
-    needs: metadata
-    runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {name: device arm64, triplet: arm64-ios, rid: ios-arm64, sysroot: iphoneos}
-    env:
-      X_VCPKG_NUGET_ID_PREFIX: vcpkg-cache
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
       - name: Prepare iOS toolchain
+        if: matrix.family == 'ios'
         shell: bash
         run: |
           set -euo pipefail
-          test "$(uname -m)" = "arm64"
+          test "$(uname -m)" = 'arm64'
           brew install ninja nasm
+      - name: Verify shared binary cache
+        shell: bash
+        run: |
+          set -euo pipefail
           test -n "${VCPKG_ROOT:-}"
           test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
           case "${VCPKG_BINARY_SOURCES:-}" in
             *nugetconfig*) ;;
-            *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
+            *) echo 'shared vcpkg NuGet cache unavailable' >&2; exit 1 ;;
           esac
-          test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
-
-      - name: Restore target SDK graph
+          test "${VCPKG_NUGET_REPOSITORY:-}" = 'https://github.com/qigao/vcpkg-cache'
+      - name: Restore cross compiler object cache
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: ${{ matrix.family }}-${{ matrix.rid }}-${{ matrix.preset }}
+          sdk_identity: salts-2.3-pre-utils-4.3-pre
+      - name: Restore cross native SDK graph
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh "${{ matrix.rid }}"
-
-      - name: Configure, build and install
+      - name: Configure and install cross SDK (build-only)
         shell: bash
         run: |
           set -euxo pipefail
-          build="$GITHUB_WORKSPACE/build/${{ matrix.rid }}"
           prefix="$GITHUB_WORKSPACE/stage/sdk/${{ matrix.rid }}"
-          export QIGAO_SDK_RID="${{ matrix.rid }}" QIGAO_TARGET_TRIPLET="${{ matrix.triplet }}"
-          export QIGAO_HOST_TRIPLET=arm64-osx QIGAO_IOS_SYSROOT="${{ matrix.sysroot }}"
-          cmake --preset ci-ios-sdk-release-user
-          cmake --build --preset ci-ios-sdk-release-user --parallel 2
-          cmake --build --preset install-ci-ios-sdk-release-user
-
+          cmake --preset "${{ matrix.preset }}"
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
+          cmake --build --preset "install-${{ matrix.preset }}"
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
-          test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
-          test -f "$prefix/include/chttp_service/service.h"
-          test -f "$prefix/include/chttp_rpc_service/service.h"
-          grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
-          grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
-
-          cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
+          if [ "${{ matrix.family }}" = ios ]; then
+            test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            test -f "$prefix/include/chttp_service/service.h"
+            test -f "$prefix/include/chttp_rpc_service/service.h"
+            grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=${{ needs.metadata.outputs.source_commit }}
           os=ios
@@ -477,7 +367,22 @@ jobs:
           triplet=${{ matrix.triplet }}
           profile=release
           EOF
-
+          else
+            cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=${{ needs.metadata.outputs.source_commit }}
+          os=android
+          abi=arm64-v8a
+          api=android-26
+          profile=release
+          EOF
+          fi
+      - name: Report ccache compilation statistics
+        if: always()
+        shell: pwsh
+        run: |
+          $ccache = Get-Command ccache -ErrorAction SilentlyContinue
+          if ($ccache) { & $ccache.Source --show-stats }
       - uses: actions/upload-artifact@v4
         with:
           name: chttp-sdk-${{ matrix.rid }}
@@ -488,7 +393,7 @@ jobs:
   pack:
     if: needs.metadata.outputs.candidate_run_id == ''
     name: Pack CHttp.Native
-    needs: [metadata, linux, macos, windows, android, ios]
+    needs: [metadata, host, cross]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -27,6 +27,7 @@ salts_idl_target(
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.schema"
   ARTIFACT_NAME "chttp_web_form_plan"
   ARTIFACTS NATIVE
+  BINARY_CODEC
   TRANSPORTS HTTP
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_web_form_plan.projection.json")
