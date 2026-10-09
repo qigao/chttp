@@ -902,6 +902,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
   impl->config = *config;
   impl->execution_options =
       (chttp_server_execution_options)CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+  impl->owner_placement_options =
+      (chttp_server_owner_placement_options)CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_INIT;
   impl->owner = (chttp_server_owner_lane){
       .server = impl,
       .network = &impl->network,
@@ -1046,6 +1048,9 @@ int chttp_server_set_execution_options(
   if (options->owner_count == 0u ||
       options->owner_count > impl->config.network.connection_capacity)
     return SALTS_EINVAL;
+  if (impl->owner_placement_options.kind == CNET_OWNER_PLACE_EXPLICIT &&
+      impl->owner_placement_options.explicit_owner >= options->owner_count)
+    return SALTS_EINVAL;
   if (impl->start_called || impl->thread_started || impl->network_initialized ||
       impl->listener_initialized)
     return SALTS_EBUSY;
@@ -1055,6 +1060,34 @@ int chttp_server_set_execution_options(
     if (status != SALTS_OK) return status;
   }
   impl->execution_options = *options;
+  return SALTS_OK;
+}
+
+int chttp_server_set_owner_placement(
+    chttp_server *server, const chttp_server_owner_placement_options *options) {
+  chttp_server_impl *impl;
+  if (server == NULL || server->impl == NULL || options == NULL ||
+      options->size != sizeof(*options) ||
+      options->version != CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_VERSION)
+    return SALTS_EINVAL;
+  impl = (chttp_server_impl *)server->impl;
+  if (impl->start_called || impl->thread_started || impl->network_initialized ||
+      impl->listener_initialized)
+    return SALTS_EBUSY;
+  switch (options->kind) {
+  case CNET_OWNER_PLACE_ROUND_ROBIN:
+  case CNET_OWNER_PLACE_LOWEST_PRESSURE:
+    if (options->explicit_owner != 0u) return SALTS_EINVAL;
+    break;
+  case CNET_OWNER_PLACE_EXPLICIT:
+    if (options->explicit_owner >= impl->owner_count) return SALTS_EINVAL;
+    break;
+  default:
+    /* STRICT_KEY cannot use an HTTP request key during TCP admission:
+     * it must fail fast instead of pretending to hash an unknown key. */
+    return SALTS_EINVAL;
+  }
+  impl->owner_placement_options = *options;
   return SALTS_OK;
 }
 
@@ -1980,6 +2013,7 @@ static int chttp_server_admission_owner(
     chttp_server_impl *server, cnet_handoff_ticket *ticket,
     chttp_server_owner_lane **out_owner) {
   cnet_owner_placement_input selection;
+  cnet_owner_placement_kind kind;
   size_t index;
   size_t attempt;
   int status;
@@ -1988,26 +2022,47 @@ static int chttp_server_admission_owner(
   if (server == NULL || server->owner_count == 0u ||
       server->placement_hints == NULL)
     return SALTS_EINVAL;
+  kind = server->owner_placement_options.kind;
 
-  /* Pure CNet decision uses a listener-owned bounded scratch array. The
-   * authoritative connection/admission credit is the handoff reservation,
-   * not a stale READY/snapshot hint. The listener is a separate control
-   * thread, so even owner0 needs a cross-thread handoff publication. */
+  /*
+   * The listener is a separate control thread, so even data-owner0 uses the
+   * bounded cross-thread handoff. CNet placement is pure and advisory; actual
+   * capacity is committed only by the generation-checked handoff reservation.
+   * The scratch array is allocated when the stopped Owner topology is set.
+   */
   for (index = 0u; index < server->owner_count; ++index) {
-    const chttp_server_owner_lane *owner = chttp_server_owner_at(server, index);
+    chttp_server_owner_lane *owner = chttp_server_owner_at(server, index);
+    const bool eligible =
+        owner != NULL &&
+        chttp_server_owner_runtime_state_get(owner) ==
+            CHTTP_SERVER_OWNER_RUNTIME_READY;
+    uint64_t pressure = 0u;
+    if (eligible && kind == CNET_OWNER_PLACE_LOWEST_PRESSURE) {
+      cnet_handoff_snapshot snapshot = {0};
+      size_t held;
+      const size_t capacity = owner->connection_count;
+      status = cnet_handoff_get_snapshot(&owner->handoff, &snapshot);
+      if (status != SALTS_OK) return status;
+      if (capacity == 0u || snapshot.reserved > capacity ||
+          snapshot.queued > capacity - snapshot.reserved ||
+          snapshot.taken > capacity - snapshot.reserved - snapshot.queued)
+        return SALTS_EPROTO;
+      held = snapshot.reserved + snapshot.queued + snapshot.taken;
+      /* Normalize differing partition capacities without overflowing when
+       * capacity is large. Owner selection never reserves a connection. */
+      pressure = (UINT64_MAX / (uint64_t)capacity) * (uint64_t)held;
+    }
     server->placement_hints[index] = (cnet_owner_placement_hint){
-        .eligible = owner != NULL &&
-                    chttp_server_owner_runtime_state_get(owner) ==
-                        CHTTP_SERVER_OWNER_RUNTIME_READY,
-        .pressure = 0u};
+        .eligible = eligible, .pressure = pressure};
   }
   selection = (cnet_owner_placement_input){
       .size = sizeof(selection),
       .version = CNET_OWNER_PLACEMENT_VERSION,
-      .kind = CNET_OWNER_PLACE_ROUND_ROBIN,
+      .kind = kind,
       .owners = server->placement_hints,
       .owner_count = server->owner_count,
-      .sequence = server->admission_cursor};
+      .sequence = server->admission_cursor,
+      .explicit_owner = server->owner_placement_options.explicit_owner};
   for (attempt = 0u; attempt < server->owner_count; ++attempt) {
     chttp_server_owner_lane *owner;
     index = SIZE_MAX;
@@ -2017,8 +2072,9 @@ static int chttp_server_admission_owner(
     if (owner == NULL) return SALTS_EPROTO;
     status = cnet_handoff_reserve(&owner->handoff, ticket);
     if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN) {
-      /* Retry decision with only this failed candidate excluded. No
-       * descriptor or credit has been transferred by a failed reserve. */
+      /* A pinned Owner never spills on FULL. Other policies can retry the
+       * remaining eligible Owners after a real reservation failure. */
+      if (kind == CNET_OWNER_PLACE_EXPLICIT) return SALTS_ENOBUFS;
       server->placement_hints[index].eligible = false;
       continue;
     }

@@ -2,6 +2,7 @@
 #define HTTP_SERVER_HTTP_H
 
 #include <http_common/http.h>
+#include <cnet/owner_placement.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -314,6 +315,41 @@ typedef struct chttp_server_execution_options {
 #define CHTTP_SERVER_EXECUTION_OPTIONS_VERSION 1u
 #define CHTTP_SERVER_EXECUTION_OPTIONS_INIT                                                    \
   {sizeof(chttp_server_execution_options), CHTTP_SERVER_EXECUTION_OPTIONS_VERSION, 1u}
+
+/**
+ * Versioned pre-start CNet server placement strategy for one newly accepted
+ * physical connection. The listener has a separate control thread; it always
+ * transfers accepted descriptors via a bounded handoff to a fixed CNet Owner.
+ * CNet chooses the target, but cnet_handoff_reserve() commits real capacity.
+ *
+ * ROUND_ROBIN (default) and LOWEST_PRESSURE can choose among READY Owners.
+ * LOWEST_PRESSURE compares bounded handoff credits / owner-local capacities.
+ * EXPLICIT pins one Owner and fails on FULL; it never spills to another Owner.
+ * STRICT_KEY is deliberately unsupported here: HTTP authority / routing keys
+ * are unavailable at TCP accept time. A later HTTP request never migrates the
+ * connection to a different Owner. Unsupported policy -> SALTS_EINVAL.
+ */
+typedef struct chttp_server_owner_placement_options {
+  size_t size;
+  uint32_t version;
+  cnet_owner_placement_kind kind;
+  size_t explicit_owner;
+} chttp_server_owner_placement_options;
+
+#define CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_VERSION 1u
+#define CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_INIT \
+  {sizeof(chttp_server_owner_placement_options), \
+   CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_VERSION, CNET_OWNER_PLACE_ROUND_ROBIN, 0u}
+
+/**
+ * Set policy before start. EXPLICIT owner must be within the currently
+ * configured execution_options.owner_count. Reconfiguring owner_count later
+ * cannot silently invalidate the selected explicit Owner.
+ * Invalid shape / unsupported policy -> SALTS_EINVAL.
+ * Called after start -> SALTS_EBUSY; no runtime reconfiguration.
+ */
+int chttp_server_set_owner_placement(
+    chttp_server *server, const chttp_server_owner_placement_options *options);
 
 /** Thread-safe snapshot of server lifecycle and bounded admission counters. */
 typedef struct chttp_server_stats {
