@@ -59,7 +59,8 @@ salts_idl_target(
   TARGET chttp_service_cflow_unsupported_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow_unsupported.schema"
   ARTIFACT_NAME "chttp_service_cflow_unsupported"
-  ARTIFACTS NATIVE)
+  ARTIFACTS NATIVE
+  BINARY_CODEC)
 
 target_sources(chttp_service_cflow_unsupported_fixture_native PRIVATE
   chttp_service_cflow_unsupported_business.c)
