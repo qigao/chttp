@@ -489,8 +489,9 @@ spec("CHttp owner topology") {
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
-    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
-                   (unsigned int)port) > 0);
+    const int uri_chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                                   (unsigned int)port);
+    check(uri_chars > 0 && (size_t)uri_chars < sizeof(uri));
 
     check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
     check_equal(owner_topology_get(&first, uri, &response), SALTS_OK);
@@ -546,8 +547,9 @@ spec("CHttp owner topology") {
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
-    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
-                   (unsigned int)port) > 0);
+    const int uri_chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                                   (unsigned int)port);
+    check(uri_chars > 0 && (size_t)uri_chars < sizeof(uri));
 
     for (size_t i = 0u; i < 5u; ++i) {
       check_equal(chttp_client_init(&clients[i], &client_config), SALTS_OK);
@@ -600,8 +602,9 @@ spec("CHttp owner topology") {
         CHTTP_SERVER_OWNER_RUNTIME_READY);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check(port != 0u);
-    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
-                   (unsigned int)port) > 0);
+    const int uri_chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                                   (unsigned int)port);
+    check(uri_chars > 0 && (size_t)uri_chars < sizeof(uri));
 
     check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
     check_equal(owner_topology_get(&first, uri, &first_response), SALTS_OK);
@@ -661,8 +664,9 @@ spec("CHttp owner topology") {
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
-    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
-                   (unsigned int)port) > 0);
+    const int uri_chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                                   (unsigned int)port);
+    check(uri_chars > 0 && (size_t)uri_chars < sizeof(uri));
 
     check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
     check_equal(owner_topology_get(&first, uri, &response), SALTS_OK);
@@ -750,8 +754,9 @@ spec("CHttp owner topology") {
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
-    check(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
-                   (unsigned int)port) > 0);
+    const int uri_chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                                   (unsigned int)port);
+    check(uri_chars > 0 && (size_t)uri_chars < sizeof(uri));
 
     /* First physical connection -> owner0. Keep it alive. */
     check_equal(chttp_client_init(&first, &client_config), SALTS_OK);
@@ -763,7 +768,10 @@ spec("CHttp owner topology") {
     /* Second physical connection -> owner1. Block inside its handler. */
     blocked_request.config = client_config;
     blocked_request.target = "/block";
-    check(snprintf(blocked_request.uri, sizeof(blocked_request.uri), "%s", uri) > 0);
+    const int blocked_uri_chars =
+        snprintf(blocked_request.uri, sizeof(blocked_request.uri), "%s", uri);
+    check(blocked_uri_chars > 0 &&
+          (size_t)blocked_uri_chars < sizeof(blocked_request.uri));
     check_equal(
         cmeta_thread_create(
             &blocked_thread, owner_topology_request_thread, &blocked_request),
@@ -784,7 +792,10 @@ spec("CHttp owner topology") {
      */
     pending_request.config = client_config;
     pending_request.target = "/ok";
-    check(snprintf(pending_request.uri, sizeof(pending_request.uri), "%s", uri) > 0);
+    const int pending_uri_chars =
+        snprintf(pending_request.uri, sizeof(pending_request.uri), "%s", uri);
+    check(pending_uri_chars > 0 &&
+          (size_t)pending_uri_chars < sizeof(pending_request.uri));
     check_equal(
         cmeta_thread_create(
             &pending_thread, owner_topology_request_thread, &pending_request),
