@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       salts_candidate_sha:
-        description: Full Salts SHA with a successful producer CI (blank uses branch pin)
+        description: Optional Salts SHA for exact candidate qualification (blank restores floating prerelease NuGet SDKs)
         type: string
         default: ''
   pull_request:
@@ -46,10 +46,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $run = ''
           $sha = $env:CANDIDATE_SHA
-          if (-not $sha -and $env:GITHUB_REF_TYPE -ne 'tag') {
-            $pin = Get-Content cmake/ci/salts-candidate.json -Raw | ConvertFrom-Json
-            $sha = $pin.commit
-          }
           if ($sha) {
             if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'Specify a full lowercase Salts commit SHA' }
             if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Release tags cannot consume candidate SDKs' }
@@ -196,7 +192,7 @@ jobs:
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: ${{ matrix.family }}-${{ matrix.preset }}-${{ steps.target.outputs.rid }}
-          sdk_identity: ${{ needs.metadata.outputs.candidate_sha || 'released' }}
+          sdk_identity: ${{ needs.metadata.outputs.candidate_sha || 'salts-2.3-pre-utils-4.3-pre' }}
 
       - name: Select exact candidate Salts SDK
         if: needs.metadata.outputs.candidate_run_id != ''
@@ -342,7 +338,7 @@ jobs:
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: ${{ matrix.family }}-${{ matrix.rid }}-${{ matrix.preset }}
-          sdk_identity: released
+          sdk_identity: salts-2.3-pre-utils-4.3-pre
       - name: Restore cross native SDK graph
         shell: bash
         env:

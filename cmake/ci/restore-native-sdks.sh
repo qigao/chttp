@@ -20,8 +20,8 @@ cat > "$project" <<'EOF'
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" Condition="'$(UseSaltsCandidate)' != 'true'" />
-    <PackageReference Include="SaltsUtils.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="2.3.0-*" Condition="'$(UseSaltsCandidate)' != 'true'" />
+    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
     <PackageReference Include="TurboWasm.Native" Version="*" Condition="'$(WithTurboWasm)' == 'true'" />
   </ItemGroup>
 </Project>

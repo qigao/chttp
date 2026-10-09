@@ -57,7 +57,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/chttp-compiler-cache
-        key: chttp-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ inputs.sdk_identity }}-${{ env.VCPKG_CACHE_CONTRACT_VERSION }}-${{ env.VCPKG_CACHE_REVISION }}-${{ hashFiles('CMakePresets.json', 'CMakeUserPresets.json', 'presets/*.json', 'CMakeOptions.cmake', 'vcpkg.json', 'vcpkg-configuration.json', 'cmake/ci/salts-candidate.json', 'cmake/ci/restore-native-sdks.*') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: chttp-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ inputs.sdk_identity }}-${{ env.VCPKG_CACHE_CONTRACT_VERSION }}-${{ env.VCPKG_CACHE_REVISION }}-${{ hashFiles('CMakePresets.json', 'CMakeUserPresets.json', 'presets/*.json', 'CMakeOptions.cmake', 'vcpkg.json', 'vcpkg-configuration.json', 'cmake/ci/restore-native-sdks.*') }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          chttp-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ inputs.sdk_identity }}-${{ env.VCPKG_CACHE_CONTRACT_VERSION }}-${{ env.VCPKG_CACHE_REVISION }}-${{ hashFiles('CMakePresets.json', 'CMakeUserPresets.json', 'presets/*.json', 'CMakeOptions.cmake', 'vcpkg.json', 'vcpkg-configuration.json', 'cmake/ci/salts-candidate.json', 'cmake/ci/restore-native-sdks.*') }}-
+          chttp-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ inputs.sdk_identity }}-${{ env.VCPKG_CACHE_CONTRACT_VERSION }}-${{ env.VCPKG_CACHE_REVISION }}-${{ hashFiles('CMakePresets.json', 'CMakeUserPresets.json', 'presets/*.json', 'CMakeOptions.cmake', 'vcpkg.json', 'vcpkg-configuration.json', 'cmake/ci/restore-native-sdks.*') }}-
 
