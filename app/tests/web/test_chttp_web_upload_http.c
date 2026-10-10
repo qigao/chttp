@@ -7,7 +7,9 @@
 #include <salts/error_codes.h>
 #include <salts/thread.h>
 
-#include <limits.h>\n#include <stddef.h>
+#include <errno.h>
+#include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +24,7 @@ typedef SOCKET upload_http_socket;
   #include <arpa/inet.h>
   #include <netinet/in.h>
   #include <sys/socket.h>
+  #include <sys/time.h>
   #include <unistd.h>
 typedef int upload_http_socket;
   #define UPLOAD_HTTP_INVALID_SOCKET (-1)
@@ -35,6 +38,7 @@ enum {
 };
 
 typedef struct upload_http_app {
+  cmeta_mutex_t signals;
   chttp_web_upload_request upload;
   unsigned char staged[UPLOAD_HTTP_STAGE_BYTES];
   size_t staged_size;
@@ -43,6 +47,7 @@ typedef struct upload_http_app {
   size_t begin_calls;
   size_t commit_calls;
   size_t abort_calls;
+  size_t close_calls;
   chttp_web_status abort_status;
   int abort_native_status;
 } upload_http_app;
@@ -130,8 +135,10 @@ static int upload_http_stage_begin(
       request->body_sink_user != NULL ||
       strcmp(request->path, "/upload") != 0)
     return SALTS_EPROTO;
-  ++app->begin_calls;
+  cmeta_mutex_lock(&app->signals);
   app->staged_size = 0u;
+  ++app->begin_calls;
+  cmeta_mutex_unlock(&app->signals);
   return SALTS_OK;
 }
 
@@ -164,9 +171,11 @@ static int upload_http_commit(void *user) {
   upload_http_app *app = (upload_http_app *)user;
   if (app == NULL || app->staged_size > sizeof(app->committed))
     return SALTS_EINVAL;
+  cmeta_mutex_lock(&app->signals);
   memcpy(app->committed, app->staged, app->staged_size);
   app->committed_size = app->staged_size;
   ++app->commit_calls;
+  cmeta_mutex_unlock(&app->signals);
   return SALTS_OK;
 }
 
@@ -174,10 +183,12 @@ static void upload_http_abort(
     void *user, chttp_web_status status, int native_status) {
   upload_http_app *app = (upload_http_app *)user;
   if (app == NULL) return;
-  ++app->abort_calls;
+  cmeta_mutex_lock(&app->signals);
   app->abort_status = status;
   app->abort_native_status = native_status;
   app->staged_size = 0u;
+  ++app->abort_calls;
+  cmeta_mutex_unlock(&app->signals);
 }
 
 static chttp_web_upload_callbacks upload_http_callbacks(void) {
@@ -250,6 +261,11 @@ static void upload_http_close(
       sink->user != &app->upload)
     return;
   chttp_web_upload_close(&app->upload, status);
+  /* Publish after close returns: the test must not reset the upload while
+   * its Owner is still running the close callback. */
+  cmeta_mutex_lock(&app->signals);
+  ++app->close_calls;
+  cmeta_mutex_unlock(&app->signals);
 }
 
 static int upload_http_handler(
@@ -359,14 +375,35 @@ static int upload_http_get_csrf(
 }
 
 static int upload_http_raw_connect(
-    uint16_t port, upload_http_socket *out_socket) {
+    uint16_t port, upload_http_socket *out_socket, int *out_native_error) {
   struct sockaddr_in address;
   upload_http_socket socket_value;
-  if (out_socket == NULL || port == 0u) return SALTS_EINVAL;
+  if (out_socket == NULL || out_native_error == NULL || port == 0u)
+    return SALTS_EINVAL;
+  *out_native_error = 0;
   *out_socket = UPLOAD_HTTP_INVALID_SOCKET;
   socket_value = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (socket_value == UPLOAD_HTTP_INVALID_SOCKET)
+  if (socket_value == UPLOAD_HTTP_INVALID_SOCKET) {
+#if defined(_WIN32)
+    *out_native_error = WSAGetLastError();
+#else
+    *out_native_error = errno;
+#endif
     return SALTS_EIO;
+  }
+#if defined(__linux__)
+  /* Linux applies SO_SNDTIMEO to connect as well as send. A dropped SYN
+   * must fail within the test deadline rather than the TCP retry budget. */
+  const struct timeval timeout = {
+      UPLOAD_HTTP_TIMEOUT_MS / 1000,
+      (UPLOAD_HTTP_TIMEOUT_MS % 1000) * 1000};
+  if (setsockopt(socket_value, SOL_SOCKET, SO_SNDTIMEO,
+                 &timeout, sizeof(timeout)) != 0) {
+    *out_native_error = errno;
+    upload_http_socket_close(socket_value);
+    return SALTS_EIO;
+  }
+#endif
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
@@ -375,6 +412,11 @@ static int upload_http_raw_connect(
           socket_value,
           (const struct sockaddr *)&address,
           sizeof(address)) != 0) {
+#if defined(_WIN32)
+    *out_native_error = WSAGetLastError();
+#else
+    *out_native_error = errno;
+#endif
     upload_http_socket_close(socket_value);
     return SALTS_EIO;
   }
@@ -407,13 +449,20 @@ static int upload_http_raw_send(
 }
 
 static int upload_http_wait_count(
-    const size_t *value, size_t expected) {
+    upload_http_app *app, const size_t *value, size_t expected) {
   const uint64_t deadline =
       cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
-  if (value == NULL) return SALTS_EINVAL;
-  while (*value < expected && cmeta_monotonic_ms() < deadline)
+  size_t observed;
+  if (app == NULL || value == NULL) return SALTS_EINVAL;
+  do {
+    cmeta_mutex_lock(&app->signals);
+    observed = *value;
+    cmeta_mutex_unlock(&app->signals);
+    if (observed >= expected)
+      return observed == expected ? SALTS_OK : SALTS_EPROTO;
     cmeta_thread_yield();
-  return *value == expected ? SALTS_OK : SALTS_ETIMEDOUT;
+  } while (cmeta_monotonic_ms() < deadline);
+  return SALTS_ETIMEDOUT;
 }
 
 static int upload_http_send_partial_request(
@@ -491,12 +540,43 @@ static int upload_http_post(
 }
 
 spec("CHttp::App upload route integration") {
+  static chttp_server server;
+  static chttp_client client;
+  static upload_http_app app;
+  static upload_http_socket socket_value;
+
+  before_each() {
+    check_null(server.impl);
+    check_null(client.impl);
+    memset(&app, 0, sizeof(app));
+    cmeta_mutex_init(&app.signals);
+    socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+  }
+
+  after_each() {
+    int client_status = SALTS_OK;
+    int stop_status = SALTS_OK;
+    int destroy_status = SALTS_OK;
+    if (socket_value != UPLOAD_HTTP_INVALID_SOCKET) {
+      upload_http_socket_close(socket_value);
+      socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+    }
+    if (client.impl != NULL)
+      client_status = chttp_client_destroy(&client, UPLOAD_HTTP_TIMEOUT_MS);
+    if (server.impl != NULL) {
+      stop_status = chttp_server_stop(&server, UPLOAD_HTTP_TIMEOUT_MS);
+      destroy_status = chttp_server_destroy(&server);
+    }
+    if (server.impl == NULL && client.impl == NULL)
+      cmeta_mutex_destroy(&app.signals);
+    check_equal(client_status, SALTS_OK);
+    check_equal(stop_status, SALTS_OK);
+    check_equal(destroy_status, SALTS_OK);
+  }
+
   it("commits only after complete H1/H2 body plus session CSRF and validation") {
-    chttp_server server = {0};
-    chttp_client client = {0};
     chttp_server_config server_config = upload_http_server_config();
     chttp_client_config client_config = upload_http_client_config();
-    upload_http_app app = {0};
     chttp_server_route_options upload_route = {
         .method = CHTTP_METHOD_POST,
         .path = "/upload",
@@ -540,6 +620,7 @@ spec("CHttp::App upload route integration") {
             h1_cookie, h1_token, 0, &status_code),
         SALTS_OK);
     check_equal(status_code, 200u);
+    check_equal(upload_http_wait_count(&app, &app.commit_calls, 1u), SALTS_OK);
     check_equal(app.commit_calls, (size_t)1u);
     check_equal(app.abort_calls, (size_t)0u);
     check_equal(app.committed_size, (size_t)7u);
@@ -556,6 +637,7 @@ spec("CHttp::App upload route integration") {
             h2_cookie, h2_token, 0, &status_code),
         SALTS_OK);
     check_equal(status_code, 200u);
+    check_equal(upload_http_wait_count(&app, &app.commit_calls, 2u), SALTS_OK);
     check_equal(app.commit_calls, (size_t)2u);
     check_equal(app.abort_calls, (size_t)0u);
 
@@ -570,6 +652,7 @@ spec("CHttp::App upload route integration") {
             h1_cookie, bad_token, 0, &status_code),
         SALTS_OK);
     check_equal(status_code, 403u);
+    check_equal(upload_http_wait_count(&app, &app.abort_calls, 1u), SALTS_OK);
     check_equal(app.commit_calls, (size_t)2u);
     check_equal(app.abort_calls, (size_t)1u);
     check_equal(app.abort_status, CHTTP_WEB_CSRF);
@@ -580,6 +663,7 @@ spec("CHttp::App upload route integration") {
             h2_cookie, h2_token, 1, &status_code),
         SALTS_OK);
     check_equal(status_code, 422u);
+    check_equal(upload_http_wait_count(&app, &app.abort_calls, 2u), SALTS_OK);
     check_equal(app.commit_calls, (size_t)2u);
     check_equal(app.abort_calls, (size_t)2u);
     check_equal(app.abort_status, CHTTP_WEB_VALIDATION);
@@ -594,9 +678,7 @@ spec("CHttp::App upload route integration") {
   }
 
   it("aborts incomplete H1 uploads exactly once on disconnect and server stop") {
-    chttp_server server = {0};
     chttp_server_config server_config = upload_http_server_config();
-    upload_http_app app = {0};
     chttp_server_route_options upload_route = {
         .method = CHTTP_METHOD_POST,
         .path = "/upload",
@@ -605,7 +687,9 @@ spec("CHttp::App upload route integration") {
         .body_open = upload_http_open,
         .body_close = upload_http_close};
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
-    upload_http_socket socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+    int native_error = 0;
+    int connect_status;
+    chttp_server_stats stats = {0};
     uint16_t port = 0u;
 
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
@@ -615,20 +699,26 @@ spec("CHttp::App upload route integration") {
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
 
-    check_equal(
-        upload_http_raw_connect(port, &socket_value),
-        SALTS_OK);
+    connect_status = upload_http_raw_connect(port, &socket_value, &native_error);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check(connect_status == SALTS_OK,
+          "connect port=%u status=%d native=%d running=%d terminal=%d",
+          (unsigned int)port, connect_status, native_error,
+          stats.running, stats.terminal_status);
     check_equal(
         upload_http_send_partial_request(socket_value),
         SALTS_OK);
     check_equal(
-        upload_http_wait_count(&app.begin_calls, 1u),
+        upload_http_wait_count(&app, &app.begin_calls, 1u),
         SALTS_OK);
     upload_http_socket_close(socket_value);
     socket_value = UPLOAD_HTTP_INVALID_SOCKET;
 
     check_equal(
-        upload_http_wait_count(&app.abort_calls, 1u),
+        upload_http_wait_count(&app, &app.abort_calls, 1u),
+        SALTS_OK);
+    check_equal(
+        upload_http_wait_count(&app, &app.close_calls, 1u),
         SALTS_OK);
     check_equal(app.commit_calls, (size_t)0u);
     check_equal(app.abort_status, CHTTP_WEB_SERVER);
@@ -637,21 +727,24 @@ spec("CHttp::App upload route integration") {
         chttp_web_upload_reset(&app.upload, &error),
         CHTTP_WEB_OK);
 
-    check_equal(
-        upload_http_raw_connect(port, &socket_value),
-        SALTS_OK);
+    connect_status = upload_http_raw_connect(port, &socket_value, &native_error);
+    check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+    check(connect_status == SALTS_OK,
+          "connect port=%u status=%d native=%d running=%d terminal=%d",
+          (unsigned int)port, connect_status, native_error,
+          stats.running, stats.terminal_status);
     check_equal(
         upload_http_send_partial_request(socket_value),
         SALTS_OK);
     check_equal(
-        upload_http_wait_count(&app.begin_calls, 2u),
+        upload_http_wait_count(&app, &app.begin_calls, 2u),
         SALTS_OK);
 
     check_equal(
         chttp_server_stop(&server, UPLOAD_HTTP_TIMEOUT_MS),
         SALTS_OK);
     check_equal(
-        upload_http_wait_count(&app.abort_calls, 2u),
+        upload_http_wait_count(&app, &app.abort_calls, 2u),
         SALTS_OK);
     check_equal(app.commit_calls, (size_t)0u);
     check_equal(app.abort_status, CHTTP_WEB_SERVER);
@@ -661,6 +754,7 @@ spec("CHttp::App upload route integration") {
         CHTTP_WEB_OK);
 
     upload_http_socket_close(socket_value);
+    socket_value = UPLOAD_HTTP_INVALID_SOCKET;
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 }

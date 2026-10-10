@@ -105,6 +105,7 @@ set_target_properties(chttp_web_upload_http_test PROPERTIES
   FOLDER "app/tests/web"
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME chttp_web_upload_http_test COMMAND chttp_web_upload_http_test)
+set_tests_properties(chttp_web_upload_http_test PROPERTIES TIMEOUT 30)
 
 add_executable(chttp_web_auth_http_test test_chttp_web_auth_http.c)
 target_link_libraries(chttp_web_auth_http_test PRIVATE
