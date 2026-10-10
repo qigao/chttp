@@ -57,8 +57,9 @@ targets. See the [merge and migration decision](../README.md#app-entry-point).
 cmake_minimum_required(VERSION 3.25)
 project(my_web_app LANGUAGES C)
 
+file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" CHTTP_ROOT_PATH)
 find_package(Chttp CONFIG REQUIRED
-  PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
+  PATHS "${CHTTP_ROOT_PATH}" NO_DEFAULT_PATH)
 
 add_executable(my_web_app main.c)
 target_link_libraries(my_web_app PRIVATE CHttp::App)
