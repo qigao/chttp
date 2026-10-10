@@ -15,8 +15,16 @@ A C JWT Implementation
 
 `cjwt` is a small JWT handler designed to allow consumers of JWTs of the JWS variant
 the ability to securely and easily get claims and data from a JWT.  This particular
-JWT implementation uses [cJSON](https://github.com/DaveGamble/cJSON) and is designed
-to support multiple different crypto libraries in the future.
+vendored copy uses Salts JsonParser and Salts Crypto. Its upstream source is
+[xmidt-org/cjwt](https://github.com/xmidt-org/cjwt); upstream license notices are retained.
+
+Local crypto integration lives in `src/jws_salts.c` and `src/jwe_salts.c`.
+It replaces the former OpenSSL backend with Salts-owned immutable keys and
+GmSSL/libecc operations, preserving the public cjwt API and JOSE algorithms.
+PBES2 now uses the complete decoded salt in both directions. PEM support is
+unencrypted SPKI/PKCS8 and traditional RSA/EC, with the four JOSE EC curves.
+The JWS JWK API remains asymmetric-only; HMAC uses the raw-key API and its
+existing `OPT_ALLOW_ONLY_HS_ALG` admission option.
 
 ## API
 
@@ -34,8 +42,30 @@ Otherwise you get a simple C struct to work with in your code.
 
 ## Dependencies
 
-- [BoringSSL](https://boringssl.googlesource.com/boringssl/)
-- [trower-base64](https://github.com/xmidt-org/trower-base64)
+- `Salts::Crypto` (GmSSL/libecc), `Salts::Core`, `Salts::JsonParser`.
+- Tests use `Salts::TinyTest`; all `chttp_cjwt_*` targets run through CTest.
+- `tests/generate_salts_vectors.py` uses Python cryptography only to regenerate
+  public, disposable interoperability fixtures. Neither production nor CTest
+  executables require OpenSSL.
+
+See [CHTTP provider requirements and validation limits](../../docs/HTTP.md#密码库迁移边界)
+for the matching SDK/overlay versions and remaining security qualification.
+
+With the matching SDK roots and shared vcpkg-cache configured, run the focused
+interoperability target through the repository presets:
+
+```powershell
+cmake --preset win-release-user -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF
+cmake --build --preset win-release-user --target chttp_cjwt_test_salts_backend
+ctest --preset win-release-user -R '^chttp_cjwt_test_salts_backend$' --output-on-failure
+```
+
+Use `win-dev-user` with the matching Debug Crypto SDK for ASan. After building
+all cjwt test targets registered in `tests/CMakeLists.txt`, `ctest -R chttp_cjwt`
+with the same preset runs the complete 11-target suite.
+
+These internal JOSE capabilities do not broaden Chttp's public HS256-only JWT
+Bearer admission contract.
 
 
 ## Opinionated Default Secure

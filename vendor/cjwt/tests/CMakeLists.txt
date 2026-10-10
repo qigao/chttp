@@ -1,10 +1,17 @@
 
-# cjwt tests using project's Unity
+# cjwt tests using Salts TinyTest.
 set(TEST_FILES
     test_utils.c
     test_print.c
+    test_cjwt_new.c
+    test_cjwt.c
     test_map.c
     test_encode.c
+    test_jwk.c
+    test_jwe.c
+    test_jwks.c
+    test_pbes2.c
+    test_salts_backend.c
 )
 
 foreach(test_file ${TEST_FILES})
