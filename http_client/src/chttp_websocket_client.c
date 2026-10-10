@@ -2,10 +2,12 @@
 
 #include "chttp_h2_proto.h"
 #include "chttp_cnet_retained.h"
+#include "chttp_managed_stream.h"
 #include "chttp_tls.h"
 #include "chttp_websocket_handshake.h"
 
 #include <cnet/websocket.h>
+#include <cnet/websocket_transport.h>
 #include <salts/clock.h>
 #include <uri_parser.h>
 
@@ -42,8 +44,16 @@ typedef struct chttp_websocket_client_event_slot {
 
 typedef struct chttp_websocket_client_impl {
   cnet_client network;
+  chttp_managed_stream transport;
   cnet_connection connection;
-  cnet_websocket websocket;
+  cnet_websocket h2_websocket;
+  cnet_websocket *websocket;
+  cnet_websocket_transport websocket_transport;
+  unsigned char *pending_input;
+  size_t pending_input_capacity;
+  size_t pending_input_size;
+  size_t tagged_size;
+  bool tagged_pending;
   chttp_h2_proto *h2_protocol;
   chttp_tls_profile_impl *tls_profile;
   const char *expected_subprotocol;
@@ -138,7 +148,6 @@ static void chttp_websocket_client_event_push(void *user, cnet_websocket *websoc
 
 static int chttp_websocket_client_write(void *user, const uint8_t *data, size_t size) {
   chttp_websocket_client_impl *client = (chttp_websocket_client_impl *)user;
-  int status;
   if (client == NULL || data == NULL || size == 0u || client->phase != CHTTP_WEBSOCKET_CLIENT_OPEN)
     return SALTS_EINVAL;
   if (client->protocol == CHTTP_HTTP_2) {
@@ -156,17 +165,7 @@ static int chttp_websocket_client_write(void *user, const uint8_t *data, size_t 
     }
     return SALTS_OK;
   }
-  if (client->write_pending) return SALTS_EBUSY;
-  if (size > client->send_capacity) return SALTS_EMSGSIZE;
-  memcpy(client->send_buffer, data, size);
-  status = chttp_cnet_retained_send(
-      &client->network, client->connection, client->send_retained,
-      client->send_buffer, client->send_capacity, size, 0);
-  if (status == SALTS_ENOBUFS) return SALTS_EBUSY;
-  if (status != SALTS_OK) return status;
-  client->write_pending = true;
-  client->expected_write_size = size;
-  return SALTS_OK;
+  return SALTS_ENOTSUP;
 }
 
 static void chttp_websocket_client_on_send(void *user, cnet_connection connection, size_t size) {
@@ -193,7 +192,10 @@ static void chttp_websocket_client_on_state(void *user, cnet_connection connecti
   client->connected = false;
   client->receive_pending = false;
   client->write_pending = false;
-  if (client->websocket.impl != NULL) (void)cnet_websocket_transport_closed(&client->websocket);
+  /* The dedicated bridge settles H1 output before forwarding this terminal.
+   * H2 still owns its per-stream engine and terminal mapping. */
+  if (client->protocol == CHTTP_HTTP_2 && client->websocket != NULL)
+    (void)cnet_websocket_transport_closed(client->websocket);
   if (client->terminal_status == SALTS_OK)
     client->terminal_status =
         error != NULL && error->status != SALTS_OK ? error->status : SALTS_ECONNRESET;
@@ -211,8 +213,20 @@ static const unsigned char *chttp_websocket_client_header_end(const unsigned cha
   return NULL;
 }
 
+static void chttp_websocket_client_tag_complete(void *user, cnet_websocket *websocket,
+                                                uint64_t tag, size_t size, int status) {
+  chttp_websocket_client_impl *client = (chttp_websocket_client_impl *)user;
+  if (websocket != client->websocket || !client->tagged_pending || tag != 1u ||
+      size != client->tagged_size) {
+    client->terminal_status = SALTS_EPROTO;
+    return;
+  }
+  client->tagged_pending = false;
+  if (status != SALTS_OK) client->terminal_status = status;
+}
+
 static int chttp_websocket_client_engine_init(chttp_websocket_client_impl *client) {
-  const cnet_websocket_config config = {.size = sizeof(config),
+  cnet_websocket_config config = {.size = sizeof(config),
                                         .role = CNET_WEBSOCKET_CLIENT,
                                         .max_frame_bytes = client->max_frame_bytes,
                                         .max_message_bytes = client->max_message_bytes,
@@ -221,7 +235,24 @@ static int chttp_websocket_client_engine_init(chttp_websocket_client_impl *clien
                                         .write = chttp_websocket_client_write,
                                         .on_event = chttp_websocket_client_event_push,
                                         .user = client};
-  return cnet_websocket_init(&client->websocket, &config);
+  int status;
+  if (client->protocol == CHTTP_HTTP_2) {
+    status = cnet_websocket_init(&client->h2_websocket, &config);
+    if (status == SALTS_OK) client->websocket = &client->h2_websocket;
+    return status;
+  }
+  /* connect() drains the Upgrade request before admitting receive demand.
+   * Its retained storage can now become the bridge's exclusive frame buffer. */
+  const cnet_websocket_tagged_policy policy = {
+      .size = sizeof(policy), .version = CNET_WEBSOCKET_TAGGED_SEND_VERSION,
+      .fragment_bytes = client->max_frame_bytes,
+      .on_send = chttp_websocket_client_tag_complete, .user = client};
+  config.write = NULL;
+  config.output_buffer = client->send_retained;
+  status = cnet_websocket_transport_init(&client->websocket_transport, &client->network,
+                                          client->connection, &config, &policy);
+  if (status != SALTS_OK) return status;
+  return cnet_websocket_transport_session(&client->websocket_transport, &client->websocket);
 }
 
 static bool chttp_websocket_client_h2_name(const char *name, size_t name_size,
@@ -318,8 +349,8 @@ static int chttp_websocket_client_h2_data(void *user, int32_t stream_id, const u
   int status = SALTS_OK;
   if (client == NULL || stream_id != client->h2_stream_id || (size != 0u && data == NULL))
     return -1;
-  if (size != 0u && client->phase == CHTTP_WEBSOCKET_CLIENT_OPEN && client->websocket.impl != NULL)
-    status = cnet_websocket_feed(&client->websocket, data, size);
+  if (size != 0u && client->phase == CHTTP_WEBSOCKET_CLIENT_OPEN && client->websocket != NULL)
+    status = cnet_websocket_feed(client->websocket, data, size);
   if (size != 0u && (chttp_h2_proto_consume_stream(client->h2_protocol, stream_id, size) != 0 ||
                      chttp_h2_proto_consume_connection(client->h2_protocol, size) != 0))
     return -1;
@@ -328,7 +359,7 @@ static int chttp_websocket_client_h2_data(void *user, int32_t stream_id, const u
     return -1;
   }
   if (chttp_h2_proto_remote_end_stream(client->h2_protocol, stream_id)) {
-    if (client->websocket.impl != NULL) (void)cnet_websocket_transport_closed(&client->websocket);
+    if (client->websocket != NULL) (void)cnet_websocket_transport_closed(client->websocket);
     if (!client->h2_close_requested && client->terminal_status == SALTS_OK)
       client->terminal_status = SALTS_ECONNRESET;
   }
@@ -340,7 +371,7 @@ static int chttp_websocket_client_h2_stream_close(void *user, int32_t stream_id,
   chttp_websocket_client_impl *client = (chttp_websocket_client_impl *)user;
   if (client == NULL || stream_id != client->h2_stream_id) return 0;
   client->h2_stream_terminal = true;
-  if (client->websocket.impl != NULL) (void)cnet_websocket_transport_closed(&client->websocket);
+  if (client->websocket != NULL) (void)cnet_websocket_transport_closed(client->websocket);
   if (error_code != CHTTP_H2_ERR_NO_ERROR && client->terminal_status == SALTS_OK)
     client->terminal_status = SALTS_ECONNRESET;
   return 0;
@@ -398,11 +429,22 @@ static void chttp_websocket_client_on_receive(void *user, cnet_connection connec
     if (status == SALTS_OK) status = chttp_websocket_client_engine_init(client);
     if (status == SALTS_OK) client->phase = CHTTP_WEBSOCKET_CLIENT_OPEN;
     if (status == SALTS_OK && header_size < client->handshake_size)
-      status = cnet_websocket_feed(&client->websocket, client->handshake_buffer + header_size,
+      status = cnet_websocket_feed(client->websocket, client->handshake_buffer + header_size,
                                    client->handshake_size - header_size);
     client->handshake_size = 0u;
-  } else if (client->phase == CHTTP_WEBSOCKET_CLIENT_OPEN && client->websocket.impl != NULL) {
-    status = cnet_websocket_feed(&client->websocket, view->data, view->size);
+  } else if (client->phase == CHTTP_WEBSOCKET_CLIENT_OPEN && client->websocket != NULL) {
+    status = cnet_websocket_feed(client->websocket, view->data, view->size);
+    if (status == SALTS_EBUSY) {
+      /* feed did not consume this borrowed callback view. Keep one receive
+       * quantum, then pause demand until the bridge releases its output. */
+      if (client->pending_input_size != 0u || view->size > client->pending_input_capacity) {
+        status = SALTS_ENOBUFS;
+      } else {
+        memcpy(client->pending_input, view->data, view->size);
+        client->pending_input_size = view->size;
+        status = SALTS_OK;
+      }
+    }
   } else {
     status = SALTS_EPROTO;
   }
@@ -416,6 +458,21 @@ static uint64_t chttp_websocket_client_deadline(uint32_t timeout_ms) {
   return UINT64_MAX - now < timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
 
+static int chttp_websocket_client_bridge_progress(chttp_websocket_client_impl *client) {
+  size_t events = 0u;
+  int status;
+  if (client->websocket_transport.impl == NULL) return SALTS_OK;
+  status = cnet_websocket_transport_advance(&client->websocket_transport, 1u, &events);
+  if (status != SALTS_OK || client->transport_terminal) return status;
+  if (client->pending_input_size != 0u && !cnet_websocket_has_pending_output(client->websocket)) {
+    status = cnet_websocket_feed(client->websocket, client->pending_input,
+                                 client->pending_input_size);
+    if (status == SALTS_EBUSY) return SALTS_OK;
+    if (status == SALTS_OK) client->pending_input_size = 0u;
+  }
+  return status;
+}
+
 static int chttp_websocket_client_poll(chttp_websocket_client_impl *client, uint64_t deadline) {
   uint32_t wait_ms = 1000u;
   size_t events = 0u;
@@ -426,12 +483,19 @@ static int chttp_websocket_client_poll(chttp_websocket_client_impl *client, uint
     remaining = deadline - now;
     wait_ms = remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
   }
-  return cnet_client_poll(&client->network, wait_ms, &events);
+  const int status = cnet_client_poll(&client->network, wait_ms, &events);
+  const int bridge_status = chttp_websocket_client_bridge_progress(client);
+  const int manager_status = chttp_managed_stream_progress(&client->transport);
+  if (status != SALTS_OK) return status;
+  return bridge_status != SALTS_OK ? bridge_status : manager_status;
 }
 
 static int chttp_websocket_client_receive_arm(chttp_websocket_client_impl *client) {
   int status;
   if (client->receive_pending) return SALTS_OK;
+  if (client->websocket_transport.impl != NULL &&
+      (client->pending_input_size != 0u || cnet_websocket_has_pending_output(client->websocket)))
+    return SALTS_OK;
   status = cnet_receive(&client->network, client->connection, 1u);
   if (status == SALTS_OK) client->receive_pending = true;
   return status;
@@ -446,9 +510,9 @@ static int chttp_websocket_client_h2_wire_flush(chttp_websocket_client_impl *cli
       !chttp_h2_proto_stream_output_pending(client->h2_protocol, client->h2_stream_id))
     client->h2_frame_size = 0u;
   if (client->h2_close_requested && !client->h2_end_submitted && client->h2_frame_size == 0u &&
-      client->websocket.impl != NULL && !cnet_websocket_has_pending_output(&client->websocket)) {
+      client->websocket != NULL && !cnet_websocket_has_pending_output(client->websocket)) {
     cnet_websocket_state websocket_state = CNET_WEBSOCKET_OPEN;
-    status = cnet_websocket_state_get(&client->websocket, &websocket_state);
+    status = cnet_websocket_state_get(client->websocket, &websocket_state);
     if (status != SALTS_OK) return status;
     if (websocket_state == CNET_WEBSOCKET_CLOSED || websocket_state == CNET_WEBSOCKET_FAILED) {
       if (chttp_h2_proto_submit_data(client->h2_protocol, client->h2_stream_id, NULL, 0u, 1) != 0)
@@ -478,7 +542,7 @@ static int chttp_websocket_client_h2_wire_flush(chttp_websocket_client_impl *cli
 static bool chttp_websocket_client_h2_output_pending(chttp_websocket_client_impl *client) {
   return client->write_pending || client->h2_frame_size != 0u || client->h2_wire_size != 0u ||
          chttp_h2_proto_want_write(client->h2_protocol) ||
-         (client->websocket.impl != NULL && cnet_websocket_has_pending_output(&client->websocket));
+         (client->websocket != NULL && cnet_websocket_has_pending_output(client->websocket));
 }
 
 static int chttp_websocket_client_drain_output(chttp_websocket_client_impl *client,
@@ -486,9 +550,9 @@ static int chttp_websocket_client_drain_output(chttp_websocket_client_impl *clie
   int status = SALTS_OK;
   if (client->protocol == CHTTP_HTTP_2) {
     do {
-      if (client->h2_frame_size == 0u && client->websocket.impl != NULL &&
-          cnet_websocket_has_pending_output(&client->websocket)) {
-        status = cnet_websocket_flush(&client->websocket);
+      if (client->h2_frame_size == 0u && client->websocket != NULL &&
+          cnet_websocket_has_pending_output(client->websocket)) {
+        status = cnet_websocket_flush(client->websocket);
         if (status != SALTS_OK && status != SALTS_EBUSY) return status;
       }
       status = chttp_websocket_client_h2_wire_flush(client);
@@ -499,17 +563,13 @@ static int chttp_websocket_client_drain_output(chttp_websocket_client_impl *clie
     } while (!client->transport_terminal && client->terminal_status == SALTS_OK);
     return client->terminal_status == SALTS_OK ? status : client->terminal_status;
   }
-  while (!client->transport_terminal && client->terminal_status == SALTS_OK &&
-         (client->write_pending || cnet_websocket_has_pending_output(&client->websocket))) {
-    if (!client->write_pending) {
-      status = cnet_websocket_flush(&client->websocket);
-      if (status != SALTS_OK && status != SALTS_EBUSY) return status;
-      status = SALTS_OK;
-    }
-    if (client->write_pending || cnet_websocket_has_pending_output(&client->websocket)) {
+  while (!client->transport_terminal && client->terminal_status == SALTS_OK) {
+    status = chttp_websocket_client_bridge_progress(client);
+    if (status != SALTS_OK) return status;
+    if (client->tagged_pending || cnet_websocket_has_pending_output(client->websocket)) {
       status = chttp_websocket_client_poll(client, deadline);
       if (status != SALTS_OK) return status;
-    }
+    } else break;
   }
   return client->terminal_status == SALTS_OK ? status : client->terminal_status;
 }
@@ -855,10 +915,13 @@ int chttp_websocket_client_init(chttp_websocket_client *client,
   impl->send_buffer = (unsigned char *)malloc(impl->send_capacity);
   impl->h2_frame_buffer = (unsigned char *)malloc(output_bytes);
   impl->handshake_buffer = (unsigned char *)malloc(impl->handshake_capacity);
+  impl->pending_input_capacity = config->network.receive_buffer_bytes;
+  impl->pending_input = (unsigned char *)malloc(impl->pending_input_capacity);
   impl->events = (chttp_websocket_client_event_slot *)calloc(event_capacity, sizeof(*impl->events));
   impl->event_payloads = (unsigned char *)malloc(event_payload_bytes);
   if (impl->send_buffer == NULL || impl->h2_frame_buffer == NULL ||
-      impl->handshake_buffer == NULL || impl->events == NULL || impl->event_payloads == NULL) {
+      impl->handshake_buffer == NULL || impl->pending_input == NULL ||
+      impl->events == NULL || impl->event_payloads == NULL) {
     status = SALTS_ENOMEM;
     goto fail;
   }
@@ -868,6 +931,8 @@ int chttp_websocket_client_init(chttp_websocket_client *client,
     impl->events[index].payload = impl->event_payloads + index * event_payload_capacity;
   status = cnet_client_init(&impl->network, &config->network);
   if (status != SALTS_OK) goto fail;
+  status = chttp_managed_stream_init(&impl->transport, &impl->network);
+  if (status != SALTS_OK) goto fail;
   if (config->socket_options.size != 0u) {
     status = cnet_client_set_stream_socket_options(&impl->network, &config->socket_options);
     if (status != SALTS_OK) goto fail;
@@ -876,6 +941,7 @@ int chttp_websocket_client_init(chttp_websocket_client *client,
   return SALTS_OK;
 
 fail:
+  (void)chttp_managed_stream_destroy(&impl->transport);
   if (impl->network.impl != NULL) {
     (void)cnet_client_stop(&impl->network, 0u);
     (void)cnet_client_destroy(&impl->network);
@@ -884,6 +950,7 @@ fail:
   free(impl->event_payloads);
   free(impl->events);
   free(impl->handshake_buffer);
+  free(impl->pending_input);
   if (chttp_cnet_retained_release(&impl->send_retained) == SALTS_OK)
     free(impl->send_buffer);
   free(impl);
@@ -958,7 +1025,7 @@ int chttp_websocket_client_connect(chttp_websocket_client *client,
                              .observer = observer,
                              .tls_client = chttp_tls_profile_client(impl->tls_profile)};
   impl->phase = CHTTP_WEBSOCKET_CLIENT_CONNECTING;
-  status = cnet_connect(&impl->network, &connect_options, &impl->connection);
+  status = chttp_managed_stream_connect(&impl->transport, &connect_options, &impl->connection);
   if (status != SALTS_OK) goto done;
   deadline = chttp_websocket_client_deadline(options->timeout_ms);
   while (!impl->connected && !impl->transport_terminal && impl->terminal_status == SALTS_OK) {
@@ -1030,7 +1097,7 @@ int chttp_websocket_client_connect(chttp_websocket_client *client,
 done:
   if (status != SALTS_OK && impl->phase != CHTTP_WEBSOCKET_CLIENT_OPEN) {
     if (impl->connection.generation != 0u && !impl->transport_terminal)
-      (void)cnet_close(&impl->network, impl->connection);
+      (void)chttp_managed_stream_close(&impl->transport);
     impl->phase = CHTTP_WEBSOCKET_CLIENT_TERMINAL;
   }
   if (status != SALTS_OK && impl->tls_profile != NULL) {
@@ -1060,7 +1127,16 @@ static int chttp_websocket_client_send(chttp_websocket_client *client,
   impl->operation_active = true;
   deadline = chttp_websocket_client_deadline(timeout_ms);
   status = chttp_websocket_client_drain_output(impl, deadline);
-  if (status == SALTS_OK) status = send(&impl->websocket, data, size);
+  if (status == SALTS_OK && impl->websocket_transport.impl != NULL &&
+      (send == cnet_websocket_send_text || send == cnet_websocket_send_binary)) {
+    status = cnet_websocket_send_tagged(impl->websocket,
+        send == cnet_websocket_send_text ? CNET_WEBSOCKET_MESSAGE_TEXT : CNET_WEBSOCKET_MESSAGE_BINARY,
+        data, size, 1u);
+    if (status == SALTS_OK) {
+      impl->tagged_pending = true;
+      impl->tagged_size = size;
+    }
+  } else if (status == SALTS_OK) status = send(impl->websocket, data, size);
   if (status == SALTS_OK) status = chttp_websocket_client_drain_output(impl, deadline);
   if (status == SALTS_OK && impl->terminal_status != SALTS_OK) status = impl->terminal_status;
   impl->operation_active = false;
@@ -1108,6 +1184,8 @@ int chttp_websocket_client_receive(chttp_websocket_client *client, uint32_t time
   impl->profile_receive_callbacks = 0u;
   while (impl->event_count == 0u && !impl->transport_terminal &&
          impl->terminal_status == SALTS_OK) {
+    status = chttp_websocket_client_bridge_progress(impl);
+    if (status != SALTS_OK || impl->event_count != 0u) break;
     status = chttp_websocket_client_receive_arm(impl);
     if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) status = SALTS_OK;
     if (status != SALTS_OK) break;
@@ -1174,7 +1252,7 @@ int chttp_websocket_client_close(chttp_websocket_client *client, uint16_t code, 
   status = chttp_websocket_client_drain_output(impl, deadline);
   if (impl->protocol == CHTTP_HTTP_2) impl->h2_close_requested = true;
   if (status == SALTS_OK)
-    status = cnet_websocket_close(&impl->websocket, code, reason, reason_size);
+    status = cnet_websocket_close(impl->websocket, code, reason, reason_size);
   if (status != SALTS_OK) {
     impl->operation_active = false;
     return status;
@@ -1192,13 +1270,10 @@ int chttp_websocket_client_close(chttp_websocket_client *client, uint16_t code, 
   } else
     while (status == SALTS_OK && !impl->transport_terminal && impl->terminal_status == SALTS_OK) {
       cnet_websocket_state websocket_state = CNET_WEBSOCKET_OPEN;
-      if (!impl->write_pending && cnet_websocket_has_pending_output(&impl->websocket)) {
-        status = cnet_websocket_flush(&impl->websocket);
-        if (status == SALTS_EBUSY) status = SALTS_OK;
-        if (status != SALTS_OK) break;
-      }
-      if (!impl->write_pending) {
-        status = cnet_websocket_state_get(&impl->websocket, &websocket_state);
+      status = chttp_websocket_client_bridge_progress(impl);
+      if (status != SALTS_OK) break;
+      if (!cnet_websocket_has_pending_output(impl->websocket)) {
+        status = cnet_websocket_state_get(impl->websocket, &websocket_state);
         if (status != SALTS_OK || websocket_state == CNET_WEBSOCKET_CLOSED ||
             websocket_state == CNET_WEBSOCKET_FAILED)
           break;
@@ -1227,27 +1302,37 @@ int chttp_websocket_client_destroy(chttp_websocket_client *client, uint32_t time
   if (impl == NULL) return SALTS_OK;
   if (impl->operation_active) return SALTS_EBUSY;
   if (!impl->transport_terminal && impl->connection.generation != 0u) {
-    status = cnet_close(&impl->network, impl->connection);
+    status = chttp_managed_stream_close(&impl->transport);
     if (status != SALTS_OK && status != SALTS_EALREADY && status != SALTS_ESHUTDOWN)
       first_status = status;
   }
   status = cnet_client_stop(&impl->network, timeout_ms);
-  if (status == SALTS_ETIMEDOUT) return status;
-  if (first_status == SALTS_OK && status != SALTS_OK && status != SALTS_EALREADY)
-    first_status = status;
+  if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+  if (impl->websocket_transport.impl != NULL) {
+    /* Native terminal comes first. Even failed advance must drain logical tags
+     * before destroy; an error never permits freeing retained frame storage. */
+    (void)chttp_websocket_client_bridge_progress(impl);
+    status = cnet_websocket_transport_destroy(&impl->websocket_transport);
+    if (status != SALTS_OK) return status;
+    impl->websocket = NULL;
+  }
+  if (impl->websocket != NULL) {
+    status = cnet_websocket_destroy(impl->websocket);
+    if (status != SALTS_OK) return status;
+    impl->websocket = NULL;
+  }
+  status = chttp_managed_stream_destroy(&impl->transport);
+  if (status != SALTS_OK) return status;
   status = cnet_client_destroy(&impl->network);
   if (first_status == SALTS_OK && status != SALTS_OK) first_status = status;
   if (status != SALTS_OK) return first_status;
-  if (impl->websocket.impl != NULL) {
-    status = cnet_websocket_destroy(&impl->websocket);
-    if (first_status == SALTS_OK && status != SALTS_OK) first_status = status;
-  }
   chttp_h2_proto_destroy(impl->h2_protocol);
   chttp_tls_profile_release(impl->tls_profile);
   free(impl->h2_frame_buffer);
   free(impl->event_payloads);
   free(impl->events);
   free(impl->handshake_buffer);
+  free(impl->pending_input);
   if (chttp_cnet_retained_release(&impl->send_retained) == SALTS_OK)
     free(impl->send_buffer);
   free(impl);

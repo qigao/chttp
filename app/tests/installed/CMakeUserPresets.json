@@ -1,0 +1,50 @@
+{
+    "version": 6,
+    "include": ["../../../CMakeUserPresets.json"],
+    "configurePresets": [
+        {
+            "name": "installed-release-user",
+            "inherits": "ci-sdk-release-user",
+            "binaryDir": "${sourceDir}/build/release",
+            "cacheVariables": {
+                "VCPKG_MANIFEST_DIR": "${sourceDir}/../../..",
+                "BUILD_TESTING": true
+            },
+            "environment": {
+                "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
+                "CHTTP_ROOT": "$penv{CHTTP_ROOT}",
+                "PATH": "$env{CHTTP_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$penv{PATH}",
+                "LD_LIBRARY_PATH": "$env{CHTTP_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+                "DYLD_LIBRARY_PATH": "$env{CHTTP_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+            }
+        },
+        {
+            "name": "installed-macos-release-user",
+            "inherits": ["AppleClang", "installed-release-user"]
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "installed-release-user",
+            "configurePreset": "installed-release-user"
+        },
+        {
+            "name": "installed-macos-release-user",
+            "configurePreset": "installed-macos-release-user"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "installed-release-user",
+            "configurePreset": "installed-release-user",
+            "output": {"outputOnFailure": true},
+            "execution": {"noTestsAction": "error"}
+        },
+        {
+            "name": "installed-macos-release-user",
+            "configurePreset": "installed-macos-release-user",
+            "output": {"outputOnFailure": true},
+            "execution": {"noTestsAction": "error"}
+        }
+    ]
+}

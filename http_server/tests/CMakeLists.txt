@@ -1,3 +1,55 @@
+add_executable(chttp_server_example_test chttp_server_example_test.c)
+target_link_libraries(chttp_server_example_test PRIVATE
+  http_example_app CHttp::Client Salts::TinyTest llhttp::llhttp_static)
+target_include_directories(chttp_server_example_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+  ${PROJECT_SOURCE_DIR}/http_server/src)
+target_compile_definitions(chttp_server_example_test PRIVATE
+  HTTP_EXAMPLE_TEST_FILE="${PROJECT_SOURCE_DIR}/http_server/examples/http_example.schema"
+  HTTP_EXAMPLE_PLUGIN_PATH="$<TARGET_FILE:http_example_contract_plugin>"
+  HTTP_EXAMPLE_BAD_PLUGIN_PATH="$<TARGET_FILE:http_example_incompatible_plugin>")
+add_dependencies(chttp_server_example_test http_example_contract_plugin http_example_incompatible_plugin)
+set_target_properties(chttp_server_example_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_server_example_test COMMAND chttp_server_example_test)
+set_tests_properties(chttp_server_example_test PROPERTIES TIMEOUT 60)
+add_test(NAME chttp_server_example_plugin_test COMMAND chttp_server_example_test)
+set_tests_properties(chttp_server_example_plugin_test PROPERTIES TIMEOUT 60
+  ENVIRONMENT "HTTP_EXAMPLE_PLUGIN=$<TARGET_FILE:http_example_contract_plugin>")
+
+# Same operation ID but incompatible result width: reject before publication.
+salts_idl_target(
+  TARGET http_example_incompatible
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/http_example_incompatible.schema"
+  ARTIFACT_NAME http_example_incompatible
+  COMPONENT "HttpExample.CalculatorPlugin"
+  VERSION "1.0.0"
+  ARTIFACTS PLUGIN
+  BINARY_CODEC
+  SOURCES http_example_incompatible.c)
+set_target_properties(http_example_incompatible_plugin http_example_incompatible_plugin_client
+  http_example_incompatible_idl_codegen PROPERTIES FOLDER "http_server/tests")
+
+add_executable(chttp_server_retry_test chttp_server_retry_test.c)
+target_link_libraries(chttp_server_retry_test PRIVATE CHttp::Server Salts::CFlow Salts::TinyTest)
+target_include_directories(chttp_server_retry_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+  ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
+set_target_properties(chttp_server_retry_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_server_retry_test COMMAND chttp_server_retry_test)
+set_tests_properties(chttp_server_retry_test PROPERTIES TIMEOUT 10)
+
+add_executable(chttp_server_manager_test chttp_server_manager_test.c)
+target_link_libraries(chttp_server_manager_test PRIVATE CHttp::Server Salts::CFlow Salts::TinyTest)
+target_include_directories(chttp_server_manager_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+  ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
+set_target_properties(chttp_server_manager_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_server_manager_test COMMAND chttp_server_manager_test)
+set_tests_properties(chttp_server_manager_test PROPERTIES TIMEOUT 10)
+
 add_executable(chttp_server_parser_test chttp_server_parser_test.c)
 target_link_libraries(chttp_server_parser_test PRIVATE CHttp::Client CHttp::Server llhttp::llhttp_static Salts::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_parser_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
@@ -28,6 +80,27 @@ set_target_properties(chttp_server_execution_options_test PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
+
+add_executable(chttp_server_configurator_test chttp_server_configurator_test.c)
+target_link_libraries(chttp_server_configurator_test PRIVATE
+  CHttp::Server Salts::CFlow Salts::TinyTest llhttp::llhttp_static)
+target_include_directories(chttp_server_configurator_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+  ${PROJECT_SOURCE_DIR}/http_server/src)
+set_target_properties(chttp_server_configurator_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_server_configurator_test COMMAND chttp_server_configurator_test)
+
+add_executable(chttp_websocket_commands_test chttp_websocket_commands_test.c)
+target_link_libraries(chttp_websocket_commands_test PRIVATE
+  CHttp::Server Salts::CFlow Salts::TinyTest llhttp::llhttp_static)
+target_include_directories(chttp_websocket_commands_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+  ${PROJECT_SOURCE_DIR}/http_server/src)
+set_target_properties(chttp_websocket_commands_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_websocket_commands_test COMMAND chttp_websocket_commands_test)
+set_tests_properties(chttp_websocket_commands_test PROPERTIES TIMEOUT 15)
 
 
 add_executable(chttp_server_owner_topology_test chttp_server_owner_topology_test.c)

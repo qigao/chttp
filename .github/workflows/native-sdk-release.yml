@@ -75,8 +75,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
-          test -n "$version"
+          version="$(jq -r '."version-semver"' vcpkg.json)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+          test -f "docs/releases/$version.md"
           tag="v$version"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
@@ -126,12 +127,13 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config nasm
-      - name: Prepare macOS GCC toolchain
+      - name: Prepare macOS AppleClang toolchain
         if: matrix.family == 'macos'
         shell: bash
         run: |
           set -euo pipefail
-          brew install nasm ninja gcc@15
+          brew install nasm ninja
+          xcrun --find clang
       - name: Prepare Windows MSVC toolchain
         if: matrix.family == 'windows'
         shell: pwsh
@@ -241,6 +243,36 @@ jobs:
           if errorlevel 1 exit /b 1
           cmake --build --preset "install-${{ matrix.preset }}"
           if errorlevel 1 exit /b 1
+      - name: Run installed App package test on Unix
+        if: matrix.family != 'windows'
+        shell: bash
+        working-directory: app/tests/installed
+        env:
+          CHTTP_ROOT: ${{ github.workspace }}/stage/sdk/${{ steps.target.outputs.rid }}
+        run: |
+          set -euo pipefail
+          preset=installed-release-user
+          if [[ "${{ matrix.family }}" == macos ]]; then preset=installed-macos-release-user; fi
+          cmake --preset "$preset"
+          cmake --build --preset "$preset" --parallel 2
+          ctest --preset "$preset"
+      - name: Run installed App package test on Windows
+        if: matrix.family == 'windows'
+        shell: cmd
+        working-directory: app/tests/installed
+        env:
+          CHTTP_ROOT: ${{ github.workspace }}/stage/sdk/${{ steps.target.outputs.rid }}
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          cmake --preset installed-release-user
+          if errorlevel 1 exit /b 1
+          cmake --build --preset installed-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset installed-release-user
+          if errorlevel 1 exit /b 1
       - name: Verify installed SDK and write manifest
         shell: pwsh
         env:
@@ -261,6 +293,8 @@ jobs:
             "arch=$arch"
             'profile=release'
           ) | Set-Content -LiteralPath (Join-Path $prefix 'chttp-sdk-manifest.txt')
+          Copy-Item -LiteralPath (Join-Path $env:SALTS_ROOT 'salts-sdk-manifest.txt') -Destination (Join-Path $prefix 'salts-dependency-manifest.txt')
+          Copy-Item -LiteralPath (Join-Path $env:SALTS_UTILS_ROOT 'salts-utils-sdk-manifest.txt') -Destination (Join-Path $prefix 'saltsutils-dependency-manifest.txt')
       - name: Report ccache compilation statistics
         if: always()
         shell: pwsh
@@ -353,11 +387,13 @@ jobs:
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           cmake --build --preset "install-${{ matrix.preset }}"
           test -f "$prefix/lib/cmake/Chttp/ChttpConfig.cmake"
+          cp "$SALTS_ROOT/salts-sdk-manifest.txt" "$prefix/salts-dependency-manifest.txt"
+          cp "$SALTS_UTILS_ROOT/salts-utils-sdk-manifest.txt" "$prefix/saltsutils-dependency-manifest.txt"
           if [ "${{ matrix.family }}" = ios ]; then
             test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
-            test -f "$prefix/include/chttp_service/service.h"
+            test -f "$prefix/include/chttp_app/service.h"
             test -f "$prefix/include/chttp_rpc_service/service.h"
-            grep -q 'CHttp::Service' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::App' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
             grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
             cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
@@ -413,19 +449,19 @@ jobs:
           test -f package/sdk/windows-x64/lib/cmake/Chttp/ChttpConfig.cmake
           test -f package/sdk/android-arm64-v8a/lib/cmake/Chttp/ChttpConfig.cmake
           test -f package/sdk/ios-arm64/lib/cmake/Chttp/ChttpConfig.cmake
-          test -f package/sdk/linux-x64/include/chttp_service/service.h
-          test -f package/sdk/windows-x64/include/chttp_service/service.h
-          test -f package/sdk/android-arm64-v8a/include/chttp_service/service.h
+          test -f package/sdk/linux-x64/include/chttp_app/service.h
+          test -f package/sdk/windows-x64/include/chttp_app/service.h
+          test -f package/sdk/android-arm64-v8a/include/chttp_app/service.h
           test -f package/sdk/linux-x64/include/chttp_rpc_service/service.h
           test -f package/sdk/windows-x64/include/chttp_rpc_service/service.h
           test -f package/sdk/android-arm64-v8a/include/chttp_rpc_service/service.h
           for rid in ios-arm64; do
-            test -f "package/sdk/$rid/include/chttp_service/service.h"
+            test -f "package/sdk/$rid/include/chttp_app/service.h"
             test -f "package/sdk/$rid/include/chttp_rpc_service/service.h"
-            grep -q 'CHttp::Service' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::App' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
             grep -q 'CHttp::RpcService' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
           done
-          grep -q 'CHttp::Service' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          grep -q 'CHttp::App' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
           grep -q 'CHttp::RpcService' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
           test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 5
       - uses: actions/setup-dotnet@v4
@@ -468,13 +504,17 @@ jobs:
 
   publish:
     name: Publish package and GitHub Release
-    if: needs.metadata.outputs.candidate_run_id == '' && needs.metadata.outputs.candidate_sha == '' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
+    if: needs.metadata.outputs.candidate_run_id == '' && needs.metadata.outputs.candidate_sha == '' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [metadata, pack]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_commit }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: chttp-native-nuget
@@ -489,17 +529,20 @@ jobs:
         run: |
           set -euo pipefail
           dotnet nuget add source --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --name github https://nuget.pkg.github.com/qigao/index.json
-          dotnet nuget push "dist/CHttp.Native.${{ needs.metadata.outputs.version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
+          dotnet nuget push "dist/CHttp.Native.${{ needs.metadata.outputs.version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github
       - name: Create GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.metadata.outputs.tag }}
           VERSION: ${{ needs.metadata.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.source_commit }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release $TAG already exists"
-            exit 0
+            echo "release $TAG already exists; refuse to replace published content" >&2
+            exit 1
           fi
-          gh release create "$TAG" dist/*.nupkg --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "CHttp $VERSION" --generate-notes
+          release_flags=()
+          if [[ "$VERSION" == *-* ]]; then release_flags+=(--prerelease); fi
+          gh release create "$TAG" dist/*.nupkg --repo "$GITHUB_REPOSITORY" --verify-tag --target "$SOURCE_COMMIT" --title "CHttp $VERSION" --notes-file "docs/releases/$VERSION.md" "${release_flags[@]}"

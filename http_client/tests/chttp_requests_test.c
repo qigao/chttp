@@ -492,6 +492,8 @@ spec("CHTTP requests-style client") {
     int first_expected_size;
     int second_expected_size;
 
+    /* Eviction is driven by physical capacity, independently of request slots. */
+    config.network.connection_capacity = 1u;
     check_equal(chttp_client_init(&client, &config), SALTS_OK);
     check_equal(chttp_requests_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);

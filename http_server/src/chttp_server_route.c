@@ -240,28 +240,6 @@ CHTTP_SERVER_ROUTE_METHOD(options, CHTTP_METHOD_OPTIONS)
 
 #undef CHTTP_SERVER_ROUTE_METHOD
 
-int chttp_server_use(chttp_server *server, chttp_server_middleware_fn middleware, void *user) {
-  chttp_server_impl *impl;
-  if (server == NULL || server->impl == NULL || middleware == NULL) return SALTS_EINVAL;
-  impl = (chttp_server_impl *)server->impl;
-  if (impl->start_called) return SALTS_EBUSY;
-  if (impl->middleware_count >= impl->config.middleware_capacity) return SALTS_ENOBUFS;
-  impl->middleware[impl->middleware_count++] = (chttp_server_middleware){middleware, user};
-  return SALTS_OK;
-}
-
-int chttp_server_use_jwt_bearer(chttp_server *server,
-                                chttp_jwt_bearer_validator *validator) {
-  chttp_server_impl *impl;
-  if (server == NULL || server->impl == NULL || validator == NULL || validator->impl == NULL)
-    return SALTS_EINVAL;
-  impl = (chttp_server_impl *)server->impl;
-  if (impl->start_called) return SALTS_EBUSY;
-  if (impl->jwt_bearer_validator != NULL) return SALTS_EALREADY;
-  impl->jwt_bearer_validator = validator;
-  return SALTS_OK;
-}
-
 static int chttp_server_route_param_copy(chttp_server_request_state *state, const char *name,
                                          size_t name_size, const char *value, size_t value_size) {
   char *name_copy;
@@ -387,74 +365,4 @@ const char *chttp_server_request_param(const chttp_server_request_view *request,
   for (index = 0u; index < request->param_count; ++index)
     if (strcmp(request->params[index].name, name) == 0) return request->params[index].value;
   return NULL;
-}
-
-static int chttp_server_allow_header(chttp_server_response *response, unsigned int methods) {
-  static const struct {
-    chttp_method method;
-    const char *name;
-  } names[] = {{CHTTP_METHOD_GET, "GET"},        {CHTTP_METHOD_HEAD, "HEAD"},
-               {CHTTP_METHOD_POST, "POST"},      {CHTTP_METHOD_PUT, "PUT"},
-               {CHTTP_METHOD_DELETE, "DELETE"},  {CHTTP_METHOD_PATCH, "PATCH"},
-               {CHTTP_METHOD_OPTIONS, "OPTIONS"}};
-  char value[64];
-  size_t used = 0u;
-  size_t index;
-  for (index = 0u; index < sizeof(names) / sizeof(names[0]); ++index) {
-    size_t name_size;
-    if ((methods & (1u << (unsigned int)names[index].method)) == 0u) continue;
-    name_size = strlen(names[index].name);
-    if (used != 0u) {
-      if (used + 2u >= sizeof(value)) return SALTS_EMSGSIZE;
-      value[used++] = ',';
-      value[used++] = ' ';
-    }
-    if (name_size >= sizeof(value) - used) return SALTS_EMSGSIZE;
-    memcpy(value + used, names[index].name, name_size);
-    used += name_size;
-  }
-  value[used] = '\0';
-  return chttp_server_response_set_header(response, "Allow", value);
-}
-
-static int chttp_server_chain_dispatch(chttp_server_chain *chain, size_t index) {
-  const size_t global_count = chain->server->middleware_count;
-  const size_t route_count = chain->route == NULL ? 0u : chain->route->middleware_count;
-  const size_t total = global_count + route_count;
-  if (index < total) {
-    const chttp_server_middleware *binding = index < global_count
-                                                 ? &chain->server->middleware[index]
-                                                 : &chain->route->middleware[index - global_count];
-    chttp_server_next_impl next_impl = {.chain = chain, .index = index + 1u};
-    chttp_server_next next = {&next_impl};
-    return binding->handler(binding->user, chain->request, chain->response, &next);
-  }
-  if (chain->route != NULL) {
-    chttp_server_handler_fn terminal =
-        chain->terminal != NULL ? chain->terminal : chain->route->handler;
-    void *terminal_user = chain->terminal != NULL ? chain->terminal_user : chain->route->user;
-    return terminal(terminal_user, chain->request, chain->response);
-  }
-  if (chain->fallback_status == 405u) {
-    const int status = chttp_server_allow_header(chain->response, chain->allowed_methods);
-    if (status != SALTS_OK) return status;
-  }
-  return chttp_server_reply(chain->response, chain->fallback_status, "text/plain",
-                            chain->fallback_status == 404u ? "Not Found" : "Method Not Allowed",
-                            chain->fallback_status == 404u ? 9u : 18u);
-}
-
-int chttp_server_chain_run(chttp_server_chain *chain) {
-  if (chain == NULL || chain->server == NULL || chain->request == NULL || chain->response == NULL)
-    return SALTS_EINVAL;
-  return chttp_server_chain_dispatch(chain, 0u);
-}
-
-int chttp_server_next_call(chttp_server_next *next) {
-  chttp_server_next_impl *impl;
-  if (next == NULL || next->impl == NULL) return SALTS_EINVAL;
-  impl = (chttp_server_next_impl *)next->impl;
-  if (impl->called) return SALTS_EALREADY;
-  impl->called = true;
-  return chttp_server_chain_dispatch(impl->chain, impl->index);
 }

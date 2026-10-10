@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "http": {
+    "operations": [{
+      "service": "Calculator",
+      "operation": "Add",
+      "method": "GET",
+      "route": "/api/add",
+      "success_status": 200,
+      "fields": [
+        {"direction": "ingress", "field": "left", "location": "query", "name": "left"},
+        {"direction": "ingress", "field": "right", "location": "query", "name": "right"},
+        {"direction": "egress", "field": "sum", "location": "response_body", "name": "sum"}
+      ]
+    }]
+  }
+}

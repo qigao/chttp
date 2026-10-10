@@ -57,10 +57,10 @@
             "inherits": [
                 "ISMac",
                 "release-mode",
-                "GccMac",
+                "AppleClang",
                 "flags-darwin"
             ],
-            "binaryDir": "${sourceDir}/build/mac-gcc-release"
+            "binaryDir": "${sourceDir}/build/mac-clang-release"
         }
     ]
 }

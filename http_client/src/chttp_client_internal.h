@@ -6,6 +6,14 @@
 #include "chttp_file_sink.h"
 #include "chttp_file_transfer.h"
 
+int chttp_destination_select(const chttp_destination_options *options,
+                               const chttp_request_options *request,
+                               cnet_destination_result *out, const char **out_uri);
+int chttp_async_client_submit_destination(chttp_async_client *client,
+                                           const chttp_request_options *options,
+                                           const cnet_destination_result *destination,
+                                           chttp_request *out_request);
+
 int chttp_async_client_file_runtime(chttp_async_client *client,
                                     cflow_io_file_runtime **out_runtime);
 int chttp_async_client_file_sink_capacity(chttp_async_client *client, size_t *out_capacity);

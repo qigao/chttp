@@ -48,6 +48,29 @@ set_target_properties(chttp_file_sink_test PROPERTIES
   C_EXTENSIONS OFF)
 
 
+add_executable(chttp_pool_lifecycle_test chttp_pool_lifecycle_test.c)
+target_link_libraries(chttp_pool_lifecycle_test PRIVATE
+  CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest llhttp::llhttp_static)
+target_include_directories(chttp_pool_lifecycle_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc)
+set_target_properties(chttp_pool_lifecycle_test PROPERTIES
+  FOLDER "http_client/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_pool_lifecycle_test COMMAND chttp_pool_lifecycle_test)
+
+add_executable(chttp_destination_test chttp_destination_test.c)
+target_link_libraries(chttp_destination_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
+set_target_properties(chttp_destination_test PROPERTIES
+  FOLDER "http_client/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_destination_test COMMAND chttp_destination_test)
+
+add_executable(chttp_managed_stream_test chttp_managed_stream_test.c)
+target_link_libraries(chttp_managed_stream_test PRIVATE Salts::CNet Salts::Core Salts::TinyTest)
+target_include_directories(chttp_managed_stream_test PRIVATE ${PROJECT_SOURCE_DIR}/http_client/src)
+set_target_properties(chttp_managed_stream_test PROPERTIES
+  FOLDER "http_client/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_managed_stream_test COMMAND chttp_managed_stream_test)
+set_tests_properties(chttp_managed_stream_test PROPERTIES TIMEOUT 15)
+
 add_executable(chttp_api_test chttp_api_test.c)
 target_link_libraries(chttp_api_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
 target_include_directories(chttp_api_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_client/src ${PROJECT_SOURCE_DIR}/http_client/rpc)

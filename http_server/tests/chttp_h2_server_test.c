@@ -560,7 +560,7 @@ static int chttp_h2_server_test_deferred_handler(void *user,
                                                  const chttp_server_request_view *request,
                                                  chttp_server_response *response) {
   chttp_h2_server_test_deferred *deferred = (chttp_h2_server_test_deferred *)user;
-  if (deferred == NULL || request == NULL || request->http_major != 2u) return SALTS_EPROTO;
+  if (deferred == NULL || request == NULL) return SALTS_EPROTO;
   deferred->defer_status = chttp_server_response_defer(response, &deferred->handle);
   atomic_fetch_add_explicit(&deferred->admitted, 1, memory_order_release);
   return deferred->defer_status;
@@ -1038,7 +1038,107 @@ static int chttp_h2_test_admission(void *user, const chttp_server_request_view *
   return SALTS_OK;
 }
 
+typedef struct chttp_interceptor_failure_fixture {
+  chttp_server server;
+  chttp_async_client client;
+  chttp_h2_server_test_deferred deferred;
+  chttp_h2_server_test_completion failed;
+  chttp_h2_server_test_completion healthy;
+} chttp_interceptor_failure_fixture;
+
+static int chttp_post_defer_error(void *user, const chttp_server_request_view *request,
+                                  chttp_server_response *response, chttp_server_next *next) {
+  (void)user;
+  int status = chttp_server_next_call(next);
+  if (status == SALTS_OK && strcmp(request->path, "/deferred") == 0)
+    status = chttp_server_response_set_header(response, "X-Too-Late", "no");
+  return status;
+}
+
+static void chttp_check_interceptor_failure(chttp_interceptor_failure_fixture *fixture,
+                                            chttp_protocol protocol) {
+  chttp_server_config config = chttp_h2_server_test_config();
+  chttp_client_config client_config = chttp_h2_server_test_client_config();
+  chttp_request request = {0};
+  char uri[64], authority[64];
+  uint16_t port = 0u;
+  size_t completions;
+  config.session_capacity = 0u;
+  client_config.network.connection_capacity = 1u;
+  check_equal(chttp_server_init(&fixture->server, &config), SALTS_OK);
+  check_equal(chttp_server_use(&fixture->server, chttp_post_defer_error, NULL), SALTS_OK);
+  check_equal(chttp_server_get(&fixture->server, "/deferred",
+      chttp_h2_server_test_deferred_handler, &fixture->deferred), SALTS_OK);
+  check_equal(chttp_server_get(&fixture->server, "/ok",
+      chttp_h2_server_test_version_handler, NULL), SALTS_OK);
+  check_equal(chttp_server_start(&fixture->server), SALTS_OK);
+  check_equal(chttp_server_port(&fixture->server, &port), SALTS_OK);
+  check_equal(chttp_h2_server_test_endpoint(port, uri, sizeof(uri), authority, sizeof(authority)), SALTS_OK);
+  check_equal(chttp_async_client_init(&fixture->client, &client_config), SALTS_OK);
+  chttp_request_options options = {.connection_uri = uri, .authority = authority,
+      .target = "/deferred", .method = CHTTP_METHOD_GET, .protocol = protocol,
+      .on_complete = chttp_h2_server_test_complete, .user = &fixture->failed};
+  check_equal(chttp_async_client_submit(&fixture->client, &options, &request), SALTS_OK);
+  options.target = "/ok";
+  options.user = &fixture->healthy;
+  if (protocol == CHTTP_HTTP_2)
+    check_equal(chttp_async_client_submit(&fixture->client, &options, &request), SALTS_OK);
+  const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+  while (fixture->failed.calls == 0u && cmeta_monotonic_ms() < deadline)
+    check_equal(chttp_async_client_poll(&fixture->client, 10u, &completions), SALTS_OK);
+  check_equal(fixture->failed.calls, (size_t)1u);
+  check_not_equal(fixture->failed.status, SALTS_OK);
+  check_equal(fixture->failed.response_status, 0u);
+  check_equal(atomic_load_explicit(&fixture->deferred.admitted, memory_order_acquire), 1);
+  check_equal(fixture->deferred.defer_status, SALTS_OK);
+  if (protocol == CHTTP_HTTP_1_1) {
+    check_equal(chttp_server_deferred_cancel(&fixture->deferred.handle), SALTS_OK);
+    int status;
+    while ((status = chttp_async_client_submit(&fixture->client, &options, &request)) == SALTS_ENOBUFS &&
+           cmeta_monotonic_ms() < deadline)
+      check_equal(chttp_async_client_poll(&fixture->client, 10u, &completions), SALTS_OK);
+    check_equal(status, SALTS_OK);
+  }
+  while (fixture->healthy.calls == 0u && cmeta_monotonic_ms() < deadline)
+    check_equal(chttp_async_client_poll(&fixture->client, 10u, &completions), SALTS_OK);
+  check_equal(fixture->healthy.calls, (size_t)1u);
+  check_equal(fixture->healthy.status, SALTS_OK);
+  check_equal(fixture->healthy.response_status, 200u);
+  if (protocol == CHTTP_HTTP_2) {
+    chttp_server_stats stats;
+    check_equal(chttp_server_get_stats(&fixture->server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, (uint64_t)1u);
+    check_equal(chttp_server_deferred_cancel(&fixture->deferred.handle), SALTS_ENOENT);
+    fixture->deferred.handle = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
+  }
+}
+
 spec("CHTTP background HTTP/2 server") {
+  group("interceptor failure after deferred admission") {
+    static chttp_interceptor_failure_fixture fixture;
+    before_each() {
+      fixture = (chttp_interceptor_failure_fixture){0};
+      atomic_init(&fixture.deferred.admitted, 0);
+    }
+    after_each() {
+      if (fixture.client.impl != NULL) {
+        check_equal(chttp_async_client_stop(&fixture.client, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&fixture.client), SALTS_OK);
+      }
+      if (fixture.deferred.handle.impl != NULL)
+        (void)chttp_server_deferred_cancel(&fixture.deferred.handle);
+      if (fixture.server.impl != NULL) {
+        check_equal(chttp_server_stop(&fixture.server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_server_destroy(&fixture.server), SALTS_OK);
+      }
+    }
+    it("closes H1 without a replacement response and permits a subsequent request") {
+      chttp_check_interceptor_failure(&fixture, CHTTP_HTTP_1_1);
+    }
+    it("resets only the deferred H2 stream while its sibling succeeds") {
+      chttp_check_interceptor_failure(&fixture, CHTTP_HTTP_2);
+    }
+  }
   it("keeps h2c connections fixed across two owners") {
     const chttp_h2_hpack_header normal[] = {
       {":method", 7, "GET", 3}, {":scheme", 7, "http", 4},

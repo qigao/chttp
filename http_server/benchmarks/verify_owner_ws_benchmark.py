@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -25,14 +26,34 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
 if not environments:
     raise SystemExit("missing environment rows")
 
+for item in environments + rows:
+    if (item.get("cpu_time_kind") != "thread-user-kernel-v1" or
+            item.get("cpu_scope") != "server-owners"):
+        raise SystemExit("unsupported CPU measurement: rerun with server-owner thread CPU timing")
+
 heads = {item.get("commit") for item in environments}
 backends = {item.get("backend") for item in environments}
 connections = {int(item.get("connections", 0)) for item in environments}
+# Earlier thread-CPU records used fixed capacity=32, poll=1ms, no idle phase.
+def configuration(item):
+    return (int(item.get("connection_capacity", 32)),
+            int(item.get("poll_slice_ms", 1)),
+            int(item.get("idle_requested_ms", 0)))
+
+configurations = {configuration(item) for item in environments}
+if len(configurations) != 1:
+    raise SystemExit(f"mixed benchmark configurations: {configurations}")
+capacity, poll_ms, idle_ms = next(iter(configurations))
+if not (8 <= capacity <= 4096 and 1 <= poll_ms <= 100 and 0 <= idle_ms <= 5000):
+    raise SystemExit("invalid benchmark configuration")
 if len(heads) != 1 or len(backends) != 1 or connections != {8}:
     raise SystemExit(
         f"environment mismatch heads={heads} backends={backends} connections={connections}"
     )
 repeat_count = len(environments)
+writer_policies = {item.get("writer_policy", "legacy") for item in rows}
+if len(writer_policies) != 1:
+    raise SystemExit(f"mixed writer policies: {writer_policies}")
 
 expected = {
     "ws-echo-16k": ("tcp", "callback-echo", 16 * 1024),
@@ -69,8 +90,11 @@ if set(groups) != set(expected):
 def median_value(items, field):
     return statistics.median(float(item[field]) for item in items)
 
-print(f"exact head: {next(iter(heads))}")
+print(f"source revision (reported metadata): {next(iter(heads))}")
 print(f"backend: {next(iter(backends))}; repeats: {repeat_count}")
+print(f"writer policy: {next(iter(writer_policies))}")
+print(f"capacity: {capacity}; poll: {poll_ms}ms; idle window requested: {idle_ms}ms")
+print("CPU: server-owner user + kernel time; excludes clients and listener/background threads")
 print()
 
 for workload in expected:
@@ -88,6 +112,8 @@ for workload in expected:
                 f"{workload}/{owners}: expected {repeat_count} repeats, got {len(points)}"
             )
         for row in points:
+            if configuration(row) != (capacity, poll_ms, idle_ms):
+                raise SystemExit(f"{workload}/{owners}: measurement configuration mismatch")
             if row.get("transport") != transport or row.get("mode") != mode:
                 raise SystemExit(f"{workload}/{owners}: transport/mode mismatch")
             if int(row["payload_bytes"]) != payload:
@@ -108,15 +134,36 @@ for workload in expected:
                 raise SystemExit(f"{workload}: operation count changed")
             for field in (
                 "messages_per_second",
-                "cpu_ns_per_message",
                 "p50_ns",
                 "p95_ns",
                 "p99_ns",
             ):
-                if float(row[field]) <= 0:
+                if not math.isfinite(float(row[field])) or float(row[field]) <= 0:
                     raise SystemExit(
                         f"{workload}/{owners}: invalid {field}={row[field]}"
                     )
+
+            if int(row.get("cpu_owner_count", 0)) != owners:
+                raise SystemExit(f"{workload}/{owners}: partial owner CPU coverage")
+            cpu_ns = int(row["server_owner_cpu_ns"])
+            cpu_per_message = float(row["server_owner_cpu_ns_per_message"])
+            cpu_percent = float(row["server_owner_cpu_percent"])
+            wall_ns = int(row["wall_ns"])
+            if (cpu_ns < 0 or cpu_per_message < 0 or cpu_percent < 0 or
+                    operations <= 0 or wall_ns <= 0 or
+                    not math.isclose(cpu_per_message, cpu_ns / operations, abs_tol=0.001) or
+                    not math.isclose(cpu_percent, cpu_ns * 100 / wall_ns, abs_tol=0.001)):
+                raise SystemExit(f"{workload}/{owners}: inconsistent owner CPU accounting")
+
+            idle_wall = int(row.get("idle_wall_ns", 0))
+            idle_cpu = int(row.get("idle_server_owner_cpu_ns", 0))
+            idle_percent = float(row.get("idle_server_owner_cpu_percent", 0))
+            if idle_ms == 0:
+                if (idle_wall, idle_cpu, idle_percent) != (0, 0, 0):
+                    raise SystemExit(f"{workload}/{owners}: unexpected idle measurement")
+            elif (idle_wall < idle_ms * 1000000 or idle_cpu < 0 or idle_percent < 0 or
+                    not math.isclose(idle_percent, idle_cpu * 100 / idle_wall, abs_tol=0.001)):
+                raise SystemExit(f"{workload}/{owners}: inconsistent idle CPU accounting")
 
             leases = [
                 int(row[f"owner{index}_leases"]) for index in range(owners)
@@ -216,12 +263,12 @@ for workload in expected:
 
     base = by_owner[1]
     base_rate = median_value(base, "messages_per_second")
-    base_cpu = median_value(base, "cpu_ns_per_message")
+    base_cpu = median_value(base, "server_owner_cpu_ns_per_message")
     print(f"### {workload}")
     print()
     print(
         "| owners | repeats | msg/s | speedup | p50 ns | p95 ns | p99 ns | "
-        "CPU ns/msg | CPU ratio | handoffs | leases | peak cmd queues |"
+        "owner CPU ns/msg | CPU ratio | handoffs | leases | peak cmd queues |"
     )
     print(
         "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
@@ -229,7 +276,8 @@ for workload in expected:
     for owners in (1, 2, 4):
         points = by_owner[owners]
         rate = median_value(points, "messages_per_second")
-        cpu = median_value(points, "cpu_ns_per_message")
+        cpu = median_value(points, "server_owner_cpu_ns_per_message")
+        cpu_ratio = f"{cpu/base_cpu:.3f}x" if base_cpu > 0 and cpu > 0 else "n/a"
         p50 = int(median_value(points, "p50_ns"))
         p95 = int(median_value(points, "p95_ns"))
         p99 = int(median_value(points, "p99_ns"))
@@ -243,10 +291,19 @@ for workload in expected:
         )
         print(
             f"| {owners} | {len(points)} | {rate:.1f} | {rate/base_rate:.3f}x | "
-            f"{p50} | {p95} | {p99} | {cpu:.1f} | {cpu/base_cpu:.3f}x | "
+            f"{p50} | {p95} | {p99} | {cpu:.1f} | {cpu_ratio} | "
             f"{int(sample['cross_owner_admission_handoffs'])} | {leases} | {peaks} |"
         )
     print()
+    if idle_ms:
+        print("| owners | idle owner CPU ms | idle wall ms | idle owner CPU % (one core=100%) |")
+        print("| ---: | ---: | ---: | ---: |")
+        for owners in (1, 2, 4):
+            points = by_owner[owners]
+            print(f"| {owners} | {median_value(points, 'idle_server_owner_cpu_ns')/1e6:.3f} | "
+                  f"{median_value(points, 'idle_wall_ns')/1e6:.3f} | "
+                  f"{median_value(points, 'idle_server_owner_cpu_percent'):.3f} |")
+        print()
     if mode == "callback-echo":
         print("| owners | client send p50 us | client receive p50 us | CNet receive p50 us | message event p50 us | receive callbacks p50 | plaintext bytes p50 | message bytes-at-event p50 | server callback send ns/call |")
         print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")

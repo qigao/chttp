@@ -11,7 +11,7 @@ target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sit
 add_library(openapi_ui_model STATIC src/ui_model.c)
 add_library(OpenAPI::UIModel ALIAS openapi_ui_model)
 target_include_directories(openapi_ui_model PUBLIC include PRIVATE src)
-target_link_libraries(openapi_ui_model PUBLIC OpenAPI::Generator CHttp::Web)
+target_link_libraries(openapi_ui_model PUBLIC OpenAPI::Generator CHttp::App)
 add_executable(openapi-gen src/main.c)
 target_link_libraries(openapi-gen PRIVATE openapi_generator)
 

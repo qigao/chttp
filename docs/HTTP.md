@@ -410,7 +410,7 @@ transport，不把加密转换路径描述成 scatter-gather zero-copy。HEAD/em
 retained buffer 在 Server terminal/reset 前不得修改 data/used/capacity，并继续受同一
 `max_buffered_response_body_bytes` 上限约束。
 
-生成的 `CHttp::Service` egress 直接把 DataBind/CSerde output transaction materialize 到独立的
+生成的 `CHttp::App` egress 直接把 DataBind/CSerde output transaction materialize 到独立的
 pooled `mem_buffer_t`：`data_bind_native_encode()` 写入该 buffer，provider 在 commit 前显式
 `cserde_writer_finish()`，随后通过 `chttp_server_reply_buffer()` 发布并立即释放 Service 自己的
 引用。不同 connection/H2 stream 不共享 response scratch。plain H1 因此形成：

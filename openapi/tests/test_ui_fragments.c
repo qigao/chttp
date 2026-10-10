@@ -1,4 +1,4 @@
-#include <chttp_web/web.h>
+#include <chttp_app/web.h>
 #include <json_parser.h>
 #include <openapi/ui_model.h>
 
@@ -136,6 +136,6 @@ int main(void) {
     REQUIRE(model == NULL);
     REQUIRE(strstr(model_error.message, "route keys") != NULL);
 
-    puts("openapi CHttp::Web fragment qualification passed");
+    puts("openapi CHttp::App fragment qualification passed");
     return 0;
 }

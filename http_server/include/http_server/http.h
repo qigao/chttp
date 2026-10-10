@@ -351,6 +351,28 @@ typedef struct chttp_server_owner_placement_options {
 int chttp_server_set_owner_placement(
     chttp_server *server, const chttp_server_owner_placement_options *options);
 
+typedef struct chttp_server_websocket_transport_options {
+  size_t size;
+  uint32_t version;
+  int dedicated_h1;
+} chttp_server_websocket_transport_options;
+
+#define CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_VERSION 1u
+#define CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT \
+  {sizeof(chttp_server_websocket_transport_options), \
+   CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_VERSION, 0}
+
+/**
+ * Copies an opt-in H1 WS/WSS transport policy before start. dedicated_h1 is 0
+ * (existing copied writer) or 1 (CNet exclusive writer after Upgrade completes).
+ * Dedicated mode permits one pending output, including one on_open send;
+ * direct callbacks must handle EBUSY. The bounded server command queue retries
+ * non-admission. H2 continues to use its stream adapter. No replay is enabled.
+ * Returns OK, EINVAL for invalid input/version, or EBUSY after start.
+ */
+int chttp_server_set_websocket_transport(
+    chttp_server *server, const chttp_server_websocket_transport_options *options);
+
 /** Thread-safe snapshot of server lifecycle and bounded admission counters. */
 typedef struct chttp_server_stats {
   uint16_t port;
@@ -496,9 +518,13 @@ int chttp_server_websocket_session_capture(const chttp_websocket *websocket,
 
 /**
  * Thread-safe copied command admission for a captured server WebSocket.
- * SALTS_OK means the bounded server queue owns a copy; SALTS_ENOBUFS applies
- * backpressure and SALTS_ENOENT means the captured connection is no longer
- * current.
+ * SALTS_OK means the bounded server queue owns a copy, not that the message
+ * reached the transport or peer. SALTS_ENOBUFS applies backpressure before
+ * copying. The owner validates the captured generation when consuming commands;
+ * stale sessions are discarded, never delivered to a reused connection slot.
+ * These admission-only APIs do not report per-command asynchronous failures.
+ * Commands retain publication order within each session; backpressure on one
+ * session does not prevent other sessions in the same owner from progressing.
  */
 int chttp_server_websocket_send_text(const chttp_server_websocket_session *session,
                                      const void *data, size_t size);
@@ -586,6 +612,10 @@ int chttp_server_response_select_websocket_subprotocol(chttp_server_response *re
  * handle. Request views remain callback-borrowed and must be copied by the
  * application before the handler returns. Existing response headers are
  * retained; response mutation after this call returns `SALTS_EALREADY`.
+ * A subsequent handler/middleware error closes H1 or resets the H2 stream;
+ * it never reopens the sealed response to synthesize a replacement. The
+ * application's admitted completion obligation still follows the handle's
+ * reply/cancel contract (including stale-handle results).
  *
  * H1 admits at most one deferred response per connection; H2 admits at most one
  * per configured stream slot. Total outstanding work is therefore bounded by

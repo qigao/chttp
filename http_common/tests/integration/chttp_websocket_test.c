@@ -276,7 +276,211 @@ static void chttp_websocket_test_event(void *user, chttp_websocket *websocket,
   }
 }
 
+static const char chttp_websocket_fragment_payload[] =
+    "fragmented message: the native terminal must settle every frame before success";
+
+static int chttp_websocket_fragment_open(void *user, chttp_websocket *websocket,
+                                         const chttp_server_request_view *request,
+                                         chttp_server_response *response) {
+  (void)user;
+  (void)request;
+  (void)response;
+  int status = chttp_websocket_send_text(websocket, "opening", 7u);
+  if (status == SALTS_OK && chttp_websocket_send_text(websocket, "busy", 4u) != SALTS_EBUSY)
+    return SALTS_EPROTO;
+  return status;
+}
+
+static int chttp_websocket_bridge_open(void *user, chttp_websocket *websocket,
+                                       const chttp_server_request_view *request,
+                                       chttp_server_response *response) {
+  const char *id = chttp_server_request_param(request, "id");
+  char payload[131];
+  int status = chttp_websocket_test_capture_open(user, websocket, request, response);
+  if (status != SALTS_OK) return status;
+  if (id != NULL && strcmp(id, "close") == 0)
+    return chttp_websocket_close(websocket, 1000u, NULL, 0u);
+  status = chttp_server_response_set_header(response, "X", "x");
+  if (status != SALTS_OK) return status;
+  /* Fixed Upgrade response: 129 + "X: x\r\n" = 135 bytes.
+   * Unmasked first frame: 4-byte header + 131-byte payload = 135 bytes. */
+  memset(payload, 'x', sizeof(payload));
+  status = chttp_websocket_send_text(websocket, payload, sizeof(payload));
+  if (status != SALTS_OK) return status;
+  return id != NULL && strcmp(id, "reject") == 0 ? SALTS_EPERM : SALTS_OK;
+}
+
+static void chttp_websocket_fragment_event(void *user, chttp_websocket *websocket,
+                                           const chttp_websocket_event *event) {
+  atomic_int *messages = (atomic_int *)user;
+  if (event->kind != CHTTP_WEBSOCKET_EVENT_MESSAGE) return;
+  if (event->size == sizeof(chttp_websocket_fragment_payload) - 1u &&
+      memcmp(event->data, chttp_websocket_fragment_payload, event->size) == 0 &&
+      chttp_websocket_send_text(websocket, "ack", 3u) == SALTS_OK)
+    atomic_fetch_add_explicit(messages, 1, memory_order_relaxed);
+}
+
 spec("CHTTP WebSocket client/server") {
+  group("dedicated H1 bridge") {
+    static chttp_server server;
+    static chttp_websocket_client client;
+    static atomic_int messages;
+    before_each() {
+      server = (chttp_server){0};
+      client = (chttp_websocket_client){0};
+      atomic_init(&messages, 0);
+    }
+    after_each() {
+      check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS),
+                  SALTS_OK);
+      if (server.impl != NULL) {
+        check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_server_destroy(&server), SALTS_OK);
+      }
+    }
+    it("separates equal-length Upgrade and first-frame writes and drains opening rejection") {
+      static chttp_websocket_test_server_session_probe probe;
+      chttp_server_config server_config = chttp_websocket_test_server_config();
+      chttp_websocket_client_config client_config = chttp_websocket_test_client_config();
+      chttp_server_websocket_transport_options transport =
+          CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+      const chttp_server_websocket_options route = {
+          .size = sizeof(route), .path = "/bridge/:id",
+          .on_open = chttp_websocket_bridge_open, .on_event = chttp_websocket_test_capture_event,
+          .user = &probe};
+      chttp_websocket_connect_options options = {
+          .size = sizeof(options), .timeout_ms = CHTTP_WEBSOCKET_TEST_TIMEOUT_MS};
+      const char *paths[] = {"reject", "ok", "close", "ok"};
+      char uri[128];
+      uint16_t port = 0u;
+      transport.dedicated_h1 = 1;
+      memset(&probe, 0, sizeof(probe));
+      atomic_init(&probe.captured, 0);
+      atomic_init(&probe.peer_present, 0);
+      check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+      check_equal(chttp_server_set_websocket_transport(&server, &transport), SALTS_OK);
+      check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
+      check_equal(chttp_server_start(&server), SALTS_OK);
+      check_equal(chttp_server_port(&server, &port), SALTS_OK);
+      for (size_t index = 0u; index < 4u; ++index) {
+        unsigned int http_status = 0u;
+        chttp_websocket_event event = {0};
+        check_true(snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/bridge/%s",
+                              (unsigned int)port, paths[index]) > 0);
+        options.uri = uri;
+        check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
+        const int status = chttp_websocket_client_connect(&client, &options, &http_status);
+        if (index == 0u) {
+          check_equal(status, SALTS_EPROTO);
+          check_equal(http_status, 500u);
+        } else {
+          check_equal(status, SALTS_OK);
+          check_equal(http_status, 101u);
+          check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS,
+                                                      &event), SALTS_OK);
+          if (index == 1u || index == 3u) {
+            char expected[131];
+            memset(expected, 'x', sizeof(expected));
+            check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+            check_equal(event.size, sizeof(expected));
+            check_equal(memcmp(event.data, expected, sizeof(expected)), 0);
+            /* The owner retries the second command after bridge capacity returns. */
+            check_equal(chttp_server_websocket_send_text(&probe.session, "one", 3u), SALTS_OK);
+            check_equal(chttp_server_websocket_send_text(&probe.session, "two", 3u), SALTS_OK);
+            for (size_t reply = 0u; reply < 2u; ++reply) {
+              check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS,
+                                                          &event), SALTS_OK);
+              check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+              check_equal(event.size, 3u);
+              check_equal(memcmp(event.data, reply == 0u ? "one" : "two", 3u), 0);
+            }
+          } else check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
+        }
+        if (index == 3u) {
+          check_equal(chttp_server_websocket_send_text(&probe.session, "pending", 7u), SALTS_OK);
+          check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+        }
+        check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+      }
+      check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+      chttp_server_stats stats = {0};
+      check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+      check_equal(stats.active_connections, 0u);
+    }
+    it("settles fragmented text and binary messages before admitting the next tag") {
+      for (size_t owner_count = 1u; owner_count <= 4u; owner_count *= 2u) {
+        atomic_store_explicit(&messages, 0, memory_order_relaxed);
+        chttp_server_config server_config = chttp_websocket_test_server_config();
+        chttp_websocket_client_config client_config = chttp_websocket_test_client_config();
+        const chttp_server_websocket_options route = {
+            .size = sizeof(route), .path = "/fragment",
+            .on_open = chttp_websocket_fragment_open, .on_event = chttp_websocket_fragment_event,
+            .user = &messages, .max_frame_bytes = 32u, .max_message_bytes = 128u,
+            .max_buffered_input_bytes = 4096u};
+        chttp_websocket_connect_options options = {
+            .size = sizeof(options), .timeout_ms = CHTTP_WEBSOCKET_TEST_TIMEOUT_MS};
+        chttp_websocket_event event = {0};
+        uint16_t port = 0u;
+        unsigned int http_status = 0u;
+        char uri[128];
+        client_config.max_frame_bytes = 32u;
+        client_config.max_message_bytes = 128u;
+        client_config.max_buffered_input_bytes = 4096u;
+        check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+        chttp_server_websocket_transport_options transport =
+            CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+        transport.dedicated_h1 = 1;
+        check_equal(chttp_server_set_websocket_transport(&server, &transport), SALTS_OK);
+        chttp_server_execution_options execution = CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+        execution.owner_count = owner_count;
+        check_equal(chttp_server_set_execution_options(&server, &execution), SALTS_OK);
+        check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
+        check_equal(chttp_server_start(&server), SALTS_OK);
+        check_equal(chttp_server_port(&server, &port), SALTS_OK);
+        check_true(snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/fragment", (unsigned int)port) > 0);
+        options.uri = uri;
+        check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
+        check_equal(chttp_websocket_client_connect(&client, &options, &http_status), SALTS_OK);
+        check_equal(http_status, 101u);
+        check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS,
+                                                    &event), SALTS_OK);
+        check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+        check_equal(event.size, 7u);
+        check_equal(memcmp(event.data, "opening", 7u), 0);
+        /* Rejected admission must leave the logical tag free for the next send. */
+        const char oversized[129] = {0};
+        check_equal(chttp_websocket_client_send_binary(&client, oversized, sizeof(oversized),
+                                                        CHTTP_WEBSOCKET_TEST_TIMEOUT_MS),
+                    SALTS_EMSGSIZE);
+        for (size_t index = 0u; index < 4u; ++index) {
+          const int status = index % 2u == 0u
+              ? chttp_websocket_client_send_text(&client, chttp_websocket_fragment_payload,
+                  sizeof(chttp_websocket_fragment_payload) - 1u, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS)
+              : chttp_websocket_client_send_binary(&client, chttp_websocket_fragment_payload,
+                  sizeof(chttp_websocket_fragment_payload) - 1u, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS);
+          check_equal(status, SALTS_OK);
+          check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS,
+                                                      &event), SALTS_OK);
+          check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_MESSAGE);
+          check_equal(event.size, 3u);
+          check_equal(memcmp(event.data, "ack", 3u), 0);
+          check_equal(chttp_websocket_client_send_ping(&client, "p", 1u,
+                                                        CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+          check_equal(chttp_websocket_client_receive(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS,
+                                                      &event), SALTS_OK);
+          check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_PONG);
+          check_equal(event.size, 1u);
+          check_equal(memcmp(event.data, "p", 1u), 0);
+        }
+        check_equal(atomic_load_explicit(&messages, memory_order_relaxed), 4);
+        check_equal(chttp_websocket_client_close(&client, 1000u, NULL, 0u,
+                                                  CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_server_destroy(&server), SALTS_OK);
+      }
+    }
+  }
   it("authenticates a protected HTTP1 WebSocket before the opening callback") {
     static const unsigned char key[] = "0123456789abcdef0123456789abcdef";
     const chttp_jwt_claims claims = {.subject = "alice", .expires_at = INT64_C(3000000000)};
@@ -443,6 +647,9 @@ spec("CHTTP WebSocket client/server") {
     atomic_init(&probe.captured, 0);
     atomic_init(&probe.peer_present, 0);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    chttp_server_websocket_transport_options transport = CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+    transport.dedicated_h1 = 1;
+    check_equal(chttp_server_set_websocket_transport(&server, &transport), SALTS_OK);
     check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -776,6 +983,9 @@ spec("CHTTP WebSocket client/server") {
 
     check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    chttp_server_websocket_transport_options transport = CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+    transport.dedicated_h1 = 1;
+    check_equal(chttp_server_set_websocket_transport(&server, &transport), SALTS_OK);
     check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1233,6 +1443,9 @@ spec("CHTTP WebSocket client/server") {
 
     check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    chttp_server_websocket_transport_options transport = CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+    transport.dedicated_h1 = 1;
+    check_equal(chttp_server_set_websocket_transport(&server, &transport), SALTS_OK);
     check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);

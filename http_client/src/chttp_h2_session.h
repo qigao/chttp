@@ -8,6 +8,7 @@
 #include "chttp_tls.h"
 
 #include <stdbool.h>
+#include <cnet/client_pool.h>
 #include <cmeta_buffer.h>
 
 typedef enum chttp_h2_session_state {
@@ -59,6 +60,7 @@ typedef struct chttp_h2_request_state {
   bool trailers;
   bool completed;
   bool terminal_pending;
+  bool pool_reserved;
   bool source_enabled;
   bool sink_enabled;
   bool sink_write_pending;
@@ -79,6 +81,12 @@ typedef struct chttp_h2_session_callbacks {
 
 struct chttp_h2_session {
   cnet_client *network;
+  cnet_manager *manager;
+  cnet_client_pool *pool;
+  cnet_managed_connection managed;
+  cnet_pool_connection pooled;
+  cnet_pool_key key;
+  cnet_destination_result destination;
   cnet_connection connection;
   chttp_h2_proto *protocol;
   chttp_h2_request_state **requests;
@@ -101,6 +109,10 @@ struct chttp_h2_session {
   bool close_admitted;
   bool close_pending;
   bool defer_completions;
+  bool pool_ready;
+  bool pool_draining;
+  bool context_released;
+  bool failed;
 };
 
 int chttp_h2_protocol_config(const chttp_client_config *config, chttp_h2_proto_config *out_config);
@@ -109,6 +121,8 @@ int chttp_h2_request_prepare(chttp_h2_request_state *request, const chttp_reques
 void chttp_h2_request_destroy(chttp_h2_request_state *request);
 
 int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
+                          cnet_manager *manager, cnet_client_pool *pool,
+                          const cnet_pool_key *key,
                           const chttp_request_options *options, chttp_tls_profile_impl *tls_profile,
                           const chttp_h2_proto_config *protocol_config, const chttp_limits *limits,
                           const chttp_h2_session_callbacks *callbacks);
@@ -124,5 +138,7 @@ int chttp_h2_session_resume_file_sink(chttp_h2_request_state *request);
 int chttp_h2_session_begin_stop(chttp_h2_session *session);
 bool chttp_h2_session_stop_ready(const chttp_h2_session *session);
 void chttp_h2_session_destroy(chttp_h2_session *session);
+int chttp_h2_session_pool_progress(chttp_h2_session *session);
+void chttp_h2_request_release(chttp_h2_request_state *request);
 
 #endif /* CHTTP_H2_SESSION_H */

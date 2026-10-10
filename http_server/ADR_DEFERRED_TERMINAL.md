@@ -52,6 +52,28 @@ Server stop continues to wait for admitted handles. Applications must perform ex
 successful reply or cancel for every admitted handle before expecting a graceful stop to finish.
 After a reply resource failure, cancel is the deterministic no-response termination path.
 
+Terminal publication and wake run under the server lifecycle mutex. The writer
+acquires it while its token is still `WRITING`, publishes `READY`/`CANCELED`,
+consumes the handle and wakes the fixed owner before releasing the mutex. CNet
+publication/destruction and cross-thread control/WebSocket wakes use the same
+mutex. Thus a retiring owner cannot destroy a wake target or report completed
+shutdown while the last terminal publisher still uses it. CNet wake invokes no
+application callbacks; stop/drain and their callbacks remain outside this lock.
+The listener's existing `listener_done` barrier separately protects acceptor wakes.
+
+Once a handler has deferred, an error while the middleware chain unwinds is
+propagated to H1 close or H2 stream reset. Dispatch must not reset the sealed
+builder or synthesize a 500: a terminal writer may already be reading those
+headers. Existing transport-close/token rules retain or invalidate the handle;
+the application must still settle admitted work and handle stale completion.
+
+This uses the existing mutex and token ownership instead of introducing a
+second reference counter or a second response state machine. The tradeoff is a
+short serialized publication/wake section; no body copy or user callback runs
+under it. Public handle layout, capacities and successful response behavior stay
+unchanged. Reverting these synchronization rules would restore the lifetime
+race and is not a safe rollback independently of their callers.
+
 ## Consequences and verification
 
 Canceling sacrifices connection reuse and any already-pipelined requests on that HTTP/1.1

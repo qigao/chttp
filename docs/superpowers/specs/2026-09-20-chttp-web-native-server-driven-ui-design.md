@@ -1,4 +1,4 @@
-# CHttp::Web — Native Server-Driven UI Layer
+# CHttp::App — Native Server-Driven UI Layer
 
 Date: 2026-09-20  
 Status: Design proposal  
@@ -14,7 +14,7 @@ The resulting stack is:
 Application
     |
     v
-CHttp::Web
+CHttp::App
     |------------------------------.
     v                              |
 CHttp::Server                      |
@@ -41,7 +41,7 @@ The design should make CHTTP + Jinja CMeta a credible native-C server-driven app
 ### 2.1 Dependency direction
 
 ```text
-CHttp::Web
+CHttp::App
    +--> CHttp::Server
    +--> Salts::JinjaCMeta
    +--> CMeta
@@ -58,11 +58,11 @@ Salts::JinjaCMeta
 
 This boundary is mandatory.
 
-The HTTP server remains a transport/application infrastructure library. Jinja CMeta remains a rendering engine. `CHttp::Web` is the optional bridge.
+The HTTP server remains a transport/application infrastructure library. Jinja CMeta remains a rendering engine. `CHttp::App` is the optional bridge.
 
 ### 2.2 Reuse existing CHTTP capabilities
 
-`CHttp::Web` must compose existing CHTTP features instead of reimplementing them:
+`CHttp::App` must compose existing CHTTP features instead of reimplementing them:
 
 - routing and path parameters;
 - global and per-route middleware;
@@ -96,19 +96,19 @@ The first product version does not add:
 
 ## 4. Product model
 
-`CHttp::Web` should be a small optional package, installable independently of the OpenAPI module.
+`CHttp::App` should be a small optional package, installable independently of the OpenAPI module.
 
 Suggested package target:
 
 ```text
-CHttp::Web
+CHttp::App
 ```
 
 Suggested source layout:
 
 ```text
 web/
-  include/chttp_web/web.h
+  include/chttp_app/web.h
   src/chttp_web_renderer.c
   src/chttp_web_context.c
   src/chttp_web_htmx.c
@@ -278,7 +278,7 @@ Jinja autoescape is a separate rendering guarantee and must not be described as 
 
 Current CHTTP handlers execute serially on the owner thread and must not block.
 
-`CHttp::Web` therefore needs a defined async/deferred pattern:
+`CHttp::App` therefore needs a defined async/deferred pattern:
 
 ```text
 owner thread
@@ -297,7 +297,7 @@ Cross-thread rendering is allowed only under a renderer ownership model proven s
 
 ## 13. SSE
 
-CHTTP already has response streaming primitives. `CHttp::Web` should add a thin SSE helper rather than a new streaming subsystem.
+CHTTP already has response streaming primitives. `CHttp::App` should add a thin SSE helper rather than a new streaming subsystem.
 
 Expected capabilities:
 
@@ -311,7 +311,7 @@ This issue is independent of WebSocket support, which already belongs to CHTTP.
 
 ## 14. OpenAPI UI as qualification application
 
-The existing OpenAPI UI should be migrated to `CHttp::Web` after the core rendering/HTMX surface stabilizes.
+The existing OpenAPI UI should be migrated to `CHttp::App` after the core rendering/HTMX surface stabilizes.
 
 It becomes the first production qualification workload, proving:
 
@@ -331,7 +331,7 @@ The migration must reduce custom OpenAPI-specific renderer glue rather than wrap
 
 ## 15. Product-readiness gates
 
-`CHttp::Web` is not product-ready until all of these are demonstrated.
+`CHttp::App` is not product-ready until all of these are demonstrated.
 
 ### Correctness
 - same model + template => deterministic output;
@@ -363,7 +363,7 @@ Measure, do not invent thresholds initially:
 - OpenAPI small/large document workloads.
 
 ### Packaging
-- optional `CHttp::Web` target;
+- optional `CHttp::App` target;
 - no Jinja dependency from `CHttp::Server`;
 - install/export package test;
 - standalone consumer example.
@@ -400,7 +400,7 @@ A..H
 
 After the final gate, the project should be able to make this accurate claim:
 
-> CHttp::Web is an optional native-C server-driven web application layer combining CHTTP's routing, middleware, sessions, security, asynchronous response and protocol capabilities with typed CMeta models and Jinja CMeta server-side rendering.
+> CHttp::App is an optional native-C server-driven web application layer combining CHTTP's routing, middleware, sessions, security, asynchronous response and protocol capabilities with typed CMeta models and Jinja CMeta server-side rendering.
 
 It should **not** claim to be a client-side UI framework or Wt-style server widget toolkit.
 

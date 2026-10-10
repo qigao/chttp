@@ -256,7 +256,7 @@ spec("CHttp owner topology") {
     impl = (chttp_server_impl *)server.impl;
     check_not_null(impl);
     check_equal(impl->owner_count, (size_t)1u);
-    check_not_null(impl->placement_hints);
+    check_not_null(impl->acceptor.placement_hints);
     check(impl->additional_owners == NULL);
     check_not_null(impl->owner.handoff.impl);
     check_equal(chttp_server_owner_admission_count(&impl->owner), (size_t)0u);
@@ -264,7 +264,7 @@ spec("CHttp owner topology") {
     options.owner_count = 3u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
     check_equal(impl->owner_count, (size_t)3u);
-    check_not_null(impl->placement_hints);
+    check_not_null(impl->acceptor.placement_hints);
     check_not_null(impl->additional_owners);
 
     for (owner_index = 0u; owner_index < impl->owner_count; ++owner_index) {
@@ -350,7 +350,7 @@ spec("CHttp owner topology") {
     options.owner_count = 1u;
     check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
     check_equal(impl->owner_count, (size_t)1u);
-    check_not_null(impl->placement_hints);
+    check_not_null(impl->acceptor.placement_hints);
     check(impl->additional_owners == NULL);
     check_equal(impl->owner.connection_begin, (size_t)0u);
     check_equal(impl->owner.connection_count, config.network.connection_capacity);
@@ -377,6 +377,10 @@ spec("CHttp owner topology") {
     check_equal(
         chttp_server_owner_runtime_state_get(&impl->owner),
         CHTTP_SERVER_OWNER_RUNTIME_IDLE);
+    cmeta_mutex_lock(&impl->mutex);
+    int wake_status = chttp_server_owner_wake_locked(&impl->owner);
+    cmeta_mutex_unlock(&impl->mutex);
+    check_equal(wake_status, SALTS_ESHUTDOWN);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(
@@ -386,13 +390,17 @@ spec("CHttp owner topology") {
     check(impl->owner.network_initialized);
     check(impl->thread_started);
     check(impl->owner.thread_started);
-    check(impl->listener_initialized);
+    check(impl->acceptor.initialized);
     check(impl->listener_thread_started);
     check(impl->listener_startup_reported);
     check(impl->listener_ready);
     check(!impl->listener_done);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check(port != 0u);
+    cmeta_mutex_lock(&impl->mutex);
+    wake_status = chttp_server_owner_wake_locked(&impl->owner);
+    cmeta_mutex_unlock(&impl->mutex);
+    check_equal(wake_status, SALTS_OK);
 
     check_equal(chttp_server_stop(&server, 0u), SALTS_OK);
     check_equal(
@@ -400,11 +408,16 @@ spec("CHttp owner topology") {
         CHTTP_SERVER_OWNER_RUNTIME_DONE);
     check(!impl->network_initialized);
     check(!impl->owner.network_initialized);
-    check(!impl->listener_initialized);
+    check(!impl->acceptor.initialized);
     check(!impl->listener_thread_started);
     check(impl->listener_done);
     check(!impl->thread_started);
     check(!impl->owner.thread_started);
+    cmeta_mutex_lock(&impl->mutex);
+    wake_status = chttp_server_owner_wake_locked(&impl->owner);
+    cmeta_mutex_unlock(&impl->mutex);
+    check_equal(wake_status, SALTS_ESHUTDOWN);
+    check_equal(chttp_server_stop(&server, 0u), SALTS_OK);
 
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
@@ -867,7 +880,7 @@ spec("CHttp owner topology") {
         CHTTP_SERVER_OWNER_RUNTIME_IDLE);
     check(!second_impl->network_initialized);
     check(!second_impl->owner.network_initialized);
-    check(!second_impl->listener_initialized);
+    check(!second_impl->acceptor.initialized);
     check(!second_impl->listener_thread_started);
     check(!second_impl->listener_startup_reported);
     check(!second_impl->listener_ready);

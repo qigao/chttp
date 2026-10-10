@@ -3,6 +3,9 @@ add_library(chttp_server SHARED
   src/chttp_h2_server.c
   src/chttp_jwt.c
   src/chttp_server.c
+  src/chttp_server_configurator.c
+  src/chttp_server_acceptor.c
+  src/chttp_server_interceptor.c
   src/chttp_server_parser.c
   src/chttp_server_response.c
   src/chttp_server_route.c
@@ -36,7 +39,7 @@ target_link_libraries(chttp_server
           chttp_cjwt Salts::DateTimeParser Salts::CSTL)
 install(TARGETS chttp_server EXPORT ChttpTargets)
 install(DIRECTORY include/http_server DESTINATION include)
-if(BUILD_EXAMPLES)
+if(BUILD_EXAMPLES OR (BUILD_TESTS AND BUILD_TESTING))
   add_subdirectory(examples)
 endif()
 

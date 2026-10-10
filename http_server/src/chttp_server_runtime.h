@@ -17,6 +17,17 @@
 #include <stdint.h>
 #include <time.h>
 
+enum {
+  CHTTP_SERVER_ERROR_RESPONSE_BYTES = 256,
+  CHTTP_SERVER_COOKIE_NAME_BYTES = 64,
+  CHTTP_SERVER_GENERATED_RESPONSE_BYTES = 256,
+  CHTTP_SERVER_H2_DRAIN_ACK_GRACE_SLICES = 64,
+  CHTTP_SERVER_DEFAULT_STREAM_CHUNK_BYTES = 64 * 1024,
+  CHTTP_SERVER_CHUNK_PREFIX_RESERVE = 32,
+  CHTTP_SERVER_CHUNK_TRAILER_BYTES = 2
+};
+
+#define CHTTP_SERVER_CONTINUE_RESPONSE "HTTP/1.1 100 Continue\r\n\r\n"
 typedef struct chttp_server_impl chttp_server_impl;
 typedef struct chttp_server_owner_lane chttp_server_owner_lane;
 
@@ -160,12 +171,6 @@ typedef struct chttp_server_chain {
   void *terminal_user;
 } chttp_server_chain;
 
-typedef struct chttp_server_next_impl {
-  chttp_server_chain *chain;
-  size_t index;
-  bool called;
-} chttp_server_next_impl;
-
 typedef enum chttp_server_pending_action {
   CHTTP_SERVER_PENDING_NONE = 0,
   CHTTP_SERVER_PENDING_RECEIVE,
@@ -276,6 +281,9 @@ struct chttp_server_connection {
   uint32_t server_generation;
   cnet_connection handle;
   cnet_managed_connection managed;
+  /* Intrusive owner-only retirement set; storage is bounded by connection slots. */
+  chttp_server_connection *manager_retired_next;
+  bool manager_retired;
   chttp_server_parser parser;
   chttp_server_request_state request_state;
   chttp_server_response_builder deferred_builder;
@@ -320,8 +328,10 @@ struct chttp_server_owner_lane {
   cnet_client *network;
   cnet_client network_storage;
   cnet_manager manager;
+  chttp_server_connection *manager_retired;
   cmeta_thread_t thread;
   chttp_server_websocket_command *websocket_commands;
+  chttp_server_websocket_command *websocket_pending;
   cflow_io_file_runtime file_runtime;
   chttp_file_transfer **file_transfers;
   cnet_handoff handoff;
@@ -329,8 +339,11 @@ struct chttp_server_owner_lane {
   size_t connection_count;
   size_t file_transfer_capacity;
   size_t pending_retry_cursor;
-  size_t websocket_command_head;
   size_t websocket_command_count;
+  /* Admission includes unpublished copies and the owner's retained batch.
+   * Counts are protected by server->mutex; pending payloads are owner-only. */
+  size_t websocket_command_claims;
+  size_t websocket_pending_count;
   atomic_int runtime_state;
   int terminal_status;
   bool network_initialized;
@@ -390,6 +403,19 @@ static inline size_t chttp_server_owner_connection_end(
 
 size_t chttp_server_owner_lease_count(const chttp_server_owner_lane *owner);
 size_t chttp_server_owner_admission_count(chttp_server_owner_lane *owner);
+/* Owner-only bounded pass; next-pass cursor advances after each retry. */
+int chttp_server_retry_pending(chttp_server_impl *server, chttp_server_owner_lane *owner);
+void chttp_server_manager_retire(chttp_server_owner_lane *owner,
+                                 chttp_server_connection *connection);
+int chttp_server_manager_progress(chttp_server_owner_lane *owner);
+
+typedef struct chttp_server_acceptor {
+  cnet_listener listener;
+  /* Prepared by the Configurator; used only by the listener thread. */
+  cnet_owner_placement_hint *placement_hints;
+  size_t admission_cursor;
+  bool initialized;
+} chttp_server_acceptor;
 
 struct chttp_server_impl {
   chttp_server_deadlines deadlines;
@@ -399,6 +425,7 @@ struct chttp_server_impl {
   chttp_server_socket_options socket_options;
   chttp_server_execution_options execution_options;
   chttp_server_owner_placement_options owner_placement_options;
+  bool websocket_dedicated_h1;
   char *host;
   char *session_cookie_name;
   chttp_server_route_record *routes;
@@ -418,10 +445,8 @@ struct chttp_server_impl {
   cnet_client network;
   chttp_server_owner_lane owner;
   chttp_server_owner_lane *additional_owners;
-  /* Listener-only scratch, allocated with the stopped owner topology. */
-  cnet_owner_placement_hint *placement_hints;
   size_t owner_count;
-  cnet_listener listener;
+  chttp_server_acceptor acceptor;
   cnet_tls_server tls_server;
   cmeta_mutex_t mutex;
   cmeta_cond_t changed;
@@ -429,7 +454,6 @@ struct chttp_server_impl {
   cmeta_thread_t listener_thread;
   chttp_server_stats stats;
   chttp_server_websocket_profile *websocket_profile;
-  size_t admission_cursor;
   size_t started_owner_count;
   size_t startup_reported_count;
   size_t ready_owner_count;
@@ -445,7 +469,6 @@ struct chttp_server_impl {
   bool sync_initialized;
   bool session_sync_initialized;
   bool network_initialized;
-  bool listener_initialized;
   bool listener_thread_started;
   bool listener_startup_reported;
   bool listener_ready;
@@ -462,6 +485,24 @@ static inline chttp_server_owner_lane *chttp_server_owner_at(
   if (server == NULL || index >= server->owner_count) return NULL;
   return index == 0u ? &server->owner : &server->additional_owners[index - 1u];
 }
+
+/* Configurator owns stopped construction and teardown after runtime drain. */
+void chttp_server_impl_free(chttp_server_impl *server);
+int chttp_server_connection_init(chttp_server_impl *server, chttp_server_connection *connection);
+void chttp_server_connection_destroy(chttp_server_connection *connection);
+
+/* Acceptor produces handoffs; Service Handlers on fixed Owners consume them.
+ * The runtime owns thread/barrier coordination and calls cancel after listener_done. */
+int chttp_server_acceptor_open(chttp_server_impl *server, uint16_t *out_port);
+int chttp_server_acceptor_poll(chttp_server_impl *server, uint32_t timeout_ms);
+int chttp_server_acceptor_close(chttp_server_impl *server);
+int chttp_server_acceptor_destroy(chttp_server_impl *server);
+int chttp_server_acceptor_cancel_pending(chttp_server_owner_lane *owner);
+bool chttp_server_should_stop(chttp_server_impl *server);
+/* Caller holds server->mutex through wake; network publication/destruction
+ * uses that same lock. No callback or unbounded wait occurs in CNet wake. */
+int chttp_server_owner_wake_locked(chttp_server_owner_lane *owner);
+void chttp_server_stats_rejected_connection(chttp_server_impl *server);
 
 int chttp_server_response_builder_init(chttp_server_response_builder *builder,
                                        const chttp_server_config *config);
@@ -525,6 +566,7 @@ int chttp_server_websocket_upgrade(void *user, const chttp_server_request_view *
 int chttp_server_websocket_input(chttp_server_connection *connection, const void *data,
                                  size_t size);
 int chttp_server_websocket_send_complete(chttp_server_connection *connection);
+int chttp_server_websocket_progress(chttp_server_connection *connection);
 void chttp_server_websocket_transport_closed(chttp_server_connection *connection);
 void chttp_server_websocket_reset(chttp_server_connection *connection);
 int chttp_server_websocket_commands_progress(chttp_server_impl *server,

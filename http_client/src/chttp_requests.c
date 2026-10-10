@@ -153,7 +153,9 @@ int chttp_client_set_socket_options(
 static int chttp_requests_perform(chttp_client *client, chttp_method method,
                                   const chttp_options *options, chttp_response *out_response,
                                   chttp_error *out_error, chttp_file_transfer *file_transfer,
-                                  chttp_file_sink_transfer *file_sink_transfer) {
+                                  chttp_file_sink_transfer *file_sink_transfer,
+                                  const chttp_destination_options *destinations,
+                                  cnet_destination_result *out_destination) {
   chttp_blocking_client_impl *impl = chttp_client_get_impl(client);
   chttp_request_options request_options;
   chttp_request request = {0};
@@ -165,10 +167,12 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
   bool admitted = false;
   bool admission_progressed = false;
 
+  if (out_destination != NULL) *out_destination = (cnet_destination_result){.index = SIZE_MAX};
   if (out_response == NULL || out_error == NULL) return SALTS_EINVAL;
   *out_response = (chttp_response){0};
   *out_error = (chttp_error){0};
   if (impl == NULL || options == NULL) return SALTS_EINVAL;
+  if (destinations != NULL && out_destination == NULL) return SALTS_EINVAL;
   if (!impl->usable) return SALTS_ESHUTDOWN;
   if (impl->operation_active) return SALTS_EBUSY;
 
@@ -191,15 +195,32 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
                                             .protocol = options->protocol};
   if (options->timeout_ms != 0u)
     deadline_at_ms = chttp_requests_deadline_after(cmeta_monotonic_ms(), options->timeout_ms);
+  if (destinations != NULL) {
+    const char *uri = NULL;
+    status = chttp_destination_select(destinations, &request_options, out_destination, &uri);
+    if (status != SALTS_OK) {
+      *out_error = (chttp_error){.status = status, .stage = "destination-select"};
+      goto finished;
+    }
+    request_options.connection_uri = uri;
+  }
   for (;;) {
-    if (file_transfer != NULL)
+    if (destinations != NULL) {
+      if (deadline_at_ms != 0u && chttp_requests_poll_wait(deadline_at_ms) == 0u) {
+        timed_out = true;
+        status = SALTS_ETIMEDOUT;
+        break;
+      }
+      status = chttp_async_client_submit_destination(&impl->async, &request_options,
+                                                      out_destination, &request);
+    } else if (file_transfer != NULL)
       status =
           chttp_async_client_submit_file(&impl->async, &request_options, file_transfer, &request);
     else if (file_sink_transfer != NULL)
       status = chttp_async_client_submit_file_download(&impl->async, &request_options,
                                                        file_sink_transfer, &request);
     else status = chttp_async_client_submit(&impl->async, &request_options, &request);
-    if (status != SALTS_ENOBUFS) break;
+    if (status != SALTS_ENOBUFS || destinations != NULL) break;
     admission_progressed = true;
     {
       uint32_t wait_ms = UINT32_MAX;
@@ -287,40 +308,56 @@ finished:
   return status;
 }
 
+int chttp_request_to(chttp_client *client, chttp_method method,
+                      const chttp_options *options,
+                      const chttp_destination_options *destinations,
+                      cnet_destination_result *out_destination,
+                      chttp_response *out_response, chttp_error *out_error) {
+  if (destinations == NULL) {
+    if (out_destination != NULL) *out_destination = (cnet_destination_result){.index = SIZE_MAX};
+    if (out_response != NULL) *out_response = (chttp_response){0};
+    if (out_error != NULL) *out_error = (chttp_error){.status = SALTS_EINVAL,
+                                                    .stage = "destination-select"};
+    return SALTS_EINVAL;
+  }
+  return chttp_requests_perform(client, method, options, out_response, out_error, NULL, NULL,
+                                 destinations, out_destination);
+}
+
 int chttp_get(chttp_client *client, const chttp_options *options, chttp_response *out_response,
               chttp_error *out_error) {
   return chttp_requests_perform(client, CHTTP_METHOD_GET, options, out_response, out_error, NULL,
-                                NULL);
+                                NULL, NULL, NULL);
 }
 
 int chttp_head(chttp_client *client, const chttp_options *options, chttp_response *out_response,
                chttp_error *out_error) {
   return chttp_requests_perform(client, CHTTP_METHOD_HEAD, options, out_response, out_error, NULL,
-                                NULL);
+                                NULL, NULL, NULL);
 }
 
 int chttp_post(chttp_client *client, const chttp_options *options, chttp_response *out_response,
                chttp_error *out_error) {
   return chttp_requests_perform(client, CHTTP_METHOD_POST, options, out_response, out_error, NULL,
-                                NULL);
+                                NULL, NULL, NULL);
 }
 
 int chttp_put(chttp_client *client, const chttp_options *options, chttp_response *out_response,
               chttp_error *out_error) {
   return chttp_requests_perform(client, CHTTP_METHOD_PUT, options, out_response, out_error, NULL,
-                                NULL);
+                                NULL, NULL, NULL);
 }
 
 int chttp_delete(chttp_client *client, const chttp_options *options, chttp_response *out_response,
                  chttp_error *out_error) {
   return chttp_requests_perform(client, CHTTP_METHOD_DELETE, options, out_response, out_error, NULL,
-                                NULL);
+                                NULL, NULL, NULL);
 }
 
 int chttp_patch(chttp_client *client, const chttp_options *options, chttp_response *out_response,
                 chttp_error *out_error) {
   return chttp_requests_perform(client, CHTTP_METHOD_PATCH, options, out_response, out_error, NULL,
-                                NULL);
+                                NULL, NULL, NULL);
 }
 
 int chttp_client_file_runtime(chttp_client *client, cflow_io_file_runtime **out_runtime) {
@@ -339,7 +376,8 @@ int chttp_client_perform_file(chttp_client *client, chttp_method method,
                               const chttp_options *options, chttp_file_transfer *transfer,
                               chttp_response *out_response, chttp_error *out_error) {
   if (method != CHTTP_METHOD_POST && method != CHTTP_METHOD_PUT) return SALTS_EINVAL;
-  return chttp_requests_perform(client, method, options, out_response, out_error, transfer, NULL);
+  return chttp_requests_perform(client, method, options, out_response, out_error, transfer, NULL,
+                                 NULL, NULL);
 }
 
 int chttp_client_perform_file_download(chttp_client *client, const chttp_options *options,
@@ -347,7 +385,7 @@ int chttp_client_perform_file_download(chttp_client *client, const chttp_options
                                        chttp_response *out_response, chttp_error *out_error) {
   if (transfer == NULL) return SALTS_EINVAL;
   return chttp_requests_perform(client, CHTTP_METHOD_GET, options, out_response, out_error, NULL,
-                                transfer);
+                                transfer, NULL, NULL);
 }
 
 const char *chttp_response_header(const chttp_response *response, const char *name) {

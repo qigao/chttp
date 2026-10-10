@@ -44,17 +44,17 @@ add_test(NAME openapi_ui_model COMMAND test_ui_model)
 
 add_executable(test_ui_renderer test_ui_renderer.c)
 set_target_properties(test_ui_renderer PROPERTIES FOLDER "tests")
-target_link_libraries(test_ui_renderer PRIVATE CHttp::Web OpenAPI::UIModel Salts::JsonParser)
+target_link_libraries(test_ui_renderer PRIVATE CHttp::App OpenAPI::UIModel Salts::JsonParser)
 add_test(NAME openapi_ui_renderer COMMAND test_ui_renderer)
 
 add_executable(test_ui_fragments test_ui_fragments.c)
 set_target_properties(test_ui_fragments PROPERTIES FOLDER "tests")
-target_link_libraries(test_ui_fragments PRIVATE CHttp::Web OpenAPI::UIModel Salts::JsonParser)
+target_link_libraries(test_ui_fragments PRIVATE CHttp::App OpenAPI::UIModel Salts::JsonParser)
 add_test(NAME openapi_ui_fragments COMMAND test_ui_fragments)
 
 add_executable(test_ui_htmx test_ui_htmx.c)
 set_target_properties(test_ui_htmx PROPERTIES FOLDER "tests")
-target_link_libraries(test_ui_htmx PRIVATE CHttp::Web OpenAPI::UIModel Salts::JsonParser)
+target_link_libraries(test_ui_htmx PRIVATE CHttp::App OpenAPI::UIModel Salts::JsonParser)
 add_test(NAME openapi_ui_htmx COMMAND test_ui_htmx)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)

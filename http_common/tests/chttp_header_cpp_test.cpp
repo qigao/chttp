@@ -1,6 +1,7 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
 #include <http_server/rate_limit.h>
+#include <chttp_app/app.h>
 
 #include <type_traits>
 
@@ -39,8 +40,25 @@ static_assert(std::is_standard_layout<chttp_websocket_session>::value,
               "WebSocket session must be C ABI data");
 static_assert(CHTTP_HTTP_1_1 == 0, "zero-initialized requests must remain HTTP/1.1");
 static_assert(CHTTP_HTTP_2 != CHTTP_HTTP_1_1, "HTTP/2 must be an explicit protocol selection");
+static_assert(std::is_standard_layout<chttp_destination_options>::value,
+              "destination configuration must be C ABI data");
 
 int main() {
+  chttp_server_websocket_transport_options websocket_transport =
+      CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+  static_assert(std::is_standard_layout<chttp_server_websocket_transport_options>::value,
+                "WebSocket transport policy must be C ABI data");
+  if (websocket_transport.size != sizeof(websocket_transport) ||
+      websocket_transport.version != CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_VERSION ||
+      websocket_transport.dedicated_h1 != 0 ||
+      chttp_server_set_websocket_transport(nullptr, &websocket_transport) != SALTS_EINVAL)
+    return 1;
+  chttp_destination_options destination = CHTTP_DESTINATION_OPTIONS_INIT;
+  auto *submit_to = &chttp_async_client_submit_to;
+  auto *request_to = &chttp_request_to;
+  (void)destination;
+  (void)submit_to;
+  (void)request_to;
   chttp_tls_profile tls_profile{};
   chttp_client client{};
   chttp_async_client async_client{};

@@ -2,6 +2,7 @@
 
 #include "chttp_h2_proto.h"
 #include "chttp_cnet_retained.h"
+#include "chttp_managed_stream.h"
 #include "chttp_tls.h"
 
 #include <cnet/websocket.h>
@@ -75,6 +76,7 @@ typedef struct chttp_websocket_pool_slot {
 
 struct chttp_websocket_pool_impl {
   cnet_client network;
+  chttp_managed_stream transport_owner;
   cnet_connection connection;
   chttp_h2_proto *protocol;
   chttp_tls_profile_impl *tls_profile;
@@ -565,7 +567,9 @@ static int chttp_websocket_pool_poll(chttp_websocket_pool_impl *pool, uint64_t d
     if (now >= deadline) return SALTS_ETIMEDOUT;
     wait_ms = chttp_websocket_pool_remaining(deadline);
   }
-  return cnet_client_poll(&pool->network, wait_ms, &events);
+  const int status = cnet_client_poll(&pool->network, wait_ms, &events);
+  const int manager_status = chttp_managed_stream_progress(&pool->transport_owner);
+  return status != SALTS_OK ? status : manager_status;
 }
 
 static int chttp_websocket_pool_slot_output(chttp_websocket_pool_slot *slot) {
@@ -907,10 +911,17 @@ int chttp_websocket_pool_init(chttp_websocket_pool *pool,
   }
   status = cnet_client_init(&impl->network, &config->client.network);
   if (status != SALTS_OK) goto fail;
+  status = chttp_managed_stream_init(&impl->transport_owner, &impl->network);
+  if (status != SALTS_OK) goto fail;
   pool->impl = impl;
   return SALTS_OK;
 
 fail:
+  (void)chttp_managed_stream_destroy(&impl->transport_owner);
+  if (impl->network.impl != NULL) {
+    (void)cnet_client_stop(&impl->network, 0u);
+    (void)cnet_client_destroy(&impl->network);
+  }
   chttp_h2_proto_destroy(impl->protocol);
   free(impl->header_name_buffer);
   if (chttp_cnet_retained_release(&impl->wire_retained) == SALTS_OK)
@@ -938,7 +949,7 @@ static int chttp_websocket_pool_connect(chttp_websocket_pool_impl *pool, const c
   memcpy(pool->transport, transport, strlen(transport) + 1u);
   memcpy(pool->authority, authority, strlen(authority) + 1u);
   pool->phase = CHTTP_WEBSOCKET_POOL_CONNECTING;
-  status = cnet_connect(&pool->network, &options, &pool->connection);
+  status = chttp_managed_stream_connect(&pool->transport_owner, &options, &pool->connection);
   if (status != SALTS_OK) {
     pool->phase = CHTTP_WEBSOCKET_POOL_DISCONNECTED;
     pool->tls_profile = NULL;
@@ -1014,7 +1025,7 @@ int chttp_websocket_pool_open(chttp_websocket_pool *pool,
       if (impl->phase != CHTTP_WEBSOCKET_POOL_DISCONNECTED) {
         impl->draining = true;
         if (!impl->transport_terminal && impl->connection.generation != 0u)
-          (void)cnet_close(&impl->network, impl->connection);
+          (void)chttp_managed_stream_close(&impl->transport_owner);
       }
       goto done;
     }
@@ -1275,7 +1286,7 @@ int chttp_websocket_pool_destroy(chttp_websocket_pool *pool, uint32_t timeout_ms
   }
   chttp_websocket_pool_release_terminal(impl);
   if (!impl->transport_terminal && impl->connection.generation != 0u) {
-    status = cnet_close(&impl->network, impl->connection);
+    status = chttp_managed_stream_close(&impl->transport_owner);
     if (first_status == SALTS_OK && status != SALTS_OK && status != SALTS_EALREADY &&
         status != SALTS_ENOENT && status != SALTS_ESHUTDOWN)
       first_status = status;
@@ -1283,14 +1294,14 @@ int chttp_websocket_pool_destroy(chttp_websocket_pool *pool, uint32_t timeout_ms
   impl->operation_active = false;
   status = cnet_client_stop(&impl->network,
                             deadline == 0u ? 0u : chttp_websocket_pool_remaining(deadline));
-  if (status == SALTS_ETIMEDOUT) return status;
-  if (first_status == SALTS_OK && status != SALTS_OK && status != SALTS_EALREADY)
-    first_status = status;
-  status = cnet_client_destroy(&impl->network);
-  if (status != SALTS_OK) return first_status == SALTS_OK ? status : first_status;
+  if (status != SALTS_OK && status != SALTS_EALREADY) return status;
   for (index = 0u; index < impl->session_capacity; ++index)
     if (impl->slots[index].phase != CHTTP_WEBSOCKET_POOL_SLOT_FREE)
       chttp_websocket_pool_slot_release(impl, &impl->slots[index]);
+  status = chttp_managed_stream_destroy(&impl->transport_owner);
+  if (status != SALTS_OK) return status;
+  status = cnet_client_destroy(&impl->network);
+  if (status != SALTS_OK) return first_status == SALTS_OK ? status : first_status;
   chttp_h2_proto_destroy(impl->protocol);
   chttp_tls_profile_release(impl->tls_profile);
   free(impl->header_name_buffer);

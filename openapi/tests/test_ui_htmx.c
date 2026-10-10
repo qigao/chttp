@@ -1,4 +1,4 @@
-#include <chttp_web/web.h>
+#include <chttp_app/web.h>
 #include <json_parser.h>
 #include <openapi/ui_model.h>
 
@@ -118,6 +118,6 @@ int main(void) {
 
     chttp_web_renderer_destroy(&renderer);
     oa_ui_model_free(model);
-    puts("openapi HTMX filter qualification through CHttp::Web passed");
+    puts("openapi HTMX filter qualification through CHttp::App passed");
     return 0;
 }

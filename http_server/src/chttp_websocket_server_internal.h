@@ -3,6 +3,7 @@
 
 #include <http_server/http.h>
 #include <cnet/websocket.h>
+#include <cnet/websocket_transport.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -22,6 +23,23 @@ typedef int (*chttp_server_websocket_write_fn)(void *transport, const uint8_t *d
 
 typedef struct chttp_server_websocket_peer {
   cnet_websocket engine;
+  cnet_websocket *session;
+  cnet_websocket_transport bridge;
+  mem_buffer_t *output_retained;
+  unsigned char *output;
+  size_t output_capacity;
+  unsigned char *opening_data;
+  size_t opening_capacity;
+  size_t opening_size;
+  int opening_kind;
+  uint16_t opening_code;
+  bool opening_pending;
+  bool dedicated;
+  bool receive_paused;
+  bool receive_pending;
+  bool tag_pending;
+  bool commands_blocked;
+  size_t tag_size;
   chttp_websocket handle;
   chttp_server_impl *server;
   chttp_server_route_record *route;

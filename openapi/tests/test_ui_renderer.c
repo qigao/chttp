@@ -1,4 +1,4 @@
-#include <chttp_web/web.h>
+#include <chttp_app/web.h>
 #include <json_parser.h>
 #include <openapi/ui_model.h>
 
@@ -128,6 +128,6 @@ int main(void) {
     chttp_web_renderer_destroy(&renderer);
 
     oa_ui_model_free(model);
-    puts("openapi CHttp::Web renderer qualification passed");
+    puts("openapi CHttp::App renderer qualification passed");
     return 0;
 }

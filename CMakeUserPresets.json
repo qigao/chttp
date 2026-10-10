@@ -355,7 +355,7 @@
         },
         {
             "name": "ci-macos-sdk-release-user",
-            "inherits": ["GccMac", "ci-sdk-release-user"]
+            "inherits": ["AppleClang", "ci-sdk-release-user"]
         },
         {
             "name": "ci-android-sdk-release-user",

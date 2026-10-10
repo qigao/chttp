@@ -14,6 +14,7 @@ typedef SOCKET chttp_test_socket;
   #define CHTTP_TEST_INVALID_SOCKET INVALID_SOCKET
 #else
   #include <netinet/in.h>
+  #include <sys/select.h>
   #include <sys/socket.h>
   #include <sys/time.h>
   #include <unistd.h>
@@ -137,6 +138,22 @@ static int chttp_test_recv_all(chttp_test_socket socket_value, void *data, size_
   return SALTS_OK;
 }
 
+static int chttp_test_accept(chttp_test_socket listener, chttp_test_socket *out_peer) {
+  fd_set readable;
+  struct timeval timeout = {CHTTP_TEST_TIMEOUT_MS / 1000, 0};
+  int ready;
+  FD_ZERO(&readable);
+  FD_SET(listener, &readable);
+#if defined(_WIN32)
+  ready = select(0, &readable, NULL, NULL, &timeout);
+#else
+  ready = select(listener + 1, &readable, NULL, NULL, &timeout);
+#endif
+  if (ready != 1) return ready == 0 ? SALTS_ETIMEDOUT : SALTS_EIO;
+  *out_peer = accept(listener, NULL, NULL);
+  return *out_peer == CHTTP_TEST_INVALID_SOCKET ? SALTS_EIO : chttp_test_set_timeout(*out_peer);
+}
+
 static int chttp_test_send_all(chttp_test_socket socket_value, const void *data, size_t size) {
   size_t offset = 0u;
   while (offset < size) {
@@ -208,6 +225,42 @@ static int chttp_test_poll_until(chttp_async_client *client, chttp_test_probe *p
     if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
+}
+
+static chttp_server_config chttp_test_server_config(void) {
+  const chttp_server_config config = {
+        .host = "127.0.0.1",
+        .port = 0u,
+        .backlog = 8u,
+        .network = {
+            .backend =
+#if defined(_WIN32)
+                NATIVE_IO_BACKEND_IOCP,
+#elif defined(__linux__)
+                NATIVE_IO_BACKEND_EPOLL,
+#else
+                NATIVE_IO_BACKEND_KQUEUE,
+#endif
+            .connection_capacity = 4u,
+            .command_capacity = 8u,
+            .request_capacity = 8u,
+            .completion_batch_capacity = 4u,
+            .event_capacity = 8u,
+            .max_send_bytes = 4096u,
+            .receive_buffer_bytes = 512u,
+            .connect_timeout_ms = 2000u,
+            .read_timeout_ms = 2000u,
+            .write_timeout_ms = 2000u},
+        .route_capacity = 1u,
+        .max_target_bytes = 128u,
+        .max_header_count = 8u,
+        .max_header_bytes = 512u,
+        .max_request_body_bytes = 128u,
+        .max_response_header_count = 8u,
+        .max_response_header_bytes = 512u,
+        .max_response_body_bytes = 256u,
+        .poll_slice_ms = 2u};
+  return config;
 }
 
 spec("CHTTP advanced async client API") {
@@ -331,38 +384,7 @@ spec("CHTTP advanced async client API") {
   it("retains bounded managed H1 connections across concurrent requests and reuse") {
     chttp_server server = {0};
     chttp_async_client client = {0};
-    chttp_server_config server_config = {
-        .host = "127.0.0.1",
-        .port = 0u,
-        .backlog = 8u,
-        .network = {
-            .backend =
-#if defined(_WIN32)
-                NATIVE_IO_BACKEND_IOCP,
-#elif defined(__linux__)
-                NATIVE_IO_BACKEND_EPOLL,
-#else
-                NATIVE_IO_BACKEND_KQUEUE,
-#endif
-            .connection_capacity = 4u,
-            .command_capacity = 8u,
-            .request_capacity = 8u,
-            .completion_batch_capacity = 4u,
-            .event_capacity = 8u,
-            .max_send_bytes = 4096u,
-            .receive_buffer_bytes = 512u,
-            .connect_timeout_ms = 2000u,
-            .read_timeout_ms = 2000u,
-            .write_timeout_ms = 2000u},
-        .route_capacity = 1u,
-        .max_target_bytes = 128u,
-        .max_header_count = 8u,
-        .max_header_bytes = 512u,
-        .max_request_body_bytes = 128u,
-        .max_response_header_count = 8u,
-        .max_response_header_bytes = 512u,
-        .max_response_body_bytes = 256u,
-        .poll_slice_ms = 2u};
+    chttp_server_config server_config = chttp_test_server_config();
     chttp_client_config client_config = chttp_test_config();
     chttp_test_probe probes[3] = {{0}};
     chttp_request requests[3] = {{0}};
@@ -427,6 +449,223 @@ spec("CHTTP advanced async client API") {
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     check_equal(chttp_server_stop(&server, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  group("independent H1 requests and physical sessions") {
+    static chttp_server server;
+    static chttp_async_client client;
+    static chttp_async_client second_owner;
+    static chttp_test_probe probes[5];
+    static char uri[64];
+
+    before_each() {
+      chttp_server_config server_config = chttp_test_server_config();
+      chttp_client_config config = chttp_test_config();
+      uint16_t port = 0u;
+      int chars;
+      server = (chttp_server){0};
+      client = (chttp_async_client){0};
+      second_owner = (chttp_async_client){0};
+      memset(probes, 0, sizeof(probes));
+      config.request_capacity = 1u;
+      config.network.connection_capacity = 2u;
+      check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+      check_equal(chttp_server_get(&server, "/ok", chttp_test_server_handler, NULL), SALTS_OK);
+      check_equal(chttp_server_start(&server), SALTS_OK);
+      check_equal(chttp_server_port(&server, &port), SALTS_OK);
+      chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port);
+      check_true(chars > 0 && (size_t)chars < sizeof(uri));
+      check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+    }
+
+    after_each() {
+      if (second_owner.impl != NULL) {
+        check_equal(chttp_async_client_stop(&second_owner, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&second_owner), SALTS_OK);
+      }
+      if (client.impl != NULL) {
+        check_equal(chttp_async_client_stop(&client, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+      }
+      if (server.impl != NULL) {
+        check_equal(chttp_server_stop(&server, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_server_destroy(&server), SALTS_OK);
+      }
+    }
+
+    it("reuses two authority-isolated connections through one logical slot") {
+      chttp_request requests[4] = {{0}};
+      chttp_server_stats stats = {0};
+      chttp_request_options options = {
+          .connection_uri = uri, .target = "/ok", .method = CHTTP_METHOD_GET,
+          .on_complete = chttp_test_complete};
+      for (size_t index = 0u; index < 4u; ++index) {
+        chttp_request rejected = {0};
+        options.authority = index % 2u == 0u ? "first.test" : "second.test";
+        options.user = &probes[index];
+        check_equal(chttp_async_client_submit(&client, &options, &requests[index]), SALTS_OK);
+        check_equal(chttp_async_client_submit(&client, &options, &rejected), SALTS_ENOBUFS);
+        check_equal(rejected.slot, 0u);
+        if (index != 0u) {
+          check_equal(requests[index].slot, requests[index - 1u].slot);
+          check_not_equal(requests[index].generation, requests[index - 1u].generation);
+          check_equal(chttp_async_request_cancel(&client, requests[index - 1u]), SALTS_ENOENT);
+        }
+        check_equal(chttp_test_poll_until(&client, &probes[index]), SALTS_OK);
+        check_equal(probes[index].called, 1);
+        check_equal(probes[index].status, SALTS_OK);
+        check_equal(probes[index].body, "ok", 2u);
+      }
+      check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+      check_equal(stats.accepted_connections, (uint64_t)2u);
+      for (size_t index = 0u; index < 4u; ++index) check_equal(probes[index].called, 1);
+    }
+
+    it("keeps identical origins isolated across Owners and drains only the stopped Owner") {
+      chttp_client_config config = chttp_test_config();
+      chttp_async_client *owners[] = {&client, &second_owner};
+      chttp_request requests[5] = {{0}};
+      chttp_server_stats stats = {0};
+      chttp_request_options options = {
+          .connection_uri = uri, .authority = "same.test", .target = "/ok",
+          .method = CHTTP_METHOD_GET, .on_complete = chttp_test_complete};
+      config.request_capacity = 1u;
+      config.network.connection_capacity = 1u;
+      check_equal(chttp_async_client_init(&second_owner, &config), SALTS_OK);
+      for (size_t round = 0u; round < 2u; ++round) {
+        const size_t first = round * 2u;
+        const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+        for (size_t owner = 0u; owner < 2u; ++owner) {
+          options.user = &probes[first + owner];
+          check_equal(chttp_async_client_submit(owners[owner], &options, &requests[first + owner]),
+                      SALTS_OK);
+        }
+        while ((!probes[first].called || !probes[first + 1u].called) &&
+               cmeta_monotonic_ms() < deadline) {
+          size_t completions = 0u;
+          for (size_t owner = 0u; owner < 2u; ++owner)
+            check_equal(chttp_async_client_poll(owners[owner], 5u, &completions), SALTS_OK);
+        }
+        for (size_t owner = 0u; owner < 2u; ++owner) {
+          check_equal(probes[first + owner].called, 1);
+          check_equal(probes[first + owner].status, SALTS_OK);
+        }
+      }
+      check_equal(chttp_async_client_stop(&client, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+      options.user = &probes[4];
+      check_equal(chttp_async_client_submit(&second_owner, &options, &requests[4]), SALTS_OK);
+      check_equal(chttp_test_poll_until(&second_owner, &probes[4]), SALTS_OK);
+      check_equal(probes[4].status, SALTS_OK);
+      check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
+      check_equal(stats.accepted_connections, (uint64_t)2u);
+      for (size_t index = 0u; index < 5u; ++index) check_equal(probes[index].called, 1);
+    }
+
+    it("drains a canceled warm lease before admitting a replacement request") {
+      chttp_request requests[3] = {{0}};
+      chttp_request rejected = {0};
+      chttp_request_options options = {
+          .connection_uri = uri, .authority = "first.test", .target = "/ok",
+          .method = CHTTP_METHOD_GET, .on_complete = chttp_test_complete};
+      options.user = &probes[0];
+      check_equal(chttp_async_client_submit(&client, &options, &requests[0]), SALTS_OK);
+      check_equal(chttp_test_poll_until(&client, &probes[0]), SALTS_OK);
+      options.user = &probes[1];
+      check_equal(chttp_async_client_submit(&client, &options, &requests[1]), SALTS_OK);
+      check_equal(chttp_async_request_cancel(&client, requests[1]), SALTS_OK);
+      check_equal(chttp_async_client_submit(&client, &options, &rejected), SALTS_ENOBUFS);
+      check_equal(chttp_test_poll_until(&client, &probes[1]), SALTS_OK);
+      check_equal(probes[1].called, 1);
+      check_equal(probes[1].status, SALTS_ECANCELED);
+      options.user = &probes[2];
+      check_equal(chttp_async_client_submit(&client, &options, &requests[2]), SALTS_OK);
+      check_equal(chttp_async_request_cancel(&client, requests[1]), SALTS_ENOENT);
+      check_equal(chttp_test_poll_until(&client, &probes[2]), SALTS_OK);
+      check_equal(probes[2].status, SALTS_OK);
+      check_equal(probes[1].called, 1);
+    }
+  }
+
+  group("H1 incomplete response lease") {
+    static chttp_async_client client;
+    static chttp_test_socket listener;
+    static chttp_test_socket peer;
+    static chttp_test_probe probes[3];
+    static char uri[64];
+
+    before_each() {
+      chttp_client_config config = chttp_test_config();
+      uint16_t port = 0u;
+      int chars;
+      client = (chttp_async_client){0};
+      listener = CHTTP_TEST_INVALID_SOCKET;
+      peer = CHTTP_TEST_INVALID_SOCKET;
+      memset(probes, 0, sizeof(probes));
+      config.network.connection_capacity = 1u;
+      check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+      check_equal(chttp_test_listener(&listener, &port), SALTS_OK);
+      chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port);
+      check_true(chars > 0 && (size_t)chars < sizeof(uri));
+    }
+
+    after_each() {
+      chttp_test_close_socket(peer);
+      chttp_test_close_socket(listener);
+      if (client.impl != NULL) {
+        check_equal(chttp_async_client_stop(&client, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+      }
+    }
+
+    it("holds a warm connection through a partial body and retires it on truncated EOF") {
+      static const char wire_request[] =
+          "GET /body HTTP/1.1\r\nHost: body.test\r\nContent-Length: 0\r\n"
+          "Connection: keep-alive\r\n\r\n";
+      static const char response[] = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+      chttp_request requests[3] = {{0}};
+      size_t completions = 0u;
+      for (size_t index = 0u; index < 3u; ++index) {
+        const chttp_body_sink sink = {.write = chttp_test_response_sink, .user = &probes[index]};
+        chttp_request_options options = {
+            .connection_uri = uri, .authority = "body.test", .target = "/body",
+            .method = CHTTP_METHOD_GET, .on_complete = chttp_test_complete,
+            .user = &probes[index], .body_sink = &sink};
+        unsigned char received[sizeof(wire_request)];
+        check_equal(chttp_async_client_submit(&client, &options, &requests[index]), SALTS_OK);
+        check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+        if (index != 1u) {
+          check_equal(chttp_test_accept(listener, &peer), SALTS_OK);
+        }
+        check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+        check_equal(chttp_test_recv_all(peer, received, sizeof(wire_request) - 1u), SALTS_OK);
+        check_equal(received, wire_request, sizeof(wire_request) - 1u);
+        if (index == 1u) {
+          chttp_request rejected = {0};
+          const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+          /* Two body bytes are visible, but the advertised five are not complete. */
+          check_equal(chttp_test_send_all(peer, response, sizeof(response) - 4u), SALTS_OK);
+          while (probes[index].body_size < 2u && probes[index].called == 0 &&
+                 cmeta_monotonic_ms() < deadline)
+            check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+          check_equal(probes[index].body_size, (size_t)2u);
+          check_equal(probes[index].called, 0);
+          /* A logical slot is free; only the occupied physical lease blocks admission. */
+          check_equal(chttp_async_client_submit(&client, &options, &rejected), SALTS_ENOBUFS);
+          check_equal(rejected.slot, 0u);
+          chttp_test_close_socket(peer);
+          peer = CHTTP_TEST_INVALID_SOCKET;
+        } else {
+          check_equal(chttp_test_send_all(peer, response, sizeof(response) - 1u), SALTS_OK);
+        }
+        check_equal(chttp_test_poll_until(&client, &probes[index]), SALTS_OK);
+        check_equal(probes[index].called, 1);
+        check_equal(probes[index].status, index == 1u ? SALTS_EPROTO : SALTS_OK);
+        if (index != 1u) check_equal(probes[index].body, "hello", 5u);
+        check_equal(chttp_async_request_cancel(&client, requests[index]), SALTS_ENOENT);
+      }
+      for (size_t index = 0u; index < 3u; ++index) check_equal(probes[index].called, 1);
+    }
   }
 
   it("streams an unknown-length H1 request and response without retaining response bytes") {

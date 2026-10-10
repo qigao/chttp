@@ -1,0 +1,6 @@
+/* Build-time embedding of the application-owned Jinja bundle. */
+static const char example_layout_source[] = "@EXAMPLE_layout_SOURCE@";
+static const char example_page_source[] = "@EXAMPLE_page_SOURCE@";
+static const chttp_web_template example_templates[] = {
+    {"layout.html", example_layout_source, sizeof(example_layout_source) - 1u},
+    {"page.html", example_page_source, sizeof(example_page_source) - 1u}};

@@ -46,6 +46,14 @@ set_target_properties(
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF)
 
+foreach(writer IN ITEMS legacy dedicated)
+  add_test(NAME chttp_server_ws_owner_benchmark_${writer}
+    COMMAND chttp_server_ws_owner_benchmark)
+  set_tests_properties(chttp_server_ws_owner_benchmark_${writer} PROPERTIES
+    LABELS benchmark RUN_SERIAL TRUE TIMEOUT 180
+    ENVIRONMENT "CHTTP_OWNER_WS_WRITER=${writer}")
+endforeach()
+
 add_executable(
   chttp_server_h2_tls_owner_benchmark
   chttp_server_h2_tls_owner_benchmark.c)

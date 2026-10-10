@@ -6,6 +6,10 @@ CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses S
 
 **Tags:** C11 · C++17 · HTTP · JSON-RPC · S3 · WebSocket · OpenAPI · TLS · networking · async-io
 
+The next prerelease is [2.1.0-rc.1](docs/releases/2.1.0-rc.1.md).
+Manual native SDK workflow runs prepare build/test/package artifacts;
+publication requires a matching version tag.
+
 ## Built on Salts
 
 CHTTP depends on the installed [Salts](https://github.com/qigao/salts) SDK and selected [SaltsUtils](https://github.com/qigao/salts-utils) components.
@@ -17,6 +21,10 @@ This integration branch requires the unified Salts CNet candidate tracked by
 **same CNet shared library**, without `Salts::CNetManager` or a second manager DLL.
 This integration branch consumes floating prerelease package families
 `Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`.
+The qualified composition baseline is the paired `2.3.0-rc.2` / `4.3.0-rc.2`
+SDKs. Upgrade or roll back both together: Unicode is now exported by Salts,
+and the H1 WebSocket client requires `<cnet/websocket_transport.h>`.
+See [composition scope and qualification](http_client/README.md#rc2-ws-composition-238).
 NuGet resolves the latest matching versions on each CI run. A selected package
 must contain the expected SDK for the requested RID; missing files or
 ABI-incompatible SDKs fail immediately, with no fallback to Salts 2.2.x or
@@ -41,9 +49,9 @@ retained Linux, Windows and macOS SDK artifacts. In that explicit mode,
 `SaltsUtils.Native 4.3.0-*` still resolves from NuGet while Salts comes from
 the verified candidate artifact. Candidate mode skips cross compilation,
 packaging and publication. It does not relax the dependency ABI gate.
-The macOS SDK profile inherits `GccMac` (GCC 15), matching the producer SDK's
-thread-local runtime ABI; Apple Clang's native TLS cannot link the GCC-built
-TinyTest runtime's emulated TLS symbols.
+The macOS profiles inherit `AppleClang`, matching the rc.2 producer SDK's
+native thread-local runtime ABI. Reconfigure an existing GCC build in a fresh
+build directory; do not reuse its compiler cache with the rc.2 TinyTest library.
 Native asynchronous file upload/download and static-file responses select
 Windows IOCP, Linux io_uring, or macOS Darwin AIO. The macOS path requires the
 matching candidate SDK exposing `CFLOW_IO_NATIVE_DARWIN_AIO`; kqueue/poll remain
@@ -66,6 +74,13 @@ That gives the library a shared foundation:
 - **SaltsUtils crypto helpers** where explicitly required by protocol features.
 - **Salts provider-neutral crypto APIs** for protocol hashing, HMAC, legacy compatibility digests, constant-time comparison, and secret wiping; CHTTP does not select or link a crypto provider directly.
 
+The current Salts CNet TLS and Salts Core crypto backends use GmSSL privately.
+CHTTP has no direct OpenSSL/BoringSSL dependency; HTTPS, H2 TLS and WSS use CNet,
+and JWT remains HS256 through Salts Core. SaltsUtils Crypto also contains
+private libecc implementations; this is not a claim that every cryptographic
+component uses GmSSL. Install the matching Salts SDK rather than adding a
+provider library to the Chttp consumer link interface.
+
 CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
 
 ## Ecosystem role
@@ -86,12 +101,38 @@ CHTTP is domain infrastructure: higher-level projects can depend on it for HTTP-
 
 | Module | CMake target | Public entry points |
 | --- | --- | --- |
+| App (generated services + server-driven Web) | `CHttp::App` | `<chttp_app/app.h>` |
 | HTTP / RPC client | `CHttp::Client` | `<http_client/http.h>`, `<http_client/rpc.h>` |
 | HTTP / RPC server | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
-| Server-driven Web | `CHttp::Web` | `<chttp_web/web.h>` |
 | S3 client | `CHttp::S3` | `<s3/s3.h>` |
 
 Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
+
+### App entry point
+
+Applications combining generated IDL services and Jinja pages can include
+`<chttp_app/app.h>` and link only `CHttp::App`. This installed C11/C++17
+shared library contains the Service and Web implementations. The HTTP server
+example and the installed App behavior test use this entry point.
+
+Service and Web are fully merged into `app/` and one `chttp_app` shared library.
+The earlier interface-only facade left two deployment units and duplicate
+module entry points; the shared library gives applications one build, include
+and deployment boundary. `CHttp::Server` remains independent of Jinja.
+App consumers acquire both the generated-service and rendering dependencies.
+
+Within App, Service still owns MethodPlan admission, invocation storage,
+executor work and plugin leases; Web owns rendering and browser adapters.
+Their existing function names, struct layouts, configuration, error codes and
+stop/drain/destroy contracts remain intact. Merging libraries creates no global
+runtime, extra dispatch, threads or allocations, and makes no CPU-speed claim.
+
+Migration requires rebuilding applications: replace the old Service/Web link
+targets with `CHttp::App`, and includes with `<chttp_app/app.h>` (or the focused
+`<chttp_app/service.h>` / `<chttp_app/web.h>`). Deploy `chttp_app` instead of the
+two old shared libraries. Old binaries cannot use the new library without
+relinking. Install into a clean SDK prefix so stale libraries are not shipped.
+Rollback restores the preceding SDK and rebuilds consumers against its targets.
 
 ## Repository layout
 
@@ -99,7 +140,7 @@ Client and Server each contain their own RPC-side implementation and link indepe
 http_client/  include/http_client/  src/  rpc/  tests/
 http_server/  include/http_server/  src/  rpc/  tests/  examples/
 http_common/  include/http_common/  http/  rpc/  tests/
-web/          include/chttp_web/  src/  tests/  examples/
+app/          include/chttp_app/  src/  tests/  examples/  benchmarks/
 s3/           include/s3/  src/  tests/
 openapi/      OpenAPI generation support
 vendor/       local third-party integration
@@ -117,9 +158,9 @@ See:
 - [HTTP client](http_client/README.md)
 - [S3 client](s3/README.md)
 
-## CHttp::Web
+## CHttp::App
 
-[CHttp::Web](web/README.md) is the optional native-C server-driven web
+[CHttp::App](app/README.md) is the optional native-C server-driven web
 application layer. It combines CHTTP routing, middleware, sessions, security,
 deferred responses and streaming with typed CMeta models and Jinja CMeta
 server-side rendering.
@@ -132,10 +173,10 @@ worker rendering, and SSE. Credential verification, password hashing, MFA,
 identity-provider protocols, and account persistence remain application or
 integration concerns.
 
-Reference applications live in `web/examples/`. The authenticated application
+Reference applications live in `app/examples/`. The authenticated application
 example demonstrates login, Session fixation defense, explicit authorization,
 asset serving, ordinary/HTMX rendering, and logout end to end. OpenAPI UI is a
-qualification application on the same generic Web layer. CHttp::Web remains
+qualification application on the same generic Web layer. CHttp::App remains
 intentionally server-driven rather than a client-side framework or Wt-style
 widget toolkit.
 
@@ -242,7 +283,7 @@ find_package(Chttp CONFIG REQUIRED
 target_link_libraries(my_app PRIVATE CHttp::Client)
 ```
 
-Use `CHttp::Server` for protocol/server applications, `CHttp::Web` for server-driven HTML applications, and `CHttp::S3` for S3 consumers.
+Use `CHttp::Server` for protocol/server applications, `CHttp::App` for server-driven HTML applications, and `CHttp::S3` for S3 consumers.
 
 The package resolves Salts and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
 
@@ -269,7 +310,7 @@ Additional technical references:
 
 - [HTTP runtime notes](docs/HTTP.md)
 - [RPC runtime notes](docs/RPC.md)
-- [CHttp::Web product guide](web/README.md)
+- [CHttp::App product guide](app/README.md)
 - [module layout decision](docs/plans/2026-09-09-server-client-layout.md)
 
 ---

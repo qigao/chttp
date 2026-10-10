@@ -313,19 +313,29 @@ static chttp_h2_request_state *chttp_h2_session_request(chttp_h2_session *sessio
   return NULL;
 }
 
+void chttp_h2_request_release(chttp_h2_request_state *request) {
+  chttp_h2_session *session = request != NULL ? request->session : NULL;
+  if (session == NULL) return;
+  if (request->registry_index < session->request_capacity &&
+      session->requests[request->registry_index] == request) {
+    session->requests[request->registry_index] = NULL;
+    --session->active_requests;
+  }
+  request->session = NULL;
+  request->pool_reserved = false;
+  if (session->state == CHTTP_H2_SESSION_DRAINING && session->active_requests == 0u)
+    session->close_after_flush = true;
+}
+
 static void chttp_h2_session_complete(chttp_h2_session *session, chttp_h2_request_state *request,
                                       const chttp_response_view *response, int status,
                                       int native_status, const char *stage) {
   if (session == NULL || request == NULL || request->completed) return;
   request->completed = true;
-  if (request->registry_index < session->request_capacity &&
-      session->requests[request->registry_index] == request)
-    session->requests[request->registry_index] = NULL;
-  if (session->active_requests != 0u) --session->active_requests;
+  /* Keep the registry/capacity token until the Owner releases its Pool lease
+   * after protocol callbacks and any outstanding file operation have ended. */
   session->callbacks.on_complete(session->callbacks.user, request->request_user, response, status,
                                  native_status, stage);
-  if (session->state == CHTTP_H2_SESSION_DRAINING && session->active_requests == 0u)
-    session->close_after_flush = true;
 }
 
 static void chttp_h2_session_record_terminal(chttp_h2_request_state *request, int status,
@@ -673,6 +683,7 @@ static int chttp_h2_session_try_close(chttp_h2_session *session) {
 static void chttp_h2_session_fail(chttp_h2_session *session, int status, int native_status,
                                   const char *stage) {
   if (session == NULL || session->state == CHTTP_H2_SESSION_TERMINAL) return;
+  session->failed = true;
   chttp_h2_session_fail_requests(session, status, native_status, stage);
   session->state = CHTTP_H2_SESSION_DRAINING;
   session->close_after_flush = false;
@@ -809,19 +820,30 @@ static void chttp_h2_cnet_send(void *user, cnet_connection connection, size_t si
   (void)chttp_h2_session_flush(session);
 }
 
+static void chttp_h2_manager_recycle(void *user) {
+  chttp_h2_session *session = (chttp_h2_session *)user;
+  session->managed = (cnet_managed_connection){0};
+}
+
 int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
+                          cnet_manager *manager, cnet_client_pool *pool,
+                          const cnet_pool_key *key,
                           const chttp_request_options *options, chttp_tls_profile_impl *tls_profile,
                           const chttp_h2_proto_config *protocol_config, const chttp_limits *limits,
                           const chttp_h2_session_callbacks *callbacks) {
   chttp_h2_proto_callbacks protocol_callbacks = {0};
   cnet_connect_options connect_options;
   int status;
-  if (session == NULL || network == NULL || options == NULL || protocol_config == NULL ||
+  if (session == NULL || network == NULL || manager == NULL || pool == NULL || key == NULL ||
+      options == NULL || protocol_config == NULL ||
       limits == NULL || callbacks == NULL || callbacks->on_complete == NULL ||
       session->state != CHTTP_H2_SESSION_FREE)
     return SALTS_EINVAL;
   memset(session, 0, sizeof(*session));
   session->network = network;
+  session->manager = manager;
+  session->pool = pool;
+  session->key = *key;
   session->limits = *limits;
   session->protocol_config = *protocol_config;
   session->callbacks = *callbacks;
@@ -868,9 +890,20 @@ int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
                                           .user = session,
                                           .on_send = chttp_h2_cnet_send},
                              .tls_client = chttp_tls_profile_client(session->tls_profile)};
-  status = cnet_connect(network, &connect_options, &session->connection);
+  {
+    const cnet_manager_attachment attachment = {
+        .observer = connect_options.observer, .on_recycle = chttp_h2_manager_recycle,
+        .hold_context = true};
+    status = cnet_pool_reserve_connecting(pool, key, &session->pooled);
+    if (status == SALTS_OK)
+      status = cnet_manager_reserve(manager, &attachment, &session->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_connect(manager, session->managed, &connect_options,
+                                    &session->connection);
+  }
   if (status != SALTS_OK) {
-    chttp_h2_session_destroy(session);
+    /* Even an immediate Manager connect rejection owes context recycle. */
+    session->state = CHTTP_H2_SESSION_TERMINAL;
     return status;
   }
   session->state = CHTTP_H2_SESSION_CONNECTING;
@@ -888,7 +921,8 @@ bool chttp_h2_session_matches(const chttp_h2_session *session, const chttp_reque
 }
 
 bool chttp_h2_session_terminal(const chttp_h2_session *session) {
-  return session != NULL && session->state == CHTTP_H2_SESSION_TERMINAL;
+  return session != NULL && session->state == CHTTP_H2_SESSION_TERMINAL &&
+      session->active_requests == 0u && session->managed.slot == 0u && session->pooled.slot == 0u;
 }
 
 static int chttp_h2_headers_build(const chttp_request_options *options,
@@ -1215,6 +1249,38 @@ bool chttp_h2_session_stop_ready(const chttp_h2_session *session) {
     return true;
   return session->active_requests == 0u && !session->send_active &&
          session->pending_output_size == 0u && !chttp_h2_proto_want_write(session->protocol);
+}
+
+int chttp_h2_session_pool_progress(chttp_h2_session *session) {
+  int status;
+  if (session == NULL || session->state == CHTTP_H2_SESSION_FREE) return SALTS_OK;
+  if (session->state == CHTTP_H2_SESSION_ACTIVE && !session->pool_ready &&
+      chttp_h2_proto_peer_settings_received(session->protocol)) {
+    status = cnet_pool_bind_ready(session->pool, session->pooled, session->managed,
+                                  session->request_capacity);
+    if (status != SALTS_OK) return status;
+    session->pool_ready = true;
+  }
+  if ((session->state == CHTTP_H2_SESSION_DRAINING ||
+       session->state == CHTTP_H2_SESSION_CLOSING) && !session->pool_draining &&
+      session->pooled.slot != 0u) {
+    status = cnet_pool_begin_drain(session->pool, session->pooled);
+    if (status != SALTS_OK) return status;
+    session->pool_draining = true;
+  }
+  if (session->state != CHTTP_H2_SESSION_TERMINAL || session->active_requests != 0u)
+    return SALTS_OK;
+  if (session->pooled.slot != 0u) {
+    status = cnet_pool_terminal(session->pool, session->pooled);
+    if (status != SALTS_OK) return status;
+    session->pooled = (cnet_pool_connection){0};
+  }
+  if (session->managed.slot != 0u && !session->context_released) {
+    status = cnet_manager_release_context(session->manager, session->managed);
+    if (status != SALTS_OK) return status;
+    session->context_released = true;
+  }
+  return SALTS_OK;
 }
 
 void chttp_h2_session_destroy(chttp_h2_session *session) {

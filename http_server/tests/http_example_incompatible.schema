@@ -1,0 +1,14 @@
+schema HttpExample [version(1)];
+component CalculatorPlugin {
+  service Calculator;
+}
+message SumRequest {
+  @Min(1) uint32 left;
+  uint32 right;
+}
+message SumResponse {
+  uint32 sum;
+}
+service Calculator {
+  Add: SumRequest -> SumResponse;
+}

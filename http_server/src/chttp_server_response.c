@@ -417,6 +417,22 @@ int chttp_server_response_defer(chttp_server_response *response,
   return SALTS_OK;
 }
 
+static void chttp_server_deferred_publish(chttp_server_deferred *deferred,
+                                           chttp_server_deferred_state state) {
+  chttp_server_deferred_target *target = deferred->impl;
+  chttp_server_impl *server = target->server;
+  chttp_server_owner_lane *owner = target->connection->owner;
+  /* WRITING retains the target until publication. Hold the lifecycle lock
+   * before publishing: the owner may retire this last request immediately,
+   * but cannot destroy CNet or report stop completion until wake has returned. */
+  cmeta_mutex_lock(&server->mutex);
+  atomic_store_explicit(target->token,
+      chttp_server_deferred_token(deferred->generation, state), memory_order_release);
+  *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
+  (void)chttp_server_owner_wake_locked(owner);
+  cmeta_mutex_unlock(&server->mutex);
+}
+
 int chttp_server_deferred_reply(chttp_server_deferred *deferred,
                                 const chttp_server_deferred_response *response) {
   chttp_server_deferred_target *target;
@@ -458,11 +474,7 @@ int chttp_server_deferred_reply(chttp_server_deferred *deferred,
         memory_order_release);
     return status;
   }
-  atomic_store_explicit(
-      target->token, chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_READY),
-      memory_order_release);
-  *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
-  (void)cnet_client_wake(chttp_server_connection_network(target->connection));
+  chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_READY);
   return SALTS_OK;
 }
 
@@ -520,13 +532,7 @@ int chttp_server_deferred_reply_buffer(
     return status;
   }
 
-  atomic_store_explicit(
-      target->token,
-      chttp_server_deferred_token(
-          deferred->generation, CHTTP_SERVER_DEFERRED_READY),
-      memory_order_release);
-  *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
-  (void)cnet_client_wake(chttp_server_connection_network(target->connection));
+  chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_READY);
   return SALTS_OK;
 }
 
@@ -538,12 +544,7 @@ int chttp_server_deferred_cancel(chttp_server_deferred *deferred) {
   if (target->server == NULL || target->token == NULL) return SALTS_EINVAL;
   status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
-  atomic_store_explicit(
-      target->token,
-      chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_CANCELED),
-      memory_order_release);
-  *deferred = (chttp_server_deferred)CHTTP_SERVER_DEFERRED_INIT;
-  (void)cnet_client_wake(chttp_server_connection_network(target->connection));
+  chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_CANCELED);
   return SALTS_OK;
 }
 

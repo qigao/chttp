@@ -3,8 +3,16 @@ include(CMakeOptions.cmake)
 
 project(
   Chttp
-  VERSION 2.0.0
+  VERSION 2.1.0
   LANGUAGES C CXX)
+
+# CMake's library version is numeric; the manifest retains the release suffix.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" chttp_manifest)
+string(JSON CHTTP_RELEASE_VERSION GET "${chttp_manifest}" version-semver)
+string(REGEX REPLACE "[-+].*$" "" chttp_release_base "${CHTTP_RELEASE_VERSION}")
+if(NOT chttp_release_base STREQUAL PROJECT_VERSION)
+  message(FATAL_ERROR "CMake VERSION and vcpkg release version disagree")
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -48,9 +56,8 @@ add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
 add_subdirectory(http_client)
 add_subdirectory(http_server)
-add_subdirectory(service)
+add_subdirectory(app)
 add_subdirectory(rpc_service)
-add_subdirectory(web)
 add_subdirectory(s3)
 add_subdirectory(openapi)
 
@@ -74,6 +81,8 @@ write_basic_package_version_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
               "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfigVersion.cmake"
         DESTINATION lib/cmake/Chttp)
+install(FILES LICENSE NOTICE THIRD_PARTY_NOTICES.md
+        DESTINATION share/licenses/Chttp)
 install(
   EXPORT ChttpTargets
   NAMESPACE CHttp::

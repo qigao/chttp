@@ -2,6 +2,7 @@
 #define HTTP_CLIENT_HTTP_H
 
 #include <http_common/http.h>
+#include <cnet/destination_policy.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -179,6 +180,37 @@ typedef struct chttp_options {
 } chttp_options;
 
 /**
+ * Explicit remote selection for one HTTP attempt. This does not select a local
+ * Owner or enable reconnect/retry. The host owns an immutable, prefiltered
+ * endpoint snapshot and its sequence/load/health facts. `connection_uris[i]`
+ * maps exactly to `selection.endpoints[i]`; both arrays have endpoint_count
+ * entries. All URIs must use the same tcp:// or tls:// transport, authority,
+ * TLS identity and HTTP protocol supplied by the request. CHttp never changes
+ * that authority/profile/protocol or falls back to a neighboring endpoint.
+ *
+ * CNet validates IDs, weights, policy and expiry. CHttp supplies monotonic
+ * now_ms (the input selection.now_ms is ignored). Snapshot generation must be
+ * nonzero and changed whenever endpoint membership or identity changes; IDs
+ * remain stable. IDs/generations share one host namespace per client/origin.
+ * They participate in pool identity, including pre-SETTINGS H2 admission.
+ *
+ * Storage is borrowed only during submit_to(), or throughout request_to().
+ * Admitted async work owns its selected URI/identity through terminal drain.
+ */
+typedef struct chttp_destination_options {
+  size_t size;
+  uint32_t version;
+  cnet_destination_selection selection;
+  const char *const *connection_uris;
+} chttp_destination_options;
+
+#define CHTTP_DESTINATION_OPTIONS_VERSION 1u
+#define CHTTP_DESTINATION_OPTIONS_INIT \
+  {sizeof(chttp_destination_options), CHTTP_DESTINATION_OPTIONS_VERSION, \
+   {sizeof(cnet_destination_selection), CNET_DESTINATION_POLICY_VERSION, \
+    CNET_DESTINATION_ROUND_ROBIN, NULL, 0u, 0u, UINT64_MAX, 0u, 0u, 0u, 0u, false}, NULL}
+
+/**
  * All capacities are hard bounds. CHTTP uses strict llhttp parsing, buffers one
  * complete response, and admits at most one HTTP/1.1 request at a time per
  * connection. `request_capacity` bounds request slots and HTTP/2 streams;
@@ -269,6 +301,21 @@ int chttp_async_client_submit(chttp_async_client *client, const chttp_request_op
                               chttp_request *out_request);
 
 /**
+ * Select with CNet policy and submit exactly one attempt. options.connection_uri
+ * must be NULL. Other request ownership/callback rules match submit().
+ * out_destination receives the chosen endpoint even if subsequent admission
+ * fails; selection failure zeroes IDs and sets index to SIZE_MAX. All outputs
+ * are required. FULL returns ENOBUFS immediately, without another selection.
+ * Errors include CNet selection errors, EINVAL for mixed/unsupported transport,
+ * and the normal submit errors. The old submit API is unchanged.
+ */
+int chttp_async_client_submit_to(chttp_async_client *client,
+                                 const chttp_request_options *options,
+                                 const chttp_destination_options *destinations,
+                                 cnet_destination_result *out_destination,
+                                 chttp_request *out_request);
+
+/**
  * Requests cancellation; completion is reported later with `SALTS_ECANCELED`.
  * H1 closes its exclusive connection; H2 sends RST_STREAM(CANCEL) without
  * closing sibling streams. A completed request is stale and returns
@@ -327,6 +374,20 @@ int chttp_client_set_h2_receive_window_policy(
 int chttp_client_set_socket_options(
     chttp_client *client,
     const cnet_stream_socket_options *options);
+
+/**
+ * Blocking destination-selected request, with the same policy/identity rules
+ * as submit_to(). Selects once; FULL is fail-fast, with no alternate endpoint,
+ * pool wait, reconnect or replay. timeout_ms starts before selection and bounds
+ * the whole attempt; terminal drain may continue after it. Inputs remain valid
+ * until return. All outputs are required; owning response uses destroy().
+ * Returns selection/admission/transport errors or SALTS_OK for an HTTP result.
+ */
+int chttp_request_to(chttp_client *client, chttp_method method,
+                      const chttp_options *options,
+                      const chttp_destination_options *destinations,
+                      cnet_destination_result *out_destination,
+                      chttp_response *out_response, chttp_error *out_error);
 
 /** Blocking requests-style methods returning an owning response. */
 int chttp_get(chttp_client *client, const chttp_options *options, chttp_response *out_response,
@@ -396,7 +457,13 @@ int chttp_websocket_client_connect(chttp_websocket_client *client,
                                    const chttp_websocket_connect_options *options,
                                    unsigned int *out_http_status);
 
-/** Blocking sends; callers never drive a poller. The client is not concurrently callable. */
+/**
+ * Blocking sends; callers never drive a poller. The client is not concurrently callable.
+ * H1 text/binary sends copy up to max_message_bytes, fragment at max_frame_bytes,
+ * and return success after local transport completion (not peer execution).
+ * A timeout does not authorize replay; an accepted message remains owned until
+ * subsequent progress or destroy settles it. H2 retains its existing frame limit.
+ */
 int chttp_websocket_client_send_text(chttp_websocket_client *client, const void *data, size_t size,
                                      uint32_t timeout_ms);
 

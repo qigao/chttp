@@ -1,0 +1,59 @@
+# PRs use native-sdk-release.yml for the complete build, CTest and install graph.
+name: CHttp App package qualification
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  CHTTP_HEAD_SHA: ${{ github.sha }}
+  QIGAO_SDK_RID: linux-x64
+  QIGAO_TARGET_TRIPLET: x64-linux
+  QIGAO_HOST_TRIPLET: x64-linux
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-app-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact Chttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Set up Salts SDKs
+        uses: ./.github/actions/setup-salts-sdk
+      - name: Build and install exact Chttp package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset ci-sdk-release-user
+          cmake --build --preset ci-sdk-release-user --parallel 2
+          cmake --build --preset install-ci-sdk-release-user
+      - name: Run installed App package test
+        shell: bash
+        working-directory: app/tests/installed
+        env:
+          CHTTP_ROOT: ${{ github.workspace }}/stage/sdk/linux-x64
+        run: |
+          set -euo pipefail
+          cmake --preset installed-release-user
+          cmake --build --preset installed-release-user --parallel 2
+          ctest --preset installed-release-user
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"

@@ -5,7 +5,7 @@
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageId>CHttp.Native</PackageId>
-    <PackageVersion Condition="'$(PackageVersion)' == ''">2.0.0</PackageVersion>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">2.1.0-rc.1</PackageVersion>
     <Authors>qigao</Authors>
     <Description>Prebuilt CHttp C/C++ SDK install trees for native consumers.</Description>
     <PackageTags>chttp;http;native;c;cpp;cmake;android;ios</PackageTags>
@@ -14,7 +14,8 @@
     <RepositoryUrl>https://github.com/qigao/chttp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <!-- Native DLLs intentionally live in sdk/<rid>/bin, not managed lib/. -->
+    <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

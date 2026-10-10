@@ -76,12 +76,12 @@ assert "Jinja" not in server_links and "HTMX" not in server_links
 
 examples_cmake = read("openapi/examples/CMakeLists.txt")
 ui_server_links = link_block(examples_cmake, "openapi_ui_server")
-assert "CHttp::Web" in ui_server_links
+assert "CHttp::App" in ui_server_links
 assert "openapi_ui_renderer" not in ui_server_links
 assert "Salts::JinjaCMeta" not in ui_server_links
 
-web_cmake = read("web/CMakeLists.txt")
-web_links = link_block(web_cmake, "chttp_web")
-assert "Salts::JinjaCMeta" in web_links
+app_cmake = read("app/CMakeLists.txt")
+app_links = link_block(app_cmake, "chttp_app")
+assert "Salts::JinjaCMeta" in app_links
 
-print("OpenAPI final cleanup and CHttp::Web dependency audit passed")
+print("OpenAPI final cleanup and CHttp::App dependency audit passed")

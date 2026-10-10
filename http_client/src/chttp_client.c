@@ -3,7 +3,8 @@
 #include "chttp_h2_session.h"
 #include "chttp_internal.h"
 #include "chttp_tls.h"
-#include <cnet/manager.h>
+#include <cnet/client_pool.h>
+#include <tstr.h>
 
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -20,6 +21,7 @@
 #endif
 
 typedef struct chttp_client_impl chttp_client_impl;
+typedef struct chttp_h1_session chttp_h1_session;
 
 enum {
   CHTTP_STREAM_CHUNK_DEFAULT_BYTES = 64u * 1024u,
@@ -33,7 +35,6 @@ typedef enum chttp_slot_state {
   CHTTP_SLOT_FREE = 0,
   CHTTP_SLOT_CONNECTING,
   CHTTP_SLOT_BUSY,
-  CHTTP_SLOT_IDLE,
   CHTTP_SLOT_CLOSING,
   CHTTP_SLOT_TERMINAL
 } chttp_slot_state;
@@ -41,18 +42,14 @@ typedef enum chttp_slot_state {
 typedef struct chttp_slot {
   chttp_client_impl *client;
   chttp_request public_handle;
-  cnet_connection connection;
-  /* H1 tcp/tls is Manager-attached; pipe IPC is an explicit separate
-   * transport outside the Manager stream-URI contract. */
-  cnet_managed_connection managed;
+  chttp_h1_session *h1;
+  cnet_pool_lease lease;
+  const chttp_request_options *acquire_options;
   chttp_response_parser response_parser;
   chttp_h2_request_state h2_request;
   unsigned char *request_data;
   unsigned char *source_buffer;
   mem_buffer_t *source_retained;
-  char *connection_uri;
-  char *authority;
-  chttp_tls_profile_impl *tls_profile;
   size_t request_size;
   size_t source_transferred;
   chttp_body_source body_source;
@@ -65,27 +62,58 @@ typedef struct chttp_slot {
   chttp_slot_state state;
   bool result_delivered;
   bool cancel_requested;
-  bool close_admitted;
-  bool close_pending;
-  bool receive_armed;
   bool source_enabled;
   bool source_complete;
   bool source_final_pending;
-  bool transport_closed;
 } chttp_slot;
+
+typedef enum chttp_h1_state {
+  CHTTP_H1_FREE = 0,
+  CHTTP_H1_CONNECTING,
+  CHTTP_H1_ACTIVE,
+  CHTTP_H1_IDLE,
+  CHTTP_H1_CLOSING,
+  CHTTP_H1_TERMINAL
+} chttp_h1_state;
+
+struct chttp_h1_session {
+  chttp_client_impl *client;
+  chttp_slot *request;
+  cnet_connection connection;
+  cnet_managed_connection managed;
+  cnet_pool_connection pooled;
+  cnet_pool_key key;
+  cnet_destination_result destination;
+  tstr connection_uri;
+  tstr authority;
+  chttp_tls_profile_impl *tls_profile;
+  chttp_h1_state state;
+  uint64_t operation;
+  bool pool_ready;
+  bool context_released;
+  bool close_admitted;
+  bool close_pending;
+  bool receive_armed;
+  bool send_pending;
+  bool transport_closed;
+};
 
 struct chttp_client_impl {
   cnet_client network;
   /* Borrowed CNet owner, no separate poller, worker or Manager DLL. */
-  cnet_manager h1_manager;
+  cnet_manager transport_manager;
+  cnet_client_pool connection_pool;
   cflow_io_file_runtime file_runtime;
   chttp_slot *slots;
+  chttp_h1_session *h1_sessions;
   chttp_h2_session *h2_sessions;
   chttp_limits limits;
   chttp_h2_proto_config h2_config;
   size_t request_capacity;
   size_t h2_session_capacity;
-  size_t h1_manager_capacity;
+  size_t connection_capacity;
+  uint64_t next_identity;
+  uint64_t next_operation;
   size_t completion_count;
   size_t file_sink_capacity;
   int h2_config_status;
@@ -98,15 +126,8 @@ struct chttp_client_impl {
   bool file_runtime_initialized;
 };
 
-/* Called after the CNet poll callback batch: retire consumed TCP/TLS
- * attachments before a request slot can be reused. No network progress here.
- * H2 and pipe:// stay on their existing explicit CNet paths. */
-static int chttp_h1_manager_progress(chttp_client_impl *impl) {
-  size_t advanced = 0u;
-  if (impl == NULL || impl->h1_manager_capacity == 0u) return SALTS_EINVAL;
-  return cnet_manager_advance(&impl->h1_manager, impl->h1_manager_capacity,
-                              &advanced);
-}
+/* Post-callback cleanup releases protocol leases before Manager contexts. */
+static int chttp_client_pool_progress(chttp_client_impl *impl);
 
 static chttp_client_impl *chttp_client_get(chttp_async_client *client) {
   return client != NULL ? (chttp_client_impl *)client->impl : NULL;
@@ -192,20 +213,8 @@ int chttp_async_client_file_sink_capacity(chttp_async_client *client, size_t *ou
 }
 
 static uint32_t chttp_next_generation(uint32_t generation) {
-  ++generation;
-  return generation == 0u ? 1u : generation;
-}
-
-static char *chttp_copy_text(const char *text) {
-  size_t size;
-  char *copy;
-  if (text == NULL) return NULL;
-  size = strlen(text);
-  if (size == SIZE_MAX) return NULL;
-  copy = (char *)malloc(size + 1u);
-  if (copy == NULL) return NULL;
-  memcpy(copy, text, size + 1u);
-  return copy;
+  /* Exhausted slots are excluded from admission, never wrapped into old handles. */
+  return generation + 1u;
 }
 
 static bool chttp_config_valid(const chttp_client_config *config) {
@@ -218,6 +227,7 @@ static bool chttp_config_valid(const chttp_client_config *config) {
     return false;
   if (config->request_capacity > SIZE_MAX / sizeof(chttp_slot)) return false;
   if (config->network.connection_capacity > SIZE_MAX / sizeof(chttp_h2_session)) return false;
+  if (config->network.connection_capacity > SIZE_MAX / sizeof(chttp_h1_session)) return false;
   if (config->max_header_bytes == SIZE_MAX || config->max_start_line_bytes == SIZE_MAX)
     return false;
   if (config->stream_chunk_bytes != 0u &&
@@ -245,6 +255,45 @@ static int chttp_h2_stream_uri_supported(const char *uri, bool has_tls_profile) 
   return SALTS_ENOTSUP;
 }
 
+int chttp_destination_select(const chttp_destination_options *options,
+                               const chttp_request_options *request,
+                               cnet_destination_result *out, const char **out_uri) {
+  cnet_destination_selection selection;
+  cnet_destination_result selected;
+  bool tls = false;
+  size_t index;
+  int status;
+  if (out == NULL || out_uri == NULL) return SALTS_EINVAL;
+  *out = (cnet_destination_result){.index = SIZE_MAX};
+  *out_uri = NULL;
+  if (options == NULL || request == NULL || request->connection_uri != NULL ||
+      options->size != sizeof(*options) || options->version != CHTTP_DESTINATION_OPTIONS_VERSION ||
+      options->connection_uris == NULL ||
+      (request->protocol != CHTTP_HTTP_1_1 && request->protocol != CHTTP_HTTP_2))
+    return SALTS_EINVAL;
+  selection = options->selection;
+  selection.now_ms = cmeta_monotonic_ms();
+  status = cnet_destination_choose(&selection, &selected);
+  if (status != SALTS_OK) return status;
+  for (index = 0u; index < selection.endpoint_count; ++index) {
+    const char *uri = options->connection_uris[index];
+    bool endpoint_tls;
+    if (uri == NULL) return SALTS_EINVAL;
+    endpoint_tls = strncmp(uri, "tls://", 6u) == 0;
+    if (!endpoint_tls && strncmp(uri, "tcp://", 6u) != 0) return SALTS_EINVAL;
+    if (index == 0u) tls = endpoint_tls;
+    else if (tls != endpoint_tls) return SALTS_EINVAL;
+  }
+  /* A snapshot cannot downgrade a supplied TLS identity or select H2 TLS
+   * without the explicit h2 profile required by the existing admission path. */
+  if ((!tls && request->tls != NULL) ||
+      (tls && request->protocol == CHTTP_HTTP_2 && request->tls == NULL))
+    return SALTS_EPROTONOSUPPORT;
+  *out_uri = options->connection_uris[selected.index];
+  *out = selected;
+  return SALTS_OK;
+}
+
 static void chttp_slot_release(chttp_slot *slot) {
   chttp_client_impl *client;
   uint32_t generation;
@@ -257,9 +306,6 @@ static void chttp_slot_release(chttp_slot *slot) {
   free(slot->request_data);
   if (chttp_cnet_retained_release(&slot->source_retained) == SALTS_OK)
     free(slot->source_buffer);
-  free(slot->authority);
-  free(slot->connection_uri);
-  chttp_tls_profile_release(slot->tls_profile);
   chttp_response_parser_destroy(&slot->response_parser);
   chttp_h2_request_destroy(&slot->h2_request);
   *slot = (chttp_slot){.client = client, .generation = generation};
@@ -268,30 +314,105 @@ static void chttp_slot_release(chttp_slot *slot) {
 static chttp_slot *chttp_slot_find_free(chttp_client_impl *impl) {
   size_t index;
   for (index = 0u; index < impl->request_capacity; ++index)
-    if (impl->slots[index].state == CHTTP_SLOT_FREE) return &impl->slots[index];
+    if (impl->slots[index].state == CHTTP_SLOT_FREE && impl->slots[index].generation != UINT32_MAX)
+      return &impl->slots[index];
   return NULL;
 }
 
-/* The scan is O(request_capacity), whose configured hard bound also limits CNet connections. */
-static chttp_slot *chttp_slot_find_idle(chttp_client_impl *impl,
-                                        const chttp_request_options *options,
-                                        const chttp_tls_profile_impl *tls_profile) {
+static bool chttp_h1_matches(const chttp_h1_session *session,
+                               const chttp_request_options *options,
+                               const chttp_tls_profile_impl *tls) {
+  return session->state != CHTTP_H1_FREE &&
+         session->connection_uri != NULL && session->authority != NULL &&
+         strcmp(session->connection_uri, options->connection_uri) == 0 &&
+         strcmp(session->authority, options->authority) == 0 && session->tls_profile == tls;
+}
+
+static bool chttp_destination_matches(const cnet_destination_result *stored,
+                                       const cnet_destination_result *selected) {
+  return stored->endpoint_id == (selected != NULL ? selected->endpoint_id : 0u) &&
+      stored->snapshot_generation == (selected != NULL ? selected->snapshot_generation : 0u);
+}
+
+static int chttp_pool_key(chttp_client_impl *impl, const chttp_request_options *options,
+                         const chttp_tls_profile_impl *tls,
+                         const cnet_destination_result *destination, cnet_pool_key *out) {
   size_t index;
-  for (index = 0u; index < impl->request_capacity; ++index) {
-    chttp_slot *slot = &impl->slots[index];
-    if (slot->state == CHTTP_SLOT_IDLE && slot->connection_uri != NULL && slot->authority != NULL &&
-        strcmp(slot->connection_uri, options->connection_uri) == 0 &&
-        strcmp(slot->authority, options->authority) == 0 && slot->tls_profile == tls_profile)
-      return slot;
+  uint64_t identity;
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    if (options->protocol == CHTTP_HTTP_1_1 &&
+        chttp_destination_matches(&impl->h1_sessions[index].destination, destination) &&
+        chttp_h1_matches(&impl->h1_sessions[index], options, tls)) {
+      *out = impl->h1_sessions[index].key;
+      return SALTS_OK;
+    }
   }
-  return NULL;
+  if (options->protocol == CHTTP_HTTP_2) {
+    for (index = 0u; index < impl->h2_session_capacity; ++index) {
+      if (chttp_destination_matches(&impl->h2_sessions[index].destination, destination) &&
+          chttp_h2_session_matches(&impl->h2_sessions[index], options, tls)) {
+        *out = impl->h2_sessions[index].key;
+        return SALTS_OK;
+      }
+    }
+  }
+  if (impl->next_identity == UINT64_MAX) return SALTS_ERANGE;
+  identity = ++impl->next_identity;
+  /* IDs are local to this one runtime/Owner pool. No hash collision or pointer
+   * reuse can equate different retained TLS profiles or origin strings. */
+  *out = (cnet_pool_key){.size = sizeof(*out), .version = CNET_CLIENT_POOL_VERSION,
+      .runtime_id = 1u, .owner_id = 1u,
+      .endpoint_id = destination != NULL ? destination->endpoint_id : identity,
+      .peer_generation = destination != NULL ? destination->snapshot_generation : identity,
+      .authority_id = identity,
+      .transport_id = strncmp(options->connection_uri, "tls://", 6u) == 0 ? 2u : 1u,
+      .tls_trust_id = tls != NULL ? identity : 0u,
+      .tls_sni_id = tls != NULL ? identity : 0u,
+      .client_identity_id = tls != NULL ? identity : 0u,
+      .alpn_id = (uint64_t)options->protocol + 1u,
+      .protocol_id = (uint64_t)options->protocol + 1u};
+  return SALTS_OK;
 }
 
-static chttp_slot *chttp_slot_find_any_idle(chttp_client_impl *impl) {
-  size_t index;
-  for (index = 0u; index < impl->request_capacity; ++index)
-    if (impl->slots[index].state == CHTTP_SLOT_IDLE) return &impl->slots[index];
-  return NULL;
+static void chttp_h1_recycle(void *user) {
+  chttp_h1_session *session = (chttp_h1_session *)user;
+  session->managed = (cnet_managed_connection){0};
+}
+
+static void chttp_h1_clear(chttp_h1_session *session) {
+  chttp_client_impl *impl = session->client;
+  tstr_free(session->connection_uri);
+  tstr_free(session->authority);
+  chttp_tls_profile_release(session->tls_profile);
+  *session = (chttp_h1_session){.client = impl};
+}
+
+static int chttp_h1_reserve(void *user, cnet_managed_connection managed,
+                            uint64_t *out_token) {
+  chttp_slot *slot = (chttp_slot *)user;
+  cnet_manager_entry entry;
+  chttp_h1_session *session;
+  int status = cnet_manager_lookup(&slot->client->transport_manager, managed, &entry);
+  if (status != SALTS_OK) return status;
+  session = (chttp_h1_session *)entry.context;
+  if (session == NULL || session->client != slot->client ||
+      session->state != CHTTP_H1_IDLE || session->request != NULL ||
+      session->operation != 0u || session->send_pending || !session->receive_armed)
+    return SALTS_ENOBUFS;
+  if (slot->client->next_operation == UINT64_MAX) return SALTS_ERANGE;
+  session->operation = ++slot->client->next_operation;
+  session->request = slot;
+  session->state = CHTTP_H1_ACTIVE;
+  slot->h1 = session;
+  *out_token = session->operation;
+  return SALTS_OK;
+}
+
+static void chttp_h1_release_operation(void *user, uint64_t token) {
+  chttp_slot *slot = (chttp_slot *)user;
+  chttp_h1_session *session = slot->h1;
+  if (session != NULL && session->request == slot && session->operation == token)
+    session->operation = 0u;
 }
 
 static chttp_slot *chttp_slot_find(chttp_client_impl *impl, chttp_request request) {
@@ -300,8 +421,7 @@ static chttp_slot *chttp_slot_find(chttp_client_impl *impl, chttp_request reques
       request.generation == 0u)
     return NULL;
   slot = &impl->slots[request.slot - 1u];
-  return slot->state != CHTTP_SLOT_FREE && slot->state != CHTTP_SLOT_TERMINAL &&
-                 slot->generation == request.generation
+  return slot->state != CHTTP_SLOT_FREE && slot->generation == request.generation
              ? slot
              : NULL;
 }
@@ -327,35 +447,40 @@ static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *resp
   ++impl->completion_count;
 }
 
-static int chttp_slot_try_close(chttp_slot *slot) {
+static int chttp_h1_try_close(chttp_h1_session *session) {
   int status;
-  if (slot == NULL || slot->state == CHTTP_SLOT_FREE || slot->state == CHTTP_SLOT_TERMINAL ||
-      slot->close_admitted)
-    return SALTS_OK;
-  status = cnet_close(&slot->client->network, slot->connection);
-  if (status == SALTS_OK) {
-    slot->close_admitted = true;
-    slot->close_pending = false;
-    slot->state = CHTTP_SLOT_CLOSING;
+  if (session == NULL || session->state == CHTTP_H1_FREE ||
+      session->transport_closed || session->close_admitted) return SALTS_OK;
+  session->state = CHTTP_H1_CLOSING;
+  session->close_pending = true;
+  if (session->pooled.slot != 0u) {
+    status = cnet_pool_begin_drain(&session->client->connection_pool, session->pooled);
+    if (status != SALTS_OK) return status;
+  }
+  status = cnet_close(&session->client->network, session->connection);
+  if (status == SALTS_OK || status == SALTS_EALREADY || status == SALTS_ENOENT ||
+      status == SALTS_ESHUTDOWN) {
+    session->close_admitted = true;
+    session->close_pending = false;
     return SALTS_OK;
   }
-  if (status == SALTS_EALREADY || status == SALTS_ENOENT || status == SALTS_ESHUTDOWN) {
-    slot->close_admitted = true;
-    slot->close_pending = false;
-    slot->state = CHTTP_SLOT_CLOSING;
-    return SALTS_OK;
-  }
-  slot->close_pending = true;
-  slot->state = CHTTP_SLOT_CLOSING;
+  session->close_pending = true;
   return status;
+}
+
+static int chttp_slot_try_close(chttp_slot *slot) {
+  if (slot == NULL || slot->state == CHTTP_SLOT_FREE || slot->state == CHTTP_SLOT_TERMINAL)
+    return SALTS_OK;
+  slot->state = CHTTP_SLOT_CLOSING;
+  return chttp_h1_try_close(slot->h1);
 }
 
 static void chttp_slot_fail_and_close(chttp_slot *slot, int status, int native_status,
                                       const char *stage) {
   chttp_slot_deliver(slot, NULL, status, native_status, stage);
-  if (slot->transport_closed) {
+  if (slot->h1->transport_closed) {
     slot->state = CHTTP_SLOT_TERMINAL;
-    slot->close_pending = false;
+    slot->h1->close_pending = false;
     return;
   }
   (void)chttp_slot_try_close(slot);
@@ -363,9 +488,9 @@ static void chttp_slot_fail_and_close(chttp_slot *slot, int status, int native_s
 
 static int chttp_slot_arm_receive(chttp_slot *slot) {
   int status;
-  if (slot->receive_armed) return SALTS_OK;
-  status = cnet_receive(&slot->client->network, slot->connection, 1u);
-  if (status == SALTS_OK) slot->receive_armed = true;
+  if (slot->h1->receive_armed) return SALTS_OK;
+  status = cnet_receive(&slot->client->network, slot->h1->connection, 1u);
+  if (status == SALTS_OK) slot->h1->receive_armed = true;
   return status;
 }
 
@@ -423,28 +548,21 @@ static int chttp_slot_prepare_streaming(chttp_slot *slot, const chttp_request_op
 }
 
 static void chttp_slot_complete_response(chttp_slot *slot) {
+  chttp_h1_session *session = slot->h1;
   const bool keep_alive = slot->response_parser.response.protocol_keep_alive != 0;
-  int status;
   chttp_slot_deliver(slot, &slot->response_parser.response, SALTS_OK, 0, NULL);
-  if (slot->transport_closed) {
+  if (session->transport_closed) {
     slot->state = CHTTP_SLOT_TERMINAL;
-    slot->close_pending = false;
     return;
   }
-  if (keep_alive && slot->source_complete && !slot->cancel_requested &&
-      !slot->client->stop_active) {
-    chttp_response_parser_destroy(&slot->response_parser);
-    slot->on_complete = NULL;
-    slot->user = NULL;
-    if (slot->file_sink_transfer != NULL)
-      chttp_file_sink_transfer_set_ready(slot->file_sink_transfer, NULL, NULL);
-    slot->file_sink_transfer = NULL;
-    slot->state = CHTTP_SLOT_IDLE;
-    status = chttp_slot_arm_receive(slot);
-    if (status != SALTS_OK) (void)chttp_slot_try_close(slot);
-  } else {
+  if (!keep_alive || !slot->source_complete || slot->cancel_requested ||
+      slot->client->stop_active) {
     (void)chttp_slot_try_close(slot);
+    return;
   }
+  /* A final response can precede the owned send completion. Retain both the
+   * request and its protocol lease until that send has actually settled. */
+  if (!session->send_pending) slot->state = CHTTP_SLOT_TERMINAL;
 }
 
 static void chttp_slot_file_sink_ready(void *user) {
@@ -522,13 +640,14 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
       return;
     }
     status = chttp_cnet_retained_send(
-        &slot->client->network, slot->connection, slot->source_retained,
+        &slot->client->network, slot->h1->connection, slot->source_retained,
         slot->source_buffer, slot->client->limits.stream_chunk_bytes + CHTTP_H1_CHUNK_OVERHEAD_BYTES,
         produced, 0);
     if (status != SALTS_OK) {
       chttp_slot_fail_and_close(slot, status, 0, "request-source-send");
       return;
     }
+    slot->h1->send_pending = true;
     slot->source_transferred += produced;
     return;
   }
@@ -547,13 +666,14 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
     static const unsigned char final_chunk[] = "0\r\n\r\n";
     memcpy(slot->source_buffer, final_chunk, sizeof(final_chunk) - 1u);
     status = chttp_cnet_retained_send(
-        &slot->client->network, slot->connection, slot->source_retained,
+        &slot->client->network, slot->h1->connection, slot->source_retained,
         slot->source_buffer, slot->client->limits.stream_chunk_bytes + CHTTP_H1_CHUNK_OVERHEAD_BYTES,
         sizeof(final_chunk) - 1u, 0);
     if (status != SALTS_OK) {
       chttp_slot_fail_and_close(slot, status, 0, "request-source-send");
       return;
     }
+    slot->h1->send_pending = true;
     slot->source_final_pending = true;
     return;
   }
@@ -576,7 +696,7 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
     memcpy(payload + produced, "\r\n", CHTTP_H1_CHUNK_TRAILER_BYTES);
     wire_size = (size_t)prefix_chars + produced + CHTTP_H1_CHUNK_TRAILER_BYTES;
     status = chttp_cnet_retained_send_range(
-        &slot->client->network, slot->connection, slot->source_retained,
+        &slot->client->network, slot->h1->connection, slot->source_retained,
         slot->source_buffer, slot->client->limits.stream_chunk_bytes + CHTTP_H1_CHUNK_OVERHEAD_BYTES,
         (size_t)(wire - slot->source_buffer), wire_size);
   }
@@ -584,6 +704,7 @@ static void chttp_slot_source_advance(chttp_slot *slot) {
     chttp_slot_fail_and_close(slot, status, 0, "request-source-send");
     return;
   }
+  slot->h1->send_pending = true;
   slot->source_transferred += produced;
 }
 
@@ -592,29 +713,49 @@ static void chttp_slot_file_ready(void *user) {
   chttp_slot_source_advance(slot);
 }
 
+static bool chttp_h1_connection_matches(const chttp_h1_session *session,
+                                         cnet_connection connection) {
+  return session != NULL && session->state != CHTTP_H1_FREE &&
+      !session->transport_closed && session->connection.slot == connection.slot &&
+      session->connection.generation == connection.generation;
+}
+
 static void chttp_cnet_send(void *user, cnet_connection connection, size_t size) {
-  chttp_slot *slot = (chttp_slot *)user;
+  chttp_h1_session *session = (chttp_h1_session *)user;
+  chttp_slot *slot;
   (void)size;
-  if (slot == NULL || slot->connection.slot != connection.slot ||
-      slot->connection.generation != connection.generation)
+  if (!chttp_h1_connection_matches(session, connection)) return;
+  session->send_pending = false;
+  slot = session->request;
+  if (slot == NULL) return;
+  if (slot->result_delivered) {
+    if (slot->state == CHTTP_SLOT_BUSY) slot->state = CHTTP_SLOT_TERMINAL;
     return;
+  }
   chttp_slot_source_advance(slot);
 }
 
 static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connection_state state,
                              const cnet_error *error) {
-  chttp_slot *slot = (chttp_slot *)user;
+  chttp_h1_session *session = (chttp_h1_session *)user;
+  chttp_slot *slot;
   int status;
-  if (slot == NULL || slot->state == CHTTP_SLOT_FREE || slot->state == CHTTP_SLOT_TERMINAL ||
-      slot->connection.slot != connection.slot ||
-      slot->connection.generation != connection.generation)
-    return;
+  if (!chttp_h1_connection_matches(session, connection)) return;
+  slot = session->request;
+  if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+    session->transport_closed = true;
+    session->send_pending = false;
+    session->receive_armed = false;
+    session->state = CHTTP_H1_TERMINAL;
+  }
+  if (slot == NULL) return;
 
   if (state == CNET_CONNECTION_CONNECTED) {
     if (slot->state != CHTTP_SLOT_CONNECTING || slot->result_delivered || slot->cancel_requested ||
         slot->client->stop_active)
       return;
     slot->state = CHTTP_SLOT_BUSY;
+    session->state = CHTTP_H1_ACTIVE;
     if (slot->request_data == NULL || slot->request_size == 0u) {
       chttp_slot_fail_and_close(slot, SALTS_EPROTO, 0, "request-state");
       return;
@@ -629,6 +770,7 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
       chttp_slot_fail_and_close(slot, status, 0, "send-admission");
       return;
     }
+    session->send_pending = true;
     slot->request_size = 0u;
     status = chttp_slot_arm_receive(slot);
     if (status != SALTS_OK) chttp_slot_fail_and_close(slot, status, 0, "receive-admission");
@@ -636,7 +778,7 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
   }
 
   if (state != CNET_CONNECTION_CLOSED && state != CNET_CONNECTION_FAILED) return;
-  slot->receive_armed = false;
+  slot->h1->receive_armed = false;
   if (!slot->result_delivered) {
     if (slot->cancel_requested) chttp_slot_deliver(slot, NULL, SALTS_ECANCELED, 0, "cancel");
     else if (slot->client->stop_active)
@@ -653,7 +795,7 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
         const chttp_file_sink_result sink_result =
             chttp_file_sink_transfer_advance(slot->file_sink_transfer);
         if (sink_result == CHTTP_FILE_SINK_WAIT) {
-          slot->transport_closed = true;
+          slot->h1->transport_closed = true;
           return;
         }
         if (sink_result == CHTTP_FILE_SINK_ERROR) {
@@ -662,7 +804,7 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
           chttp_slot_deliver(slot, NULL, status == SALTS_OK ? SALTS_EIO : status, native_status,
                              "file-write");
         } else {
-          slot->transport_closed = true;
+          slot->h1->transport_closed = true;
           chttp_slot_complete_response(slot);
           return;
         }
@@ -677,20 +819,19 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
     }
   }
   slot->state = CHTTP_SLOT_TERMINAL;
-  slot->close_pending = false;
+  slot->h1->close_pending = false;
 }
 
 static void chttp_cnet_receive(void *user, cnet_connection connection,
                                const cnet_receive_view *view) {
-  chttp_slot *slot = (chttp_slot *)user;
+  chttp_h1_session *session = (chttp_h1_session *)user;
+  chttp_slot *slot;
   int status;
-  if (slot == NULL || view == NULL || slot->state == CHTTP_SLOT_FREE ||
-      slot->state == CHTTP_SLOT_TERMINAL || slot->connection.slot != connection.slot ||
-      slot->connection.generation != connection.generation)
-    return;
-  slot->receive_armed = false;
-  if (slot->state == CHTTP_SLOT_IDLE) {
-    (void)chttp_slot_try_close(slot);
+  if (view == NULL || !chttp_h1_connection_matches(session, connection)) return;
+  session->receive_armed = false;
+  slot = session->request;
+  if (slot == NULL || slot->state == CHTTP_SLOT_TERMINAL) {
+    (void)chttp_h1_try_close(session);
     return;
   }
   if (slot->result_delivered) {
@@ -736,23 +877,101 @@ static void chttp_cnet_receive(void *user, cnet_connection connection,
 static int chttp_retry_pending_closes(chttp_client_impl *impl) {
   size_t index;
   int first_status = SALTS_OK;
-  for (index = 0u; index < impl->request_capacity; ++index) {
-    chttp_slot *slot = &impl->slots[index];
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    chttp_h1_session *session = &impl->h1_sessions[index];
     int status;
-    if (slot->state == CHTTP_SLOT_FREE || slot->state == CHTTP_SLOT_TERMINAL ||
-        !slot->close_pending)
-      continue;
-    status = chttp_slot_try_close(slot);
+    if (!session->close_pending) continue;
+    status = chttp_h1_try_close(session);
     if (status != SALTS_OK && status != SALTS_ENOBUFS && first_status == SALTS_OK)
       first_status = status;
   }
   return first_status;
 }
 
-static void chttp_reap_terminal_slots(chttp_client_impl *impl) {
+static int chttp_reap_terminal_slots(chttp_client_impl *impl) {
   size_t index;
-  for (index = 0u; index < impl->request_capacity; ++index)
-    if (impl->slots[index].state == CHTTP_SLOT_TERMINAL) chttp_slot_release(&impl->slots[index]);
+  for (index = 0u; index < impl->request_capacity; ++index) {
+    chttp_slot *slot = &impl->slots[index];
+    chttp_h1_session *session = slot->h1;
+    int status;
+    if (slot->state != CHTTP_SLOT_TERMINAL) continue;
+    if ((slot->file_transfer != NULL && slot->file_transfer->pending) ||
+        (slot->file_sink_transfer != NULL && slot->file_sink_transfer->pending)) continue;
+    if (session != NULL) {
+      if (session->send_pending) continue;
+      if (slot->lease.slot != 0u) {
+        status = cnet_pool_release(&impl->connection_pool, slot->lease);
+        if (status != SALTS_OK) return status;
+        slot->lease = (cnet_pool_lease){0};
+      }
+      session->operation = 0u;
+      session->request = NULL;
+      if (session->state == CHTTP_H1_ACTIVE && impl->stop_active) {
+        status = chttp_h1_try_close(session);
+        if (status != SALTS_OK && status != SALTS_ENOBUFS) return status;
+      } else if (session->state == CHTTP_H1_ACTIVE) {
+        session->state = CHTTP_H1_IDLE;
+        status = chttp_slot_arm_receive(slot);
+        if (status != SALTS_OK) {
+          (void)chttp_h1_try_close(session);
+        } else if (session->pooled.slot != 0u && !session->pool_ready) {
+          status = cnet_pool_bind_ready(&impl->connection_pool, session->pooled, session->managed, 1u);
+          if (status != SALTS_OK) {
+            (void)chttp_h1_try_close(session);
+            chttp_slot_release(slot);
+            return status;
+          }
+          session->pool_ready = true;
+        }
+      }
+    } else if (slot->h2_request.session != NULL) {
+      chttp_h2_session *h2 = slot->h2_request.session;
+      if (h2->failed && h2->state != CHTTP_H2_SESSION_TERMINAL) continue;
+      if (slot->lease.slot != 0u) {
+        status = cnet_pool_release(&impl->connection_pool, slot->lease);
+        if (status != SALTS_OK) return status;
+        slot->lease = (cnet_pool_lease){0};
+      } else {
+        chttp_h2_request_release(&slot->h2_request);
+      }
+    }
+    chttp_slot_release(slot);
+  }
+  return SALTS_OK;
+}
+
+static int chttp_client_pool_progress(chttp_client_impl *impl) {
+  size_t index, advanced = 0u;
+  int status = chttp_reap_terminal_slots(impl);
+  if (status != SALTS_OK) return status;
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    chttp_h1_session *session = &impl->h1_sessions[index];
+    if (!session->transport_closed || session->request != NULL) continue;
+    /* Manager has returned from its native terminal callback. Pool release
+     * precedes context release, so neither can name recycled protocol storage. */
+    if (session->pooled.slot != 0u) {
+      status = cnet_pool_terminal(&impl->connection_pool, session->pooled);
+      if (status != SALTS_OK) return status;
+      session->pooled = (cnet_pool_connection){0};
+    }
+    if (session->managed.slot != 0u && !session->context_released) {
+      status = cnet_manager_release_context(&impl->transport_manager, session->managed);
+      if (status != SALTS_OK) return status;
+      session->context_released = true;
+    }
+  }
+  for (index = 0u; index < impl->h2_session_capacity; ++index) {
+    status = chttp_h2_session_pool_progress(&impl->h2_sessions[index]);
+    if (status != SALTS_OK) return status;
+  }
+  status = cnet_manager_advance(&impl->transport_manager, impl->connection_capacity, &advanced);
+  if (status != SALTS_OK) return status;
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    chttp_h1_session *session = &impl->h1_sessions[index];
+    if (session->transport_closed && session->request == NULL && session->managed.slot == 0u)
+      chttp_h1_clear(session);
+  }
+  return SALTS_OK;
 }
 
 static chttp_h2_session *chttp_h2_session_find_free(chttp_client_impl *impl) {
@@ -763,13 +982,13 @@ static chttp_h2_session *chttp_h2_session_find_free(chttp_client_impl *impl) {
 }
 
 static int chttp_begin_idle_eviction(chttp_client_impl *impl) {
-  chttp_slot *idle_slot;
   size_t index;
   int status;
   if (impl == NULL) return SALTS_EINVAL;
-  idle_slot = chttp_slot_find_any_idle(impl);
-  if (idle_slot != NULL) {
-    status = chttp_slot_try_close(idle_slot);
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    chttp_h1_session *session = &impl->h1_sessions[index];
+    if (session->state != CHTTP_H1_IDLE) continue;
+    status = chttp_h1_try_close(session);
     return status == SALTS_ENOBUFS ? SALTS_OK : status;
   }
   for (index = 0u; index < impl->h2_session_capacity; ++index) {
@@ -829,14 +1048,43 @@ static void chttp_h2_file_sink_ready(void *user) {
   (void)chttp_h2_session_resume_file_sink(request);
 }
 
+static int chttp_h2_reserve(void *user, cnet_managed_connection managed,
+                            uint64_t *out_token) {
+  chttp_slot *slot = (chttp_slot *)user;
+  cnet_manager_entry entry;
+  chttp_h2_session *session;
+  int status = cnet_manager_lookup(&slot->client->transport_manager, managed, &entry);
+  if (status != SALTS_OK) return status;
+  session = (chttp_h2_session *)entry.context;
+  if (session == NULL || session->state != CHTTP_H2_SESSION_ACTIVE ||
+      !session->pool_ready || session->pool_draining) return SALTS_ENOBUFS;
+  /* Submit allocates an actual protocol stream under current peer SETTINGS,
+   * including the registry slot and body ownership, without sending or polling. */
+  status = chttp_h2_session_submit(session, &slot->h2_request, slot->acquire_options);
+  if (status == SALTS_EBUSY) return SALTS_ENOBUFS;
+  if (status != SALTS_OK) return status;
+  slot->h2_request.pool_reserved = true;
+  *out_token = (uint64_t)slot->h2_request.stream_id;
+  return SALTS_OK;
+}
+
+static void chttp_h2_release_operation(void *user, uint64_t token) {
+  chttp_slot *slot = (chttp_slot *)user;
+  chttp_h2_request_state *request = &slot->h2_request;
+  if (request->pool_reserved && request->completed && (uint64_t)request->stream_id == token)
+    chttp_h2_request_release(request);
+}
+
 static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options *options,
                            chttp_file_transfer *file_transfer,
                            chttp_file_sink_transfer *file_sink_transfer,
+                           const cnet_destination_result *destination,
                            chttp_request *out_request) {
   chttp_h2_session_callbacks callbacks = {.user = impl, .on_complete = chttp_h2_complete};
   chttp_h2_session *session;
   chttp_tls_profile_impl *tls_profile = NULL;
   chttp_slot *slot;
+  cnet_pool_key key;
   size_t session_index;
   size_t slot_index;
   int status;
@@ -852,8 +1100,6 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
   slot = chttp_slot_find_free(impl);
   if (slot == NULL) {
     chttp_tls_profile_release(tls_profile);
-    status = chttp_begin_idle_eviction(impl);
-    if (status != SALTS_OK) return status;
     return SALTS_ENOBUFS;
   }
   slot_index = (size_t)(slot - impl->slots);
@@ -874,20 +1120,29 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
   slot->file_sink_transfer = file_sink_transfer;
   slot->h2_request.file_transfer = file_transfer;
   slot->h2_request.file_sink_transfer = file_sink_transfer;
+  status = chttp_pool_key(impl, options, tls_profile, destination, &key);
+  if (status == SALTS_OK) {
+    const cnet_pool_protocol_ops protocol = {
+        .reserve = chttp_h2_reserve, .release = chttp_h2_release_operation, .user = slot};
+    cnet_managed_connection managed = {0};
+    slot->acquire_options = options;
+    status = cnet_pool_try_acquire(&impl->connection_pool, &key, &protocol, &slot->lease, &managed);
+    slot->acquire_options = NULL;
+    if (status == SALTS_OK) goto admitted;
+  }
+  if (status != SALTS_ENOBUFS) {
+    chttp_tls_profile_release(tls_profile);
+    chttp_slot_release(slot);
+    return status;
+  }
   for (session_index = 0u; session_index < impl->h2_session_capacity; ++session_index) {
     session = &impl->h2_sessions[session_index];
-    if (!chttp_h2_session_matches(session, options, tls_profile)) continue;
+    /* Existing pre-SETTINGS admission stays bounded by the actual protocol
+     * stream table. Once READY, every new stream must use the Pool callback. */
+    if (session->pool_ready || !chttp_destination_matches(&session->destination, destination) ||
+        !chttp_h2_session_matches(session, options, tls_profile)) continue;
     status = chttp_h2_session_submit(session, &slot->h2_request, options);
-    if (status == SALTS_OK) {
-      if (file_transfer != NULL)
-        chttp_file_transfer_set_ready(file_transfer, chttp_h2_file_ready, &slot->h2_request);
-      if (file_sink_transfer != NULL)
-        chttp_file_sink_transfer_set_ready(file_sink_transfer, chttp_h2_file_sink_ready,
-                                           &slot->h2_request);
-      chttp_tls_profile_release(tls_profile);
-      *out_request = slot->public_handle;
-      return SALTS_OK;
-    }
+    if (status == SALTS_OK) goto admitted;
     if (status != SALTS_EBUSY) {
       chttp_tls_profile_release(tls_profile);
       chttp_slot_release(slot);
@@ -902,10 +1157,17 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
     if (status != SALTS_OK) return status;
     return SALTS_ENOBUFS;
   }
-  status = chttp_h2_session_open(session, &impl->network, options, tls_profile, &impl->h2_config,
+  status = chttp_h2_session_open(session, &impl->network, &impl->transport_manager,
+                                 &impl->connection_pool, &key, options, tls_profile, &impl->h2_config,
                                  &impl->limits, &callbacks);
+  if (destination != NULL) session->destination = *destination;
+  tls_profile = NULL; /* Session open consumes the retained profile. */
   if (status != SALTS_OK) {
+    int cleanup_status;
     chttp_slot_release(slot);
+    cleanup_status = chttp_client_pool_progress(impl);
+    if (cleanup_status != SALTS_OK) return cleanup_status;
+    chttp_h2_reap_terminal_sessions(impl);
     if (status == SALTS_ENOBUFS) {
       status = chttp_begin_idle_eviction(impl);
       if (status == SALTS_OK) return SALTS_ENOBUFS;
@@ -918,6 +1180,8 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
     chttp_slot_release(slot);
     return status;
   }
+admitted:
+  chttp_tls_profile_release(tls_profile);
   if (file_transfer != NULL)
     chttp_file_transfer_set_ready(file_transfer, chttp_h2_file_ready, &slot->h2_request);
   if (file_sink_transfer != NULL)
@@ -937,9 +1201,12 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
   impl = (chttp_client_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
   impl->slots = (chttp_slot *)calloc(config->request_capacity, sizeof(*impl->slots));
+  impl->h1_sessions =
+      (chttp_h1_session *)calloc(config->network.connection_capacity, sizeof(*impl->h1_sessions));
   impl->h2_sessions =
       (chttp_h2_session *)calloc(config->network.connection_capacity, sizeof(*impl->h2_sessions));
-  if (impl->slots == NULL || impl->h2_sessions == NULL) {
+  if (impl->slots == NULL || impl->h2_sessions == NULL || impl->h1_sessions == NULL) {
+    free(impl->h1_sessions);
     free(impl->h2_sessions);
     free(impl->slots);
     free(impl);
@@ -947,7 +1214,7 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
   }
   impl->request_capacity = config->request_capacity;
   impl->h2_session_capacity = config->network.connection_capacity;
-  impl->h1_manager_capacity = config->network.connection_capacity;
+  impl->connection_capacity = config->network.connection_capacity;
   impl->h2_config_status = chttp_h2_protocol_config(config, &impl->h2_config);
   impl->file_sink_capacity = config->network.receive_buffer_bytes;
   if (impl->h2_config_status == SALTS_OK &&
@@ -972,8 +1239,11 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
                      : 0u)};
   for (index = 0u; index < impl->request_capacity; ++index)
     impl->slots[index].client = impl;
+  for (index = 0u; index < impl->connection_capacity; ++index)
+    impl->h1_sessions[index].client = impl;
   status = cnet_client_init(&impl->network, &config->network);
   if (status != SALTS_OK) {
+    free(impl->h1_sessions);
     free(impl->h2_sessions);
     free(impl->slots);
     free(impl);
@@ -984,12 +1254,32 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
         .size = sizeof(manager_config),
         .version = CNET_MANAGER_VERSION,
         .client = &impl->network,
-        .record_capacity = impl->h1_manager_capacity,
-        .connection_capacity = impl->h1_manager_capacity};
-    status = cnet_manager_init(&impl->h1_manager, &manager_config);
+        .record_capacity = impl->connection_capacity,
+        .connection_capacity = impl->connection_capacity};
+    status = cnet_manager_init(&impl->transport_manager, &manager_config);
     if (status != SALTS_OK) {
       (void)cnet_client_stop(&impl->network, 0u);
       (void)cnet_client_destroy(&impl->network);
+      free(impl->h1_sessions);
+      free(impl->h2_sessions);
+      free(impl->slots);
+      free(impl);
+      return status;
+    }
+  }
+  {
+    const cnet_pool_config pool_config = {
+        .size = sizeof(pool_config), .version = CNET_CLIENT_POOL_VERSION,
+        .manager = &impl->transport_manager, .owner_id = 1u,
+        .max_connections = impl->connection_capacity,
+        .max_connecting = impl->connection_capacity,
+        .max_leases = impl->request_capacity};
+    status = cnet_pool_init(&impl->connection_pool, &pool_config);
+    if (status != SALTS_OK) {
+      (void)cnet_manager_destroy(&impl->transport_manager);
+      (void)cnet_client_stop(&impl->network, 0u);
+      (void)cnet_client_destroy(&impl->network);
+      free(impl->h1_sessions);
       free(impl->h2_sessions);
       free(impl->slots);
       free(impl);
@@ -1037,192 +1327,223 @@ int chttp_async_client_set_socket_options(
   return cnet_client_set_stream_socket_options(&impl->network, options);
 }
 
+static int chttp_h1_rollback(chttp_slot *slot) {
+  chttp_h1_session *session = slot->h1;
+  int status;
+  if (slot->lease.slot != 0u) {
+    status = cnet_pool_release(&slot->client->connection_pool, slot->lease);
+    if (status != SALTS_OK) return status;
+  }
+  if (session != NULL) {
+    session->operation = 0u;
+    session->request = NULL;
+    if (session->state == CHTTP_H1_ACTIVE) session->state = CHTTP_H1_IDLE;
+  }
+  chttp_slot_release(slot);
+  return SALTS_OK;
+}
+
 static int chttp_async_client_submit_impl(chttp_async_client *client,
                                           const chttp_request_options *options,
                                           chttp_file_transfer *file_transfer,
                                           chttp_file_sink_transfer *file_sink_transfer,
+                                          const cnet_destination_result *destination,
                                           chttp_request *out_request) {
   chttp_client_impl *impl = chttp_client_get(client);
   chttp_slot *slot;
+  chttp_h1_session *session = NULL;
   unsigned char *request_data = NULL;
-  size_t request_size = 0u;
+  size_t request_size = 0u, index;
   cnet_connect_options connect_options;
   chttp_tls_profile_impl *tls_profile = NULL;
-  size_t slot_index;
-  int status;
+  cnet_pool_key key;
+  bool pipe;
+  int status, cleanup_status;
   if (out_request == NULL) return SALTS_EINVAL;
   *out_request = (chttp_request){0};
   if (impl == NULL || options == NULL || (file_transfer != NULL && options->body_source == NULL) ||
-      (file_sink_transfer != NULL && options->body_sink == NULL))
-    return SALTS_EINVAL;
+      (file_sink_transfer != NULL && options->body_sink == NULL)) return SALTS_EINVAL;
   if (impl->callback_active) return SALTS_EBUSY;
   if (!impl->admission_open) return SALTS_ESHUTDOWN;
   if (options->protocol == CHTTP_HTTP_2)
-    return chttp_h2_submit(impl, options, file_transfer, file_sink_transfer, out_request);
+    return chttp_h2_submit(impl, options, file_transfer, file_sink_transfer, destination, out_request);
   if (options->protocol != CHTTP_HTTP_1_1) return SALTS_EINVAL;
   status = chttp_stream_uri_supported(options->connection_uri, options->tls != NULL);
   if (status != SALTS_OK) return status;
   status = chttp_request_build(options, &impl->limits, &request_data, &request_size);
   if (status != SALTS_OK) return status;
   status = chttp_tls_profile_acquire(options->tls, &tls_profile);
-  if (status != SALTS_OK) {
-    free(request_data);
-    return status;
-  }
+  if (status != SALTS_OK) { free(request_data); return status; }
   if (tls_profile != NULL && chttp_tls_profile_protocol(tls_profile) != options->protocol) {
     free(request_data);
     chttp_tls_profile_release(tls_profile);
     return SALTS_EPROTONOSUPPORT;
   }
-
-  slot = chttp_slot_find_idle(impl, options, tls_profile);
-  if (slot != NULL) {
-    chttp_tls_profile_release(tls_profile);
-    if (!slot->receive_armed) {
-      free(request_data);
-      (void)chttp_slot_try_close(slot);
-      return SALTS_ENOBUFS;
-    }
-    status = chttp_slot_prepare_streaming(slot, options, file_sink_transfer);
-    if (status != SALTS_OK) {
-      free(request_data);
-      return status;
-    }
-    slot_index = (size_t)(slot - impl->slots);
-    slot->generation = chttp_next_generation(slot->generation);
-    slot->public_handle =
-        (chttp_request){.slot = (uint32_t)(slot_index + 1u), .generation = slot->generation};
-    slot->request_data = request_data;
-    slot->protocol = CHTTP_HTTP_1_1;
-    slot->request_size = request_size;
-    slot->on_complete = options->on_complete;
-    slot->user = options->user;
-    slot->result_delivered = false;
-    slot->cancel_requested = false;
-    slot->close_admitted = false;
-    slot->close_pending = false;
-    slot->state = CHTTP_SLOT_BUSY;
-    slot->file_transfer = file_transfer;
-    slot->file_sink_transfer = file_sink_transfer;
-    if (file_transfer != NULL)
-      chttp_file_transfer_set_ready(file_transfer, chttp_slot_file_ready, slot);
-    if (file_sink_transfer != NULL)
-      chttp_file_sink_transfer_set_ready(file_sink_transfer, chttp_slot_file_sink_ready, slot);
-    {
-      void *request_data = slot->request_data;
-      status = chttp_cnet_send_owned_malloc(
-          &impl->network, slot->connection, &request_data, slot->request_size);
-      slot->request_data = (unsigned char *)request_data;
-    }
-    if (status != SALTS_OK) {
-      free(slot->request_data);
-      slot->request_data = NULL;
-      slot->request_size = 0u;
-      chttp_response_parser_destroy(&slot->response_parser);
-      if (chttp_cnet_retained_release(&slot->source_retained) == SALTS_OK) {
-        free(slot->source_buffer);
-        slot->source_buffer = NULL;
-      }
-      slot->source_enabled = false;
-      slot->source_complete = false;
-      if (slot->file_transfer != NULL)
-        chttp_file_transfer_set_ready(slot->file_transfer, NULL, NULL);
-      slot->file_transfer = NULL;
-      if (slot->file_sink_transfer != NULL)
-        chttp_file_sink_transfer_set_ready(slot->file_sink_transfer, NULL, NULL);
-      slot->file_sink_transfer = NULL;
-      slot->on_complete = NULL;
-      slot->user = NULL;
-      slot->result_delivered = true;
-      slot->state = CHTTP_SLOT_IDLE;
-      return status;
-    }
-    slot->request_size = 0u;
-    *out_request = slot->public_handle;
-    return SALTS_OK;
-  }
-
   slot = chttp_slot_find_free(impl);
   if (slot == NULL) {
     free(request_data);
     chttp_tls_profile_release(tls_profile);
-    status = chttp_begin_idle_eviction(impl);
-    if (status != SALTS_OK) return status;
     return SALTS_ENOBUFS;
   }
-  status = chttp_slot_prepare_streaming(slot, options, file_sink_transfer);
-  if (status != SALTS_OK) {
-    free(request_data);
-    chttp_tls_profile_release(tls_profile);
-    return status;
-  }
-  slot_index = (size_t)(slot - impl->slots);
-  slot->generation = chttp_next_generation(slot->generation);
-  slot->public_handle =
-      (chttp_request){.slot = (uint32_t)(slot_index + 1u), .generation = slot->generation};
   slot->request_data = request_data;
-  slot->protocol = CHTTP_HTTP_1_1;
   slot->request_size = request_size;
+  slot->generation = chttp_next_generation(slot->generation);
+  slot->public_handle = (chttp_request){
+      .slot = (uint32_t)(slot - impl->slots + 1u), .generation = slot->generation};
+  slot->protocol = CHTTP_HTTP_1_1;
   slot->on_complete = options->on_complete;
   slot->user = options->user;
-  slot->tls_profile = tls_profile;
   slot->state = CHTTP_SLOT_CONNECTING;
+  status = chttp_slot_prepare_streaming(slot, options, file_sink_transfer);
+  if (status != SALTS_OK) goto reject;
   slot->file_transfer = file_transfer;
   slot->file_sink_transfer = file_sink_transfer;
   if (file_transfer != NULL)
     chttp_file_transfer_set_ready(file_transfer, chttp_slot_file_ready, slot);
   if (file_sink_transfer != NULL)
     chttp_file_sink_transfer_set_ready(file_sink_transfer, chttp_slot_file_sink_ready, slot);
-  slot->connection_uri = chttp_copy_text(options->connection_uri);
-  slot->authority = chttp_copy_text(options->authority);
-  if (slot->connection_uri == NULL || slot->authority == NULL) {
-    chttp_slot_release(slot);
-    return SALTS_ENOMEM;
+  status = chttp_pool_key(impl, options, tls_profile, destination, &key);
+  if (status != SALTS_OK) goto reject;
+  pipe = strncmp(options->connection_uri, "pipe://", sizeof("pipe://") - 1u) == 0;
+  if (!pipe) {
+    const cnet_pool_protocol_ops protocol = {
+        .reserve = chttp_h1_reserve, .release = chttp_h1_release_operation, .user = slot};
+    cnet_managed_connection managed = {0};
+    status = cnet_pool_try_acquire(&impl->connection_pool, &key, &protocol, &slot->lease, &managed);
+    if (status != SALTS_OK && status != SALTS_ENOBUFS) goto reject;
+    session = slot->h1;
+  } else {
+    for (index = 0u; index < impl->connection_capacity; ++index) {
+      chttp_h1_session *candidate = &impl->h1_sessions[index];
+      if (candidate->state == CHTTP_H1_IDLE && candidate->receive_armed &&
+          chttp_destination_matches(&candidate->destination, destination) &&
+          chttp_h1_matches(candidate, options, tls_profile)) {
+        session = candidate;
+        break;
+      }
+    }
+    if (session != NULL) {
+      if (impl->next_operation == UINT64_MAX) { status = SALTS_ERANGE; goto reject; }
+      session->operation = ++impl->next_operation;
+      session->request = slot;
+      session->state = CHTTP_H1_ACTIVE;
+      slot->h1 = session;
+    }
   }
-  connect_options =
-      (cnet_connect_options){.uri = options->connection_uri,
-                             .observer = {.on_state = chttp_cnet_state,
-                                          .on_receive = chttp_cnet_receive,
-                                          .user = slot,
-                                          .on_send = chttp_cnet_send},
-                             .tls_client = chttp_tls_profile_client(slot->tls_profile)};
-  if (strncmp(options->connection_uri, "pipe://", sizeof("pipe://") - 1u) == 0) {
-    /* Named-pipe IPC is a genuine separate CNet transport. The released
-     * Manager intentionally supports only tcp/tls; this is not a fallback. */
-    status = cnet_connect(&impl->network, &connect_options, &slot->connection);
+  if (session != NULL) {
+    void *owned = slot->request_data;
+    slot->state = CHTTP_SLOT_BUSY;
+    status = chttp_cnet_send_owned_malloc(&impl->network, session->connection,
+                                          &owned, slot->request_size);
+    slot->request_data = (unsigned char *)owned;
+    if (status != SALTS_OK) goto reject;
+    session->send_pending = true;
+    slot->request_size = 0u;
+    chttp_tls_profile_release(tls_profile);
+    *out_request = slot->public_handle;
+    return SALTS_OK;
+  }
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    if (impl->h1_sessions[index].state == CHTTP_H1_FREE) {
+      session = &impl->h1_sessions[index];
+      break;
+    }
+  }
+  if (session == NULL) {
+    status = SALTS_ENOBUFS;
+    goto reject;
+  }
+  if (impl->next_operation == UINT64_MAX) { status = SALTS_ERANGE; goto reject; }
+  session->state = CHTTP_H1_CONNECTING;
+  session->key = key;
+  if (destination != NULL) session->destination = *destination;
+  session->request = slot;
+  session->operation = ++impl->next_operation;
+  slot->h1 = session;
+  session->tls_profile = tls_profile;
+  tls_profile = NULL;
+  session->connection_uri = tstr_dup(options->connection_uri);
+  session->authority = tstr_dup(options->authority);
+  if (session->connection_uri == NULL || session->authority == NULL) {
+    status = SALTS_ENOMEM;
+    goto reject_connection;
+  }
+  connect_options = (cnet_connect_options){
+      .uri = options->connection_uri,
+      .observer = {.on_state = chttp_cnet_state, .on_receive = chttp_cnet_receive,
+                   .user = session, .on_send = chttp_cnet_send},
+      .tls_client = chttp_tls_profile_client(session->tls_profile)};
+  if (pipe) {
+    /* IPC is a distinct transport, outside Manager's tcp/tls contract. */
+    status = cnet_connect(&impl->network, &connect_options, &session->connection);
   } else {
     const cnet_manager_attachment attachment = {
-        .observer = connect_options.observer,
-        .on_recycle = NULL,
-        .hold_context = false};
-    status = cnet_manager_reserve(&impl->h1_manager, &attachment, &slot->managed);
+        .observer = connect_options.observer, .on_recycle = chttp_h1_recycle,
+        .hold_context = true};
+    status = cnet_pool_reserve_connecting(&impl->connection_pool, &key, &session->pooled);
     if (status == SALTS_OK)
-      status = cnet_manager_connect(
-          &impl->h1_manager, slot->managed, &connect_options, &slot->connection);
+      status = cnet_manager_reserve(&impl->transport_manager, &attachment, &session->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_connect(&impl->transport_manager, session->managed,
+                                    &connect_options, &session->connection);
   }
-  if (status != SALTS_OK) {
-    /* A failed managed connect consumes its record; Manager.advance reclaims
-     * it without any callback after the H1 slot is released. */
-    chttp_slot_release(slot);
-    if (status == SALTS_ENOBUFS) {
-      status = chttp_begin_idle_eviction(impl);
-      if (status == SALTS_OK) return SALTS_ENOBUFS;
-    }
-    return status;
-  }
+  if (status != SALTS_OK) goto reject_connection;
   *out_request = slot->public_handle;
   return SALTS_OK;
+
+reject_connection:
+  session->transport_closed = true;
+  session->state = CHTTP_H1_TERMINAL;
+reject:
+  chttp_tls_profile_release(tls_profile);
+  cleanup_status = chttp_h1_rollback(slot);
+  if (cleanup_status != SALTS_OK) return cleanup_status;
+  cleanup_status = chttp_client_pool_progress(impl);
+  if (cleanup_status != SALTS_OK) return cleanup_status;
+  if (status == SALTS_ENOBUFS) {
+    cleanup_status = chttp_begin_idle_eviction(impl);
+    if (cleanup_status != SALTS_OK) return cleanup_status;
+  }
+  return status;
 }
 
 int chttp_async_client_submit(chttp_async_client *client, const chttp_request_options *options,
                               chttp_request *out_request) {
-  return chttp_async_client_submit_impl(client, options, NULL, NULL, out_request);
+  return chttp_async_client_submit_impl(client, options, NULL, NULL, NULL, out_request);
+}
+
+int chttp_async_client_submit_destination(chttp_async_client *client,
+                                           const chttp_request_options *options,
+                                           const cnet_destination_result *destination,
+                                           chttp_request *out_request) {
+  return chttp_async_client_submit_impl(client, options, NULL, NULL, destination, out_request);
+}
+
+int chttp_async_client_submit_to(chttp_async_client *client,
+                                 const chttp_request_options *options,
+                                 const chttp_destination_options *destinations,
+                                 cnet_destination_result *out_destination,
+                                 chttp_request *out_request) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  chttp_request_options selected_options;
+  const char *uri = NULL;
+  int status;
+  if (out_request != NULL) *out_request = (chttp_request){0};
+  if (out_destination != NULL) *out_destination = (cnet_destination_result){.index = SIZE_MAX};
+  if (impl == NULL || out_request == NULL || out_destination == NULL) return SALTS_EINVAL;
+  if (impl->callback_active) return SALTS_EBUSY;
+  if (!impl->admission_open) return SALTS_ESHUTDOWN;
+  status = chttp_destination_select(destinations, options, out_destination, &uri);
+  if (status != SALTS_OK) return status;
+  selected_options = *options;
+  selected_options.connection_uri = uri;
+  return chttp_async_client_submit_destination(client, &selected_options, out_destination, out_request);
 }
 
 int chttp_async_client_submit_file(chttp_async_client *client, const chttp_request_options *options,
                                    chttp_file_transfer *transfer, chttp_request *out_request) {
   if (transfer == NULL || transfer->file.impl == NULL) return SALTS_EINVAL;
-  return chttp_async_client_submit_impl(client, options, transfer, NULL, out_request);
+  return chttp_async_client_submit_impl(client, options, transfer, NULL, NULL, out_request);
 }
 
 int chttp_async_client_submit_file_download(chttp_async_client *client,
@@ -1230,7 +1551,7 @@ int chttp_async_client_submit_file_download(chttp_async_client *client,
                                             chttp_file_sink_transfer *transfer,
                                             chttp_request *out_request) {
   if (transfer == NULL || transfer->file.impl == NULL) return SALTS_EINVAL;
-  return chttp_async_client_submit_impl(client, options, NULL, transfer, out_request);
+  return chttp_async_client_submit_impl(client, options, NULL, transfer, NULL, out_request);
 }
 
 int chttp_async_request_cancel(chttp_async_client *client, chttp_request request) {
@@ -1239,18 +1560,21 @@ int chttp_async_request_cancel(chttp_async_client *client, chttp_request request
   int status;
   if (impl == NULL) return SALTS_EINVAL;
   if (slot == NULL) return SALTS_ENOENT;
-  if (slot->result_delivered) return slot->state == CHTTP_SLOT_IDLE ? SALTS_ENOENT : SALTS_EALREADY;
+  if (slot->result_delivered) return SALTS_EALREADY;
   if (slot->cancel_requested) return SALTS_EALREADY;
   if (slot->protocol == CHTTP_HTTP_2) {
     status = chttp_h2_session_cancel(slot->h2_request.session, &slot->h2_request);
     if (status == SALTS_OK) slot->cancel_requested = true;
     return status;
   }
-  status = cnet_close(&impl->network, slot->connection);
+  status = cnet_close(&impl->network, slot->h1->connection);
   if (status != SALTS_OK) return status;
   slot->cancel_requested = true;
-  slot->close_admitted = true;
+  slot->h1->close_admitted = true;
+  slot->h1->state = CHTTP_H1_CLOSING;
   slot->state = CHTTP_SLOT_CLOSING;
+  if (slot->h1->pooled.slot != 0u)
+    return cnet_pool_begin_drain(&impl->connection_pool, slot->h1->pooled);
   return SALTS_OK;
 }
 
@@ -1281,11 +1605,10 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
     if (close_status == SALTS_OK) close_status = after_status;
   }
   {
-    const int manager_status = chttp_h1_manager_progress(impl);
+    const int manager_status = chttp_client_pool_progress(impl);
     if (close_status == SALTS_OK) close_status = manager_status;
   }
   chttp_h2_reap_terminal_sessions(impl);
-  chttp_reap_terminal_slots(impl);
   *out_completions = impl->completion_count;
   impl->poll_active = false;
   if (status != SALTS_OK) return status;
@@ -1303,6 +1626,8 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
   if (impl->stopped) return SALTS_OK;
   impl->admission_open = false;
   impl->stop_active = true;
+  first_status = cnet_pool_seal(&impl->connection_pool);
+  if (first_status != SALTS_OK) return first_status;
   impl->completion_count = 0u;
   if (!impl->network_stop_started) {
     for (index = 0u; index < impl->h2_session_capacity; ++index) {
@@ -1329,24 +1654,15 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
       if (status == SALTS_OK) status = chttp_h2_progress_sessions(impl);
       if (status != SALTS_OK) first_status = status;
       chttp_h2_reap_terminal_sessions(impl);
-      chttp_reap_terminal_slots(impl);
+      status = chttp_client_pool_progress(impl);
+      if (status != SALTS_OK && first_status == SALTS_OK) first_status = status;
     }
     if (first_status == SALTS_OK && !chttp_h2_sessions_stop_ready(impl)) return SALTS_ETIMEDOUT;
   }
   impl->network_stop_started = true;
   stop_status = cnet_client_stop(&impl->network, chttp_stop_remaining_ms(started_ms, timeout_ms));
   if (stop_status == SALTS_EALREADY) stop_status = SALTS_OK;
-  if (stop_status == SALTS_OK) {
-    cnet_manager_snapshot snapshot;
-    int manager_status = chttp_h1_manager_progress(impl);
-    if (manager_status == SALTS_OK)
-      manager_status = cnet_manager_get_snapshot(&impl->h1_manager, &snapshot);
-    if (manager_status == SALTS_OK && !snapshot.drained) manager_status = SALTS_EBUSY;
-    if (manager_status != SALTS_OK && first_status == SALTS_OK)
-      first_status = manager_status;
-  }
   chttp_h2_reap_terminal_sessions(impl);
-  chttp_reap_terminal_slots(impl);
   if (stop_status == SALTS_OK && impl->file_runtime_initialized) {
     int file_status = cflow_io_file_runtime_close(&impl->file_runtime);
     if (file_status == SALTS_EALREADY) file_status = SALTS_OK;
@@ -1359,6 +1675,18 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
       if (file_status == SALTS_OK) cmeta_thread_yield();
     }
     if (file_status != SALTS_OK && first_status == SALTS_OK) first_status = file_status;
+  }
+  if (stop_status == SALTS_OK) {
+    cnet_manager_snapshot manager_snapshot;
+    cnet_pool_snapshot pool_snapshot;
+    int status = chttp_client_pool_progress(impl);
+    if (status == SALTS_OK)
+      status = cnet_pool_get_snapshot(&impl->connection_pool, &pool_snapshot);
+    if (status == SALTS_OK && !pool_snapshot.drained) status = SALTS_EBUSY;
+    if (status == SALTS_OK)
+      status = cnet_manager_get_snapshot(&impl->transport_manager, &manager_snapshot);
+    if (status == SALTS_OK && !manager_snapshot.drained) status = SALTS_EBUSY;
+    if (status != SALTS_OK && first_status == SALTS_OK) first_status = status;
   }
   if (stop_status == SALTS_OK && first_status == SALTS_OK) impl->stopped = true;
   return first_status != SALTS_OK ? first_status : stop_status;
@@ -1377,7 +1705,9 @@ int chttp_async_client_destroy(chttp_async_client *client) {
     if (status != SALTS_OK) return status;
     impl->file_runtime_initialized = false;
   }
-  status = cnet_manager_destroy(&impl->h1_manager);
+  status = cnet_pool_destroy(&impl->connection_pool);
+  if (status != SALTS_OK) return status;
+  status = cnet_manager_destroy(&impl->transport_manager);
   if (status != SALTS_OK) return status;
   status = cnet_client_destroy(&impl->network);
   if (status != SALTS_OK) return status;
@@ -1385,6 +1715,7 @@ int chttp_async_client_destroy(chttp_async_client *client) {
     chttp_h2_session_destroy(&impl->h2_sessions[index]);
   for (index = 0u; index < impl->request_capacity; ++index)
     chttp_slot_release(&impl->slots[index]);
+  free(impl->h1_sessions);
   free(impl->h2_sessions);
   free(impl->slots);
   free(impl);

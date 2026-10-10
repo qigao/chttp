@@ -852,6 +852,104 @@ spec("CHTTP HTTP/2 client") {
     chttp_h2_test_close_socket(listener);
   }
 
+  group("READY H2 protocol leases") {
+    static chttp_async_client client;
+    static chttp_h2_test_completion results[4];
+    static chttp_h2_test_socket listener;
+    static chttp_h2_test_server server;
+    static cmeta_thread_t thread;
+    static char uri[64];
+
+    before_each() {
+      chttp_client_config config = chttp_h2_test_config();
+      uint16_t port = 0u;
+      int chars;
+      client = (chttp_async_client){0};
+      memset(results, 0, sizeof(results));
+      server = (chttp_h2_test_server){0};
+      listener = CHTTP_H2_TEST_INVALID_SOCKET;
+      thread = NULL;
+      config.network.connection_capacity = 1u;
+      config.request_capacity = 2u;
+      check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+      check_equal(chttp_h2_test_listener(&listener, &port), SALTS_OK);
+      chars = snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port);
+      check_true(chars > 0 && (size_t)chars < sizeof(uri));
+      server.listener = listener;
+      server.parse_until_close = 1;
+      check_equal(cmeta_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server),
+                  SALTS_OK);
+    }
+
+    after_each() {
+      if (client.impl != NULL) {
+        check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+      }
+      if (thread != NULL) {
+        check_equal(cmeta_thread_join(&thread), SALTS_OK);
+        cmeta_thread_destroy(&thread);
+      }
+      chttp_h2_test_close_socket(listener);
+    }
+
+    it("releases a canceled warm stream once while its sibling and later stream progress") {
+      chttp_request requests[4] = {{0}};
+      chttp_request rejected = {0};
+      chttp_request_options options = {
+          .connection_uri = uri, .authority = "pool.test", .target = "/warmup",
+          .method = CHTTP_METHOD_GET, .protocol = CHTTP_HTTP_2,
+          .on_complete = chttp_h2_test_on_complete, .user = &results[0]};
+      size_t completions = 0u;
+      uint64_t deadline;
+      check_equal(chttp_async_client_submit(&client, &options, &requests[0]), SALTS_OK);
+      deadline = cmeta_monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+      while (results[0].count == 0u && cmeta_monotonic_ms() < deadline)
+        check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+      check_equal(results[0].count, (size_t)1u);
+      check_equal(results[0].statuses[0], SALTS_OK);
+
+      /* A completed response proves the shared connection has exchanged
+       * SETTINGS. Both following requests acquire real streams from READY. */
+      options.target = "/cancel-warm";
+      options.user = &results[1];
+      check_equal(chttp_async_client_submit(&client, &options, &requests[1]), SALTS_OK);
+      options.target = "/sibling-warm";
+      options.user = &results[2];
+      check_equal(chttp_async_client_submit(&client, &options, &requests[2]), SALTS_OK);
+      check_equal(chttp_async_client_submit(&client, &options, &rejected), SALTS_ENOBUFS);
+      check_equal(rejected.slot, 0u);
+      check_equal(chttp_async_request_cancel(&client, requests[0]), SALTS_ENOENT);
+      check_equal(chttp_async_request_cancel(&client, requests[1]), SALTS_OK);
+      deadline = cmeta_monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+      while ((results[1].count == 0u || results[2].count == 0u) &&
+             cmeta_monotonic_ms() < deadline)
+        check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+      check_equal(results[1].count, (size_t)1u);
+      check_equal(results[1].statuses[0], SALTS_ECANCELED);
+      check_equal(results[2].count, (size_t)1u);
+      check_equal(results[2].statuses[0], SALTS_OK);
+      options.target = "/after-release";
+      options.user = &results[3];
+      check_equal(chttp_async_client_submit(&client, &options, &requests[3]), SALTS_OK);
+      check_equal(chttp_async_request_cancel(&client, requests[1]), SALTS_ENOENT);
+      deadline = cmeta_monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+      while (results[3].count == 0u && cmeta_monotonic_ms() < deadline)
+        check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+      check_equal(results[3].count, (size_t)1u);
+      check_equal(results[3].statuses[0], SALTS_OK);
+      check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(cmeta_thread_join(&thread), SALTS_OK);
+      cmeta_thread_destroy(&thread);
+      thread = NULL;
+      check_equal(server.status, SALTS_OK);
+      check_equal(server.accepted_connections, (size_t)1u);
+      check_equal(server.received_goaway, 1);
+      for (size_t index = 0u; index < 4u; ++index)
+        check_equal(results[index].count, (size_t)1u);
+    }
+  }
+
   it("evicts an idle HTTP/2 origin when the physical pool is full") {
     chttp_async_client client = {0};
     chttp_client_config config = chttp_h2_test_config();

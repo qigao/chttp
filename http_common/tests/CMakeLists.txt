@@ -1,3 +1,11 @@
+add_executable(chttp_thread_cpu_test chttp_thread_cpu_test.c)
+target_link_libraries(chttp_thread_cpu_test PRIVATE Salts::Platform Salts::TinyTest)
+target_include_directories(chttp_thread_cpu_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+set_target_properties(chttp_thread_cpu_test PROPERTIES
+  FOLDER "http_common/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_thread_cpu_test COMMAND chttp_thread_cpu_test)
+set_tests_properties(chttp_thread_cpu_test PROPERTIES TIMEOUT 10)
+
 add_executable(chttp_file_transfer_test chttp_file_transfer_test.c)
 target_link_libraries(chttp_file_transfer_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
 target_include_directories(chttp_file_transfer_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc)
@@ -21,7 +29,7 @@ set_target_properties(chttp_websocket_handshake_test PROPERTIES
 
 
 add_executable(chttp_header_cpp_test chttp_header_cpp_test.cpp)
-target_link_libraries(chttp_header_cpp_test PRIVATE CHttp::Client CHttp::Server)
+target_link_libraries(chttp_header_cpp_test PRIVATE CHttp::Client CHttp::App)
 target_include_directories(chttp_header_cpp_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc)
 add_test(NAME chttp_header_cpp_test COMMAND chttp_header_cpp_test)
 set_target_properties(chttp_header_cpp_test PROPERTIES FOLDER "http_common/tests")
