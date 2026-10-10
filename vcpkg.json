@@ -1,7 +1,8 @@
 {
   "name": "http-services",
-  "version-semver": "2.1.0-rc.1",
+  "version-semver": "2.1.0-rc.2",
   "dependencies": [
+    "gmssl",
     "llhttp",
     "tree-sitter",
     "tree-sitter-c"

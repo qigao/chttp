@@ -72,14 +72,15 @@ That gives the library a shared foundation:
 - **CMeta / CFlow** for typed metadata and execution boundaries where required.
 - **SaltsUtils parsers and DataBind** for JSON, related higher-level formats, and typed data binding through `Salts::DataBind`.
 - **SaltsUtils crypto helpers** where explicitly required by protocol features.
-- **Salts provider-neutral crypto APIs** for protocol hashing, HMAC, legacy compatibility digests, constant-time comparison, and secret wiping; CHTTP does not select or link a crypto provider directly.
+- **Salts provider-neutral crypto APIs** for protocol hashing, HMAC, legacy compatibility digests, constant-time comparison, and secret wiping; provider types stay private.
 
 The current Salts CNet TLS and Salts Core crypto backends use GmSSL privately.
 CHTTP has no direct OpenSSL/BoringSSL dependency; HTTPS, H2 TLS and WSS use CNet,
-and JWT remains HS256 through Salts Core. SaltsUtils Crypto also contains
-private libecc implementations; this is not a claim that every cryptographic
-component uses GmSSL. Install the matching Salts SDK rather than adding a
-provider library to the Chttp consumer link interface.
+and public JWT admission remains HS256. The internal cjwt JWS/JWE backend uses
+SaltsUtils Crypto with GmSSL/libecc. Install SaltsUtils Native 4.3.0-rc.4 or a
+compatible newer SDK and restore GmSSL port revision 9 through the shared
+vcpkg-cache manifest; its CMake target resolves the static Crypto dependency.
+See [provider requirements and qualification](docs/HTTP.md#密码库迁移边界).
 
 CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
 
