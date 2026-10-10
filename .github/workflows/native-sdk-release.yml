@@ -126,7 +126,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config nasm
+          sudo apt-get install -y ninja-build pkg-config nasm strace
       - name: Prepare macOS AppleClang toolchain
         if: matrix.family == 'macos'
         shell: bash
@@ -218,6 +218,7 @@ jobs:
         run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
 
       - name: Configure, test and install Unix SDK
+        id: unix_sdk
         if: matrix.family != 'windows'
         shell: bash
         run: |
@@ -226,6 +227,17 @@ jobs:
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           ctest --preset "${{ matrix.preset }}" --output-on-failure --no-tests=error
           cmake --build --preset "install-${{ matrix.preset }}"
+      - name: Diagnose failed Linux upload connection through CTest
+        if: failure() && matrix.family == 'linux' && steps.unix_sdk.conclusion == 'failure'
+        shell: bash
+        run: |
+          set +e
+          strace -f -e trace=socket,connect,bind,listen,getsockname,getsockopt,setsockopt \
+            -o build/upload-connect.strace \
+            ctest --preset "${{ matrix.preset }}" -R '^chttp_web_upload_http_test$' --output-on-failure
+          status=$?
+          if [[ -f build/upload-connect.strace ]]; then cat build/upload-connect.strace; fi
+          exit "$status"
       - name: Configure, test and install Windows SDK
         if: matrix.family == 'windows'
         shell: cmd
