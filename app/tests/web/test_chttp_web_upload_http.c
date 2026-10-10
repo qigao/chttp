@@ -7,29 +7,10 @@
 #include <salts/error_codes.h>
 #include <salts/thread.h>
 
-#include <errno.h>
-#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
-#if defined(_WIN32)
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-typedef SOCKET upload_http_socket;
-  #define UPLOAD_HTTP_INVALID_SOCKET INVALID_SOCKET
-  #define upload_http_socket_close closesocket
-#else
-  #include <arpa/inet.h>
-  #include <netinet/in.h>
-  #include <sys/socket.h>
-  #include <sys/time.h>
-  #include <unistd.h>
-typedef int upload_http_socket;
-  #define UPLOAD_HTTP_INVALID_SOCKET (-1)
-  #define upload_http_socket_close close
-#endif
 
 enum {
   UPLOAD_HTTP_TIMEOUT_MS = 5000,
@@ -51,6 +32,18 @@ typedef struct upload_http_app {
   chttp_web_status abort_status;
   int abort_native_status;
 } upload_http_app;
+
+/* The test thread owns progress and the copied observer for its entire life.
+ * Use portable CNet endpoints: SaltsUtils rc.2 exports an endian.h that can
+ * shadow glibc's header in consumers using native htonl/htons macros. */
+typedef struct upload_http_peer {
+  cnet_client network;
+  cnet_connection connection;
+  int connected;
+  int status;
+  int native_status;
+  size_t sent;
+} upload_http_peer;
 
 static native_io_backend_kind upload_http_backend(void) {
 #if defined(_WIN32)
@@ -374,78 +367,98 @@ static int upload_http_get_csrf(
   return status;
 }
 
-static int upload_http_raw_connect(
-    uint16_t port, upload_http_socket *out_socket, int *out_native_error) {
-  struct sockaddr_in address;
-  upload_http_socket socket_value;
-  if (out_socket == NULL || out_native_error == NULL || port == 0u)
-    return SALTS_EINVAL;
-  *out_native_error = 0;
-  *out_socket = UPLOAD_HTTP_INVALID_SOCKET;
-  socket_value = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (socket_value == UPLOAD_HTTP_INVALID_SOCKET) {
-#if defined(_WIN32)
-    *out_native_error = WSAGetLastError();
-#else
-    *out_native_error = errno;
-#endif
-    return SALTS_EIO;
+static void upload_http_peer_state(
+    void *user, cnet_connection connection,
+    cnet_connection_state state, const cnet_error *error) {
+  upload_http_peer *peer = (upload_http_peer *)user;
+  (void)connection;
+  if (state == CNET_CONNECTION_CONNECTED) peer->connected = 1;
+  else if (state == CNET_CONNECTION_FAILED || state == CNET_CONNECTION_CLOSED) {
+    peer->connected = 0;
+    peer->status = error != NULL && error->status != SALTS_OK
+        ? error->status : SALTS_ECANCELED;
+    peer->native_status = error != NULL ? error->native_status : 0;
   }
-#if defined(__linux__)
-  /* Linux applies SO_SNDTIMEO to connect as well as send. A dropped SYN
-   * must fail within the test deadline rather than the TCP retry budget. */
-  const struct timeval timeout = {
-      UPLOAD_HTTP_TIMEOUT_MS / 1000,
-      (UPLOAD_HTTP_TIMEOUT_MS % 1000) * 1000};
-  if (setsockopt(socket_value, SOL_SOCKET, SO_SNDTIMEO,
-                 &timeout, sizeof(timeout)) != 0) {
-    *out_native_error = errno;
-    upload_http_socket_close(socket_value);
-    return SALTS_EIO;
-  }
-#endif
-  memset(&address, 0, sizeof(address));
-  address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (connect(
-          socket_value,
-          (const struct sockaddr *)&address,
-          sizeof(address)) != 0) {
-#if defined(_WIN32)
-    *out_native_error = WSAGetLastError();
-#else
-    *out_native_error = errno;
-#endif
-    upload_http_socket_close(socket_value);
-    return SALTS_EIO;
-  }
-  *out_socket = socket_value;
-  return SALTS_OK;
 }
 
-static int upload_http_raw_send(
-    upload_http_socket socket_value,
-    const void *data,
-    size_t size) {
-  const unsigned char *cursor = (const unsigned char *)data;
-  size_t sent = 0u;
-  if (socket_value == UPLOAD_HTTP_INVALID_SOCKET ||
-      data == NULL || size == 0u)
+static void upload_http_peer_sent(
+    void *user, cnet_connection connection, size_t size) {
+  upload_http_peer *peer = (upload_http_peer *)user;
+  (void)connection;
+  peer->sent += size;
+}
+
+static int upload_http_peer_connect(upload_http_peer *peer, uint16_t port) {
+  cnet_client_config config = upload_http_network(1u);
+  cnet_stream_endpoint endpoint = CNET_STREAM_ENDPOINT_INIT;
+  cnet_stream_endpoint actual = CNET_STREAM_ENDPOINT_INIT;
+  const cnet_observer observer = {
+      .on_state = upload_http_peer_state,
+      .on_send = upload_http_peer_sent,
+      .user = peer};
+  const uint64_t deadline = cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+  int status;
+  size_t events;
+  if (peer == NULL || peer->network.impl != NULL || port == 0u)
     return SALTS_EINVAL;
-  while (sent < size) {
-    const size_t remaining = size - sent;
-    const int chunk =
-        remaining > (size_t)INT_MAX ? INT_MAX : (int)remaining;
-    const int result = send(
-        socket_value,
-        (const char *)cursor + sent,
-        chunk,
-        0);
-    if (result <= 0) return SALTS_EIO;
-    sent += (size_t)result;
+  peer->connected = 0;
+  peer->status = SALTS_OK;
+  peer->native_status = 0;
+  peer->sent = 0u;
+  endpoint.family = CNET_DATAGRAM_ADDRESS_IPV4;
+  endpoint.port = port;
+  endpoint.address[0] = 127u;
+  endpoint.address[3] = 1u;
+  status = cnet_client_init(&peer->network, &config);
+  if (status != SALTS_OK) return status;
+  status = cnet_connect_endpoint(
+      &peer->network, &endpoint, NULL, &observer, &peer->connection);
+  if (status != SALTS_OK) return status;
+  while (!peer->connected && peer->status == SALTS_OK &&
+         cmeta_monotonic_ms() < deadline) {
+    status = cnet_client_poll(&peer->network, 1u, &events);
+    if (status != SALTS_OK) return status;
   }
-  return SALTS_OK;
+  if (peer->status != SALTS_OK) return peer->status;
+  if (!peer->connected) return SALTS_ETIMEDOUT;
+  status = cnet_connection_remote_endpoint(
+      &peer->network, peer->connection, &actual);
+  if (status != SALTS_OK) return status;
+  return actual.family == endpoint.family && actual.port == port &&
+         memcmp(actual.address, endpoint.address, sizeof(actual.address)) == 0
+      ? SALTS_OK : SALTS_EPROTO;
+}
+
+static int upload_http_peer_close(upload_http_peer *peer) {
+  int status;
+  int destroy_status;
+  if (peer->network.impl == NULL) return SALTS_OK;
+  status = cnet_client_stop(&peer->network, UPLOAD_HTTP_TIMEOUT_MS);
+  destroy_status = cnet_client_destroy(&peer->network);
+  return status != SALTS_OK ? status : destroy_status;
+}
+
+static int upload_http_peer_send(
+    upload_http_peer *peer, const void *data, size_t size) {
+  mem_buffer_t *buffer = mem_get_buffer(mem_global(), size);
+  const uint64_t deadline = cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+  int status;
+  size_t events;
+  if (buffer == NULL) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  status = cnet_send_buffer(&peer->network, peer->connection, buffer);
+  /* Admission retains the backing; release the test's reference on either
+   * result, and keep driving progress until the admitted send settles. */
+  mem_buffer_release(buffer);
+  if (status != SALTS_OK) return status;
+  while (peer->sent < size && peer->status == SALTS_OK &&
+         cmeta_monotonic_ms() < deadline) {
+    status = cnet_client_poll(&peer->network, 1u, &events);
+    if (status != SALTS_OK) return status;
+  }
+  if (peer->status != SALTS_OK) return peer->status;
+  return peer->sent == size ? SALTS_OK : SALTS_ETIMEDOUT;
 }
 
 static int upload_http_wait_count(
@@ -466,7 +479,7 @@ static int upload_http_wait_count(
 }
 
 static int upload_http_send_partial_request(
-    upload_http_socket socket_value) {
+    upload_http_peer *peer) {
   static const char request[] =
       "POST /upload HTTP/1.1\r\n"
       "Host: 127.0.0.1\r\n"
@@ -479,8 +492,7 @@ static int upload_http_send_partial_request(
       "Content-Type: text/plain\r\n"
       "\r\n"
       "partial";
-  return upload_http_raw_send(
-      socket_value, request, sizeof(request) - 1u);
+  return upload_http_peer_send(peer, request, sizeof(request) - 1u);
 }
 
 static int upload_http_post(
@@ -543,33 +555,31 @@ spec("CHttp::App upload route integration") {
   static chttp_server server;
   static chttp_client client;
   static upload_http_app app;
-  static upload_http_socket socket_value;
+  static upload_http_peer peer;
 
   before_each() {
     check_null(server.impl);
     check_null(client.impl);
+    check_null(peer.network.impl);
     memset(&app, 0, sizeof(app));
     cmeta_mutex_init(&app.signals);
-    socket_value = UPLOAD_HTTP_INVALID_SOCKET;
   }
 
   after_each() {
     int client_status = SALTS_OK;
+    int peer_status = upload_http_peer_close(&peer);
     int stop_status = SALTS_OK;
     int destroy_status = SALTS_OK;
-    if (socket_value != UPLOAD_HTTP_INVALID_SOCKET) {
-      upload_http_socket_close(socket_value);
-      socket_value = UPLOAD_HTTP_INVALID_SOCKET;
-    }
     if (client.impl != NULL)
       client_status = chttp_client_destroy(&client, UPLOAD_HTTP_TIMEOUT_MS);
     if (server.impl != NULL) {
       stop_status = chttp_server_stop(&server, UPLOAD_HTTP_TIMEOUT_MS);
       destroy_status = chttp_server_destroy(&server);
     }
-    if (server.impl == NULL && client.impl == NULL)
+    if (server.impl == NULL && client.impl == NULL && peer.network.impl == NULL)
       cmeta_mutex_destroy(&app.signals);
     check_equal(client_status, SALTS_OK);
+    check_equal(peer_status, SALTS_OK);
     check_equal(stop_status, SALTS_OK);
     check_equal(destroy_status, SALTS_OK);
   }
@@ -687,7 +697,6 @@ spec("CHttp::App upload route integration") {
         .body_open = upload_http_open,
         .body_close = upload_http_close};
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
-    int native_error = 0;
     int connect_status;
     chttp_server_stats stats = {0};
     uint16_t port = 0u;
@@ -699,20 +708,19 @@ spec("CHttp::App upload route integration") {
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
 
-    connect_status = upload_http_raw_connect(port, &socket_value, &native_error);
+    connect_status = upload_http_peer_connect(&peer, port);
     check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
     check(connect_status == SALTS_OK,
           "connect port=%u status=%d native=%d running=%d terminal=%d",
-          (unsigned int)port, connect_status, native_error,
+          (unsigned int)port, connect_status, peer.native_status,
           stats.running, stats.terminal_status);
     check_equal(
-        upload_http_send_partial_request(socket_value),
+        upload_http_send_partial_request(&peer),
         SALTS_OK);
     check_equal(
         upload_http_wait_count(&app, &app.begin_calls, 1u),
         SALTS_OK);
-    upload_http_socket_close(socket_value);
-    socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+    check_equal(upload_http_peer_close(&peer), SALTS_OK);
 
     check_equal(
         upload_http_wait_count(&app, &app.abort_calls, 1u),
@@ -727,14 +735,14 @@ spec("CHttp::App upload route integration") {
         chttp_web_upload_reset(&app.upload, &error),
         CHTTP_WEB_OK);
 
-    connect_status = upload_http_raw_connect(port, &socket_value, &native_error);
+    connect_status = upload_http_peer_connect(&peer, port);
     check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
     check(connect_status == SALTS_OK,
           "connect port=%u status=%d native=%d running=%d terminal=%d",
-          (unsigned int)port, connect_status, native_error,
+          (unsigned int)port, connect_status, peer.native_status,
           stats.running, stats.terminal_status);
     check_equal(
-        upload_http_send_partial_request(socket_value),
+        upload_http_send_partial_request(&peer),
         SALTS_OK);
     check_equal(
         upload_http_wait_count(&app, &app.begin_calls, 2u),
@@ -753,8 +761,7 @@ spec("CHttp::App upload route integration") {
         chttp_web_upload_reset(&app.upload, &error),
         CHTTP_WEB_OK);
 
-    upload_http_socket_close(socket_value);
-    socket_value = UPLOAD_HTTP_INVALID_SOCKET;
+    check_equal(upload_http_peer_close(&peer), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 }
