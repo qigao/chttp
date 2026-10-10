@@ -222,9 +222,27 @@ int chttp_server_response_set_header(chttp_server_response *response, const char
 }
 
 int chttp_server_response_append_vary(chttp_server_response *response, const char *fields) {
+  if (response == NULL || response->impl == NULL || fields == NULL || *fields == '\0')
+    return SALTS_EINVAL;
+  if (strcmp(fields, "*") != 0) {
+    const unsigned char *cursor = (const unsigned char *)fields;
+    for (;;) {
+      while (*cursor == ' ' || *cursor == '\t') ++cursor;
+      const unsigned char *start = cursor;
+      while ((*cursor >= '0' && *cursor <= '9') ||
+          (*cursor >= 'a' && *cursor <= 'z') || (*cursor >= 'A' && *cursor <= 'Z') ||
+          (*cursor != 0u && strchr("!#$%&'*+-.^_`|~", *cursor) != NULL)) ++cursor;
+      if (cursor == start || (cursor == start + 1 && *start == '*')) return SALTS_EINVAL;
+      while (*cursor == ' ' || *cursor == '\t') ++cursor;
+      if (*cursor == '\0') break;
+      if (*cursor++ != ',') return SALTS_EINVAL;
+    }
+  }
   chttp_server_response_builder *builder = (chttp_server_response_builder *)response->impl;
   const size_t extra = strlen(fields);
   if (builder->deferred) return SALTS_EALREADY;
+  if (strcmp(fields, "*") == 0)
+    return chttp_server_response_set_header(response, "Vary", fields);
   for (size_t index = 0; index < builder->header_count; ++index) {
     chttp_header *header = &builder->headers[index];
     if (!chttp_server_response_ascii_equal(header->name, "Vary")) continue;

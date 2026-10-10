@@ -6,6 +6,7 @@
 #include <chttp_app/app.h>
 #include "http_example_native.h"
 #include "http_example.plugin_client.h"
+#include <salts/component.h>
 
 enum {
   HTTP_EXAMPLE_TIMEOUT_MS = 5000,
@@ -27,6 +28,18 @@ typedef struct http_example_config {
 } http_example_config;
 
 /* Private example owner; keep at a stable address until close releases it. */
+struct http_example_app;
+typedef struct http_example_component_resource {
+  struct http_example_app *app;
+  int role;
+} http_example_component_resource;
+
+enum {
+  HTTP_EXAMPLE_SERVICE_COMPONENT,
+  HTTP_EXAMPLE_CONTRACT_COMPONENT,
+  HTTP_EXAMPLE_COMPONENT_COUNT
+};
+
 typedef struct http_example_app {
   crpc_server rpc;
   chttp_rate_limiter limiter;
@@ -46,6 +59,14 @@ typedef struct http_example_app {
   const cmeta_data_desc *page_desc;
   HomePage_t page;
   tstr file_path;
+  salts_component_context components;
+  salts_component_provider_binding providers[2];
+  salts_component_deployment deployments[2];
+  salts_component_instance instances[2];
+  salts_component_dependency dependencies[1];
+  size_t activation_order[2];
+  cmeta_object_lifecycle component_lifecycles[2];
+  http_example_component_resource component_resources[2];
 } http_example_app;
 
 http_example_config http_example_config_default(void);
@@ -59,5 +80,8 @@ int http_example_intercept(void *user, const chttp_server_request_view *request,
     chttp_server_response *response, chttp_server_next *next);
 int http_example_no_store(void *user, const chttp_server_request_view *request,
     chttp_server_response *response, chttp_server_next *next);
+int http_example_select_policies(void *context, const DataBindBindingPlan *binding,
+    const DataBindServiceNativeBinding *native,
+    chttp_service_interceptor_hook *hooks, size_t capacity, size_t *count);
 
 #endif

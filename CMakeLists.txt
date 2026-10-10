@@ -45,7 +45,7 @@ unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
 find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
+find_package(SaltsUtils CONFIG REQUIRED COMPONENTS Crypto PATHS "${SALTS_UTILS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 if(NOT TARGET Salts::DataBind)
   message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
@@ -56,6 +56,7 @@ add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
 add_subdirectory(http_client)
 add_subdirectory(http_server)
+include(cmake/ChttpApplication.cmake)
 add_subdirectory(app)
 add_subdirectory(rpc_service)
 add_subdirectory(s3)
@@ -81,6 +82,8 @@ write_basic_package_version_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
               "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfigVersion.cmake"
         DESTINATION lib/cmake/Chttp)
+install(FILES cmake/ChttpApplication.cmake DESTINATION lib/cmake/Chttp)
+install(DIRECTORY cmake/application DESTINATION lib/cmake/Chttp)
 install(FILES LICENSE NOTICE THIRD_PARTY_NOTICES.md
         DESTINATION share/licenses/Chttp)
 install(

@@ -136,8 +136,9 @@ typedef struct chttp_service_http_mount {
  * the writer, then publishes through chttp_server_reply_buffer(). No shared
  * response scratch is reused across connections or H2 streams.
  *
- * Structured body/egress and requested HTTP context remain fail-closed until
- * their producer-owned lifecycle/FormatPlan slices land. DEFERRED_DIRECT
+ * The legacy mount keeps scalar egress; interceptor.h exposes an additive
+ * JSON/XML document mount using producer-owned FormatPlans. Structured request
+ * bodies and requested HTTP context remain unsupported. DEFERRED_DIRECT
  * offloads an already-admitted synchronous exact operation. DEFERRED_CFLOW
  * compiles the producer-owned typed projection once at mount and executes only
  * the immutable Plan on workers. A canonical FunctionDesc carrying

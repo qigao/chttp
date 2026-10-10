@@ -1,0 +1,64 @@
+#include "@APP_TARGET@_application.h"
+#include <salts/thread.h>
+#include <tlog.h>
+#include <signal.h>
+#include <string.h>
+
+#cmakedefine APP_CONFIGURE @APP_CONFIGURE@
+#ifdef APP_CONFIGURE
+int APP_CONFIGURE(chttp_application_options *options);
+#endif
+
+static volatile sig_atomic_t stopping;
+static void stop_signal(int signal_number) { (void)signal_number; stopping = 1; }
+
+int main(int argc, char **argv) {
+  chttp_application app = {0};
+  chttp_application_options options = chttp_application_options_default();
+  options.server.port = 8080u;
+  int status = SALTS_OK;
+  const char *phase = "configure";
+#ifdef APP_CONFIGURE
+  status = APP_CONFIGURE(&options);
+  if (status != SALTS_OK) goto finish;
+#endif
+  phase = "arguments (expected --port 0..65535)";
+  if (argc != 1) {
+    if (argc != 3 || strcmp(argv[1], "--port") != 0 || argv[2][0] == '\0') {
+      status = SALTS_EINVAL; goto finish;
+    }
+    unsigned port = 0u;
+    for (const char *p = argv[2]; *p != '\0'; ++p) {
+      if (*p < '0' || *p > '9' || port > (65535u - (unsigned)(*p - '0')) / 10u) {
+        status = SALTS_EINVAL; goto finish;
+      }
+      port = port * 10u + (unsigned)(*p - '0');
+    }
+    options.server.port = (uint16_t)port;
+  }
+  phase = "signals";
+  if (signal(SIGINT, stop_signal) == SIG_ERR || signal(SIGTERM, stop_signal) == SIG_ERR) {
+    status = SALTS_EIO; goto finish;
+  }
+  phase = "prepare schema and policies";
+  status = @APP_TARGET@_application_init(&app, &options);
+  if (status != SALTS_OK) goto finish;
+  phase = "listen";
+  status = chttp_application_start(&app);
+  if (status != SALTS_OK) goto finish;
+  TLOG_INFOF("@APP_TARGET@ listening on {}:{}", options.server.host, chttp_application_port(&app));
+  phase = "serve";
+  while (!stopping) {
+    chttp_server_stats stats = {0};
+    status = chttp_application_get_stats(&app, &stats);
+    if (status != SALTS_OK) break;
+    if (!stats.running) { status = stats.terminal_status; break; }
+    cmeta_sleep_ms(50u);
+  }
+finish:
+  if (status != SALTS_OK) TLOG_ERRORF("@APP_TARGET@ failed during {}: status={}", phase, status);
+  int closed = chttp_application_close(&app, 5000u);
+  if (closed != SALTS_OK) TLOG_ERRORF("@APP_TARGET@ close failed: status={}", closed);
+  tlog_flush(tlog_peek_default());
+  return status == SALTS_OK && closed == SALTS_OK ? 0 : 1;
+}

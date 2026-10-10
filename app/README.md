@@ -69,6 +69,264 @@ Applications include the public entry point:
 #include <chttp_app/app.h>
 ```
 
+### Schema-owned endpoint configuration (requires the updated SaltsUtils compiler)
+
+The schema projection feature under development in SaltsUtils lets applications
+keep HTTP/RPC mappings beside service declarations. SaltsUtils 4.3.0-rc.7 does
+not yet provide `SCHEMA_PROJECTION`; use the updated compiler and CMake helper
+together. Existing external `PROJECTION_CONFIG` projects remain supported.
+
+```text
+schema App;
+message Lookup { uint32 id; }
+message User { uint32 id; string name; }
+service Users {
+  [http("GET", "/users/{id}"),
+   app_http_field("ingress", "id", "path", "id"),
+   app_rpc("users.get")]
+  Get: Lookup -> User;
+
+  [http("POST", "/users"), app_http_status(201),
+   app_http_formats("json", "xml"), app_rpc("users.create")]
+  Create: User -> User;
+}
+```
+
+These are structured annotations checked during generation. Ordinary comments
+document the service. The example accepts JSON for `Create` and defaults its
+response to XML; JSON-RPC continues to use JSON.
+
+```cmake
+salts_idl_target(
+  TARGET users_contract
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/users.schema"
+  ARTIFACT_NAME users
+  ARTIFACTS NATIVE
+  BINARY_CODEC
+  TRANSPORTS HTTP RPC
+  SCHEMA_PROJECTION)
+target_sources(users_contract_native PRIVATE users_service.c)
+target_link_libraries(my_web_app PRIVATE CHttp::App users_contract_native)
+```
+
+The build generates `users.projection.json`, HTTP/RPC projections, native types
+and service bindings. Business code implements the declarations in
+`users.service_native.h`; regeneration leaves `users_service.c` untouched.
+Multiple services and operations can share one schema. Every operation needs an
+explicit mapping for each selected transport. Missing mappings, unknown fields,
+annotation typos and duplicate endpoints fail generation.
+
+This removes manually maintained projection JSON. For a complete synchronous
+HTTP application, use the CHttp helper below. Keep secrets and deployment
+settings outside schema.
+
+### Generate the HTTP application
+
+`chttp_app_target` combines native service generation, schema projection and an
+application host. It requires the updated SaltsUtils compiler/helper advertising
+`SaltsUtils_IDL_APPLICATION_VERSION >= 2`; the released 4.3.0-rc.7 compiler does
+not provide this capability. The helper reports this at configure time. The
+runtime uses Salts 2.3.0-rc.9 Component and Interceptor contracts.
+
+```cmake
+cmake_minimum_required(VERSION 3.25)
+project(my_application LANGUAGES C)
+find_package(Chttp CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
+chttp_app_target(TARGET my_application
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/app.schema"
+  SOURCES services.c)
+```
+
+```text
+schema App;
+message Input { uint32 value; }
+message Output { uint32 value; }
+service Echo {
+  [http("POST", "/echo"), app_http_policy("no_store")]
+  Call: Input -> Output;
+}
+```
+
+The only required C source implements the generated signature:
+
+```c
+#include "my_application.service_native.h"
+int databind_3_App_4_Echo_4_Call(const Input_t *request, Output_t *response) {
+  response->value = request->value;
+  return 0;
+}
+```
+
+Build with the project's existing configure/build presets, then run
+`my_application --port 8080`. The generated executable binds loopback by default;
+SIGINT/SIGTERM initiates shutdown. `--port 0` selects an ephemeral port. The
+host embeds the codec, mounts every operation before listening, decodes JSON/XML
+bodies or scalar path/query/header/cookie parameters, and encodes the declared
+document response. No runtime schema file or hand-written `main.c` is needed.
+The complete [multi-service example](examples/schema_app/app.schema) has three
+endpoints and [three business functions](examples/schema_app/services.c).
+
+The helper generates `${TARGET}_application`, a static library exposing
+`${TARGET}_application_init`, alongside the executable `${TARGET}`. Tests or
+custom hosts link this library and use `chttp_application_start`, `port`,
+`get_stats` and `close`. Generated files live in the build directory; regeneration
+never overwrites business sources. `LIBRARIES` adds business implementation
+dependencies. Existing `salts_idl_target` and manual mounting remain supported.
+
+### Automatic service dependency injection
+
+Declare application dependencies on a service. The three arguments name the
+generated member, an existing CMeta Interface, and the header declaring it:
+
+Use `inject` and `http` in schemas; migrate the earlier experimental `app_inject`
+and `app_http` spellings and regenerate. Companion annotations such as
+`app_http_policy` and `app_http_field` retain their names.
+
+```text
+schema Injected;
+message Numbers { uint32 value; }
+message Answer { uint64 value; }
+[inject("factor", "FactorSource", "factor_source.h")]
+service Calc {
+  [http("POST", "/scale")]
+  Scale: Numbers -> Answer;
+}
+```
+
+The generated business signature receives a typed, immutable dependency record:
+
+```c
+#include "my_application.service_native.h"
+int databind_8_Injected_4_Calc_5_Scale(
+    const databind_8_Injected_4_Calc_dependencies *dependencies,
+    const Numbers_t *request, Answer_t *response) {
+  FactorSource factor = dependencies->factor;
+  response->value = (uint64_t)request->value * FactorSource_value(&factor);
+  return 0;
+}
+```
+
+The provider implements and publishes `FactorSource` using an ordinary
+`salts_component_provider_binding`. Deployment supplies providers and their
+configuration once through `options.providers`/`provider_count`; it need not
+allocate graph storage, resolve dependencies, start components or bind methods.
+The [complete example](examples/injected_app/CMakeLists.txt) supplies two
+interfaces from one [provider](examples/injected_app/factor_source.c), declares
+both in the [schema](examples/injected_app/app.schema), and configures the
+provider in [configure.c](examples/injected_app/configure.c). `INCLUDES` makes
+external Interface headers available to generated and business code;
+`LIBRARIES` links provider implementations.
+
+Init appends generated consumers to the deployment graph, resolves dependencies,
+creates providers in dependency order, and binds each receiver before mounting
+routes. All methods of one service share a dependency record. Separate apps own
+separate graphs and instances. Factories may themselves require other interfaces;
+the existing Component resolver handles these transitively. Exactly one provider
+must match each requirement. Use `options.selections` with consumer component ID,
+Interface descriptor and provider component ID to resolve intentional ambiguity.
+The generated `<dependencies_type>_component()->component->stable_id` supplies the
+consumer ID without duplicating its spelling.
+
+Missing providers return `SALTS_ENOENT`; ambiguity, cycles, metadata mismatch and
+provider callback failures return `SALTS_EINVAL`. Set `component_diagnostic` to
+receive the precise Component status, phase, indices and callback status during
+init, including after rollback. Failed init never starts the listener. There is
+no default provider selection or global service locator.
+
+Dependencies are borrowed Interface carriers, not request/response fields; JSON,
+XML and MethodPlan schemas are unchanged. The generated native adapter proves
+the three-argument C signature and validates CMeta receiver/Function ABI
+projection to the logical two-argument method. Dispatch uses the bound context
+directly. Copying an Interface carrier does not retain its provider; business
+code must not keep it past application close or start untracked asynchronous work.
+
+The application owns bounded graph storage (128 total providers/consumers and
+4096 dependency edges/selections). It copies deployment/selection rows; provider
+metadata, Interface descriptors, selection strings and provider contexts must
+outlive close. Configuration values are borrowed only during factory creation;
+providers must copy anything needed later. Caller-supplied `options.components`
+and automatic graphs are mutually exclusive. Method dependencies support at most
+16 distinct member names and Interface tokens per service; two members of the
+same Interface are rejected. All Interface includes precede C linkage declarations
+so public generated headers work in C11 and C++17.
+
+This is an opt-in application-scoped injection contract. Existing stateless
+service prototypes are unchanged. Providers still own resource creation, failure
+handling and synchronization; reflection does not construct arbitrary types or
+choose configuration. Request scopes, field injection, dynamic provider swapping,
+Plugin/Wasm publication and typed-error injected services are outside this
+contract. Unsupported publication ABIs fail generation. To roll back, remove
+`inject` and restore the stateless signature, or keep the generated receiver
+and host its Component graph explicitly using `salts_idl_target`.
+
+### Method policies and deployment configuration
+
+Repeat `app_http_policy("name")` on a method to select hooks in declaration order.
+Names contain ASCII letters, digits, `_`, `.` or `-`; duplicates and more than 16
+policies fail generation. `no_store` is built in and adds `Cache-Control: no-store`.
+Other names must resolve in `chttp_application_options.policies`; missing names
+fail initialization with `SALTS_ENOENT` before the listener starts. Names alone
+do not implement authentication or authorization.
+
+An optional `CONFIGURE configure_app` CMake argument calls
+`int configure_app(chttp_application_options *)` before host initialization.
+Declare it in a user source passed to `SOURCES`; return `SALTS_OK` on success.
+This is the deployment boundary for host/port, limits, TLS configuration,
+custom hook contexts and an optional READY `salts_component_context`:
+
+```c
+static cmeta_status authorize(void *context,
+    const chttp_service_call *call, bool *proceed); /* supplied policy implementation */
+static const chttp_application_policy policies[] = {
+  {"authorize", {NULL, authorize, NULL, NULL}}
+};
+int configure_app(chttp_application_options *options) {
+  options->policies = policies;
+  options->policy_count = sizeof(policies) / sizeof(policies[0]);
+  return SALTS_OK;
+}
+```
+
+Policy selection runs once after native admission. The existing typed CMeta
+Interceptor executes before hooks forward, then after/on_error hooks in reverse.
+Hook code and contexts must outlive close. Hooks cannot publish their own replies
+or retain callback views. Policy declarations are emitted in the HTTP header;
+the version-1 projection JSON deliberately retains its existing route/format
+schema and does **not** carry policy names. Deploy the generated application,
+not that JSON alone as a complete policy configuration.
+
+### Host ownership and scope
+
+The host is the sole owner of its server, Service, native binding storage and
+method plans. The codec owns acquired message plans. All records have stable
+addresses, bounded by 1024 methods and 64 registered policy names. Configuration
+defaults bound network, body and native staging storage; callers can adjust them
+before init. Inline services and hooks must not block the HTTP owner thread.
+
+An optional Component graph resolves dependencies and activates before routes
+are admitted; errors unwind acquired resources. Normal close stops/joins the
+server, destroys Service and codec resources, then stops components in reverse
+dependency order. A close timeout retains the whole application for retry.
+For manual graphs, graph/provider storage stays caller-owned. For automatic
+injection, the host owns graph storage and stops it before freeing it. Component
+failure diagnostics remain available through the optional init output. Already
+active manual graphs are rejected rather than adopted.
+
+This design reuses the native producer's operation catalog instead of duplicating
+IDL parsing or symbol mangling in CMake. Runtime metadata and invocation remain
+DataBind/CMeta-owned; CHttp owns transport, policy selection and lifetime. The
+alternative of generating an independent server implementation would duplicate
+those contracts and make shutdown fixes inconsistent across projects.
+
+The generated host currently supports HTTP with synchronous direct execution.
+RPC, deferred executors, Plugin leases and content negotiation still use their
+existing explicit mounting APIs. Mixed document-body and scalar parameter input,
+typed error documents and unsupported JSON/XML shapes fail mount admission;
+there is no silent downgrade. Native service dependencies use the opt-in receiver
+described above. Nested XML work is unchanged. Stateless migration is additive:
+adopt the helper per target, or return to `salts_idl_target` plus explicit hosting
+without changing stateless service signatures.
+
 The installed App behavior test links only `CHttp::App` and
 executes Web parsing/validation/upload adapters plus Service initialization
 and destruction against the installed SDK. From `app/tests/installed`, use
@@ -101,6 +359,312 @@ parallel workers need independent renderers or external serialization.
 The merge preserves feature API names, layouts and error semantics. Consumers
 must replace the old includes/link targets, rebuild, and deploy `chttp_app`.
 No Service/Web compatibility DLLs or target aliases are installed.
+
+## JSON and XML service responses
+
+`chttp_service_mount_http_document()` opts one operation into a structured
+response. The compiled MethodPlan's `egress_format` selects JSON or XML and
+sets `Content-Type` to `application/json` or `application/xml`. Business code
+continues to fill its generated C response; it does not assemble wire text.
+
+```c
+/* Copy the generated projection before compiling the MethodPlan. */
+DataBindHttpProjectionConfig projection = *generated_projection;
+projection.egress_format = DATA_BIND_FORMAT_JSON; /* or DATA_BIND_FORMAT_XML */
+DataBindHttpMethodPlan *plan = NULL;
+DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+DataBindStatus compiled = data_bind_http_method_plan_compile_service(
+    contract, "Calculator", "Add", &projection, &native, &plan, &diagnostic);
+if (compiled != DATA_BIND_OK) return SALTS_EINVAL;
+mount.method_plan = plan;
+/* Keep plan/native/execution alive through service destruction. */
+int status = chttp_service_mount_http_document(
+    &service, server, &mount, NULL, NULL);
+/* Optional final arguments select the same reflected policies described below. */
+```
+
+For `AddResponse { uint32 sum; }`, JSON emits `{"sum":7}` and XML emits an
+`<AddResponse><sum>7</sum></AddResponse>` document. XML may include a declaration
+and whitespace. The existing scalar mount still emits plain `7`.
+
+The private App/RpcService bridge consumes the admitted BindingPlan and feeds
+`data_bind_native_encode()` into DataBind's canonical FormatPlan writer.
+Output field names, including nested records and record elements, follow IDL
+`[name(...)]`; aliases remain input-only.
+Egress entries must all target `response_body` with canonical projection names.
+JSON shapes are subject to the SDK's Native and FormatPlan admission; the
+end-to-end fixture qualifies generated multi-field and nested records with exact
+uint64 values, owned strings, lists of records and scalar sets.
+Document adapters require SaltsUtils **4.3.0-rc.7** and Salts **2.3.0-rc.9**
+or compatible newer SDKs. Regenerate bindings and rebuild consumers together.
+
+XML uses the existing explicit-root DataBind writer: its root is the IDL
+response type. It supports nested records and required list/set fields whose
+elements are scalars or records. Collection elements repeat the field element;
+an empty sequence emits no elements. Bytes, nullable fields, optional sequences,
+sequences of sequences, maps and variants are rejected by plan compilation or
+mount admission. Typed-error operations are rejected by
+both document mounts because the SDK does not expose the corresponding
+producer-owned per-error FormatPlan. Ordinary operational HTTP errors keep
+their existing plain-text responses. This response-only API keeps existing
+request binding. The body mount below adds document input; neither API performs
+`Accept` negotiation or fallback.
+
+Encoded HTTP bytes obey `max_response_body_bytes`; format token work obeys
+`native_max_items` and `native_max_owned_bytes`. Recursive field-name projection
+also has a fixed ceiling of `DATA_BIND_FORMAT_CURSOR_MAX_DEPTH` (64 aggregate
+frames in rc.7); a larger native depth setting does not raise that ceiling.
+Output is invocation-owned and
+published only after all writers finish successfully. Failure discards the
+staged document. Deferred direct execution uses the same value lifetime and
+terminal ownership as scalar responses. Stop and destroy the server, drain
+accepted work, destroy Service, then free its borrowed MethodPlans.
+
+JSON-RPC shares this encoding path through
+`chttp_rpc_service_mount_document()`, while retaining the JSON-RPC envelope.
+Its matching `chttp_rpc_service_client_call_document()` accepts a prepared
+response MessagePlan and returns an owning native C record with schema
+validation and rollback, including optional/null state and field aliases.
+See [RPC document results](../docs/RPC.md#generated-rpcservice-json-对象结果).
+
+### JSON and XML request bodies
+
+Use `chttp_service_mount_http_document_body()` for a complete document request
+and response. Prepare the request MessagePlan once, using the same IDL contract
+and generated native binding as the HTTP MethodPlan:
+
+```c
+const DataBindMessagePlan *request_plan = NULL;
+DataBindError error = DATA_BIND_ERROR_INIT;
+DataBindStatus prepared = data_bind_message_plan_acquire_generated(
+    codec, AddRequest_native_artifact(), &request_plan, &error);
+if (prepared != DATA_BIND_OK) return SALTS_EINVAL;
+
+/* Compile method_plan with method="POST", route="/add",
+ * ingress_format=JSON, egress_format=JSON (or XML), and canonical body
+ * projections. The default HTTP field projection targets the body. */
+chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+mount.method_plan = method_plan;
+mount.native_binding = native;
+mount.execution = execution;
+int status = chttp_service_mount_http_document_body(
+    &service, &server, &mount, request_plan, NULL, NULL);
+```
+
+For `AddRequest { uint32 a; uint32 b; }`, send
+`Content-Type: application/json` with `{"a":3,"b":4}`, or configure XML ingress
+and send `Content-Type: application/xml` with
+`<AddRequest><a>3</a><b>4</b></AddRequest>`. The business function receives its
+generated `const AddRequest_t *`; it does not parse HTTP, JSON or XML. Input and
+output formats are independent fixed MethodPlan choices. XML ingress uses the
+upstream plan-aware reader to group repeated elements, including field aliases,
+into required lists/sets; missing elements produce empty sequences. Nested
+record names are canonicalized recursively with an invocation-local cursor.
+
+All input fields must target `http.body` with canonical projection names.
+Mixed body/query/path/header/cookie projections fail at mount rather than
+silently changing binding precedence. IDL `[name]` and aliases are handled by
+FormatPlan; MessagePlan handles required/default/optional/null state and schema
+validation. XML root labeling follows the DataBind reader and does not select a
+native type. Native type, state layout and field-count mismatches fail before
+route publication; callers must supply plans from the same immutable contract.
+
+The route requires a single matching `Content-Type`: `application/json`, or
+`application/xml`/`text/xml` for XML ingress. It accepts an optional UTF-8 charset
+parameter, including quoted and case-insensitive forms. Missing/mismatched
+media types and unsupported parameters return 415. Invalid syntax, unknown or
+duplicate fields, missing required fields and wrong value types return 400;
+schema constraints return 422; decoding limits return 413. Operational errors
+retain text/plain responses. There is no content sniffing or format fallback.
+
+Server `max_request_body_bytes` bounds the buffered wire body. Parser depth and
+native workspace/items/owned-byte budgets remain explicit. The HTTP owner fully
+decodes and validates input, closes the parser lease, then submits deferred work.
+Only invocation-owned native values cross to the worker; cleanup runs at the
+existing exactly-once finalization boundary. Stop the server and drain accepted
+work before destroying Service, its borrowed MethodPlans and the codec owning
+the prepared MessagePlan. No per-request schema compilation occurs.
+
+This additive API reuses the SDK's whole-message decoder because BindingPlan's
+existing per-field provider cannot consume a document in one pass. It avoids
+adding a transport-owned field tree or another parser. The explicit prepared
+MessagePlan supplies the producer's validation and state semantics; public
+configuration layouts and scalar mounts stay unchanged. Rollback removes the
+body route or restores its previous explicit client/server contract.
+
+### Select JSON or XML with Accept
+
+`chttp_service_mount_http_negotiated_document()` explicitly enables response
+negotiation for one route. Prepare the alternate response FormatPlan at startup
+from the same immutable IDL contract as the MethodPlan. The MethodPlan's egress
+format is the default; the alternate must be the other supported format for the
+same response type. Both must pass document admission before registration.
+
+```c
+DataBindFormatPlan *xml_response = NULL;
+DataBindError error = DATA_BIND_ERROR_INIT;
+DataBindStatus prepared = data_bind_format_plan_compile(
+    codec, "AddResponse", DATA_BIND_FORMAT_XML, &xml_response, &error);
+if (prepared != DATA_BIND_OK) return SALTS_EINVAL;
+
+/* mount.method_plan has JSON egress; request_plan enables document body input.
+ * Pass NULL instead for the existing scalar query/path/header/cookie input. */
+int status = chttp_service_mount_http_negotiated_document(
+    &service, &server, &mount, request_plan, xml_response, NULL, NULL);
+if (status != SALTS_OK) data_bind_format_plan_free(xml_response);
+/* On success, free xml_response only after Service destruction. */
+```
+
+A client can POST JSON with `Accept: application/xml` and receive XML, or use
+`Accept: application/json;q=0.4, application/xml;q=0.9`. Request Content-Type
+still follows the fixed ingress format; it never changes the output preference.
+XML shapes follow the nested-record and required-sequence rules described above.
+
+The selection follows the weight and specificity rules of
+[RFC 9110 sections 12.4–12.5.1](https://www.rfc-editor.org/rfc/rfc9110.html#name-accept):
+
+- Missing Accept uses the MethodPlan default. An empty Accept accepts neither
+  representation and returns 406.
+- Supported offers are parameterless `application/json` and `application/xml`.
+  A range with additional media parameters does not match either offer;
+  `text/xml` is an accepted request-body media type but is not an output offer.
+- Type/subtype matching is case-insensitive. Exact matches override `type/*`,
+  which overrides `*/*`, including explicit `q=0` exclusions. Weight is 0–1
+  with at most three fractional digits and defaults to 1.
+- Repeated Accept lines form one logical list. For equally specific duplicate
+  ranges the first wins. Equal final offer weights prefer the MethodPlan default.
+- Unsupported or excluded offers return 406; malformed syntax returns 400.
+  Both happen before body decoding or business invocation. Policy hooks and
+  middleware still run first. Operational errors remain text/plain.
+
+Every response reaching negotiation appends `Vary: Accept`, including rejection
+responses. Server's public `chttp_server_response_append_vary()` preserves prior
+Vary fields such as Origin, validates appended field lists, and respects header
+capacity limits. Existing `Vary: *` remains unchanged. Headers are copied by the
+Server and survive deferred completion; App never inspects private Server state.
+
+The selected immutable plan pointer belongs to one invocation and remains valid
+under the existing mount lifetime. The HTTP owner scans already bounded request
+headers in linear time with constant storage, then the worker uses that selection.
+No request changes shared method metadata, recompiles a schema, or retries another
+format after encoding failure. Output buffers, task admission, cancellation and
+drain ownership retain their existing limits and finalizers.
+
+This is an additive choice because changing fixed-format mounts would change
+their wire contract. Supplying a prepared alternate plan keeps format capability
+and schema ownership in DataBind; adding format flags and runtime codec creation
+would duplicate that authority. App owns selection, DataBind owns encoding, and
+Server owns Vary storage. To migrate, compile both representations and replace
+the mount call; to roll back, use the fixed-format mount with its original client
+contract. JSON-RPC retains its required JSON envelope and is not negotiated.
+
+### Compatibility decision and verification
+
+Existing projections default to JSON even though the legacy HTTP adapter
+returns scalar text. Changing that adapter implicitly would break existing
+clients. The additive document mount makes the wire change explicit and keeps
+existing public configuration layouts and mount behavior stable. It reuses
+the installed DataBind/CSerde codecs rather than introducing another serializer
+or a dependency from Server to App. Rollback selects the old mount together
+with the matching scalar client contract; it is not a runtime fallback.
+
+The generated fixture in `tests/service/chttp_document.schema` and
+`chttp_document_test.c` exercises real HTTP JSON, deferred XML, JSON-RPC result
+objects, canonical name mapping, escaping, exact uint64 output, bounded output
+failure and subsequent request recovery. Typed-client cases additionally cover
+owned result lifetime, embedded NUL, aliases, optional/null state, schema
+validation, malformed/duplicate/unknown fields, decode budgets and remote errors.
+Request-body cases additionally cover inline JSON, deferred XML and JSON
+state round trips, media-type rejection, mount incompatibility, input validation,
+wire/native limits and recovery after failure. The installed App consumer links
+the additive body mount through `CHttp::App` alone.
+Negotiation cases cover weighted/specific/duplicate ranges, invalid and empty
+Accept, mount rejection, fixed-route compatibility, Vary merging/validation,
+and concurrent deferred JSON/XML responses over both HTTP/1.1 and HTTP/2.
+Nested cases cover record and collection aliases, repeated XML elements, empty
+sequences, deferred ownership, format negotiation, malformed-input recovery,
+binary-leaf rejection and owned RPC response lifetime.
+Run the repository build preset, then
+`ctest --preset ci-sdk-release-user -R chttp_document_test --output-on-failure`.
+
+## Reflected method policies and Component assembly
+
+`<chttp_app/interceptor.h>` adds `chttp_service_mount_http_with_policies()`.
+Its startup selector receives the admitted DataBind BindingPlan and canonical
+native binding. Use `data_bind_binding_plan_operation_id()` (for example,
+`Calculator.Add`), binding entries, and `native->function` to select method
+policies. The selector fills a bounded array of `chttp_service_interceptor_hook`;
+App validates and copies up to 16 hooks before publishing the route. Returning
+an error, exceeding capacity, or returning an empty hook publishes no route
+and releases any mount-acquired Plugin lease. Explicitly selecting zero hooks
+is allowed. Unknown required policies should fail selection.
+
+```c
+/* select_policies implements chttp_service_policy_select_fn. */
+int status = chttp_service_mount_http_with_policies(
+    &service, server, &mount, select_policies, policy_context);
+```
+
+The chain uses `CMETA_INTERCEPTOR_TYPE` over `chttp_service_call` and
+`chttp_service_dispatch_result`. Native business Function/ABI admission still
+uses the generated DataBind execution contract; it is not reinterpreted as the
+different HTTP hook signature. Before hooks run forward; after/error hooks
+unwind in reverse. Rejection (`proceed=false`) or `CMETA_CALLBACK_ERROR` before
+dispatch produces 403; other hook failures produce 500. Both prevent native
+execution. Hooks may add headers before dispatch but must not reply, defer,
+retain request views, or stop the server. Existing outer HTTP middleware
+retains its normal short-circuit behavior, including CORS.
+
+These are **HTTP dispatch** hooks. A successful HTTP error response is still a
+successful dispatch. For deferred direct, CFlow and Plugin execution, `after`
+means the dispatch/submission callback returned; it does not signal worker,
+native-value, or network completion. The existing deferred terminal and task
+finalizer remain authoritative. Hook contexts/code are borrowed until Service
+destruction; startup is exclusive, hooks execute on the HTTP owner, and shared
+contexts across servers need application synchronization. Storage is bounded
+by `method_capacity * 16` hook slots; no request-time policy lookup or hook
+allocation occurs. This does not replace authentication, CSRF, or admission.
+
+The real [HTTP example](../http_server/examples/http_example_configurator.c)
+uses `Salts::Component` for `ExampleService requires example_contract` and
+`ExampleContract provides example_contract`. It deliberately lists the consumer
+first. The container resolves the graph, creates Contract before Service,
+injects a typed Interface carrying the borrowed MethodPlan, and rolls back or
+destroys in reverse order. Distinct owned resource records release the Service
+and Contract; they do not own the enclosing application. The example's policy
+selector installs `no-store` for the reflected `Calculator.Add` operation,
+including Plugin mounts, without a manual route middleware array.
+
+Server/executor/Plugin shutdown remains with the application: stop admission,
+drain accepted work, destroy the server, then stop the Component graph before
+unloading Plugin providers. Component callbacks cannot report asynchronous
+`EBUSY`; calling graph stop before drain is outside this contract. A failed
+Component start has already rolled back and must not be stopped a second time.
+Renderer, limiter and network configuration remain explicit domain resources.
+
+### Decision and migration
+
+The existing middleware ABI has successful short-circuit semantics, whereas
+CMeta Interceptor rejection is an error unwind. Replacing that ABI would change
+CORS, replies and deferred ownership. The chosen additive App boundary keeps
+those behaviors and reuses CMeta typed chains and Salts Component resolution;
+there is no additional registry, scheduler, RTTI table or dependency resolver.
+Component is an example/application dependency, not a new Server dependency.
+
+The current SDK exposes operation identity, binding and native signature
+metadata, **not arbitrary operation annotations**. Policies are selected by
+application code over that metadata; this API does not claim an `@Authorize`
+annotation compiler or automatic container discovery. Such annotations require
+a producer-owned DataBind export contract before adding an adapter here.
+
+Existing applications can keep `chttp_service_mount_http()` unchanged, adopt
+the policy mount operation by operation, and optionally compose their startup
+with `Salts::Component`. Rollback is to the existing mount API and explicit
+assembly; no schema, wire format, existing struct layout or persisted data
+changes. Rebuild App consumers that include the new header against the matching
+Salts RC SDK. Real HTTP tests cover selection failure, bounded admission,
+denial/error unwind, native and deferred execution, dependency order, rollback
+and retry; the C++ header test checks the public typed hook signature.
 
 ## Core model
 

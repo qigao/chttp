@@ -1,0 +1,19 @@
+#include "@APP_TARGET@_application.h"
+#include "@APP_TARGET@.service_native.h"
+#include "@APP_TARGET@.http.h"
+
+#define CHTTP_APPLICATION_OPERATION(service, operation, symbol, request, response, component) \
+  {service, operation, symbol##__databind_native_binding, \
+      NULL, request##_native_artifact, component, symbol##__databind_bind_execution},
+static const chttp_application_operation operations[] = {
+  databind_@APP_TARGET@_native_APPLICATION_SERVICES(CHTTP_APPLICATION_OPERATION)
+};
+#undef CHTTP_APPLICATION_OPERATION
+
+int @APP_TARGET@_application_init(chttp_application *app, const chttp_application_options *options) {
+  static const chttp_application_definition definition = {
+      sizeof(chttp_application_definition), databind_@APP_TARGET@_native_CODEC,
+      operations, sizeof(operations) / sizeof(operations[0]),
+      &databind_@APP_TARGET@_http_projection, databind_@APP_TARGET@_http_policy_at};
+  return chttp_application_init(app, &definition, options);
+}

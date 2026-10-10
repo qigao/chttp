@@ -7,6 +7,11 @@ static_assert(std::is_standard_layout_v<chttp_rpc_service_config>);
 static_assert(std::is_standard_layout_v<chttp_rpc_service_mount_options>);
 static_assert(std::is_standard_layout_v<chttp_rpc_service_client_outcome>);
 static_assert(std::is_standard_layout_v<chttp_rpc_service_client_call_options>);
+static_assert(std::is_same_v<decltype(&chttp_rpc_service_mount_document),
+    int (*)(chttp_rpc_service *, crpc_server *, const chttp_rpc_service_mount_options *)>);
+static_assert(std::is_same_v<decltype(&chttp_rpc_service_client_call_document),
+    int (*)(crpc_client *, const chttp_rpc_service_client_call_options *,
+        const DataBindMessagePlan *, chttp_rpc_service_client_outcome *, crpc_error *)>);
 
 int main() {
   chttp_rpc_service service{};

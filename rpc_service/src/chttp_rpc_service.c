@@ -1,4 +1,5 @@
 #include <chttp_rpc_service/service.h>
+#include "chttp_document.h"
 
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
@@ -29,6 +30,7 @@ typedef struct chttp_rpc_service_method_record {
   size_t param_bytes[3];
   size_t param_count;
   DataBindBindingCallFrame frame;
+  chttp_document_plan document;
 } chttp_rpc_service_method_record;
 
 struct chttp_rpc_service_impl {
@@ -58,6 +60,10 @@ typedef struct chttp_rpc_service_provider {
   int output_active;
   int output_published;
   int output_is_error;
+  const chttp_document_plan *document_plan;
+  chttp_document_writer document;
+  size_t token_count;
+  size_t slice_bytes;
 } chttp_rpc_service_provider;
 
 static void chttp_rpc_service_error_set(
@@ -165,6 +171,30 @@ static cserde_status chttp_rpc_service_capture_token(
 
   if (provider == NULL || provider->service == NULL || token == NULL)
     return CSERDE_INVALID_ARGUMENT;
+  if (provider->document_plan != NULL) {
+    /* One invocation-owned arena: aligned token records grow from the front,
+     * copied slices from the back. Each admission preserves used <= capacity,
+     * including the multiplication below. No borrowed native slice survives. */
+    size_t bytes = 0u;
+    const size_t capacity = provider->service->output_capacity;
+    if (token->kind == CSERDE_STRING || token->kind == CSERDE_BYTES)
+      bytes = token->value.slice.size;
+    const size_t used = provider->token_count * sizeof(*token) + provider->slice_bytes;
+    if (used > capacity || sizeof(*token) > capacity - used ||
+        bytes > capacity - used - sizeof(*token))
+      return CSERDE_LIMIT_EXCEEDED;
+    cserde_token copy = *token;
+    if (token->kind == CSERDE_STRING || token->kind == CSERDE_BYTES) {
+      unsigned char *destination = (unsigned char *)mem_buffer_data(provider->token_storage)
+          + capacity - provider->slice_bytes - bytes;
+      if (bytes != 0u) memcpy(destination, token->value.slice.data, bytes);
+      copy.value.slice = (cserde_slice){destination, bytes, CSERDE_VIEW_STABLE};
+      provider->slice_bytes += bytes;
+    }
+    ((cserde_token *)mem_buffer_data(provider->token_storage))[provider->token_count++] = copy;
+    provider->token_valid = 1;
+    return CSERDE_OK;
+  }
   if (provider->token_valid) return CSERDE_INVALID_STATE;
 
   provider->token = *token;
@@ -224,6 +254,22 @@ static DataBindStatus chttp_rpc_service_begin_output(
   provider->output_active = 1;
   provider->output_published = 0;
   provider->output_is_error = 0;
+  if (provider->document_plan != NULL) {
+    provider->token_count = 0u;
+    provider->slice_bytes = 0u;
+    provider->token_storage = mem_get_buffer(mem_global(), provider->service->output_capacity);
+    if (provider->token_storage == NULL) return DATA_BIND_ERR_OOM;
+    if (cserde_writer_init(&provider->writer, &CHTTP_RPC_SERVICE_CAPTURE_OPS, provider) != CSERDE_OK) {
+      chttp_rpc_service_release_token_storage(provider);
+      return DATA_BIND_ERR_RUNTIME;
+    }
+    provider->writer_started = 1;
+    DataBindStatus status = chttp_document_begin(&provider->document,
+        provider->document_plan, &provider->writer, &provider->service->native_options,
+        provider->service->native_options.max_owned_bytes, error);
+    if (status != DATA_BIND_OK) chttp_rpc_service_release_token_storage(provider);
+    return status;
+  }
   return DATA_BIND_OK;
 }
 
@@ -240,6 +286,8 @@ static DataBindStatus chttp_rpc_service_write_output(
   if (provider == NULL || provider->service == NULL || entry == NULL ||
       !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->document_plan != NULL)
+    return chttp_document_field(&provider->document, entry, state, value, value_bytes, error);
   if (provider->token_valid) {
     chttp_rpc_service_error_set(
         error, DATA_BIND_ERR_RUNTIME,
@@ -297,6 +345,10 @@ static DataBindStatus chttp_rpc_service_commit_output(
       (chttp_rpc_service_provider *)context;
   if (provider == NULL || !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->document_plan != NULL) {
+    DataBindStatus status = chttp_document_finish(&provider->document);
+    if (status != DATA_BIND_OK) return status;
+  }
   if (provider->writer_started &&
       cserde_writer_finish(&provider->writer) != CSERDE_OK) {
     chttp_rpc_service_error_set(
@@ -332,6 +384,14 @@ static cserde_status chttp_rpc_service_encode_staged(
       (chttp_rpc_service_provider *)user;
   if (provider == NULL || writer == NULL || !provider->token_valid)
     return CSERDE_INVALID_ARGUMENT;
+  if (provider->document_plan != NULL) {
+    const cserde_token *tokens = (const cserde_token *)mem_buffer_const_data(provider->token_storage);
+    for (size_t i = 0u; i < provider->token_count; ++i) {
+      cserde_status status = cserde_writer_write(writer, &tokens[i]);
+      if (status != CSERDE_OK) return status;
+    }
+    return CSERDE_OK;
+  }
   return cserde_writer_write(writer, &provider->token);
 }
 
@@ -379,7 +439,7 @@ static int chttp_rpc_service_execution_admit(
     const DataBindRpcMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
     const DataBindNativeExecution *execution,
-    size_t max_frame_bytes,
+    size_t max_frame_bytes, int document,
     size_t *request_bytes,
     size_t *response_bytes,
     size_t *error_bytes,
@@ -441,7 +501,7 @@ static int chttp_rpc_service_execution_admit(
     }
 
     count = data_bind_binding_plan_egress_count(binding);
-    if (count > 1u) return SALTS_ENOTSUP;
+    if (!document && count > 1u) return SALTS_ENOTSUP;
     for (i = 0u; i < count; ++i) {
       size_t bytes;
       entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
@@ -450,7 +510,7 @@ static int chttp_rpc_service_execution_admit(
           entry.target_is_return || entry.function_param_index != 1u ||
           entry.address.space == NULL ||
           strcmp(entry.address.space, "rpc.result") != 0 ||
-          !chttp_rpc_service_scalar_kind(entry.data))
+          (!document && !chttp_rpc_service_scalar_kind(entry.data)))
         return SALTS_ENOTSUP;
       bytes = entry.data->storage_type->size;
       if (entry.native_offset > *response_bytes ||
@@ -546,6 +606,7 @@ static int chttp_rpc_service_handler(
   DataBindBindingPlanDiagnostic diagnostic =
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   DataBindStatus status;
+  DataBindBindingCallLifetime lifetime = DATA_BIND_BINDING_CALL_LIFETIME_INIT;
   int native_status = 0;
   int code = 0;
   int result;
@@ -564,6 +625,7 @@ static int chttp_rpc_service_handler(
 
   provider_context = (chttp_rpc_service_provider){
       .service = record->owner,
+      .document_plan = record->document.format_plan != NULL ? &record->document : NULL,
       .request = request,
       .param_reader = CRPC_SERVER_PARAM_READER_INIT};
 
@@ -574,9 +636,9 @@ static int chttp_rpc_service_handler(
   provider.commit_output = chttp_rpc_service_commit_output;
   provider.abort_output = chttp_rpc_service_abort_output;
 
-  status = data_bind_binding_plan_bind_inputs(
+  status = data_bind_binding_plan_bind_call(
       record->binding, &provider, &record->owner->native_options,
-      &record->frame, &diagnostic);
+      &record->frame, &lifetime, &diagnostic);
 
   if (status == DATA_BIND_OK &&
       !record->execution->invoke(
@@ -588,6 +650,13 @@ static int chttp_rpc_service_handler(
     status = data_bind_binding_plan_write_outcome(
         record->binding, &provider, &record->frame, native_status,
         &outcome, &diagnostic);
+
+  /* Egress owns its token slices now; release all native values before the
+   * synchronous envelope encoder, including failures and notifications. */
+  if (data_bind_binding_call_is_live(&lifetime)) {
+    DataBindStatus cleanup = data_bind_binding_call_restore_zero(&lifetime, &diagnostic);
+    if (status == DATA_BIND_OK) status = cleanup;
+  }
 
   crpc_server_request_param_close(&provider_context.param_reader);
 
@@ -645,7 +714,7 @@ static int chttp_rpc_service_handler(
 }
 
 static int chttp_rpc_service_plan_supported(
-    const DataBindRpcMethodPlan *plan) {
+    const DataBindRpcMethodPlan *plan, int document) {
   const DataBindBindingPlan *binding;
   size_t i;
   DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
@@ -666,14 +735,14 @@ static int chttp_rpc_service_plan_supported(
       return 0;
   }
 
-  if (data_bind_binding_plan_egress_count(binding) > 1u)
+  if (!document && data_bind_binding_plan_egress_count(binding) > 1u)
     return 0;
-  if (data_bind_binding_plan_egress_count(binding) == 1u) {
+  for (i = 0u; i < data_bind_binding_plan_egress_count(binding); ++i) {
     entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
-    if (!data_bind_binding_plan_egress_at(binding, 0u, &entry) ||
+    if (!data_bind_binding_plan_egress_at(binding, i, &entry) ||
         entry.address.space == NULL ||
         strcmp(entry.address.space, "rpc.result") != 0 ||
-        !chttp_rpc_service_scalar_kind(entry.data))
+        (!document && !chttp_rpc_service_scalar_kind(entry.data)))
       return 0;
   }
 
@@ -724,10 +793,10 @@ int chttp_rpc_service_init(
   return SALTS_OK;
 }
 
-int chttp_rpc_service_mount(
+static int chttp_rpc_service_mount_impl(
     chttp_rpc_service *service,
     crpc_server *server,
-    const chttp_rpc_service_mount_options *mount) {
+    const chttp_rpc_service_mount_options *mount, int document) {
   chttp_rpc_service_impl *impl;
   chttp_rpc_service_method_record *record;
   crpc_method method = {0};
@@ -738,6 +807,7 @@ int chttp_rpc_service_mount(
   size_t error_bytes = 0u;
   size_t param_count = 0u;
   int status;
+  chttp_document_plan document_plan = {0};
 
   if (service == NULL || service->impl == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
@@ -745,8 +815,13 @@ int chttp_rpc_service_mount(
       mount->method_plan == NULL || mount->native_binding == NULL ||
       mount->execution == NULL)
     return SALTS_EINVAL;
-  if (!chttp_rpc_service_plan_supported(mount->method_plan))
+  if (!chttp_rpc_service_plan_supported(mount->method_plan, document))
     return SALTS_ENOTSUP;
+  if (document) {
+    status = chttp_document_admit(data_bind_rpc_method_plan_transport(mount->method_plan),
+        data_bind_rpc_method_plan_binding(mount->method_plan), "rpc.result", 0, &document_plan);
+    if (status != SALTS_OK) return status;
+  }
 
   impl = (chttp_rpc_service_impl *)service->impl;
   if (impl->method_count == impl->method_capacity)
@@ -754,7 +829,7 @@ int chttp_rpc_service_mount(
 
   status = chttp_rpc_service_execution_admit(
       mount->method_plan, mount->native_binding, mount->execution,
-      impl->max_call_frame_bytes, &request_bytes, &response_bytes,
+      impl->max_call_frame_bytes, document, &request_bytes, &response_bytes,
       &error_bytes, &param_count);
   if (status != SALTS_OK) return status;
 
@@ -770,6 +845,7 @@ int chttp_rpc_service_mount(
   record = &impl->methods[impl->method_count];
   *record = (chttp_rpc_service_method_record){
       .owner = impl,
+      .document = document_plan,
       .method_plan = mount->method_plan,
       .binding = binding,
       .native_binding = mount->native_binding,
@@ -818,6 +894,16 @@ int chttp_rpc_service_mount(
 
   ++impl->method_count;
   return SALTS_OK;
+}
+
+int chttp_rpc_service_mount(chttp_rpc_service *service, crpc_server *server,
+    const chttp_rpc_service_mount_options *mount) {
+  return chttp_rpc_service_mount_impl(service, server, mount, 0);
+}
+
+int chttp_rpc_service_mount_document(chttp_rpc_service *service, crpc_server *server,
+    const chttp_rpc_service_mount_options *mount) {
+  return chttp_rpc_service_mount_impl(service, server, mount, 1);
 }
 
 int chttp_rpc_service_destroy(chttp_rpc_service *service) {

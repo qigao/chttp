@@ -1,0 +1,11 @@
+#ifndef CHTTP_GENERATED_@APP_TARGET@_APPLICATION_H
+#define CHTTP_GENERATED_@APP_TARGET@_APPLICATION_H
+#include <chttp_app/application.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+int @APP_TARGET@_application_init(chttp_application *app, const chttp_application_options *options);
+#ifdef __cplusplus
+}
+#endif
+#endif

@@ -51,6 +51,9 @@ static void upload_abort(void *user, chttp_web_status status, int native_status)
 }
 
 int main(void) {
+  /* Link and execute the installed additive API through the App umbrella. */
+  if (chttp_service_mount_http_document(NULL, NULL, NULL, NULL, NULL) != SALTS_EINVAL)
+    return 20;
   static const char body[] =
       "--AaB03x\r\n"
       "Content-Disposition: form-data; name=\"value\"\r\n\r\n"
@@ -194,6 +197,11 @@ int main(void) {
     return 20;
 
   /* Exercise the Service runtime through the same installed App target. */
+  if (chttp_service_mount_http_negotiated_document(NULL, NULL, NULL, NULL, NULL, NULL, NULL) != SALTS_EINVAL ||
+      chttp_server_response_append_vary(NULL, "Accept") != SALTS_EINVAL)
+    return 27;
+  if (chttp_service_mount_http_document_body(NULL, NULL, NULL, NULL, NULL, NULL) != SALTS_EINVAL)
+    return 26;
   {
     chttp_service service = {0};
     chttp_service_config config = CHTTP_SERVICE_CONFIG_INIT;

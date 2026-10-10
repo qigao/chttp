@@ -1,4 +1,10 @@
 #include <chttp_app/service.h>
+#include <chttp_app/interceptor.h>
+#include "chttp_document.h"
+#include "chttp_service_accept.h"
+#include <data_bind_format_provider.h>
+#include <data_bind_xml_writer.h>
+#include <data_bind_xml_provider.h>
 
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
@@ -39,6 +45,12 @@ typedef struct chttp_service_method_record {
   size_t response_bytes;
   size_t error_bytes;
   size_t param_count;
+  chttp_service_interceptor_hook hooks[CHTTP_SERVICE_MAX_INTERCEPTORS];
+  size_t hook_count;
+  chttp_document_plan document;
+  chttp_document_plan alternate_document;
+  chttp_document_plan input_document;
+  const DataBindMessagePlan *request_plan;
   _Atomic size_t deferred_in_flight;
 } chttp_service_method_record;
 
@@ -56,6 +68,7 @@ struct chttp_service_impl {
 };
 
 typedef struct chttp_service_invocation {
+  const chttp_document_plan *document;
   chttp_service_method_record *record;
 
   unsigned char *request_storage;
@@ -94,6 +107,9 @@ typedef struct chttp_service_http_provider {
   int output_published;
   size_t staged_body_size;
   const char *staged_content_type;
+  DataBindFormatWriter format_writer;
+  DataBindXmlWriter xml_writer;
+  chttp_document_writer document;
 } chttp_service_http_provider;
 
 static void chttp_service_error_set(
@@ -482,6 +498,11 @@ static DataBindStatus chttp_service_http_open_input(
 static void chttp_service_http_release_output(
     chttp_service_http_provider *provider) {
   if (provider == NULL) return;
+  /* Closing a failed writer may flush; retain its bounded sink until closed. */
+  if (provider->format_writer.owner != NULL)
+    (void)data_bind_format_writer_close(&provider->format_writer, NULL);
+  if (provider->xml_writer.owner != NULL)
+    (void)data_bind_xml_writer_close(&provider->xml_writer, NULL);
   if (provider->output_buffer != NULL) {
     mem_buffer_release(provider->output_buffer);
     provider->output_buffer = NULL;
@@ -639,6 +660,17 @@ static const cserde_writer_ops CHTTP_SERVICE_SCALAR_WRITER_OPS = {
     chttp_service_scalar_write,
     chttp_service_scalar_finish};
 
+static int chttp_service_document_sink(const void *data, size_t size, void *context) {
+  chttp_service_http_provider *provider = context;
+  if (size > provider->service->response_capacity - provider->staged_body_size)
+    return -1;
+  if (size != 0u)
+    memcpy(mem_buffer_data(provider->output_buffer) + provider->staged_body_size, data, size);
+  provider->staged_body_size += size;
+  mem_set_used(provider->output_buffer, provider->staged_body_size);
+  return 0;
+}
+
 static DataBindStatus chttp_service_http_begin_output(
     void *context, DataBindError *error) {
   chttp_service_http_provider *provider =
@@ -654,6 +686,33 @@ static DataBindStatus chttp_service_http_begin_output(
   provider->staged_content_type = "text/plain";
   provider->writer_tokens = 0u;
   provider->writer = (cserde_writer){0};
+  if (provider->invocation->record->document.format_plan != NULL) {
+    const chttp_document_plan *plan = provider->invocation->document;
+    cserde_writer *writer = NULL;
+    provider->output_buffer = mem_get_buffer(mem_global(), provider->service->response_capacity);
+    if (provider->output_buffer == NULL) return DATA_BIND_ERR_OOM;
+    DataBindStatus status;
+    if (plan->format == DATA_BIND_FORMAT_XML) {
+      provider->xml_writer = (DataBindXmlWriter)DATA_BIND_XML_WRITER_INIT;
+      status = data_bind_xml_writer_open_root(plan->root_name, chttp_service_document_sink,
+          provider, provider->invocation->native_options.max_depth, &provider->xml_writer, error);
+      writer = provider->xml_writer.writer;
+      provider->staged_content_type = "application/xml";
+    } else {
+      provider->format_writer = (DataBindFormatWriter)DATA_BIND_FORMAT_WRITER_INIT;
+      status = data_bind_format_writer_open(data_bind_builtin_format_provider(plan->format),
+          chttp_service_document_sink, provider, provider->invocation->native_options.max_depth,
+          &provider->format_writer, error);
+      writer = provider->format_writer.writer;
+      provider->staged_content_type = "application/json";
+    }
+    if (status == DATA_BIND_OK)
+      status = chttp_document_begin(&provider->document, plan, writer,
+          &provider->invocation->native_options,
+          provider->invocation->native_options.max_owned_bytes, error);
+    if (status != DATA_BIND_OK) chttp_service_http_release_output(provider);
+    return status;
+  }
   return DATA_BIND_OK;
 }
 
@@ -670,6 +729,8 @@ static DataBindStatus chttp_service_http_write_output(
   if (provider == NULL || provider->service == NULL || entry == NULL ||
       !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->invocation->record->document.format_plan != NULL)
+    return chttp_document_field(&provider->document, entry, state, value, value_bytes, error);
   if (provider->writer_tokens != 0u) {
     chttp_service_error_set(
         error, DATA_BIND_ERR_RUNTIME,
@@ -741,6 +802,17 @@ static DataBindStatus chttp_service_http_commit_output(
       (chttp_service_http_provider *)context;
   if (provider == NULL || !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->invocation->record->document.format_plan != NULL) {
+    DataBindStatus status = chttp_document_finish(&provider->document);
+    DataBindStatus closed = provider->xml_writer.owner != NULL
+        ? data_bind_xml_writer_close(&provider->xml_writer, error)
+        : data_bind_format_writer_close(&provider->format_writer, error);
+    if (status == DATA_BIND_OK) status = closed;
+    provider->output_active = 0;
+    provider->output_published = status == DATA_BIND_OK;
+    if (status != DATA_BIND_OK) chttp_service_http_release_output(provider);
+    return status;
+  }
   if (provider->writer_tokens != 0u &&
       cserde_writer_finish(&provider->writer) != CSERDE_OK) {
     chttp_service_http_release_output(provider);
@@ -1251,7 +1323,7 @@ static int chttp_service_invocation_init(
 }
 
 static int chttp_service_plan_supported(
-    const DataBindHttpMethodPlan *plan) {
+    const DataBindHttpMethodPlan *plan, int document, int body) {
   const DataBindBindingPlan *binding;
   size_t i;
   size_t egress_count;
@@ -1267,8 +1339,13 @@ static int chttp_service_plan_supported(
   for (i = 0u; i < data_bind_binding_plan_ingress_count(binding); ++i) {
     entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
     if (!data_bind_binding_plan_ingress_at(binding, i, &entry) ||
-        entry.address.space == NULL || !chttp_service_scalar_kind(entry.data))
+        entry.address.space == NULL)
       return 0;
+    if (body) {
+      if (strcmp(entry.address.space, "http.body") != 0) return 0;
+      continue;
+    }
+    if (!chttp_service_scalar_kind(entry.data)) return 0;
     if (strcmp(entry.address.space, "http.path") != 0 &&
         strcmp(entry.address.space, "http.query") != 0 &&
         strcmp(entry.address.space, "http.header") != 0 &&
@@ -1277,13 +1354,13 @@ static int chttp_service_plan_supported(
   }
 
   egress_count = data_bind_binding_plan_egress_count(binding);
-  if (egress_count > 1u) return 0;
-  if (egress_count == 1u) {
+  if (!document && egress_count > 1u) return 0;
+  for (i = 0u; i < egress_count; ++i) {
     entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
-    if (!data_bind_binding_plan_egress_at(binding, 0u, &entry) ||
+    if (!data_bind_binding_plan_egress_at(binding, i, &entry) ||
         entry.address.space == NULL ||
         strcmp(entry.address.space, "http.response.body") != 0 ||
-        !chttp_service_scalar_kind(entry.data))
+        (!document && !chttp_service_scalar_kind(entry.data)))
       return 0;
   }
   return 1;
@@ -1326,6 +1403,79 @@ static int chttp_service_http_failure_reply(
   return chttp_server_reply(
       response, failure.status_code, "text/plain",
       failure.body, failure.body_size);
+}
+
+static int chttp_service_body_content_type(
+    const chttp_server_request_view *request, DataBindFormat format) {
+  const char *value = NULL;
+  for (size_t i = 0u; i < request->header_count; ++i) {
+    if (vstr_ieq(vstr_from_cstr(request->headers[i].name), vstr_from_cstr("Content-Type"))) {
+      if (value != NULL) return 0;
+      value = request->headers[i].value;
+    }
+  }
+  if (value == NULL) return 0;
+  const char *separator = strchr(value, ';');
+  vstr type = vstr_trim(vstr_from_buf(value,
+      separator != NULL ? (size_t)(separator - value) : strlen(value)), " \t");
+  int matches = format == DATA_BIND_FORMAT_JSON
+      ? vstr_ieq(type, vstr_from_cstr("application/json"))
+      : (vstr_ieq(type, vstr_from_cstr("application/xml")) ||
+         vstr_ieq(type, vstr_from_cstr("text/xml")));
+  if (!matches || separator == NULL) return matches;
+  vstr parameter = vstr_trim(vstr_from_cstr(separator + 1), " \t");
+  const char *equals = memchr(parameter.data, '=', parameter.len);
+  if (equals == NULL || !vstr_ieq(vstr_trim(vstr_from_buf(parameter.data,
+          (size_t)(equals - parameter.data)), " \t"), vstr_from_cstr("charset")))
+    return 0;
+  vstr charset = vstr_trim(vstr_from_buf(equals + 1,
+      parameter.len - (size_t)(equals + 1 - parameter.data)), " \t");
+  return vstr_ieq(charset, vstr_from_cstr("utf-8")) ||
+      vstr_ieq(charset, vstr_from_cstr("\"utf-8\""));
+}
+
+/* Decode once into the invocation-owned request. MessagePlan owns defaults,
+ * validation and state overlays; the transport only selects the exact reader.
+ * No parser token or HTTP body view survives this function. */
+static DataBindStatus chttp_service_decode_body(
+    chttp_service_method_record *record, const chttp_server_request_view *request,
+    chttp_service_invocation *invocation) {
+  DataBindFormatReader lease = DATA_BIND_FORMAT_READER_INIT;
+  DataBindFormatCanonicalReader canonical = DATA_BIND_FORMAT_CANONICAL_READER_INIT;
+  DataBindFormatCursor cursor = DATA_BIND_FORMAT_CURSOR_INIT;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  DataBindMessagePlanDiagnostic message = DATA_BIND_MESSAGE_PLAN_DIAGNOSTIC_INIT;
+  DataBindNativeDiagnostic native = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+  if (request->body_streamed || request->body == NULL || request->body_size == 0u)
+    return DATA_BIND_ERR_PARSE;
+  DataBindStatus status = record->input_document.format == DATA_BIND_FORMAT_XML
+      ? data_bind_xml_format_reader_open_plan(record->input_document.format_plan,
+          request->body, request->body_size, invocation->native_options.max_depth, &lease, &error)
+      : data_bind_format_reader_open(
+      data_bind_builtin_format_provider(record->input_document.format),
+      request->body, request->body_size, invocation->native_options.max_depth, &lease, &error);
+  if (status != DATA_BIND_OK) return status;
+  status = data_bind_format_canonical_reader_init_recursive(record->input_document.format_plan,
+      lease.reader, &canonical, &cursor, &error);
+  if (status == DATA_BIND_OK)
+    status = data_bind_message_plan_decode_native_format(record->request_plan,
+        &invocation->native_options, record->input_document.format,
+        data_bind_format_canonical_reader_reader(&canonical),
+        invocation->request_storage, record->request_bytes, &message);
+  (void)data_bind_format_reader_close(&lease);
+  /* The admitted immutable plans are valid. A reader shape/name that cannot
+   * represent this contract is a client input error (FormatPlan UNSUPPORTED). */
+  if (status == DATA_BIND_ERR_SCHEMA) status = DATA_BIND_ERR_TYPE_MISMATCH;
+  if (status != DATA_BIND_OK) return status;
+  status = data_bind_native_init(&invocation->native_options,
+      record->native_binding->response->data, invocation->response_storage,
+      record->response_bytes, &native);
+  if (status != DATA_BIND_OK) {
+    (void)cmeta_data_value_restore_zero(record->native_binding->request->data,
+        invocation->request_storage);
+    return status;
+  }
+  return DATA_BIND_OK;
 }
 
 static void chttp_service_deferred_cancel_task(void *user) {
@@ -1489,7 +1639,7 @@ static void chttp_service_deferred_cflow_run(void *user) {
 static int chttp_service_http_execute_deferred(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
-    chttp_server_response *response) {
+    chttp_server_response *response, const chttp_document_plan *document) {
   chttp_service_invocation *invocation;
   chttp_service_http_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
@@ -1522,6 +1672,7 @@ static int chttp_service_http_execute_deferred(
     free(invocation);
     return status;
   }
+  invocation->document = document;
 
   provider_context = (chttp_service_http_provider){
       .service = record->owner,
@@ -1531,9 +1682,12 @@ static int chttp_service_http_execute_deferred(
   provider.context = &provider_context;
   provider.open_input = chttp_service_http_open_input;
 
-  bind_status = data_bind_binding_plan_bind_inputs(
-      record->binding, &provider, &invocation->native_options,
-      &invocation->frame, &diagnostic);
+  if (record->request_plan != NULL)
+    bind_status = chttp_service_decode_body(record, request, invocation);
+  else
+    bind_status = data_bind_binding_plan_bind_inputs(
+        record->binding, &provider, &invocation->native_options,
+        &invocation->frame, &diagnostic);
   if (bind_status == DATA_BIND_OK)
     invocation->frame_live = 1;
   if (bind_status != DATA_BIND_OK) {
@@ -1585,7 +1739,7 @@ static int chttp_service_http_execute_deferred(
 static int chttp_service_http_execute(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
-    chttp_server_response *response) {
+    chttp_server_response *response, const chttp_document_plan *document) {
   chttp_service_invocation invocation = {0};
   chttp_service_http_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
@@ -1606,6 +1760,7 @@ static int chttp_service_http_execute(
 
   result = chttp_service_invocation_init(record, &invocation);
   if (result != SALTS_OK) return result;
+  invocation.document = document;
 
   provider_context = (chttp_service_http_provider){
       .service = record->owner,
@@ -1621,9 +1776,12 @@ static int chttp_service_http_execute(
   provider.abort_output = chttp_service_http_abort_output;
 
   binding = record->binding;
-  bind_status = data_bind_binding_plan_bind_inputs(
-      binding, &provider, &invocation.native_options,
-      &invocation.frame, &diagnostic);
+  if (record->request_plan != NULL)
+    bind_status = chttp_service_decode_body(record, request, &invocation);
+  else
+    bind_status = data_bind_binding_plan_bind_inputs(
+        binding, &provider, &invocation.native_options,
+        &invocation.frame, &diagnostic);
   if (bind_status == DATA_BIND_OK)
     invocation.frame_live = 1;
 
@@ -1691,6 +1849,24 @@ static int chttp_service_http_handler(
       (chttp_service_method_record *)user;
   if (record == NULL || record->owner == NULL)
     return SALTS_EINVAL;
+  const chttp_document_plan *document = &record->document;
+  if (record->alternate_document.format_plan != NULL) {
+    int selected_xml = 0;
+    int status = chttp_server_response_append_vary(response, "Accept");
+    if (status != SALTS_OK) return status;
+    unsigned rejection = chttp_service_accept(request->headers, request->header_count,
+        record->document.format == DATA_BIND_FORMAT_XML, &selected_xml);
+    if (rejection != 0u) {
+      const char *body = rejection == 406u ? "Not Acceptable" : "Invalid Accept";
+      return chttp_server_reply(response, rejection, "text/plain", body, strlen(body));
+    }
+    if (selected_xml != (record->document.format == DATA_BIND_FORMAT_XML))
+      document = &record->alternate_document;
+  }
+  if (record->request_plan != NULL &&
+      !chttp_service_body_content_type(request, record->input_document.format))
+    return chttp_server_reply(response, 415u, "text/plain",
+        "Unsupported Media Type", sizeof("Unsupported Media Type") - 1u);
   if (record->execution_mode ==
           CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
       record->execution_mode ==
@@ -1698,8 +1874,8 @@ static int chttp_service_http_handler(
       record->execution_mode ==
           CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN)
     return chttp_service_http_execute_deferred(
-        record, request, response);
-  return chttp_service_http_execute(record, request, response);
+        record, request, response, document);
+  return chttp_service_http_execute(record, request, response, document);
 }
 
 int chttp_service_init(
@@ -1746,9 +1922,35 @@ int chttp_service_init(
   return SALTS_OK;
 }
 
-int chttp_service_mount_http(
+static cmeta_status chttp_service_dispatch_intercepted(
+    void *context, const chttp_service_call *call,
+    chttp_service_dispatch_result *result) {
+  result->entered = true;
+  result->status = chttp_service_http_handler(context, call->request, call->response);
+  return result->status == SALTS_OK ? CMETA_OK : CMETA_CALLBACK_ERROR;
+}
+
+static int chttp_service_intercepted_handler(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  chttp_service_method_record *record = (chttp_service_method_record *)user;
+  const chttp_service_call call = {record->binding, record->native_binding,
+      request, response};
+  const chttp_service_interceptor chain = {record,
+      chttp_service_dispatch_intercepted, record->hooks, record->hook_count};
+  chttp_service_dispatch_result result = {SALTS_OK, false};
+  const cmeta_status status = chttp_service_interceptor_invoke(&chain, &call, &result);
+  if (result.entered) return result.status;
+  if (status == CMETA_CALLBACK_ERROR)
+    return chttp_server_reply(response, 403u, "text/plain", "Forbidden", 9u);
+  return chttp_server_reply(response, 500u, "text/plain", "Policy failure", 14u);
+}
+
+static int chttp_service_mount_http_impl(
     chttp_service *service, chttp_server *server,
-    const chttp_service_http_mount *mount) {
+    const chttp_service_http_mount *mount,
+    chttp_service_policy_select_fn select, void *policy_context, int document,
+    const DataBindMessagePlan *request_plan, const DataBindFormatPlan *alternate_response) {
   chttp_service_impl *impl;
   chttp_service_method_record *record;
   chttp_server_route_options route_options = {0};
@@ -1811,7 +2013,7 @@ int chttp_service_mount_http(
       return SALTS_EINVAL;
   }
 
-  if (!chttp_service_plan_supported(mount->method_plan))
+  if (!chttp_service_plan_supported(mount->method_plan, document, request_plan != NULL))
     return SALTS_ENOTSUP;
 
   impl = (chttp_service_impl *)service->impl;
@@ -1864,6 +2066,56 @@ int chttp_service_mount_http(
     return SALTS_EINVAL;
   }
   record->binding = binding;
+  if (document) {
+    status = chttp_document_admit(data_bind_http_method_plan_transport(mount->method_plan),
+        binding, "http.response.body", 1, &record->document);
+    if (status != SALTS_OK) {
+      chttp_service_method_release(record);
+      return status;
+    }
+  }
+  if (request_plan != NULL) {
+    status = chttp_document_input_admit(data_bind_http_method_plan_transport(mount->method_plan),
+        binding, &record->input_document);
+    if (status == SALTS_OK)
+      status = chttp_document_message_admit(request_plan, native->request,
+          &record->input_document, data_bind_binding_plan_ingress_count(binding));
+    if (status != SALTS_OK) {
+      chttp_service_method_release(record);
+      return status;
+    }
+    record->request_plan = request_plan;
+  }
+  if (alternate_response != NULL) {
+    status = chttp_document_format_admit(alternate_response, binding,
+        "http.response.body", 1, &record->alternate_document);
+    if (status == SALTS_OK &&
+        (record->document.format == record->alternate_document.format ||
+         strcmp(record->document.root_name, record->alternate_document.root_name) != 0))
+      status = SALTS_EINVAL;
+    if (status != SALTS_OK) {
+      chttp_service_method_release(record);
+      return status;
+    }
+  }
+  if (select != NULL) {
+    chttp_service_interceptor_hook hooks[CHTTP_SERVICE_MAX_INTERCEPTORS] = {{0}};
+    size_t count = SIZE_MAX;
+    status = select(policy_context, binding, native, hooks,
+        CHTTP_SERVICE_MAX_INTERCEPTORS, &count);
+    if (status == SALTS_OK && count > CHTTP_SERVICE_MAX_INTERCEPTORS)
+      status = SALTS_ENOBUFS;
+    for (size_t i = 0u; status == SALTS_OK && i < count; ++i) {
+      if (hooks[i].before == NULL && hooks[i].after == NULL && hooks[i].on_error == NULL)
+        status = SALTS_EINVAL;
+    }
+    if (status != SALTS_OK) {
+      chttp_service_method_release(record);
+      return status;
+    }
+    memcpy(record->hooks, hooks, count * sizeof(*hooks));
+    record->hook_count = count;
+  }
   record->request_bytes = request_bytes;
   record->response_bytes = response_bytes;
   record->error_bytes = error_bytes;
@@ -1900,7 +2152,8 @@ int chttp_service_mount_http(
   route_options.path = route;
   route_options.middleware = mount->middleware;
   route_options.middleware_count = mount->middleware_count;
-  route_options.handler = chttp_service_http_handler;
+  route_options.handler = record->hook_count != 0u
+      ? chttp_service_intercepted_handler : chttp_service_http_handler;
   route_options.user = record;
 
   status = chttp_server_route_with(server, &route_options);
@@ -1912,6 +2165,45 @@ int chttp_service_mount_http(
 
   ++impl->method_count;
   return SALTS_OK;
+}
+
+int chttp_service_mount_http(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount) {
+  return chttp_service_mount_http_impl(service, server, mount, NULL, NULL, 0, NULL, NULL);
+}
+
+int chttp_service_mount_http_with_policies(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount,
+    chttp_service_policy_select_fn select, void *context) {
+  if (select == NULL) return SALTS_EINVAL;
+  return chttp_service_mount_http_impl(service, server, mount, select, context, 0, NULL, NULL);
+}
+
+int chttp_service_mount_http_document(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount,
+    chttp_service_policy_select_fn select, void *context) {
+  return chttp_service_mount_http_impl(service, server, mount, select, context, 1, NULL, NULL);
+}
+
+int chttp_service_mount_http_document_body(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount, const DataBindMessagePlan *request_plan,
+    chttp_service_policy_select_fn select, void *context) {
+  if (request_plan == NULL) return SALTS_EINVAL;
+  return chttp_service_mount_http_impl(service, server, mount, select, context, 1, request_plan, NULL);
+}
+
+int chttp_service_mount_http_negotiated_document(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount, const DataBindMessagePlan *request_plan,
+    const DataBindFormatPlan *alternate_response,
+    chttp_service_policy_select_fn select, void *context) {
+  if (alternate_response == NULL) return SALTS_EINVAL;
+  return chttp_service_mount_http_impl(service, server, mount, select, context,
+      1, request_plan, alternate_response);
 }
 
 int chttp_service_destroy(chttp_service *service) {

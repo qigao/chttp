@@ -599,6 +599,14 @@ const char *chttp_server_request_param(const chttp_server_request_view *request,
 int chttp_server_response_set_header(chttp_server_response *response, const char *name,
                                      const char *value);
 
+/** Append a nonempty comma-separated field-name list to Vary, preserving
+ * previous values. "*" replaces the list; an existing "*" remains unchanged.
+ * Values are copied under the response header limits. Duplicate names are
+ * permitted. Returns SALTS_EINVAL for invalid arguments/list syntax,
+ * SALTS_EALREADY after defer, SALTS_ENOBUFS on capacity exhaustion, or SALTS_OK.
+ * Call during the response-building callback, before reply or defer. */
+int chttp_server_response_append_vary(chttp_server_response *response, const char *fields);
+
 /**
  * Selects one case-sensitive WebSocket subprotocol token offered by the
  * current upgrade request. The selected token is copied into the handshake.

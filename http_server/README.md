@@ -10,6 +10,11 @@ Session 由 HTTP server 持有，具备显式容量与 idle timeout。
 中间件使用 `chttp_server_use()` 注册，通过 `chttp_server_next_call()` 继续处理链；
 路由也支持单独配置中间件。RPC server 通过 `crpc_server_http()` 暴露借用的 HTTP owner，允许在启动前配置这些能力。
 
+IDL Service 可通过 `CHttp::App` 的 `chttp_service_mount_http_with_policies()`，
+在挂载时按方法身份、BindingPlan 和 CMeta 签名选择类型化 Interceptor。
+示例使用 `Salts::Component` 自动解析 Contract → Service 的依赖和回滚顺序；
+策略、异步提交边界与迁移方式见 [App 装配说明](../app/README.md#reflected-method-policies-and-component-assembly)。
+
 服务端 owner、并发提交、deferred response 与关闭协议保持不变。
 服务端实现只引用本侧私有头、公共协议头和安装后的 Salts API，不访问客户端私有运行时。
 公开入口为 `<http_server/http.h>`、`<http_server/rpc.h>`，位于本模块的 `include/`。

@@ -21,8 +21,9 @@ This integration branch requires the unified Salts CNet candidate tracked by
 **same CNet shared library**, without `Salts::CNetManager` or a second manager DLL.
 This integration branch consumes floating prerelease package families
 `Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`.
-The qualified composition baseline is the paired `2.3.0-rc.2` / `4.3.0-rc.2`
-SDKs. Upgrade or roll back both together: Unicode is now exported by Salts,
+The current document-adapter baseline is the paired `2.3.0-rc.9` / `4.3.0-rc.7`
+SDKs, including recursive JSON/XML field projection and plan-aware XML sequences.
+Upgrade or roll back both together: Unicode is now exported by Salts,
 and the H1 WebSocket client requires `<cnet/websocket_transport.h>`.
 See [composition scope and qualification](http_client/README.md#rc2-ws-composition-238).
 NuGet resolves the latest matching versions on each CI run. A selected package
@@ -204,7 +205,10 @@ Requirements:
 
 Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, and `VCPKG_ROOT` before configuration.
 DataBind/TBE are components of the SaltsUtils installation. CHTTP consumes the
-concrete `Salts::DataBind` target from `find_package(SaltsUtils CONFIG REQUIRED)`.
+concrete `Salts::DataBind` target from
+`find_package(SaltsUtils CONFIG REQUIRED COMPONENTS Crypto)`.
+The explicit Crypto component also resolves the provider dependencies needed by
+`Salts::Crypto`; installed CHTTP consumers use the same dependency declaration.
 
 Local and CI builds use the [shared vcpkg cache](https://github.com/qigao/vcpkg-cache).
 On Windows its checkout belongs at `%LOCALAPPDATA%/qigao/vcpkg-cache`; on Linux,

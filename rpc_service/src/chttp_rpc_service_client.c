@@ -1,4 +1,5 @@
 #include <chttp_rpc_service/service.h>
+#include "chttp_document.h"
 
 #include <string.h>
 
@@ -272,7 +273,7 @@ static int chttp_rpc_service_client_plan_admit(
     const DataBindRpcMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
     size_t request_bytes, size_t response_bytes,
-    chttp_rpc_service_params_mode *out_mode) {
+    chttp_rpc_service_params_mode *out_mode, int document) {
   const DataBindBindingPlan *binding;
   const cmeta_function_desc *function;
   size_t native_request_bytes = 0u;
@@ -407,16 +408,17 @@ static int chttp_rpc_service_client_plan_admit(
   if (saw_ordinal && saw_name_only) return SALTS_ENOTSUP;
 
   egress_count = data_bind_binding_plan_egress_count(binding);
-  if (egress_count > 1u) return SALTS_ENOTSUP;
-  if (egress_count == 1u) {
+  if (!document && egress_count > 1u) return SALTS_ENOTSUP;
+  for (i = 0u; i < egress_count; ++i) {
     DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
     size_t bytes;
-    if (!data_bind_binding_plan_egress_at(binding, 0u, &entry) ||
+    if (!data_bind_binding_plan_egress_at(binding, i, &entry) ||
         entry.address.space == NULL ||
         strcmp(entry.address.space, "rpc.result") != 0 ||
         entry.address.binding_class != DATA_BIND_BINDING_RESULT ||
         entry.target_is_return || entry.function_param_index != 1u ||
-        !chttp_rpc_service_client_scalar_kind(entry.data) ||
+        entry.data == NULL ||
+        (!document && !chttp_rpc_service_client_scalar_kind(entry.data)) ||
         entry.data->storage_type == NULL)
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
@@ -436,6 +438,18 @@ static int chttp_rpc_service_client_plan_admit(
                   : saw_ordinal ? CHTTP_RPC_SERVICE_PARAMS_ARRAY
                                 : CHTTP_RPC_SERVICE_PARAMS_OBJECT;
   return SALTS_OK;
+}
+
+static int chttp_rpc_service_client_document_admit(
+    const chttp_rpc_service_client_call_options *options,
+    const DataBindMessagePlan *response_plan, chttp_document_plan *document) {
+  const DataBindBindingPlan *binding = data_bind_rpc_method_plan_binding(options->method_plan);
+  const DataBindNativeTypeBinding *expected = options->native_binding->response;
+  int status = chttp_document_admit(data_bind_rpc_method_plan_transport(options->method_plan),
+      binding, "rpc.result", 0, document);
+  if (status != SALTS_OK) return status;
+  return chttp_document_message_admit(response_plan, expected, document,
+      data_bind_binding_plan_egress_count(binding));
 }
 
 static int chttp_rpc_service_client_bind_status_to_salts(
@@ -499,6 +513,24 @@ static int chttp_rpc_service_client_decode_success(
     }
   }
   return SALTS_OK;
+}
+
+static int chttp_rpc_service_client_decode_document(
+    const chttp_rpc_service_client_call_options *options,
+    const DataBindMessagePlan *response_plan, const chttp_document_plan *document,
+    const crpc_response *response) {
+  DataBindFormatCanonicalReader reader = DATA_BIND_FORMAT_CANONICAL_READER_INIT;
+  DataBindFormatCursor cursor = DATA_BIND_FORMAT_CURSOR_INIT;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  DataBindMessagePlanDiagnostic diagnostic = DATA_BIND_MESSAGE_PLAN_DIAGNOSTIC_INIT;
+  if (response->value.result == NULL) return SALTS_EPROTO;
+  DataBindStatus status = data_bind_format_canonical_reader_init_recursive(
+      document->format_plan, response->value.result, &reader, &cursor, &error);
+  if (status == DATA_BIND_OK)
+    status = data_bind_message_plan_decode_native_format(response_plan, options->native_options,
+        DATA_BIND_FORMAT_JSON, data_bind_format_canonical_reader_reader(&reader),
+        options->response, options->response_bytes, &diagnostic);
+  return chttp_rpc_service_client_bind_status_to_salts(status);
 }
 
 static int chttp_rpc_service_client_typed_error_index(
@@ -577,9 +609,10 @@ static int chttp_rpc_service_client_decode_typed_error(
   return SALTS_OK;
 }
 
-int chttp_rpc_service_client_call(
+static int chttp_rpc_service_client_call_impl(
     crpc_client *client,
     const chttp_rpc_service_client_call_options *options,
+    const DataBindMessagePlan *response_plan,
     chttp_rpc_service_client_outcome *outcome,
     crpc_error *out_error) {
   const DataBindBindingPlan *binding;
@@ -588,6 +621,7 @@ int chttp_rpc_service_client_call(
   crpc_options rpc_options = {0};
   crpc_response rpc_response = {0};
   crpc_method method = {0};
+  chttp_document_plan document = {0};
   DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
   size_t native_request_bytes = 0u;
   size_t native_response_bytes = 0u;
@@ -618,8 +652,12 @@ int chttp_rpc_service_client_call(
 
   status = chttp_rpc_service_client_plan_admit(
       options->method_plan, options->native_binding,
-      options->request_bytes, options->response_bytes, &mode);
+      options->request_bytes, options->response_bytes, &mode, response_plan != NULL);
   if (status != SALTS_OK) return status;
+  if (response_plan != NULL) {
+    status = chttp_rpc_service_client_document_admit(options, response_plan, &document);
+    if (status != SALTS_OK) return status;
+  }
 
   if (options->native_binding->error_count != 0u &&
       (options->typed_error == NULL ||
@@ -678,8 +716,9 @@ int chttp_rpc_service_client_call(
   }
 
   if (rpc_response.kind == CRPC_RESPONSE_RESULT) {
-    status = chttp_rpc_service_client_decode_success(
-        options, &rpc_response);
+    status = response_plan != NULL
+        ? chttp_rpc_service_client_decode_document(options, response_plan, &document, &rpc_response)
+        : chttp_rpc_service_client_decode_success(options, &rpc_response);
     if (status != SALTS_OK) {
       *out_error = (crpc_error){
           .status = status,
@@ -730,4 +769,23 @@ fail:
       options->native_options, options->native_binding->response->data,
       options->response, native_response_bytes, &diagnostic);
   return status;
+}
+
+int chttp_rpc_service_client_call(
+    crpc_client *client, const chttp_rpc_service_client_call_options *options,
+    chttp_rpc_service_client_outcome *outcome, crpc_error *out_error) {
+  return chttp_rpc_service_client_call_impl(client, options, NULL, outcome, out_error);
+}
+
+int chttp_rpc_service_client_call_document(
+    crpc_client *client, const chttp_rpc_service_client_call_options *options,
+    const DataBindMessagePlan *response_plan,
+    chttp_rpc_service_client_outcome *outcome, crpc_error *out_error) {
+  if (response_plan == NULL) {
+    if (outcome != NULL)
+      *outcome = (chttp_rpc_service_client_outcome)CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+    if (out_error != NULL) *out_error = (crpc_error){0};
+    return SALTS_EINVAL;
+  }
+  return chttp_rpc_service_client_call_impl(client, options, response_plan, outcome, out_error);
 }

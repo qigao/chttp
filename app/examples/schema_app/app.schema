@@ -1,0 +1,23 @@
+schema WebDemo [version(1)];
+
+message Numbers { uint32 left; uint32 right; }
+message Answer { uint64 value; }
+message Probe { uint32 id; }
+message Health { bool ready; }
+
+service Calculator {
+  [http("GET", "/add"),
+   app_http_field("ingress", "left", "query", "left"),
+   app_http_field("ingress", "right", "query", "right"),
+   app_http_policy("no_store")]
+  Add: Numbers -> Answer;
+
+  [http("POST", "/multiply"), app_http_formats("json", "xml")]
+  Multiply: Numbers -> Answer;
+}
+
+service System {
+  [http("GET", "/health/{id}"),
+   app_http_field("ingress", "id", "path", "id")]
+  Check: Probe -> Health;
+}

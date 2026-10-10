@@ -36,7 +36,8 @@ target_include_directories(http_example_app PUBLIC
   PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(http_example_app PUBLIC
   CHttp::App http_example_contract_native
-  http_example_contract_plugin_client Salts::Plugin Salts::CFlow Salts::Core)
+  http_example_contract_plugin_client Salts::Plugin Salts::CFlow Salts::Core
+  Salts::Component)
 add_dependencies(http_example_app http_example_contract_idl_codegen)
 set_target_properties(http_example_app PROPERTIES FOLDER "http_server/examples")
 

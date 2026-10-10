@@ -1,0 +1,12 @@
+schema Injected;
+message Numbers { uint32 value; }
+message Answer { uint64 value; }
+
+[inject("factor", "FactorSource", "factor_source.h"),
+ inject("offset", "OffsetSource", "factor_source.h")]
+service Calc {
+  [http("POST", "/scale"), app_http_policy("no_store")]
+  Scale: Numbers -> Answer;
+  [http("POST", "/next")]
+  Next: Numbers -> Answer;
+}

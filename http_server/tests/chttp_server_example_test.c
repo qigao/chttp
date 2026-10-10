@@ -118,6 +118,12 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
 
   it("serves generated scalar binding, validation and exact uint64 output") {
     example_start(&fixture, &config);
+    check_equal(fixture.app.components.state, SALTS_COMPONENT_CONTEXT_ACTIVE);
+    check_equal(fixture.app.components.dependency_count, (size_t)1u);
+    check_equal(fixture.app.activation_order[0], (size_t)1u);
+    check_equal(fixture.app.activation_order[1], (size_t)0u);
+    check_equal(fixture.app.dependencies[0].provider_index, (size_t)1u);
+    check_equal(fixture.app.dependencies[0].consumer_index, (size_t)0u);
     example_get(&fixture, "/api/add?left=3&right=4", 200u);
     check_equal(fixture.response.body_size, 1u);
     check_equal(fixture.response.body, "7", 1u);
@@ -255,6 +261,10 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
     check_equal(http_example_configure(&fixture.app, &config), SALTS_EINVAL);
     check_null(fixture.app.plugins.impl);
     check_null(fixture.app.rpc.impl);
+    check_null(fixture.app.service.impl);
+    check_null(fixture.app.contract);
+    check_null(fixture.app.method_plan);
+    check_equal(fixture.app.components.state, SALTS_COMPONENT_CONTEXT_ZERO);
     check_false(cflow_executor_valid(&fixture.app.executor));
     config.plugin_path = HTTP_EXAMPLE_PLUGIN_PATH;
     example_start(&fixture, &config);

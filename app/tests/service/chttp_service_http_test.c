@@ -1,4 +1,5 @@
 #include <chttp_app/service.h>
+#include <chttp_app/interceptor.h>
 
 #include <http_client/http.h>
 #include <cmeta_cmeta_fixed_width.h>
@@ -914,7 +915,174 @@ static int chttp_service_test_call(
   return chttp_get(client, &options, response, &error);
 }
 
+typedef struct policy_test_state {
+  atomic_int mode;
+  atomic_int trace;
+  unsigned selections;
+  int selection_mode;
+} policy_test_state;
+
+static void policy_trace(policy_test_state *state, int digit) {
+  atomic_store(&state->trace, atomic_load(&state->trace) * 10 + digit);
+}
+
+static cmeta_status policy_first(void *context, const chttp_service_call *call,
+    bool *proceed) {
+  policy_test_state *state = context;
+  (void)call;
+  *proceed = true;
+  policy_trace(state, 1);
+  return CMETA_OK;
+}
+
+static cmeta_status policy_second(void *context, const chttp_service_call *call,
+    bool *proceed) {
+  policy_test_state *state = context;
+  (void)call;
+  policy_trace(state, 2);
+  *proceed = atomic_load(&state->mode) != 1;
+  return atomic_load(&state->mode) == 2 ? CMETA_INVALID_ARGUMENT : CMETA_OK;
+}
+
+static void policy_after_first(void *context, const chttp_service_call *call,
+    const chttp_service_dispatch_result *result) {
+  (void)call;
+  if (result->entered && result->status == SALTS_OK) policy_trace(context, 3);
+}
+static void policy_after_second(void *context, const chttp_service_call *call,
+    const chttp_service_dispatch_result *result) {
+  (void)call;
+  if (result->entered && result->status == SALTS_OK) policy_trace(context, 4);
+}
+static void policy_error_first(void *context, const chttp_service_call *call,
+    cmeta_status status) {
+  (void)call; (void)status;
+  policy_trace(context, 5);
+}
+static void policy_error_second(void *context, const chttp_service_call *call,
+    cmeta_status status) {
+  (void)call; (void)status;
+  policy_trace(context, 6);
+}
+
+static int policy_select(void *context, const DataBindBindingPlan *binding,
+    const DataBindServiceNativeBinding *native,
+    chttp_service_interceptor_hook *hooks, size_t capacity, size_t *count) {
+  policy_test_state *state = context;
+  ++state->selections;
+  if (strcmp(data_bind_binding_plan_operation_id(binding), "Calc.Add") != 0 ||
+      !cmeta_function_desc_equal(native->function, FunctionMeta(chttp_service_test_add)))
+    return SALTS_ENOTSUP;
+  if (state->selection_mode == 1) return SALTS_ENOTSUP;
+  if (state->selection_mode == 2) { *count = capacity + 1u; return SALTS_OK; }
+  if (state->selection_mode == 3) { *count = 1u; return SALTS_OK; }
+  if (state->selection_mode == 4) return SALTS_OK; /* broken selector: no count */
+  if (capacity < 2u) return SALTS_ENOBUFS;
+  hooks[0] = (chttp_service_interceptor_hook){state, policy_first,
+      policy_after_first, policy_error_first};
+  hooks[1] = (chttp_service_interceptor_hook){state, policy_second,
+      policy_after_second, policy_error_second};
+  *count = 2u;
+  return SALTS_OK;
+}
+
 spec("CHttp::App generated HTTP MethodPlan") {
+  group("reflected method policy admission and dispatch") {
+    static DataBind *contract;
+    static DataBindHttpMethodPlan *plan;
+    static chttp_service service;
+    static chttp_server server;
+    static chttp_client client;
+    static chttp_response response;
+    static policy_test_state policy;
+    static DataBindServiceNativeBinding native;
+    static DataBindNativeExecution execution;
+    static char uri[64];
+
+    before_each() {
+      const char schema[] = "message AddRequest { uint32 left; uint32 right;"
+          " optional uint32 scale default 1; } message AddResponse { uint32 sum; }"
+          " service Calc { Add: AddRequest -> AddResponse; }";
+      DataBindError error = DATA_BIND_ERROR_INIT;
+      DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+      chttp_service_config config = CHTTP_SERVICE_CONFIG_INIT;
+      chttp_server_config server_config = chttp_service_test_server_config();
+      contract = NULL; plan = NULL;
+      service = (chttp_service){0}; server = (chttp_server){0};
+      client = (chttp_client){0}; response = (chttp_response){0};
+      policy.selections = 0u; policy.selection_mode = 0;
+      atomic_init(&policy.mode, 0); atomic_init(&policy.trace, 0);
+      native = (DataBindServiceNativeBinding)DATA_BIND_SERVICE_NATIVE_BINDING_INIT(
+          FunctionMeta(chttp_service_test_add), &ADD_REQUEST_NATIVE, &ADD_RESPONSE_NATIVE);
+      execution = (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
+      execution.function = FunctionMeta(chttp_service_test_add);
+      execution.abi = FunctionAbi(chttp_service_test_add);
+      execution.invoke = chttp_service_test_invoke;
+      check_equal(data_bind_create_from_text(schema, sizeof(schema)-1u,
+          &contract, &error), DATA_BIND_OK);
+      check_equal(data_bind_http_method_plan_compile_service(contract, "Calc", "Add",
+          data_bind_http_projection_artifact_find(&databind_chttp_service_http_projection,
+              "Calc", "Add"), &native, &plan, &diagnostic), DATA_BIND_OK);
+      config.method_capacity = 1u;
+      config.max_response_body_bytes = 2u;
+      check_equal(chttp_service_init(&service, &config), SALTS_OK);
+      check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    }
+    after_each() {
+      chttp_response_destroy(&response);
+      if (client.impl != NULL)
+        check_equal(chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+      if (server.impl != NULL) {
+        check_equal(chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_server_destroy(&server), SALTS_OK);
+      }
+      check_equal(chttp_service_destroy(&service), SALTS_OK);
+      data_bind_http_method_plan_free(plan);
+      data_bind_free(contract);
+    }
+    it("rejects invalid selections before publication and unwinds real HTTP calls") {
+      chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+      chttp_client_config config = chttp_service_test_client_config();
+      uint16_t port = 0u;
+      mount.method_plan = plan; mount.native_binding = &native; mount.execution = &execution;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, NULL, &policy), SALTS_EINVAL);
+      policy.selection_mode = 1;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, policy_select, &policy), SALTS_ENOTSUP);
+      policy.selection_mode = 2;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, policy_select, &policy), SALTS_ENOBUFS);
+      policy.selection_mode = 3;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, policy_select, &policy), SALTS_EINVAL);
+      policy.selection_mode = 4;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, policy_select, &policy), SALTS_ENOBUFS);
+      policy.selection_mode = 0;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, policy_select, &policy), SALTS_OK);
+      check_equal(policy.selections, 5u);
+      check_equal(chttp_server_start(&server), SALTS_OK);
+      check_equal(chttp_server_port(&server, &port), SALTS_OK);
+      snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+      check_equal(chttp_client_init(&client, &config), SALTS_OK);
+      CHTTP_SERVICE_TEST_ADD_CALLS = 0u;
+      for (int mode = 0; mode < 4; ++mode) {
+        atomic_store(&policy.mode, mode);
+        atomic_store(&policy.trace, 0);
+        check_equal(chttp_service_test_call(&client, uri,
+            mode == 3 ? "/add/3?right=100" : "/add/3?right=4", &response), SALTS_OK);
+        check_equal(response.status_code, mode == 0 ? 201u : mode == 1 ? 403u : 500u);
+        /* A successfully published HTTP 500 is a completed dispatch too. */
+        check_equal(atomic_load(&policy.trace), mode == 0 || mode == 3 ? 1243 : 1265);
+        chttp_response_destroy(&response);
+        response = (chttp_response){0};
+      }
+      check_equal(CHTTP_SERVICE_TEST_ADD_CALLS, (size_t)2u);
+      check_equal(policy.selections, 5u);
+    }
+  }
   it("mounts generated transport projection without IDL HTTP annotations") {
     static const char schema[] =
         "message AddRequest {"
@@ -1561,6 +1729,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         chttp_service_test_server_config();
     cflow_executor executor = {0};
     chttp_service_executor_gate invoke_gate;
+    policy_test_state policy = {0};
     chttp_service_request_thread_args request_args;
     cmeta_thread_t request_thread = {0};
     uint64_t deadline;
@@ -1582,6 +1751,8 @@ spec("CHttp::App generated HTTP MethodPlan") {
 
     atomic_init(&invoke_gate.started, 0);
     atomic_init(&invoke_gate.release, 0);
+    atomic_init(&policy.mode, 0);
+    atomic_init(&policy.trace, 0);
     execution.function = FunctionMeta(chttp_service_test_add);
     execution.abi = FunctionAbi(chttp_service_test_add);
     execution.context = &invoke_gate;
@@ -1607,7 +1778,8 @@ spec("CHttp::App generated HTTP MethodPlan") {
     mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
     mount.executor = &executor;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+        chttp_service_mount_http_with_policies(&service, &server, &mount,
+            policy_select, &policy), SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1642,9 +1814,19 @@ spec("CHttp::App generated HTTP MethodPlan") {
     check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
     check_not_null(service.impl);
 
+    /* after must finish while native execution is still blocked. Capture the
+     * evidence, then release the worker before any potentially fatal check. */
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load(&policy.trace) != 1243 && cmeta_monotonic_ms() < deadline)
+      cmeta_thread_yield();
+    const int submission_trace = atomic_load(&policy.trace);
+    const int completed_before_release = atomic_load(&request_args.completed);
     atomic_store_explicit(&invoke_gate.release, 1, memory_order_release);
     check_equal(cmeta_thread_join(&request_thread), SALTS_OK);
     cmeta_thread_destroy(&request_thread);
+    check_equal(submission_trace, 1243);
+    check_equal(completed_before_release, 0);
+    check_equal(policy.selections, 1u);
     check_equal(
         atomic_load_explicit(&request_args.completed, memory_order_acquire), 1);
     check_equal(request_args.status, SALTS_OK);
@@ -1917,6 +2099,13 @@ spec("CHttp::App generated HTTP MethodPlan") {
     mount.plugin_registry = &registry;
     mount.plugin_ref = plugin_ref;
     mount.plugin_export_id = "CHttpPlugin.Calc.Add";
+    {
+      policy_test_state rejected = {0};
+      rejected.selection_mode = 1;
+      check_equal(chttp_service_mount_http_with_policies(&service, &server,
+          &mount, policy_select, &rejected), SALTS_ENOTSUP);
+      check_equal(rejected.selections, 1u);
+    }
     check_equal(
         chttp_service_mount_http(&service, &server, &mount),
         SALTS_OK);

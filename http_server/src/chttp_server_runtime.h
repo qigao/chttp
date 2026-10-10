@@ -44,7 +44,6 @@ void chttp_server_deadline_start(chttp_server_request_state *state, uint32_t bud
 bool chttp_server_deadline_expired(const chttp_server_request_state *state);
 int chttp_server_request_rejection_response(chttp_server_request_state *state);
 
-int chttp_server_response_append_vary(chttp_server_response *response, const char *fields);
 
 typedef enum chttp_server_wire_protocol {
   CHTTP_SERVER_WIRE_UNKNOWN = 0,

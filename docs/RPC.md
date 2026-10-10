@@ -64,7 +64,7 @@ native response / generated typed-error envelope
 typed-error code 都来自 immutable generated plan/native binding；实际 scalar value 的转换只经过
 `data_bind_native_encode()/decode()`。
 
-当前 client slice 与 RpcService server 的已验证能力保持一致：bool/signed/unsigned/float/enum
+当前 client slice 与 RpcService 的旧标量挂载接口保持一致：bool/signed/unsigned/float/enum
 scalar params、最多一个 scalar result，以及 scalar typed-error payload。全部 ingress ordinal
 生成 JSON array；全部 name selector 生成 JSON object；混合 selector、重复 wire name/ordinal、
 structured value 与 array 中间的 ABSENT 字段均 fail closed。object ABSENT 字段被省略，因此
@@ -78,6 +78,85 @@ DataBind server-side default 仍只对 ABSENT 生效。
 
 transport/HTTP/deadline/envelope/native encode/decode 失败仍以非 `SALTS_OK` 和 `crpc_error`
 返回。低层 `crpc_request_reply()` 与 async CRPC API 保持不变。
+
+### Generated RpcService JSON 对象结果
+
+`chttp_rpc_service_mount_document()` 使用与 HTTP JSON/XML 响应相同的
+DataBind Native → FormatPlan canonical writer → CSerde 编码路径。
+MethodPlan 的 `egress_format` 必须为 `DATA_BIND_FORMAT_JSON`：JSON-RPC 的
+`jsonrpc/id/result/error` envelope 始终由 CRPC 维护，XML 用普通 HTTP 路由。
+
+```c
+/* mount contains the compiled RPC MethodPlan, generated native binding and execution. */
+int status = chttp_rpc_service_mount_document(&service, &server, &mount);
+```
+
+例如 IDL 响应字段 `sum` 会生成
+`{"jsonrpc":"2.0","id":1,"result":{"sum":7}}`。旧的
+`chttp_rpc_service_mount()` 仍可返回标量 `"result":7`，不会自动改变协议形状。
+文档结果可用 `chttp_rpc_service_client_call_document()` 直接解码到生成的 C 结构体，
+也可使用低层 `crpc_request_reply()` 的 result reader。旧的
+`chttp_rpc_service_client_call()` 保留原有标量协议。
+
+```c
+/* Startup: acquire once from the same contract used to compile the RPC MethodPlan. */
+const DataBindMessagePlan *reply_plan = NULL;
+DataBindError bind_error = DATA_BIND_ERROR_INIT;
+if (data_bind_message_plan_acquire_generated(
+        contract, Reply_native_artifact(), &reply_plan, &bind_error) != DATA_BIND_OK)
+  return SALTS_EINVAL;
+
+/* Per call: call already holds URI, MethodPlan, native binding, request and workspace. */
+Reply_t reply = {0};
+call.response = &reply;
+call.response_bytes = sizeof(reply);
+chttp_rpc_service_client_outcome outcome = CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+crpc_error error = {0};
+int status = chttp_rpc_service_client_call_document(
+    &client, &call, reply_plan, &outcome, &error);
+if (status == SALTS_OK && outcome.kind == CHTTP_RPC_SERVICE_CLIENT_SUCCESS) {
+  /* Use reply.total / reply.text; strings remain valid after the call. */
+}
+Reply_clear(&reply); /* Also required before reusing a successful result. */
+/* The acquired reply_plan is codec-owned; free contract only after calls stop. */
+```
+
+FormatPlan 的每调用独立递归 cursor 负责 `[name]` / `[alias]` 到 canonical 字段名的转换，
+包括嵌套记录与记录集合；MessagePlan
+负责 required、optional、nullable、default、约束校验和 native 生命周期。响应解码
+直接消费 CRPC 的 result token reader，不重建 JSON 文本、不二次解析。
+`response_plan` 与 RPC MethodPlan 必须来自同一份 IDL；调用入口校验响应类型、
+CMeta 语义身份、字段数量和 presence/null 布局。准备过程放在启动阶段；
+每次调用借用独占 workspace 和结果存储，多个调用只能共享不可变 plan。
+
+结果必须是 fresh storage 或已通过生成的 `*_clear()` / `data_bind_native_clear()`
+清理的存储，不能覆盖仍拥有字符串的旧结果。成功后字符串和容器由调用方拥有；
+解码失败回滚字段和状态位，outcome 保持 `NONE`，错误阶段为 `rpc-service-result`。
+合法远端错误仍返回 `SALTS_OK + REMOTE_ERROR`，不会伪装成解码成功。
+`native_options` 的 workspace、depth、item 和 owned-byte 上限控制 materialization；
+CRPC/HTTP 的响应体与解析深度限制仍控制上游接收和解析。
+
+此入口显式接收预先准备的 MessagePlan，因为当前 SDK 的 MethodPlan 不公开其内部
+响应 MessagePlan。另写字段解码器会重复默认值、校验、状态位及回滚规则；逐次重编译
+则会把 schema 工作带进请求路径。选择复用现有 producer API，保留旧 options ABI。
+迁移时同时选择 server 的 `mount_document` 与 client 的 `call_document`；回滚也需
+成对恢复旧标量挂载和调用，不根据收到的 JSON 类型自动切换协议。
+
+字段名由 IDL `[name(...)]` 和 producer FormatPlan 决定；egress projection 保留
+canonical 字段名。当前文档挂载拒绝 typed errors 和非 JSON 格式；现有标量挂载的
+typed-error 行为不变。已验证生成的多字段对象、64 位整数与拥有字符串的结果。
+另已验证 optional ABSENT、nullable NULL 与 VALUE 的独立状态和失败回滚。
+Salts 2.3.0-rc.9 / SaltsUtils 4.3.0-rc.7 上已验证嵌套记录响应的服务端编码、
+类型化客户端解码及独立所有权。其他形状仍受 Native/FormatPlan admission 限制。
+递归名称投影最多使用 64 层聚合 cursor；原有 depth/items/owned-byte 限制继续生效。
+RPC envelope 仍只使用 JSON；XML 用于 HTTP 文档入口。
+详细格式边界见 [App 文档响应](../app/README.md#json-and-xml-service-responses)。
+
+RPC 使用每次调用独占的有界 CSerde token 存储，复制字符串后再清理 native response，
+由同步 CRPC encoder 写出 envelope；不经过中间 JSON 文本或二次解析。
+`max_output_value_bytes` 限制 token 记录和复制字节的总量，服务端 HTTP 配置另行限制
+最终 envelope 字节数。超过容量返回标准内部错误，不发送部分 result；notification
+继续不发送响应。DataBind call lifetime 统一处理成功、失败和 notification 的值清理。
 
 ## CMeta 与 CSerde 的职责
 

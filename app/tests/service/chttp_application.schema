@@ -1,0 +1,8 @@
+schema PolicyApp;
+message Request { uint32 value; }
+message Reply { uint32 value; }
+service Api {
+  [http("POST", "/echo"), app_http_policy("no_store"),
+   app_http_policy("gate"), app_http_policy("observe")]
+  Echo: Request -> Reply;
+}

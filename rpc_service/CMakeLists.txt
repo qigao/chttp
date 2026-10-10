@@ -1,4 +1,5 @@
 add_library(chttp_rpc_service SHARED
+  ${PROJECT_SOURCE_DIR}/http_common/service/chttp_document.c
   src/chttp_rpc_service.c
   src/chttp_rpc_service_client.c)
 
@@ -15,6 +16,7 @@ set_target_properties(chttp_rpc_service PROPERTIES
 target_compile_features(chttp_rpc_service PUBLIC c_std_11)
 
 target_include_directories(chttp_rpc_service
+  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/service
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)

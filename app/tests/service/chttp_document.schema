@@ -1,0 +1,29 @@
+schema Document [version(1)];
+
+message Request { uint32 large; }
+message Reply {
+  [name("sum"), alias("legacySum")] uint64 total;
+  @Min(1) uint32 ready;
+  string text;
+}
+message StateReply {
+  optional uint32 note;
+  nullable uint32 count;
+  string text;
+}
+message Nested {
+  [name("detail"), alias("oldDetail")] Reply child;
+  [name("row"), alias("oldRow")] list<Reply> rows;
+  [name("tag"), alias("oldTag")] set<uint32> tags;
+}
+message BinaryDetail { bytes data; }
+message BinaryReply { BinaryDetail child; }
+service Api {
+  Get: Request -> Reply;
+  State: Request -> StateReply;
+  Echo: Reply -> Reply;
+  EchoState: StateReply -> StateReply;
+  EchoNested: Nested -> Nested;
+  GetNested: Request -> Nested;
+  GetBinary: Request -> BinaryReply;
+}

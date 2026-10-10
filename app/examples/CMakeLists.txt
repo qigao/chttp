@@ -65,3 +65,6 @@ if(BUILD_TESTS AND BUILD_TESTING)
     NAME chttp_web_authenticated_app_test
     COMMAND $<TARGET_FILE:chttp_web_authenticated_app_example> --self-test)
 endif()
+
+add_subdirectory(schema_app)
+add_subdirectory(injected_app)

@@ -1,4 +1,40 @@
 salts_idl_target(
+  TARGET chttp_document_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_document.schema"
+  ARTIFACT_NAME "chttp_document"
+  ARTIFACTS NATIVE
+  BINARY_CODEC)
+target_sources(chttp_document_fixture_native PRIVATE chttp_document_business.c)
+add_executable(chttp_document_test chttp_document_test.c)
+target_link_libraries(chttp_document_test PRIVATE
+  CHttp::App CHttp::RpcService CHttp::Client chttp_document_fixture_native Salts::TinyTest)
+target_include_directories(chttp_document_test PRIVATE "${chttp_document_fixture_GENERATED_DIR}")
+target_compile_definitions(chttp_document_test PRIVATE
+  DOCUMENT_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/chttp_document.schema")
+add_dependencies(chttp_document_test chttp_document_fixture_idl_codegen)
+add_test(NAME chttp_document_test COMMAND chttp_document_test)
+set_target_properties(chttp_document_test PROPERTIES
+  FOLDER "app/tests/service" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+chttp_app_target(TARGET chttp_policy_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_application.schema"
+  SOURCES chttp_application_business.c)
+add_executable(chttp_application_test chttp_application_test.c)
+target_link_libraries(chttp_application_test PRIVATE
+  chttp_schema_example_application chttp_policy_fixture_application CHttp::Client Salts::TinyTest)
+add_test(NAME chttp_application_test COMMAND chttp_application_test)
+
+add_executable(chttp_application_injection_test chttp_application_injection_test.c)
+target_link_libraries(chttp_application_injection_test PRIVATE
+  chttp_injected_example_application CHttp::Client Salts::TinyTest)
+add_test(NAME chttp_application_injection_test COMMAND chttp_application_injection_test)
+
+add_executable(chttp_application_injection_cpp_test chttp_application_injection_cpp_test.cpp)
+target_link_libraries(chttp_application_injection_cpp_test PRIVATE chttp_injected_example_application)
+set_target_properties(chttp_application_injection_cpp_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+add_test(NAME chttp_application_injection_cpp_test COMMAND chttp_application_injection_cpp_test)
+
+salts_idl_target(
   TARGET chttp_service_http_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.schema"
   ARTIFACT_NAME "chttp_service"

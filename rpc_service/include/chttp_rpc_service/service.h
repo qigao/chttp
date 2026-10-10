@@ -5,6 +5,7 @@
 #include <http_server/rpc.h>
 
 #include <data_bind_method_plan.h>
+#include <data_bind_message_plan.h>
 #include <data_bind_native.h>
 #include <data_bind_native_binding.h>
 
@@ -60,9 +61,9 @@ typedef struct chttp_rpc_service_mount_options {
 /**
  * Initialize bounded owner-thread execution storage for generated RPC MethodPlans.
  *
- * Current slice supports independent name/ordinal params selection and one
- * scalar/string/bytes result or typed-error data value. Structured output
- * remains fail-closed until shared producer-owned composition is qualified.
+ * Supports independent name/ordinal params selection. The legacy mount returns
+ * one scalar result or typed-error data value; mount_document opts into a JSON
+ * object result using the producer-owned egress FormatPlan.
  */
 int chttp_rpc_service_init(
     chttp_rpc_service *service,
@@ -79,6 +80,22 @@ int chttp_rpc_service_init(
 int chttp_rpc_service_mount(
     chttp_rpc_service *service,
     crpc_server *server,
+    const chttp_rpc_service_mount_options *mount);
+
+/** Opt-in JSON object result using the MethodPlan's JSON egress FormatPlan.
+ * Root names follow IDL [name]. Egress wire names must be canonical; typed
+ * errors and non-JSON formats fail admission. Legacy mount keeps scalar results.
+ * A bounded owned CSerde token tape preserves output until the synchronous
+ * JSON-RPC encoder runs. max_output_value_bytes bounds tokens plus copied
+ * slices, and the server separately bounds final envelope bytes. No JSON parse
+ * or intermediate JSON text is used. Consume document results through
+ * client_call_document() or the low-level CRPC client/JSON reader.
+ * Borrowing and server/service teardown follow mount(). Returns SALTS_OK on
+ * registration, SALTS_ENOTSUP for an unsupported plan, SALTS_EINVAL for invalid
+ * arguments, or the existing mount/CRPC registration error.
+ */
+int chttp_rpc_service_mount_document(
+    chttp_rpc_service *service, crpc_server *server,
     const chttp_rpc_service_mount_options *mount);
 
 /**
@@ -120,7 +137,7 @@ typedef struct chttp_rpc_service_client_outcome {
  *
  *   native request -> plan-driven params -> CRPC -> plan-driven native result
  *
- * The current slice mirrors the mounted RpcService server capability:
+ * The current slice mirrors the legacy scalar RpcService mount:
  * scalar params, at most one scalar result, and scalar typed-error payloads.
  * Unsupported mixed array/object selectors or structured values fail closed.
  */
@@ -161,6 +178,39 @@ typedef struct chttp_rpc_service_client_call_options {
 int chttp_rpc_service_client_call(
     crpc_client *client,
     const chttp_rpc_service_client_call_options *options,
+    chttp_rpc_service_client_outcome *outcome,
+    crpc_error *out_error);
+
+/** Call a document-mounted operation and decode its JSON result into a C record.
+ *
+ * response_plan must be prepared from the same IDL contract and response native
+ * binding as options->method_plan. Prepare it once with MessagePlan compile or
+ * acquire_generated; the caller owns its lifetime. All plans, descriptors and
+ * options are borrowed for this blocking call. Params retain the legacy scalar
+ * name/ordinal rules. Non-JSON formats and typed-error operations are rejected.
+ *
+ * FormatPlan maps external names/aliases; MessagePlan owns required fields,
+ * optional/null state, defaults, validation and bounded native materialization.
+ * No JSON text reconstruction or second parse occurs. The response must be
+ * fresh storage or already restored to semantic zero; never pass a live result
+ * without first calling data_bind_native_clear() with its response descriptor.
+ * On SUCCESS, owned strings/containers belong to the caller and survive CRPC
+ * response destruction. Use the same canonical cleanup after consumption.
+ *
+ * Admission failure leaves response untouched. After successful initialization,
+ * transport/decode failure restores semantic zero and leaves outcome NONE;
+ * a valid remote error returns SALTS_OK with REMOTE_ERROR and a zero response.
+ * Native workspace/item/depth/owned-byte limits remain caller supplied; HTTP
+ * body/depth limits remain owned by crpc_client. Workspace and native storage
+ * must be disjoint and exclusively borrowed until return.
+ * Returns SALTS_EINVAL for incompatible plans/storage, SALTS_ENOTSUP for
+ * unsupported format/shape, SALTS_EMSGSIZE for exhausted native limits, or the
+ * existing transport/decode error. Decode errors set stage rpc-service-result.
+ */
+int chttp_rpc_service_client_call_document(
+    crpc_client *client,
+    const chttp_rpc_service_client_call_options *options,
+    const DataBindMessagePlan *response_plan,
     chttp_rpc_service_client_outcome *outcome,
     crpc_error *out_error);
 
