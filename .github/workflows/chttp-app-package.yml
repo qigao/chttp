@@ -43,8 +43,6 @@ jobs:
       - name: Run installed App package test
         shell: bash
         working-directory: app/tests/installed
-        env:
-          CHTTP_ROOT: ${{ github.workspace }}/stage/sdk/linux-x64
         run: |
           set -euo pipefail
           cmake --preset installed-release-user

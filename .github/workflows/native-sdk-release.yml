@@ -247,8 +247,6 @@ jobs:
         if: matrix.family != 'windows'
         shell: bash
         working-directory: app/tests/installed
-        env:
-          CHTTP_ROOT: ${{ github.workspace }}/stage/sdk/${{ steps.target.outputs.rid }}
         run: |
           set -euo pipefail
           preset=installed-release-user
@@ -260,8 +258,6 @@ jobs:
         if: matrix.family == 'windows'
         shell: cmd
         working-directory: app/tests/installed
-        env:
-          CHTTP_ROOT: ${{ github.workspace }}/stage/sdk/${{ steps.target.outputs.rid }}
         run: |
           set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul

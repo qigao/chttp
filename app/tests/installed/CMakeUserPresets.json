@@ -12,7 +12,7 @@
             },
             "environment": {
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/../../../vcpkg_installed",
-                "CHTTP_ROOT": "$penv{CHTTP_ROOT}",
+                "CHTTP_ROOT": "${sourceDir}/../../../stage/sdk/$env{QIGAO_SDK_RID}",
                 "PATH": "$env{CHTTP_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$penv{PATH}",
                 "LD_LIBRARY_PATH": "$env{CHTTP_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
                 "DYLD_LIBRARY_PATH": "$env{CHTTP_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"

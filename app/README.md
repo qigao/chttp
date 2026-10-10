@@ -57,9 +57,7 @@ targets. See the [merge and migration decision](../README.md#app-entry-point).
 cmake_minimum_required(VERSION 3.25)
 project(my_web_app LANGUAGES C)
 
-file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" CHTTP_ROOT_PATH)
-find_package(Chttp CONFIG REQUIRED
-  PATHS "${CHTTP_ROOT_PATH}" NO_DEFAULT_PATH)
+find_package(Chttp CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
 
 add_executable(my_web_app main.c)
 target_link_libraries(my_web_app PRIVATE CHttp::App)
@@ -74,8 +72,14 @@ Applications include the public entry point:
 The installed App behavior test links only `CHttp::App` and
 executes Web parsing/validation/upload adapters plus Service initialization
 and destruction against the installed SDK. From `app/tests/installed`, use
-`installed-release-user` for configure/build/CTest with the release SDK roots;
-macOS uses `installed-macos-release-user`. It shares the root vcpkg manifest.
+`installed-release-user` for configure/build/CTest after the root release
+preset installs the SDK. The test preset owns `CHTTP_ROOT`, deriving it from
+`${sourceDir}/../../../stage/sdk/$env{QIGAO_SDK_RID}` with forward slashes,
+including on Windows; it does not consume the parent process's `CHTTP_ROOT`.
+macOS uses `installed-macos-release-user`. Both share the root vcpkg manifest.
+Consumers outside this formal test set their own `CHTTP_ROOT` in their preset
+environment, using forward slashes on Windows and preserving the package
+discovery expression above.
 Full HTTP MethodPlan, deferred execution and DSO behavior remain covered by
 the formal integration tests under `app/tests/service` and `app/tests/web`.
 

@@ -37,8 +37,7 @@ the simulator target is not published.
 Consumers restore the package graph, set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, and
 `CHTTP_ROOT` to the matching platform directories, then use:
 
-    file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" CHTTP_ROOT_PATH)
-    find_package(Chttp CONFIG REQUIRED PATHS "${CHTTP_ROOT_PATH}" NO_DEFAULT_PATH)
+    find_package(Chttp CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
 
 For generated HTTP services and server-rendered pages, link `CHttp::App`
 and include `<chttp_app/app.h>`. Both implementations are in `chttp_app`.
