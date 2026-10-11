@@ -2,8 +2,6 @@
 
 set(CHTTP_RELEASE_VERSION "@CHTTP_RELEASE_VERSION@")
 
-include(CMakeFindDependencyMacro)
-
 if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   set(Chttp_FOUND FALSE)
   set(Chttp_NOT_FOUND_MESSAGE "SALTS_ROOT must name the installed Salts SDK")
@@ -22,10 +20,12 @@ unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_dependency(Salts CONFIG REQUIRED
+# These lookups must run after cache invalidation; find_dependency can memoize
+# an earlier lookup from another package in the same directory.
+find_package(Salts CONFIG REQUIRED
   PATHS "${_CHTTP_SALTS_ROOT}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_dependency(SaltsUtils CONFIG REQUIRED COMPONENTS Crypto
+find_package(SaltsUtils CONFIG REQUIRED COMPONENTS Crypto
   PATHS "${_CHTTP_SALTS_UTILS_ROOT}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
