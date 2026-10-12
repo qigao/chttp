@@ -325,6 +325,41 @@ static int crpc_server_test_error(void *user, const crpc_server_request_view *re
                                     "detail");
 }
 
+/* #243: a provider encoder may fail after the transport has staged tokens.
+ * The in-progress JSON-RPC result must be discarded, not partially exposed.
+ * Encode and handler invocation are counted independently. */
+typedef struct crpc_server_test_partial_encoder_probe {
+  size_t handler_calls;
+  size_t encoder_calls;
+} crpc_server_test_partial_encoder_probe;
+
+static cserde_status crpc_server_test_partial_result_encode(
+    void *user, cserde_writer *writer) {
+  crpc_server_test_partial_encoder_probe *probe =
+      (crpc_server_test_partial_encoder_probe *)user;
+  const cserde_token value = {
+      .kind = CSERDE_UINT, .value.uint = UINT64_C(123)};
+  cserde_status status;
+  if (probe == NULL || writer == NULL) return CSERDE_INVALID_ARGUMENT;
+  ++probe->encoder_calls;
+  status = cserde_writer_write(writer, &value);
+  if (status != CSERDE_OK) return status;
+  /* Deliberately fail after writing a real value to the staging writer. */
+  return CSERDE_SINK_ERROR;
+}
+
+static int crpc_server_test_failed_output(
+    void *user, const crpc_server_request_view *request,
+    crpc_server_response *response) {
+  crpc_server_test_partial_encoder_probe *probe =
+      (crpc_server_test_partial_encoder_probe *)user;
+  (void)request;
+  if (probe == NULL || response == NULL) return SALTS_EINVAL;
+  ++probe->handler_calls;
+  return crpc_server_response_result(
+      response, crpc_server_test_partial_result_encode, probe);
+}
+
 static int crpc_server_test_incomplete(void *user, const crpc_server_request_view *request,
                                        crpc_server_response *response) {
   crpc_server_test_probe *probe = (crpc_server_test_probe *)user;
@@ -794,6 +829,69 @@ spec("CRPC server") {
     check_equal(probe.notifications, (size_t)3u);
     check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("discards partial result encoding and serves the next RPC exactly once") {
+    static const char fail_call[] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"broken\",\"id\":71}";
+    static const char fail_reply[] =
+        "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,"
+        "\"message\":\"Internal error\"},\"id\":71}";
+    static const char next_call[] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":72}";
+    static const char next_reply[] =
+        "{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":72}";
+    chttp_server server = {0};
+    chttp_client client = {0};
+    crpc_server_test_config server_config = crpc_server_test_config_for(0);
+    chttp_client_config client_config = crpc_server_test_http_client_config();
+    crpc_server_test_partial_encoder_probe bad = {0};
+    crpc_server_test_probe good = {0};
+    const crpc_method broken = {.name = "broken"};
+    const crpc_method ping = {.name = "ping"};
+    chttp_response response = {0};
+    char uri[64];
+    uint16_t port = 0u;
+
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_rpc_register(
+        &server, "/rpc", &broken, crpc_server_test_failed_output, &bad),
+        SALTS_OK);
+    check_equal(chttp_server_rpc_register(
+        &server, "/rpc", &ping, crpc_server_test_ping, &good), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                           (unsigned int)port), 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(crpc_server_test_http_post(
+        &client, uri, "/rpc", fail_call, sizeof(fail_call) - 1u, NULL,
+        CHTTP_HTTP_1_1, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, fail_reply, sizeof(fail_reply) - 1u);
+    chttp_response_destroy(&response);
+    check_equal(bad.handler_calls, (size_t)1u);
+    check_equal(bad.encoder_calls, (size_t)1u);
+    check_equal(good.calls, (size_t)0u);
+
+    /* On the identical HTTP Owner, neither stale partial result bytes nor
+     * a second terminal response may leak into the next request. */
+    check_equal(crpc_server_test_http_post(
+        &client, uri, "/rpc", next_call, sizeof(next_call) - 1u, NULL,
+        CHTTP_HTTP_1_1, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, next_reply, sizeof(next_reply) - 1u);
+    chttp_response_destroy(&response);
+    check_equal(bad.handler_calls, (size_t)1u);
+    check_equal(bad.encoder_calls, (size_t)1u);
+    check_equal(good.calls, (size_t)1u);
+
+    check_equal(chttp_client_destroy(
+        &client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(
+        &server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
