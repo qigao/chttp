@@ -215,8 +215,15 @@ static int chttp_server_test_raw_connect(uint16_t port, chttp_server_test_socket
   if (socket_value == CHTTP_SERVER_TEST_INVALID_SOCKET) return SALTS_EIO;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  /* Raw fixture sockaddr expects wire octets (not host-order integers).
+   * Explicit bytes avoid endianness-dependent bind/peer mismatches on Linux. */
+  {
+    const unsigned char endpoint_port[2] = {
+        (unsigned char)(port >> 8u), (unsigned char)(port & 0xffu)};
+    const unsigned char endpoint_address[4] = {127u, 0u, 0u, 1u};
+    memcpy(&address.sin_port, endpoint_port, sizeof(endpoint_port));
+    memcpy(&address.sin_addr, endpoint_address, sizeof(endpoint_address));
+  }
   if (chttp_server_test_socket_timeout(socket_value) != SALTS_OK ||
       connect(socket_value, (const struct sockaddr *)&address, sizeof(address)) != 0) {
     chttp_server_test_close_socket(socket_value);
