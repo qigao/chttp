@@ -21,8 +21,9 @@ typedef struct OwnedText {
 } OwnedText;
 typedef struct OwnedRequest {
   uint32_t left;
-  OwnedText note;
   uint32_t right;
+  OwnedText note;
+  OwnedText tag;
 } OwnedRequest;
 typedef struct OwnedResponse {
   uint32_t sum;
@@ -130,22 +131,26 @@ static const cmeta_type_desc OWNED_RES_PTR = {
 static const cmeta_field_desc OWNED_REQ_FIELDS[] = {
     {"left", "uint32_t", offsetof(OwnedRequest, left), sizeof(uint32_t),
      _Alignof(uint32_t), &cmeta_type_uint32, NULL},
+    {"right", "uint32_t", offsetof(OwnedRequest, right), sizeof(uint32_t),
+     _Alignof(uint32_t), &cmeta_type_uint32, NULL},
     {"note", "OwnedText", offsetof(OwnedRequest, note), sizeof(OwnedText),
      _Alignof(OwnedText), &OWNED_TEXT_TYPE, NULL},
-    {"right", "uint32_t", offsetof(OwnedRequest, right), sizeof(uint32_t),
-     _Alignof(uint32_t), &cmeta_type_uint32, NULL}};
+    {"tag", "OwnedText", offsetof(OwnedRequest, tag), sizeof(OwnedText),
+     _Alignof(OwnedText), &OWNED_TEXT_TYPE, NULL}};
 static const cmeta_struct_desc OWNED_REQ_LAYOUT = {
     "OwnedRequest", sizeof(OwnedRequest), _Alignof(OwnedRequest),
-    OWNED_REQ_FIELDS, 3u};
+    OWNED_REQ_FIELDS, 4u};
 static const cmeta_data_field_desc OWNED_REQ_DATA_FIELDS[] = {
     {"test.chttp.rpc.OwnedRequest.left", "left", offsetof(OwnedRequest, left),
      &cmeta_data_uint32},
+    {"test.chttp.rpc.OwnedRequest.right", "right", offsetof(OwnedRequest, right),
+     &cmeta_data_uint32},
     {"test.chttp.rpc.OwnedRequest.note", "note", offsetof(OwnedRequest, note),
      &OWNED_TEXT_DATA},
-    {"test.chttp.rpc.OwnedRequest.right", "right", offsetof(OwnedRequest, right),
-     &cmeta_data_uint32}};
+    {"test.chttp.rpc.OwnedRequest.tag", "tag", offsetof(OwnedRequest, tag),
+     &OWNED_TEXT_DATA}};
 static const cmeta_data_struct_shape OWNED_REQ_SHAPE = {
-    &OWNED_REQ_LAYOUT, OWNED_REQ_DATA_FIELDS, 3u};
+    &OWNED_REQ_LAYOUT, OWNED_REQ_DATA_FIELDS, 4u};
 static const cmeta_data_desc OWNED_REQ_DATA = {
     .struct_size = sizeof(cmeta_data_desc),
     .abi_version = CMETA_DATA_DESC_ABI_VERSION,
@@ -189,12 +194,14 @@ FunctionDeclAsAbiResult(
 int chhttp_rpc_owned_note(
     const OwnedRequest *request, OwnedResponse *response) {
   if (request == NULL || response == NULL) return -1;
-  if (request->note.data == NULL ||
-      request->note.size > OWNED_RPC_MAX_BYTES) return -1;
+  if (request->note.data == NULL || request->tag.data == NULL ||
+      request->note.size + request->tag.size > OWNED_RPC_MAX_BYTES)
+    return -1;
   atomic_fetch_add_explicit(&owned_invocations, 1, memory_order_acq_rel);
   if (request->left == 99u) return 7;
   response->sum = request->left + request->right +
-                  (uint32_t)request->note.size;
+                  (uint32_t)request->note.size +
+                  (uint32_t)request->tag.size;
   return 0;
 }
 static bool DATA_BIND_NATIVE_CALL owned_note_invoke(
@@ -287,22 +294,22 @@ static int owned_rpc_response_contains(
 spec("CHttp generated RPC canonical owned ingress") {
   it("restores heap owners once on partial failure and successful Server drain") {
     static const char schema[] =
-        "message OwnedRequest { uint32 left; string note; uint32 right; }"
+        "message OwnedRequest { uint32 left; uint32 right; string note; string tag; }"
         "message OwnedResponse { uint32 sum; }"
         "service Calc { Note: OwnedRequest -> OwnedResponse; }";
-    static const char invalid_third[] =
+    static const char invalid_fourth[] =
         "{\"jsonrpc\":\"2.0\",\"method\":\"calc.note\","
-        "\"params\":[3,\"owned\",\"wrong\"],\"id\":701}";
+        "\"params\":[3,4,\"owned\",777],\"id\":701}";
     static const char duplicate_last[] =
         "{\"jsonrpc\":\"2.0\",\"method\":\"calc.note\","
-        "\"params\":{\"left\":3,\"note\":\"owned\","
-        "\"right\":4,\"right\":5},\"id\":702}";
+        "\"params\":{\"left\":3,\"right\":4,\"note\":\"owned\","
+        "\"tag\":\"a\",\"tag\":\"b\"},\"id\":702}";
     static const char valid[] =
         "{\"jsonrpc\":\"2.0\",\"method\":\"calc.note\","
-        "\"params\":[3,\"hello\",4],\"id\":703}";
+        "\"params\":[3,4,\"hello\",\"!\"],\"id\":703}";
     static const char native_error[] =
         "{\"jsonrpc\":\"2.0\",\"method\":\"calc.note\","
-        "\"params\":[99,\"boom\",4],\"id\":704}";
+        "\"params\":[99,4,\"boom\",\"!\"],\"id\":704}";
     DataBind *contract = NULL;
     DataBindError bind_error = DATA_BIND_ERROR_INIT;
     DataBindBindingPlanDiagnostic diagnostic =
@@ -359,7 +366,7 @@ spec("CHttp generated RPC canonical owned ingress") {
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
     check_equal(owned_rpc_post(
-        &client, uri, invalid_third, &response), SALTS_OK);
+        &client, uri, invalid_fourth, &response), SALTS_OK);
     check_equal(response.status_code, 200u);
     check_true(owned_rpc_response_contains(&response, "\"code\":-32602"));
     chttp_response_destroy(&response);
@@ -372,7 +379,7 @@ spec("CHttp generated RPC canonical owned ingress") {
 
     check_equal(owned_rpc_post(&client, uri, valid, &response), SALTS_OK);
     check_equal(response.status_code, 200u);
-    check_true(owned_rpc_response_contains(&response, "\"result\":12"));
+    check_true(owned_rpc_response_contains(&response, "\"result\":13"));
     chttp_response_destroy(&response);
 
     check_equal(owned_rpc_post(
@@ -391,9 +398,9 @@ spec("CHttp generated RPC canonical owned ingress") {
     check_equal(atomic_load_explicit(
         &owned_invocations, memory_order_acquire), 2);
     check_equal(atomic_load_explicit(
-        &owned_allocations, memory_order_acquire), 4);
+        &owned_allocations, memory_order_acquire), 6);
     check_equal(atomic_load_explicit(
-        &owned_releases, memory_order_acquire), 4);
+        &owned_releases, memory_order_acquire), 6);
     data_bind_rpc_method_plan_free(plan);
     data_bind_free(contract);
   }
