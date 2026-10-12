@@ -6,6 +6,15 @@ message AddRequest {
 message AddResponse {
   @Max(100) uint32 sum;
 }
+message OwnedRequest {
+  uint32 left;
+  string note;
+  uint32 right;
+}
+message OwnedResponse {
+  uint32 sum;
+}
 service Calc {
   Add: AddRequest -> AddResponse;
+  Note: OwnedRequest -> OwnedResponse;
 }
