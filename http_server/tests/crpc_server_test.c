@@ -334,7 +334,72 @@ static int crpc_server_test_http_post(chttp_client *client, const char *uri, con
   return chttp_post(client, &options, response, &error);
 }
 
+static int crpc_server_test_health(void *user,
+                                    const chttp_server_request_view *request,
+                                    chttp_server_response *response) {
+  (void)user;
+  (void)request;
+  return chttp_server_reply(response, 200u, "text/plain", "healthy", 7u);
+}
+
 spec("CRPC server") {
+  it("attaches a low-level RPC registry to the existing HTTP Server owner") {
+    static const char call[] = "{\\"jsonrpc\\":\\"2.0\\",\\"method\\":\\"ping\\",\\"id\\":1}";
+    static const char reply[] = "{\\"jsonrpc\\":\\"2.0\\",\\"result\\":1,\\"id\\":1}";
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_server_config http_config = crpc_server_test_http_config(0);
+    chttp_server_rpc_config rpc_config = CHTTP_SERVER_RPC_CONFIG_INIT;
+    chttp_client_config client_config = crpc_server_test_http_client_config();
+    crpc_server_test_probe probe = {0};
+    crpc_method ping = {.name = "ping"};
+    chttp_response response = {0};
+    chttp_options health = {0};
+    chttp_error error = {0};
+    uint16_t port = 0u;
+    char uri[64];
+
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EINVAL);
+    check_equal(chttp_server_init(&server, &http_config), SALTS_OK);
+    check_equal(chttp_server_route(&server, CHTTP_GET, "/health",
+                                   crpc_server_test_health, NULL), SALTS_OK);
+    rpc_config.size = 0u;
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EINVAL);
+    rpc_config = (chttp_server_rpc_config)CHTTP_SERVER_RPC_CONFIG_INIT;
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_OK);
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EALREADY);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping,
+                                         crpc_server_test_ping, &probe), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping,
+                                         crpc_server_test_ping, &probe), SALTS_EALREADY);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/another", &ping,
+                                         crpc_server_test_ping, &probe), SALTS_EBUSY);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                           (unsigned)port), 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(crpc_server_test_http_post(&client, uri, "/rpc", call,
+                                           sizeof(call) - 1u, NULL,
+                                           CHTTP_HTTP_1_1, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, reply, sizeof(reply) - 1u);
+    chttp_response_destroy(&response);
+    health = (chttp_options){.connection_uri = uri, .authority = "localhost",
+                             .target = "/health",
+                             .timeout_ms = CRPC_SERVER_TEST_TIMEOUT_MS};
+    check_equal(chttp_get(&client, &health, &response, &error), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, "healthy", 7u);
+    chttp_response_destroy(&response);
+
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("validates bounded configuration, registry identity, and lifecycle") {
     crpc_server server = {0};
     crpc_server_config config = crpc_server_test_config(0);

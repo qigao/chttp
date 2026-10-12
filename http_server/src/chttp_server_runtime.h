@@ -429,6 +429,8 @@ struct chttp_server_impl {
   char *host;
   char *session_cookie_name;
   chttp_server_route_record *routes;
+  /* Optional immutable-after-start CRPC method registry owned by this host. */
+  void *rpc_owner;
   char *route_paths;
   chttp_server_middleware *route_middleware;
   chttp_server_middleware *middleware;
@@ -488,6 +490,8 @@ static inline chttp_server_owner_lane *chttp_server_owner_at(
 
 /* Configurator owns stopped construction and teardown after runtime drain. */
 void chttp_server_impl_free(chttp_server_impl *server);
+/* RPC registration records/borrowed descriptors outlive accepted callbacks. */
+void chttp_server_rpc_owner_release(void *rpc_owner);
 int chttp_server_connection_init(chttp_server_impl *server, chttp_server_connection *connection);
 void chttp_server_connection_destroy(chttp_server_connection *connection);
 

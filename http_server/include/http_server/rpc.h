@@ -133,6 +133,33 @@ int crpc_server_stop(crpc_server *server, uint32_t timeout_ms);
 /** Releases a stopped server; a zero server is already destroyed. */
 int crpc_server_destroy(crpc_server *server);
 
+/**
+ * Optional JSON-RPC registry attached to an existing chttp_server.
+ * Configuration is pre-start, bounded, and shares the HTTP listener, routes,
+ * middleware, fixed connection Owners and stop/destroy lifecycle. No second
+ * transport runtime is created. Full generated-plan mounting is tracked in
+ * qigao/chttp#241 and is not part of this initial low-level registry slice.
+ */
+typedef struct chttp_server_rpc_config {
+  size_t size;
+  size_t method_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+  size_t max_batch_items;
+} chttp_server_rpc_config;
+
+#define CHTTP_SERVER_RPC_CONFIG_INIT \
+  { sizeof(chttp_server_rpc_config), 8u, 64u, 8u, 4u }
+
+/** Allocate a stopped, host-owned registry before any RPC method is registered. */
+int chttp_server_rpc_configure(chttp_server *server,
+                              const chttp_server_rpc_config *config);
+
+/** Register one fixed-path JSON-RPC method on the existing HTTP server. */
+int chttp_server_rpc_register(chttp_server *server, const char *target,
+                              const crpc_method *method,
+                              crpc_server_method_fn handler, void *user);
+
 #ifdef __cplusplus
 }
 #endif
