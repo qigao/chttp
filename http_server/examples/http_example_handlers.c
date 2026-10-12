@@ -25,14 +25,14 @@ static int example_file(void *user, const chttp_server_request_view *request,
 }
 
 int http_example_register_handlers(http_example_app *app) {
-  chttp_server *server = crpc_server_http(&app->rpc);
+  chttp_server *server = &app->server;
   const chttp_server_middleware policy = {http_example_no_store, NULL};
   const chttp_server_route_options home = {.method = CHTTP_METHOD_GET, .path = "/",
       .middleware = &policy, .middleware_count = 1u, .handler = example_page, .user = app};
   const crpc_method ping = {.service = "example", .name = "ping"};
   int status = chttp_server_route_with(server, &home);
   if (status == SALTS_OK)
-    status = crpc_server_register(&app->rpc, "/rpc", &ping, example_ping, NULL);
+    status = chttp_server_rpc_register(&app->server, "/rpc", &ping, example_ping, NULL);
   if (status == SALTS_OK && app->file_path != NULL)
     status = chttp_server_get(server, "/file", example_file, app);
   return status;

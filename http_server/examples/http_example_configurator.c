@@ -17,39 +17,35 @@ static native_io_backend_kind example_backend(void) {
 #endif
 }
 
-static crpc_server_config example_config(void) {
-  crpc_server_config config = {0};
-  config.http.host = "127.0.0.1";
-  config.http.backlog = 8u;
-  config.http.network.backend = example_backend();
-  config.http.network.connection_capacity = 8u;
-  config.http.network.command_capacity = 32u;
-  config.http.network.request_capacity = 16u;
-  config.http.network.completion_batch_capacity = 8u;
-  config.http.network.event_capacity = 32u;
-  config.http.network.max_send_bytes = 64u * 1024u;
-  config.http.network.receive_buffer_bytes = 4096u;
-  config.http.network.connect_timeout_ms = HTTP_EXAMPLE_TIMEOUT_MS;
-  config.http.network.read_timeout_ms = HTTP_EXAMPLE_TIMEOUT_MS;
-  config.http.network.write_timeout_ms = HTTP_EXAMPLE_TIMEOUT_MS;
-  config.http.route_capacity = 4u;
-  config.http.middleware_capacity = 4u;
-  config.http.max_route_middleware_count = 4u;
-  config.http.max_route_param_count = 4u;
-  config.http.max_route_param_bytes = 128u;
-  config.http.max_target_bytes = 256u;
-  config.http.max_header_count = 16u;
-  config.http.max_header_bytes = 4096u;
-  config.http.max_request_body_bytes = HTTP_EXAMPLE_BODY_BYTES;
-  config.http.max_response_header_count = 16u;
-  config.http.max_response_header_bytes = 4096u;
-  config.http.max_response_body_bytes = HTTP_EXAMPLE_BODY_BYTES;
-  config.http.poll_slice_ms = 2u;
-  config.http.max_buffered_response_body_bytes = HTTP_EXAMPLE_BODY_BYTES;
-  config.method_capacity = 8u;
-  config.max_method_bytes = 64u;
-  config.max_json_depth = 8u;
-  config.max_batch_items = 4u;
+static chttp_server_config example_config(void) {
+  chttp_server_config config = {0};
+  config.host = "127.0.0.1";
+  config.backlog = 8u;
+  config.network.backend = example_backend();
+  config.network.connection_capacity = 8u;
+  config.network.command_capacity = 32u;
+  config.network.request_capacity = 16u;
+  config.network.completion_batch_capacity = 8u;
+  config.network.event_capacity = 32u;
+  config.network.max_send_bytes = 64u * 1024u;
+  config.network.receive_buffer_bytes = 4096u;
+  config.network.connect_timeout_ms = HTTP_EXAMPLE_TIMEOUT_MS;
+  config.network.read_timeout_ms = HTTP_EXAMPLE_TIMEOUT_MS;
+  config.network.write_timeout_ms = HTTP_EXAMPLE_TIMEOUT_MS;
+  config.route_capacity = 4u;
+  config.middleware_capacity = 4u;
+  config.max_route_middleware_count = 4u;
+  config.max_route_param_count = 4u;
+  config.max_route_param_bytes = 128u;
+  config.max_target_bytes = 256u;
+  config.max_header_count = 16u;
+  config.max_header_bytes = 4096u;
+  config.max_request_body_bytes = HTTP_EXAMPLE_BODY_BYTES;
+  config.max_response_header_count = 16u;
+  config.max_response_header_bytes = 4096u;
+  config.max_response_body_bytes = HTTP_EXAMPLE_BODY_BYTES;
+  config.poll_slice_ms = 2u;
+  config.max_buffered_response_body_bytes = HTTP_EXAMPLE_BODY_BYTES;
   return config;
 }
 
@@ -115,11 +111,11 @@ int http_example_close(http_example_app *app) {
   if (app == NULL) return SALTS_EINVAL;
   const uint64_t started = cmeta_monotonic_ms();
   /* Control-thread only: stop admission before observing executor quiescence. */
-  if (app->rpc.impl != NULL) {
-    const int status = crpc_server_stop(&app->rpc, app->shutdown_timeout_ms);
+  if (app->server.impl != NULL) {
+    const int status = chttp_server_stop(&app->server, app->shutdown_timeout_ms);
     if (status != SALTS_OK) {
       chttp_server_stats stats = {0};
-      if (chttp_server_get_stats(crpc_server_http(&app->rpc), &stats) != SALTS_OK ||
+      if (chttp_server_get_stats(&app->server, &stats) != SALTS_OK ||
           stats.running || stats.stopping)
         return status;
       /* A stopped runtime retains its first operational error. That error
@@ -135,8 +131,8 @@ int http_example_close(http_example_app *app) {
     }
     if (!cflow_executor_wait_idle(&app->executor)) return SALTS_EBUSY;
   }
-  if (app->rpc.impl != NULL) {
-    const int status = crpc_server_destroy(&app->rpc);
+  if (app->server.impl != NULL) {
+    const int status = chttp_server_destroy(&app->server);
     if (status != SALTS_OK) return status;
   }
   if (app->service.impl != NULL) {
@@ -218,7 +214,8 @@ static int example_prepare(http_example_app *app, const http_example_config *con
   chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
   chttp_web_renderer_config render_config = CHTTP_WEB_RENDERER_CONFIG_INIT;
   chttp_web_error web_error = CHTTP_WEB_ERROR_INIT;
-  crpc_server_config server_config = example_config();
+  chttp_server_config server_config = example_config();
+  chttp_server_rpc_config rpc_config = CHTTP_SERVER_RPC_CONFIG_INIT;
   app->shutdown_timeout_ms = config->shutdown_timeout_ms;
   HomePage_init(&app->page);
   app->page.title = tstr_from_v(vstr_from_cstr(config->title));
@@ -239,11 +236,17 @@ static int example_prepare(http_example_app *app, const http_example_config *con
   service_config.method_capacity = 1u;
   status = chttp_service_init(&app->service, &service_config);
   if (status != SALTS_OK) return status;
-  server_config.http.port = config->port;
-  /* One owner serializes both the non-reentrant renderer and peer-IP limiter. */
-  status = crpc_server_init(&app->rpc, &server_config);
+  server_config.port = config->port;
+  /* One existing HTTP Owner owns HTTP middleware, RPC and Plugin execution. */
+  status = chttp_server_init(&app->server, &server_config);
   if (status != SALTS_OK) return status;
-  chttp_server *server = crpc_server_http(&app->rpc);
+  rpc_config.method_capacity = 8u;
+  rpc_config.max_method_bytes = 64u;
+  rpc_config.max_json_depth = 8u;
+  rpc_config.max_batch_items = 4u;
+  status = chttp_server_rpc_configure(&app->server, &rpc_config);
+  if (status != SALTS_OK) return status;
+  chttp_server *server = &app->server;
   status = chttp_rate_limiter_init(&app->limiter, &config->rate);
   if (status == SALTS_OK)
     status = chttp_server_set_admission(server, chttp_rate_limiter_admit, &app->limiter);
@@ -277,7 +280,7 @@ int http_example_configure(http_example_app *app, const http_example_config *con
       config->title[0] == '\0' || strlen(config->title) > 256u ||
       (config->file_path != NULL && config->file_path[0] == '\0'))
     return SALTS_EINVAL;
-  if (app->contract != NULL || app->rpc.impl != NULL || app->plugins.impl != NULL)
+  if (app->contract != NULL || app->server.impl != NULL || app->plugins.impl != NULL)
     return SALTS_EALREADY;
   const int status = example_prepare(app, config);
   if (status != SALTS_OK) {
