@@ -143,7 +143,7 @@ add_test(
           -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_retained_send_contract_test.cmake)
 
 # Native typed RPC API must be accessible from the Client target alone.
-add_executable(chttp_client_rpc_header_cpp_test chhttp_client_rpc_header_cpp_test.cpp)
+add_executable(chttp_client_rpc_header_cpp_test chttp_client_rpc_header_cpp_test.cpp)
 target_link_libraries(chttp_client_rpc_header_cpp_test PRIVATE CHttp::Client)
 set_target_properties(chttp_client_rpc_header_cpp_test PROPERTIES
   FOLDER "http_client/tests" CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
