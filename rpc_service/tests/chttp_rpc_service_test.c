@@ -892,6 +892,21 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
             chttp_rpc_service_test_async_typed_complete,
             &completed, &handle), SALTS_OK);
         check(handle.slot != 0u);
+        /* Immediate duplicate RPC admission must not change any new caller-
+         * supplied native output, nor produce a callback or request handle. */
+        {
+          AddResponse rejected_storage = {.sum = UINT32_C(0xdecafbad)};
+          chttp_client_rpc_call_options rejected_options = async_options;
+          chttp_request rejected_handle = {0};
+          rejected_options.response = &rejected_storage;
+          check_equal(chttp_async_client_rpc_call(
+              &async_client, &rejected_options,
+              chttp_rpc_service_test_async_typed_complete,
+              &completed, &rejected_handle), SALTS_EALREADY);
+          check_equal(rejected_handle.slot, 0u);
+          check_equal(rejected_storage.sum, UINT32_C(0xdecafbad));
+          check_equal(completed.terminal_calls, 0);
+        }
         deadline = cmeta_monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
         while (completed.terminal_calls == 0 &&
                cmeta_monotonic_ms() < deadline) {
