@@ -174,6 +174,23 @@ def append_env(path: Path, name: str, value: str) -> None:
         stream.write(f"{name}={value}\n")
 
 
+def exact_nuget_project(salts_version: str, utils_version: str) -> str:
+    """NuGet requires bracketed [version] to pin a single exact version.
+
+    Unbracketed PackageReference versions are minimum-range selectors;
+    post-restore asset auditing alone is too late to prevent resolution drift.
+    """
+    return (
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+        '<TargetFramework>net8.0</TargetFramework>'
+        '<RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>'
+        '</PropertyGroup><ItemGroup>'
+        f'<PackageReference Include="Salts.Native" Version="[{escape(salts_version)}]"/>'
+        f'<PackageReference Include="SaltsUtils.Native" Version="[{escape(utils_version)}]"/>'
+        '</ItemGroup></Project>\n'
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--salts-version", required=True)
@@ -203,15 +220,7 @@ def main() -> int:
         raise ValueError("Refusing a preexisting package restore directory")
     work.mkdir()
     project = work / "exact-native-graph.csproj"
-    project.write_text(
-        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
-        '<TargetFramework>net8.0</TargetFramework>'
-        '<RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>'
-        '</PropertyGroup><ItemGroup>'
-        f'<PackageReference Include="Salts.Native" Version="{escape(args.salts_version)}"/>'
-        f'<PackageReference Include="SaltsUtils.Native" Version="{escape(args.utils_version)}"/>'
-        '</ItemGroup></Project>\n'
-    )
+    project.write_text(exact_nuget_project(args.salts_version, args.utils_version))
     root = Path(__file__).resolve().parents[2]
     packages = work / "packages"
     run("dotnet", "restore", str(project), "--packages", str(packages),
