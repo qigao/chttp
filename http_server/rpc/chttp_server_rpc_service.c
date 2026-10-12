@@ -366,10 +366,10 @@ static int chttp_rpc_service_add_aligned_size(
     size_t *total, size_t value, size_t limit) {
   const size_t alignment = _Alignof(max_align_t);
   size_t padding;
-  if (total == NULL || alignment == 0u) return 0;
-  padding = (alignment - (*total % alignment)) % alignment;
-  if (padding > limit - (*total <= limit ? *total : limit))
+  if (total == NULL || alignment == 0u || *total > limit)
     return 0;
+  padding = (alignment - (*total % alignment)) % alignment;
+  if (padding > limit - *total) return 0;
   *total += padding;
   if (value > limit - *total) return 0;
   *total += value;
