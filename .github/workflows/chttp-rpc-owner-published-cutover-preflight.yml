@@ -1,0 +1,194 @@
+name: CHttp exact published SDK cutover preflight (NO PUBLISH)
+
+'on':
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-rpc-owner-published-cutover-preflight.yml"
+      - "cmake/ci/restore-exact-published-native-sdks.py"
+      - "cmake/ci/test_restore_exact_published_native_sdks.py"
+  workflow_dispatch:
+    inputs:
+      salts_version:
+        description: Exact officially released Salts.Native version
+        required: true
+        type: string
+      utils_version:
+        description: Exact officially released SaltsUtils.Native version
+        required: true
+        type: string
+      salts_source_sha:
+        description: Full Salts source SHA of the official release tag
+        required: true
+        type: string
+      utils_source_sha:
+        description: Full SaltsUtils source SHA of the official release tag
+        required: true
+        type: string
+      salts_package_sha256:
+        description: SHA-256 of the published Salts.Native NuGet archive
+        required: true
+        type: string
+      utils_package_sha256:
+        description: SHA-256 of the published SaltsUtils.Native NuGet archive
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: exact-published-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-contract:
+    name: Check strict published SDK release selection
+    if: >-
+      github.repository == 'qigao/chttp' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 245 &&
+      github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Exercise all version, tag, SHA and NuGet rejection contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s cmake/ci \
+            -p test_restore_exact_published_native_sdks.py -v
+
+  official-sdk-sanitizer:
+    name: Official exact Native DSO / ${{ matrix.mode }}
+    if: >-
+      github.repository == 'qigao/chttp' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/feature/chttp-rpc-owner-241'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {mode: asan-ubsan, asan: "ON", ubsan: "ON", tsan: "OFF", repeats: 1}
+          - {mode: tsan, asan: "OFF", ubsan: "OFF", tsan: "ON", repeats: 5}
+    env:
+      EXPECTED_CHTTP: ${{ github.sha }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Use immutable vcpkg/cache tooling
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+        with:
+          mode: read
+      - name: Restore independent host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+      - name: Cache exact-identity compiler objects
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: official-sdk-${{ matrix.mode }}
+          sdk_identity: published-${{ inputs.salts_version }}-${{ inputs.utils_version }}-${{ inputs.salts_source_sha }}-${{ inputs.utils_source_sha }}
+      - name: Check official release/tag identities and restore exact binary graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          python3 cmake/ci/restore-exact-published-native-sdks.py \
+            --salts-version '${{ inputs.salts_version }}' \
+            --utils-version '${{ inputs.utils_version }}' \
+            --salts-sha '${{ inputs.salts_source_sha }}' \
+            --utils-sha '${{ inputs.utils_source_sha }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 }}'
+      - name: Configure RPC Owner with exact published SDK files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset ci-linux-release-user -B 'build/published-cutover/${{ matrix.mode }}' \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DENABLE_SANITIZER_ADDRESS=${{ matrix.asan }} \
+            -DENABLE_SANITIZER_UNDEFINED=${{ matrix.ubsan }} \
+            -DENABLE_SANITIZER_THREAD=${{ matrix.tsan }} \
+            -DENABLE_SANITIZER_LEAK=OFF -DENABLE_SANITIZER_MEMORY=OFF
+      - name: Build complete RPC Owner conformance targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build 'build/published-cutover/${{ matrix.mode }}' --parallel 2 \
+            --target crpc_transport_test crpc_server_test crpc_api_test \
+                     chttp_rpc_service_test chttp_server_test chttp_h2_client_test \
+                     chttp_rpc_owned_native_test
+      - name: Assert exact CMake SDK roots and real CNet/TSan dynamic links
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "Salts_DIR:PATH=$SALTS_ROOT" 'build/published-cutover/${{ matrix.mode }}/CMakeCache.txt'
+          grep -F "SaltsUtils_DIR:PATH=$SALTS_UTILS_ROOT" 'build/published-cutover/${{ matrix.mode }}/CMakeCache.txt'
+          ldd 'build/published-cutover/${{ matrix.mode }}/bin/crpc_transport_test' \
+            | tee 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+          grep -F "$SALTS_ROOT/lib" 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+          grep -F "$SALTS_UTILS_ROOT/lib" 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+          if readelf -d "$SALTS_ROOT/lib/libcnet.so" | grep -q libtsan; then
+            echo "Expected ordinary native CNet DSO, not a TSan-rebuilt SDK" >&2
+            exit 1
+          fi
+          if [[ '${{ matrix.mode }}' == tsan ]]; then
+            grep -q libtsan 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          commands = json.loads(Path("build/published-cutover/tsan/compile_commands.json").read_text())
+          missing = [c["file"] for c in commands
+                     if "-fsanitize=thread" not in
+                        (c.get("command") or " ".join(c.get("arguments", [])))]
+          if not commands or missing:
+              raise SystemExit(f"Missing first-party TSan: {missing[:8]}")
+          print(f"Qualified CHttp TSan compilation units={len(commands)}")
+          PY
+          fi
+      - name: Run exact published SDK Owner/RPC contracts without suppression
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 480s \
+            ctest --test-dir 'build/published-cutover/${{ matrix.mode }}' \
+            -R '^(crpc_transport_test|crpc_server_test|crpc_api_test|chttp_rpc_service_test|chttp_server_test|chttp_h2_client_test|chttp_rpc_owned_native_test)$' \
+            --repeat until-fail:${{ matrix.repeats }} --no-tests=error \
+            --timeout 90 --output-on-failure
+      - name: Preserve immutable release and sanitizer qualifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-official-cutover-${{ matrix.mode }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/published-cutover/provenance.json
+            build/published-cutover/${{ matrix.mode }}/CMakeCache.txt
+            build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt
+            build/published-cutover/${{ matrix.mode }}/Testing/Temporary/LastTest.log
+      - name: Require unchanged exact CHttp source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
