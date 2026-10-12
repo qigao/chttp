@@ -4,7 +4,7 @@ message AddRequest {
   optional uint32 scale default 1;
 }
 message AddResponse {
-  uint32 sum;
+  @Max(100) uint32 sum;
 }
 service Calc {
   Add: AddRequest -> AddResponse;
