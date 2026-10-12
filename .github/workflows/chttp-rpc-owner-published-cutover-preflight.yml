@@ -6,6 +6,8 @@ name: CHttp exact published SDK cutover preflight (NO PUBLISH)
       - ".github/workflows/chttp-rpc-owner-published-cutover-preflight.yml"
       - "cmake/ci/restore-exact-published-native-sdks.py"
       - "cmake/ci/test_restore_exact_published_native_sdks.py"
+      - "cmake/ci/attest-exact-published-consumer.py"
+      - "cmake/vcpkg-cache.nuget.config"
   workflow_dispatch:
     inputs:
       salts_version:
@@ -239,6 +241,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - name: Select canonical iOS binary cache namespace
         if: matrix.family == 'ios'
         shell: bash
@@ -300,7 +305,7 @@ jobs:
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vs)) { throw 'MSVC x64 unavailable' }
           "VSINSTALL=$vs" >> $env:GITHUB_ENV
-      - name: Restore exact six-RID unpublished Salts and SaltsUtils NuGet pair
+      - name: Restore exact six-RID officially published Salts and SaltsUtils NuGet pair
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -408,7 +413,7 @@ jobs:
           if errorlevel 1 exit /b 1
           ctest --preset installed-release-user --output-on-failure --no-tests=error
           if errorlevel 1 exit /b 1
-      - name: Attest installed CHttp SDK exact candidate dependency paths
+      - name: Attest installed CHttp SDK exact published dependency paths
         shell: bash
         run: |
           set -euo pipefail
