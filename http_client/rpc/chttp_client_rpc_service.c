@@ -1,5 +1,6 @@
 #include <http_client/rpc_service.h>
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef enum chttp_rpc_service_params_mode {
