@@ -118,7 +118,8 @@ int chttp_client_rpc_request_reply(
  * No separate RPC owner/poller/pool is created.
  *
  * Current slice explicitly rejects nonzero deadline_ms with ENOTSUP. The
- * caller must provide distinct active wire IDs; no RPC-ID registry is added.
+ * HTTP request-slot table rejects duplicate active JSON-RPC wire IDs as
+ * SALTS_EALREADY, retaining identity through native terminal recycling.
  * Callback response/readers are borrowed until the callback returns.
  */
 typedef void (*chttp_async_rpc_complete_fn)(

@@ -192,6 +192,18 @@ static int crpc_transport_test_direct_async(
       &client, &limits, &options, crpc_transport_test_direct_complete,
       &completion, &request);
   if (status != SALTS_OK || request.slot == 0u) goto done;
+  /* Same Client, same in-flight wire ID: no second HTTP admission and no
+   * terminal callback for immediate duplicate-ID rejection. */
+  {
+    chttp_request duplicate = {0};
+    const int duplicate_status = chttp_async_client_rpc_submit(
+        &client, &limits, &options, crpc_transport_test_direct_complete,
+        &completion, &duplicate);
+    if (duplicate_status != SALTS_EALREADY || duplicate.slot != 0u) {
+      status = SALTS_EPROTO;
+      goto done;
+    }
+  }
   {
     const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
     while (!completion.called) {

@@ -59,6 +59,10 @@ typedef struct chttp_slot {
   void *user;
   uint32_t generation;
   chttp_protocol protocol;
+  /* JSON-RPC logical wire ID is stored in the existing HTTP request slot.
+   * No independent RPC registry or transport owner is allocated. */
+  uint64_t rpc_wire_id;
+  bool rpc_wire_id_live;
   chttp_slot_state state;
   bool result_delivered;
   bool cancel_requested;
@@ -1505,6 +1509,40 @@ reject:
     if (cleanup_status != SALTS_OK) return cleanup_status;
   }
   return status;
+}
+
+/* The sole RPC identity admission boundary is the existing HTTP request
+ * table. A duplicated logical wire ID is rejected before any HTTP submit,
+ * and stays reserved until terminal transport recycling frees the slot.
+ * This is single-owner like chttp_async_client_submit itself. */
+int chttp_async_client_rpc_submit_transport(
+    chttp_async_client *client, const chttp_request_options *options,
+    uint64_t wire_id, chttp_request *out_request) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  chttp_slot *slot;
+  size_t i;
+  int status;
+  if (out_request == NULL) return SALTS_EINVAL;
+  *out_request = (chttp_request){0};
+  if (impl == NULL || options == NULL) return SALTS_EINVAL;
+  if (impl->callback_active || impl->poll_active) return SALTS_EBUSY;
+  if (!impl->admission_open) return SALTS_ESHUTDOWN;
+  for (i = 0u; i < impl->request_capacity; ++i) {
+    const chttp_slot *active = &impl->slots[i];
+    if (active->state != CHTTP_SLOT_FREE &&
+        active->rpc_wire_id_live && active->rpc_wire_id == wire_id)
+      return SALTS_EALREADY;
+  }
+  status = chttp_async_client_submit_impl(
+      client, options, NULL, NULL, NULL, out_request);
+  if (status != SALTS_OK) return status;
+  /* The successful submit published this exact generation; callbacks cannot
+   * run before the owning HTTP progress loop executes again. */
+  slot = chttp_slot_find(impl, *out_request);
+  if (slot == NULL) return SALTS_EPROTO;
+  slot->rpc_wire_id = wire_id;
+  slot->rpc_wire_id_live = true;
+  return SALTS_OK;
 }
 
 int chttp_async_client_submit(chttp_async_client *client, const chttp_request_options *options,

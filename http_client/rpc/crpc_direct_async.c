@@ -1,4 +1,5 @@
 #include "crpc_client_internal.h"
+#include "../src/chttp_client_internal.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -101,7 +102,8 @@ int chttp_async_client_rpc_submit(
       .user = call,
       .tls = options->tls,
       .protocol = options->protocol};
-  status = chttp_async_client_submit(client, &http, out_request);
+  status = chttp_async_client_rpc_submit_transport(
+      client, &http, options->request_id, out_request);
   crpc_prepared_call_destroy(&prepared);
   if (status != SALTS_OK) {
     free(call);
