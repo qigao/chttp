@@ -360,6 +360,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Select canonical iOS binary cache namespace
+        if: matrix.family == 'ios'
+        shell: bash
+        run: echo 'X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache' >> "$GITHUB_ENV"
       - name: Configure canonical vcpkg binary cache
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
