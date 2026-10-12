@@ -872,10 +872,6 @@ spec("CRPC server") {
     check_equal(response.status_code, 200u);
     check_equal(response.body, fail_reply, sizeof(fail_reply) - 1u);
     chttp_response_destroy(&response);
-    check_equal(bad.handler_calls, (size_t)1u);
-    check_equal(bad.encoder_calls, (size_t)1u);
-    check_equal(good.calls, (size_t)0u);
-
     /* On the identical HTTP Owner, neither stale partial result bytes nor
      * a second terminal response may leak into the next request. */
     check_equal(crpc_server_test_http_post(
@@ -884,15 +880,16 @@ spec("CRPC server") {
     check_equal(response.status_code, 200u);
     check_equal(response.body, next_reply, sizeof(next_reply) - 1u);
     chttp_response_destroy(&response);
-    check_equal(bad.handler_calls, (size_t)1u);
-    check_equal(bad.encoder_calls, (size_t)1u);
-    check_equal(good.calls, (size_t)1u);
-
     check_equal(chttp_client_destroy(
         &client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_stop(
         &server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+    /* The network response isn't itself a TSan-visible join of the Owner.
+     * Read callback-owned counters only after the stop/destroy barrier. */
+    check_equal(bad.handler_calls, (size_t)1u);
+    check_equal(bad.encoder_calls, (size_t)1u);
+    check_equal(good.calls, (size_t)1u);
   }
 
   it("maps per-item batch response overflow without skipping later calls") {
