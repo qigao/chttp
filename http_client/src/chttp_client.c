@@ -1650,7 +1650,10 @@ static int chttp_rpc_expire_deadlines(chttp_async_client *client,
     slot->rpc_deadline_cancelled = true;
     status = chttp_async_request_cancel(client, slot->public_handle);
     if (status != SALTS_OK) {
-      slot->rpc_deadline_cancelled = false;
+      /* H1 may successfully admit close, then report a Pool drain error.
+       * Preserve timeout intent once native cancellation is committed. */
+      if (!slot->cancel_requested)
+        slot->rpc_deadline_cancelled = false;
       if (status != SALTS_EALREADY && status != SALTS_ENOENT &&
           first_status == SALTS_OK)
         first_status = status;

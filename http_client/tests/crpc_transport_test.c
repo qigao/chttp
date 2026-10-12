@@ -406,7 +406,8 @@ spec("CRPC CHTTP transport parity") {
   }
 
 
-  it("expires direct H2 RPC in the HTTP Owner and drains exactly once") {
+  it("expires direct H1/H2 RPC in the HTTP Owner and drains exactly once") {
+    for (size_t variant = 0u; variant < 2u; ++variant) {
     chttp_server server = {0};
     chttp_async_client client = {0};
     const chttp_server_config server_config =
@@ -421,7 +422,7 @@ spec("CRPC CHTTP transport parity") {
                             .method = {.service = "math", .name = "double"},
                             .request_id = UINT64_C(99),
                             .deadline_ms = 80u,
-                            .protocol = CHTTP_HTTP_2};
+                            .protocol = variant == 0u ? CHTTP_HTTP_1_1 : CHTTP_HTTP_2};
     chttp_request request = {0};
     uint16_t port = 0u;
     char uri[64];
@@ -467,6 +468,7 @@ spec("CRPC CHTTP transport parity") {
     check_equal(chttp_server_stop(
         &server, CRPC_TRANSPORT_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+    }
   }
 
   it("supports synchronous and asynchronous JSON-RPC over cleartext HTTP/2") {
