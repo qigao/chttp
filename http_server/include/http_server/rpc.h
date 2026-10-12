@@ -146,10 +146,19 @@ typedef struct chttp_server_rpc_config {
   size_t max_method_bytes;
   size_t max_json_depth;
   size_t max_batch_items;
+  /** Per-invocation generated DataBind runtime budgets (no separate service owner). */
+  size_t max_output_value_bytes;
+  size_t max_call_frame_bytes;
+  size_t native_workspace_bytes;
+  size_t native_max_depth;
+  size_t native_max_items;
+  size_t native_max_owned_bytes;
+  size_t max_inflight_calls;
 } chttp_server_rpc_config;
 
 #define CHTTP_SERVER_RPC_CONFIG_INIT \
-  { sizeof(chttp_server_rpc_config), 8u, 64u, 8u, 4u }
+  { sizeof(chttp_server_rpc_config), 8u, 64u, 8u, 4u, \
+    4096u, 65536u, 16384u, 16u, 256u, 65536u, 4u }
 
 /** Allocate a stopped, host-owned registry before any RPC method is registered. */
 int chttp_server_rpc_configure(chttp_server *server,

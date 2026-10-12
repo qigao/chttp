@@ -1,6 +1,7 @@
 #include <http_server/rpc.h>
 #include "crpc_internal.h"
 #include "../src/chttp_server_runtime.h"
+#include "chttp_server_rpc_service_internal.h"
 
 #include <json_cserde_reader.h>
 #include <vstr.h>
@@ -43,6 +44,8 @@ typedef struct crpc_server_impl {
   size_t response_body_limit;
   bool started;
   bool borrowed_http;
+  void *generated;
+  chttp_server_rpc_generated_config generated_config;
 } crpc_server_impl;
 
 typedef struct crpc_server_response_context {
@@ -192,6 +195,8 @@ static int crpc_server_config_validate(const crpc_server_config *config, size_t 
 
 static void crpc_server_impl_free(crpc_server_impl *impl) {
   if (impl == NULL) return;
+  chttp_server_rpc_generated_release(impl->generated);
+  impl->generated = NULL;
   free(impl->method_storage);
   free(impl->method_scratch);
   free(impl->target_storage);
@@ -511,6 +516,15 @@ int chttp_server_rpc_configure(chttp_server *server,
   if (status != SALTS_OK) return status;
   impl->http = *server;
   impl->borrowed_http = true;
+  impl->generated_config = (chttp_server_rpc_generated_config){
+      .method_capacity = config->method_capacity,
+      .max_output_value_bytes = config->max_output_value_bytes,
+      .max_call_frame_bytes = config->max_call_frame_bytes,
+      .native_workspace_bytes = config->native_workspace_bytes,
+      .native_max_depth = config->native_max_depth,
+      .native_max_items = config->native_max_items,
+      .native_max_owned_bytes = config->native_max_owned_bytes,
+      .max_inflight_calls = config->max_inflight_calls};
   host->rpc_owner = impl;
   return SALTS_OK;
 }
@@ -581,6 +595,25 @@ int chttp_server_rpc_register(chttp_server *server, const char *target,
   if (host->rpc_owner == NULL) return SALTS_EINVAL;
   borrowed.impl = host->rpc_owner;
   return crpc_server_register(&borrowed, target, method, handler, user);
+}
+
+int chttp_server_rpc_mount(chttp_server *server,
+                           const chttp_server_rpc_mount_options *mount) {
+  chttp_server_impl *host;
+  crpc_server_impl *impl;
+  int status;
+  if (server == NULL || server->impl == NULL || mount == NULL)
+    return SALTS_EINVAL;
+  host = (chttp_server_impl *)server->impl;
+  if (host->start_called) return SALTS_EBUSY;
+  impl = (crpc_server_impl *)host->rpc_owner;
+  if (impl == NULL || !impl->borrowed_http) return SALTS_EINVAL;
+  if (impl->generated == NULL) {
+    status = chttp_server_rpc_generated_init(
+        &impl->generated, &impl->generated_config);
+    if (status != SALTS_OK) return status;
+  }
+  return chttp_server_rpc_generated_mount(impl->generated, server, mount);
 }
 
 int crpc_server_response_result(crpc_server_response *response, crpc_encode_value_fn encode,
