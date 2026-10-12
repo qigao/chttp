@@ -1,4 +1,4 @@
-name: CHttp RPC Owner mixed native SDK TSan
+name: CHttp RPC Owner exact packaged candidate TSan
 
 'on':
   pull_request:
@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   mixed-sdk:
-    name: Native uninstrumented Salts and Utils with TSan CHttp
+    name: Uninstrumented NuGet candidate SDKs with TSan CHttp
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -79,7 +79,7 @@ jobs:
             printf 'chttp_source=%s\n' "$EXPECTED_CHTTP"
             printf 'salts_source=%s\n' "$EXPECTED_SALTS"
             printf 'saltsutils_source=%s\n' "$EXPECTED_UTILS"
-            printf 'qualification=mixed-candidate-native-sdk-tsan\n'
+            printf 'qualification=packaged-candidate-native-sdk-tsan\n'
             printf 'sdk_published=false\n'
             printf 'native_salts_tsan=false\n'
           } | tee build/rpc-mixed-sdk-tsan/provenance.txt
@@ -130,12 +130,162 @@ jobs:
           test -f "$root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           grep -F "Salts_DIR:PATH=$SALTS_ROOT" build/rpc-mixed-sdk-tsan/build-utils/CMakeCache.txt
 
+      - name: Set up package tooling (no feed publication)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Pack, attest and extract exact unpublished native NuGet candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/chttp-mixed-tsan"
+          stage="$base/pack-stage"
+          dist="$GITHUB_WORKSPACE/build/rpc-mixed-sdk-tsan/dist"
+          mkdir -p "$stage/salts/sdk/linux-x64" "$stage/utils/sdk/linux-x64" "$dist"
+          cp -a "$base/salts/." "$stage/salts/sdk/linux-x64/"
+          cp -a "$base/salts-utils/." "$stage/utils/sdk/linux-x64/"
+          salts_version="2.3.0-cnet.once.sha$EXPECTED_SALTS"
+          utils_version="4.3.0-cnet.once.sha$EXPECTED_UTILS.salts.sha$EXPECTED_SALTS"
+          printf 'version=%s\ncommit=%s\nrid=linux-x64\nprofile=candidate\n' \
+            "$salts_version" "$EXPECTED_SALTS" \
+            > "$stage/salts/sdk/linux-x64/salts-sdk-manifest.txt"
+          printf 'version=%s\ncommit=%s\nrid=linux-x64\nprofile=candidate\nsalts_commit=%s\n' \
+            "$utils_version" "$EXPECTED_UTILS" "$EXPECTED_SALTS" \
+            > "$stage/utils/sdk/linux-x64/salts-utils-sdk-manifest.txt"
+          dotnet pack build/rpc-mixed-sdk-tsan/sources/salts/packaging/nuget/Salts.Native.csproj \
+            --configuration Release --output "$dist" \
+            "-p:PackageVersion=$salts_version" "-p:PackageRoot=$stage/salts" \
+            "-p:RepositoryCommit=$EXPECTED_SALTS"
+          dotnet pack build/rpc-mixed-sdk-tsan/sources/salts-utils/packaging/nuget/SaltsUtils.Native.csproj \
+            --configuration Release --output "$dist" \
+            "-p:PackageVersion=$utils_version" "-p:PackageRoot=$stage/utils" \
+            "-p:RepositoryCommit=$EXPECTED_UTILS"
+          python3 - "$dist" "$base" "$salts_version" "$utils_version" \
+            "$EXPECTED_SALTS" "$EXPECTED_UTILS" <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import stat
+          import sys
+          import tempfile
+          from xml.etree import ElementTree
+          import zipfile
+
+          dist, base = map(Path, sys.argv[1:3])
+          salts_version, utils_version, salts_sha, utils_sha = sys.argv[3:]
+          # SaltsUtils release packaging preserves the executable bit on host
+          # IDL compilers. The source helper expects six RIDs; this candidate
+          # intentionally packages only Linux x64.
+          utils_pkg = dist / f"SaltsUtils.Native.{utils_version}.nupkg"
+          tool = "sdk/linux-x64/bin/salts-idlc"
+          with zipfile.ZipFile(utils_pkg) as original:
+              if tool not in original.namelist():
+                  raise SystemExit(f"Missing IDL compiler in {utils_pkg.name}")
+              fd, name = tempfile.mkstemp(suffix=".nupkg", dir=dist)
+              os.close(fd)
+              temp = Path(name)
+              try:
+                  with zipfile.ZipFile(temp, "w", allowZip64=True) as output:
+                      output.comment = original.comment
+                      for info in original.infolist():
+                          if info.filename == tool:
+                              info.create_system = 3
+                              info.external_attr = (stat.S_IFREG | 0o755) << 16
+                          output.writestr(info, original.read(info.filename))
+                  os.replace(temp, utils_pkg)
+              finally:
+                  temp.unlink(missing_ok=True)
+
+          results = []
+          for package_id, version, sha, manifest, required in (
+              ("Salts.Native", salts_version, salts_sha,
+               "salts-sdk-manifest.txt",
+               ("lib/cmake/Salts/SaltsConfig.cmake",
+                "include/salts/thread.h", "lib/libcnet.so")),
+              ("SaltsUtils.Native", utils_version, utils_sha,
+               "salts-utils-sdk-manifest.txt",
+               ("lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake",
+                "include/data_bind_native_binding.h",
+                "bin/salts-idlc")),
+          ):
+              pkg = dist / f"{package_id}.{version}.nupkg"
+              target = base / "extracted" / package_id / "sdk" / "linux-x64"
+              with zipfile.ZipFile(pkg) as archive:
+                  names = archive.namelist()
+                  prefix = "sdk/linux-x64/"
+                  matches = [n for n in names if n.endswith("/" + manifest)]
+                  if matches != [prefix + manifest]:
+                      raise SystemExit(f"{pkg.name}: manifest set {matches!r}")
+                  for suffix in required:
+                      if prefix + suffix not in names:
+                          raise SystemExit(f"{pkg.name}: missing {suffix}")
+                  nuspec = [n for n in names if n.endswith(".nuspec")]
+                  if len(nuspec) != 1:
+                      raise SystemExit(f"{pkg.name}: invalid nuspec set")
+                  root = ElementTree.fromstring(archive.read(nuspec[0]))
+                  meta = {tag.tag.rsplit("}", 1)[-1]: tag.text
+                          for tag in root.iter()
+                          if tag.tag.rsplit("}", 1)[-1] in ("id", "version")}
+                  if (meta.get("id"), meta.get("version")) != (package_id, version):
+                      raise SystemExit(f"{pkg.name}: wrong NuGet identity {meta}")
+                  facts = dict(line.split("=", 1)
+                               for line in archive.read(prefix + manifest).decode().splitlines()
+                               if "=" in line)
+                  expected = {"version": version, "commit": sha,
+                              "rid": "linux-x64", "profile": "candidate"}
+                  if package_id == "SaltsUtils.Native":
+                      expected["salts_commit"] = salts_sha
+                  if facts != expected:
+                      raise SystemExit(f"{pkg.name}: incorrect candidate manifest {facts}")
+                  if package_id == "Salts.Native":
+                      header = archive.read(prefix + "include/salts/thread.h")
+                      if b"pthread_once_t native;" not in header:
+                          raise SystemExit("Packaged Salts ABI lacks POSIX pthread_once")
+                  else:
+                      mode = (archive.getinfo(prefix + "bin/salts-idlc").external_attr >> 16) & 0o777
+                      if mode & 0o111 != 0o111:
+                          raise SystemExit("Packaged salts-idlc lacks executable permission")
+                  for entry in archive.infolist():
+                      if not entry.filename.startswith(prefix):
+                          continue
+                      subpath = entry.filename[len(prefix):]
+                      if not subpath:
+                          continue
+                      p = Path(subpath)
+                      if p.is_absolute() or ".." in p.parts:
+                          raise SystemExit(f"Unsafe package entry {entry.filename!r}")
+                      output = target / p
+                      if entry.is_dir():
+                          output.mkdir(parents=True, exist_ok=True)
+                      else:
+                          output.parent.mkdir(parents=True, exist_ok=True)
+                          output.write_bytes(archive.read(entry))
+                          mode = (entry.external_attr >> 16) & 0o777
+                          if mode:
+                              output.chmod(mode)
+              digest = hashlib.sha256(pkg.read_bytes()).hexdigest()
+              results.append(f"{package_id}={version}\n{package_id}_sha256={digest}\n")
+              print(f"Qualified packaged {package_id} {version} sha256={digest}")
+          (dist / "candidate-nupkg-provenance.txt").write_text(
+              f"salts_source={salts_sha}\nsaltsutils_source={utils_sha}\n"
+              "published=false\nused_after_extraction=true\n" + "".join(results))
+          PY
+          test -x "$base/extracted/SaltsUtils.Native/sdk/linux-x64/bin/salts-idlc"
+          test -f "$base/extracted/Salts.Native/sdk/linux-x64/lib/libcnet.so"
+          # No producer-install fallback: consumer must link the extracted
+          # packages, and never find its original staging trees.
+          rm -rf "$base/salts" "$base/salts-utils"
+          test ! -e "$base/salts/lib/cmake/Salts/SaltsConfig.cmake"
+          test ! -e "$base/salts-utils/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          cat "$dist/candidate-nupkg-provenance.txt" | tee -a build/rpc-mixed-sdk-tsan/provenance.txt
+
       - name: Build source-instrumented CHttp against ordinary native SDK
         shell: bash
         run: |
           set -euo pipefail
-          export SALTS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/salts"
-          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/salts-utils"
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/extracted/Salts.Native/sdk/linux-x64"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/extracted/SaltsUtils.Native/sdk/linux-x64"
           export DATABIND_ROOT="$SALTS_UTILS_ROOT"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           src="$GITHUB_WORKSPACE"
@@ -182,7 +332,7 @@ jobs:
                   if not any(c["file"].endswith(name) for c in cmds):
                       raise SystemExit(f"{label} missing source {name}")
           PY
-          root="$RUNNER_TEMP/chttp-mixed-tsan/salts"
+          root="$RUNNER_TEMP/chttp-mixed-tsan/extracted/Salts.Native/sdk/linux-x64"
           if readelf -d "$root/lib/libcnet.so" | grep -q libtsan; then
             echo "candidate native CNet unexpectedly needs libtsan" >&2
             exit 1
@@ -195,8 +345,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export SALTS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/salts"
-          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/salts-utils"
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/extracted/Salts.Native/sdk/linux-x64"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-mixed-tsan/extracted/SaltsUtils.Native/sdk/linux-x64"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           timeout --signal=TERM --kill-after=10s 480s \
             ctest --test-dir build/rpc-mixed-sdk-tsan/build-chttp \
@@ -211,6 +361,8 @@ jobs:
           if-no-files-found: warn
           path: |
             build/rpc-mixed-sdk-tsan/provenance.txt
+            build/rpc-mixed-sdk-tsan/dist/*.nupkg
+            build/rpc-mixed-sdk-tsan/dist/candidate-nupkg-provenance.txt
             build/rpc-mixed-sdk-tsan/instrumentation.txt
             build/rpc-mixed-sdk-tsan/consumer-ldd.txt
             build/rpc-mixed-sdk-tsan/build-chttp/Testing/Temporary/LastTest.log
