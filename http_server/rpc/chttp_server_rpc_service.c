@@ -642,6 +642,8 @@ static int chttp_rpc_service_handler_call(
   DataBindBindingPlanDiagnostic diagnostic =
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   DataBindStatus status;
+  /* Egress failures are server faults, never malformed client params. */
+  int ingress_failed = 0;
   int native_status = 0;
   int code = 0;
   int result;
@@ -677,6 +679,7 @@ static int chttp_rpc_service_handler_call(
   status = data_bind_binding_plan_bind_call(
       record->binding, &provider, &slot->native_options,
       &record->frame, lifetime, &diagnostic);
+  ingress_failed = (status != DATA_BIND_OK);
 
   if (status == DATA_BIND_OK &&
       !record->execution->invoke(
@@ -693,8 +696,7 @@ static int chttp_rpc_service_handler_call(
 
   if (status != DATA_BIND_OK) {
     chttp_rpc_service_release_token_storage(&provider_context);
-    if (!provider_context.output_attempted &&
-        chttp_rpc_service_input_failure(status))
+    if (ingress_failed && chttp_rpc_service_input_failure(status))
       return crpc_server_response_error(
           response, -32602, "Invalid params", NULL, NULL);
     return SALTS_EPROTO;
