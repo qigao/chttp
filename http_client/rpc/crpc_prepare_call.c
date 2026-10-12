@@ -4,17 +4,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-bool crpc_client_config_valid(const crpc_client_config *config) {
-  if (config == NULL || config->request_capacity == 0u ||
-      config->request_capacity > config->http.request_capacity ||
-      config->request_capacity > UINT32_MAX || config->max_method_bytes == 0u ||
-      config->max_json_depth < 2u || config->http.max_request_body_bytes == 0u ||
-      config->http.max_request_body_bytes == SIZE_MAX || config->http.max_header_count < 5u)
-    return false;
-  if (config->max_json_depth - 1u > SIZE_MAX / sizeof(size_t)) return false;
-  return true;
-}
-
 static unsigned char crpc_ascii_lower(unsigned char value) {
   return value >= (unsigned char)'A' && value <= (unsigned char)'Z'
              ? (unsigned char)(value + ('a' - 'A'))

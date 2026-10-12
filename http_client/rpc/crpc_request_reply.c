@@ -6,16 +6,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct crpc_blocking_client_impl {
-  chttp_client http;
-  crpc_client_config config;
-  bool operation_active;
-} crpc_blocking_client_impl;
-
-static crpc_blocking_client_impl *crpc_client_get(crpc_client *client) {
-  return client != NULL ? (crpc_blocking_client_impl *)client->impl : NULL;
-}
-
 static int crpc_deadline_remaining(uint64_t started_ms, uint32_t deadline_ms,
                                    uint32_t *out_remaining_ms) {
   const uint64_t now_ms = cmeta_monotonic_ms();
@@ -42,24 +32,6 @@ static void crpc_response_take(crpc_decoded_response *decoded, crpc_response *ou
                          .impl = decoded};
   if (view->kind == CRPC_RESPONSE_RESULT) out->value.result = view->value.result;
   else out->value.remote_error = view->value.remote_error;
-}
-
-int crpc_client_init(crpc_client *client, const crpc_client_config *config) {
-  crpc_blocking_client_impl *impl;
-  int status;
-  if (client == NULL || config == NULL) return SALTS_EINVAL;
-  if (client->impl != NULL) return SALTS_EALREADY;
-  if (!crpc_client_config_valid(config)) return SALTS_EINVAL;
-  impl = (crpc_blocking_client_impl *)calloc(1u, sizeof(*impl));
-  if (impl == NULL) return SALTS_ENOMEM;
-  status = chttp_client_init(&impl->http, &config->http);
-  if (status != SALTS_OK) {
-    free(impl);
-    return status;
-  }
-  impl->config = *config;
-  client->impl = impl;
-  return SALTS_OK;
 }
 
 void crpc_response_destroy(crpc_response *response) {
@@ -181,35 +153,3 @@ int chttp_client_rpc_request_reply(
       client, limits, options, out_response, out_error);
 }
 
-/* Temporary legacy entry point until #244 cutover, sharing the implementation. */
-int crpc_request_reply(crpc_client *client, const crpc_options *options,
-                       crpc_response *out_response, crpc_error *out_error) {
-  crpc_blocking_client_impl *impl = crpc_client_get(client);
-  chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
-  int status;
-  if (impl == NULL) return SALTS_EINVAL;
-  if (impl->operation_active) return SALTS_EBUSY;
-  limits.max_method_bytes = impl->config.max_method_bytes;
-  limits.max_json_depth = impl->config.max_json_depth;
-  limits.max_request_body_bytes = impl->config.http.max_request_body_bytes;
-  limits.max_http_header_count = impl->config.http.max_header_count;
-  impl->operation_active = true;
-  status = crpc_request_reply_on_http(
-      &impl->http, &limits, options, out_response, out_error);
-  impl->operation_active = false;
-  return status;
-}
-
-int crpc_client_destroy(crpc_client *client, uint32_t timeout_ms) {
-  crpc_blocking_client_impl *impl;
-  int status;
-  if (client == NULL) return SALTS_EINVAL;
-  impl = crpc_client_get(client);
-  if (impl == NULL) return SALTS_OK;
-  if (impl->operation_active) return SALTS_EBUSY;
-  status = chttp_client_destroy(&impl->http, timeout_ms);
-  if (status != SALTS_OK) return status;
-  free(impl);
-  client->impl = NULL;
-  return SALTS_OK;
-}

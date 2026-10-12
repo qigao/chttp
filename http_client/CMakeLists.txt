@@ -12,7 +12,6 @@ add_library(chttp_client SHARED
   src/chttp_websocket_pool.c
   src/chttp_auth.c
 
-  rpc/crpc_client.c
   rpc/crpc_prepare_call.c
   rpc/crpc_request_reply.c
   rpc/crpc_direct_async.c
