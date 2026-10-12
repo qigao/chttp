@@ -344,8 +344,8 @@ static int crpc_server_test_health(void *user,
 
 spec("CRPC server") {
   it("attaches a low-level RPC registry to the existing HTTP Server owner") {
-    static const char call[] = "{\\"jsonrpc\\":\\"2.0\\",\\"method\\":\\"ping\\",\\"id\\":1}";
-    static const char reply[] = "{\\"jsonrpc\\":\\"2.0\\",\\"result\\":1,\\"id\\":1}";
+    static const char call[] = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
+    static const char reply[] = "{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":1}";
     chttp_server server = {0};
     chttp_client client = {0};
     chttp_server_config http_config = crpc_server_test_http_config(0);
@@ -361,7 +361,7 @@ spec("CRPC server") {
 
     check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EINVAL);
     check_equal(chttp_server_init(&server, &http_config), SALTS_OK);
-    check_equal(chttp_server_route(&server, CHTTP_GET, "/health",
+    check_equal(chttp_server_route(&server, CHTTP_METHOD_GET, "/health",
                                    crpc_server_test_health, NULL), SALTS_OK);
     rpc_config.size = 0u;
     check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EINVAL);
