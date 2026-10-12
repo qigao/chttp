@@ -59,6 +59,48 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Draft candidate"):
                 module["validate_inputs"](self.inputs())
 
+    def test_cross_platform_target_host_rid_pairs_fail_closed(self):
+        valid = module["HOST_RIDS"]
+        self.assertEqual(len(valid), 6)
+        self.assertEqual(valid["android-arm64-v8a"], "linux-x64")
+        self.assertEqual(valid["ios-arm64"], "macos-arm64")
+        self.assertEqual(set(valid), set(module["RIDS"]))
+        for rid, host in valid.items():
+            with self.subTest(rid=rid, host=host):
+                module["validate_rid_pair"](rid, host)
+                for other in module["RIDS"]:
+                    if other != host:
+                        with self.assertRaisesRegex(ValueError, "target/host"):
+                            module["validate_rid_pair"](rid, other)
+        with self.assertRaisesRegex(ValueError, "target/host"):
+            module["validate_rid_pair"]("linux-amd64", "linux-x64")
+
+    def test_each_native_rid_requires_expected_once_abi(self):
+        for rid in module["RIDS"]:
+            with self.subTest(rid=rid), tempfile.TemporaryDirectory() as tmp:
+                pkg = Path(tmp)
+                version, sha = "2.3.0-rc.15", "a" * 40
+                archive = self.synthetic_archive(pkg, "Salts.Native",
+                                                 version, sha, version, rid=rid)
+                digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                root, got = module["verify_package"](
+                    pkg, "Salts.Native", version, sha, digest, version, rid)
+                self.assertEqual(root, pkg / "sdk" / rid)
+                self.assertEqual(got, digest)
+
+    def test_windows_once_abi_rejects_old_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp)
+            version, sha = "2.3.0-rc.15", "a" * 40
+            archive = self.synthetic_archive(
+                pkg, "Salts.Native", version, sha, version,
+                bad_abi=True, rid="windows-x64")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "Windows Salts"):
+                module["verify_package"](
+                    pkg, "Salts.Native", version, sha, digest, version,
+                    "windows-x64")
+
     def test_nuget_graph_selection_is_exact_and_unique(self):
         with tempfile.TemporaryDirectory() as temp:
             packages = Path(temp)
@@ -81,9 +123,8 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     @staticmethod
     def synthetic_archive(
         package: Path, identity: str, version: str, commit: str,
-        salts_version: str, bad_abi=False
+        salts_version: str, bad_abi=False, rid="linux-x64"
     ):
-        rid = "linux-x64"
         is_salts = identity == "Salts.Native"
         manifest = ("salts-sdk-manifest.txt" if is_salts
                     else "salts-utils-sdk-manifest.txt")
@@ -98,8 +139,10 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                           else "lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"),
                 "set(dummy ok)\n")
             if is_salts:
+                native_header = ("volatile int state;\nSALTS_ONCE_INIT {0}"
+                                 if rid == "windows-x64" else "pthread_once_t native;")
                 z.writestr(prefix + "include/salts/thread.h",
-                           "old custom once" if bad_abi else "pthread_once_t native;")
+                           "old custom once" if bad_abi else native_header)
             z.writestr(identity + ".nuspec",
                 '<package><metadata><id>' + identity + '</id><version>'
                 + version + '</version></metadata></package>')
