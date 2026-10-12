@@ -9,7 +9,7 @@ import shutil
 import subprocess
 
 SALTS = "21bdb1145fbb2b39ee3fa644173ec037adba7b87"
-UTILS = "01cbc2f0e9566927331e783c1246e6a6"
+UTILS = "01cbc2f0e9566927331e783c1246e9d61636e6a6"
 
 
 def require(condition: bool, reason: str) -> None:
