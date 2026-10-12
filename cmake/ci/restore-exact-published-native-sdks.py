@@ -21,7 +21,18 @@ SALTS_VERSION_RE = re.compile(r"2\.3\.0(?:-rc\.[1-9][0-9]*)?\Z")
 UTILS_VERSION_RE = re.compile(r"4\.3\.0(?:-rc\.[1-9][0-9]*)?\Z")
 SOURCE_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-RID = "linux-x64"
+RIDS = (
+    "linux-x64", "linux-arm64", "windows-x64", "macos-arm64",
+    "android-arm64-v8a", "ios-arm64",
+)
+# The IDL generator executes on the CI host, not on the cross-compiled target.
+HOST_RIDS = {
+    "linux-x64": "linux-x64", "linux-arm64": "linux-arm64",
+    "windows-x64": "windows-x64", "macos-arm64": "macos-arm64",
+    "android-arm64-v8a": "linux-x64", "ios-arm64": "macos-arm64",
+}
+RID = "linux-x64"  # Preserve direct helper-test compatibility.
+
 
 
 def validate_inputs(args: argparse.Namespace) -> None:
@@ -101,8 +112,10 @@ def select_package(assets: dict, package_id: str, version: str, packages: Path) 
 
 def verify_package(
     package: Path, package_id: str, version: str, source: str,
-    expected_digest: str, salts_version: str
+    expected_digest: str, salts_version: str, rid: str = RID,
 ) -> tuple[Path, str]:
+    if rid not in RIDS:
+        raise ValueError(f"Unsupported native RID {rid!r}")
     name = f"{package_id}.{version}.nupkg".lower()
     archives = [p for p in package.glob("*.nupkg") if p.name.lower() == name]
     if len(archives) != 1:
@@ -112,7 +125,7 @@ def verify_package(
         raise ValueError(f"{package_id}: published package digest mismatch: {digest}")
     with zipfile.ZipFile(archives[0]) as archive:
         entries = set(archive.namelist())
-        expected_prefix = f"sdk/{RID}/"
+        expected_prefix = f"sdk/{rid}/"
         manifest_name = ("salts-sdk-manifest.txt" if package_id == "Salts.Native"
                          else "salts-utils-sdk-manifest.txt")
         manifest_path = expected_prefix + manifest_name
@@ -141,11 +154,16 @@ def verify_package(
             header = archive.read(expected_prefix + "include/salts/thread.h")
             if b"pthread_once_t native;" not in header:
                 raise ValueError("Published native Salts lacks qualified pthread_once ABI")
-    root = package / "sdk" / RID
+    root = package / "sdk" / rid
     config = ("Salts" if package_id == "Salts.Native" else "SaltsUtils")
     if not (root / "lib" / "cmake" / config / f"{config}Config.cmake").is_file():
         raise ValueError(f"{package_id}: missing installed CMake exports")
     return root, digest
+
+
+def validate_rid_pair(rid: str, host_rid: str) -> None:
+    if rid not in HOST_RIDS or HOST_RIDS[rid] != host_rid:
+        raise ValueError(f"Unsupported target/host SDK pair: {rid}/{host_rid}")
 
 
 def append_env(path: Path, name: str, value: str) -> None:
@@ -161,7 +179,10 @@ def main() -> int:
     parser.add_argument("--utils-sha", required=True)
     parser.add_argument("--salts-digest", required=True)
     parser.add_argument("--utils-digest", required=True)
+    parser.add_argument("--rid", choices=RIDS, default=RID)
+    parser.add_argument("--host-rid", choices=RIDS, default=RID)
     args = parser.parse_args()
+    validate_rid_pair(args.rid, args.host_rid)
     validate_inputs(args)
     for name in ("GITHUB_TOKEN", "RUNNER_TEMP", "GITHUB_ENV", "GITHUB_PATH"):
         if not os.environ.get(name):
@@ -194,29 +215,51 @@ def main() -> int:
         "--configfile", str(root / "cmake/vcpkg-cache.nuget.config"),
         "--no-cache", "--force-evaluate")
     assets = json.loads((work / "obj/project.assets.json").read_text())
+    salts_package = select_package(
+        assets, "Salts.Native", args.salts_version, packages)
+    utils_package = select_package(
+        assets, "SaltsUtils.Native", args.utils_version, packages)
     salts_root, salts_digest = verify_package(
-        select_package(assets, "Salts.Native", args.salts_version, packages),
-        "Salts.Native", args.salts_version, args.salts_sha,
-        args.salts_digest, args.salts_version)
+        salts_package, "Salts.Native", args.salts_version, args.salts_sha,
+        args.salts_digest, args.salts_version, args.rid)
     utils_root, utils_digest = verify_package(
-        select_package(assets, "SaltsUtils.Native", args.utils_version, packages),
-        "SaltsUtils.Native", args.utils_version, args.utils_sha,
-        args.utils_digest, args.salts_version)
-    idlc = utils_root / "bin/salts-idlc"
-    if not idlc.is_file() or not os.access(idlc, os.X_OK):
-        raise ValueError("Published host salts-idlc missing or nonexecutable")
-    for name, path in (("SALTS_ROOT", salts_root),
-                       ("SALTS_UTILS_ROOT", utils_root),
-                       ("DATABIND_ROOT", utils_root)):
+        utils_package, "SaltsUtils.Native", args.utils_version, args.utils_sha,
+        args.utils_digest, args.salts_version, args.rid)
+    host_salts, _ = verify_package(
+        salts_package, "Salts.Native", args.salts_version, args.salts_sha,
+        args.salts_digest, args.salts_version, args.host_rid)
+    host_utils, _ = verify_package(
+        utils_package, "SaltsUtils.Native", args.utils_version, args.utils_sha,
+        args.utils_digest, args.salts_version, args.host_rid)
+    idlc = host_utils / "bin" / (
+        "salts-idlc.exe" if args.host_rid == "windows-x64" else "salts-idlc")
+    if not idlc.is_file() or (
+        os.name != "nt" and not os.access(idlc, os.X_OK)
+    ):
+        raise ValueError(f"Published host salts-idlc missing or nonexecutable: {idlc}")
+    for name, path in (
+        ("SALTS_ROOT", salts_root),
+        ("SALTS_UTILS_ROOT", utils_root),
+        ("DATABIND_ROOT", utils_root),
+        ("SALTS_HOST_ROOT", host_salts),
+        ("SALTS_UTILS_HOST_ROOT", host_utils),
+        ("EXACT_SALTS_IDLC", idlc),
+    ):
         append_env(Path(os.environ["GITHUB_ENV"]), name, str(path))
-    path_variable = ":".join((str(utils_root / "lib"), str(utils_root / "bin"),
-                              str(salts_root / "lib"),
-                              os.environ.get("LD_LIBRARY_PATH", "")))
-    append_env(Path(os.environ["GITHUB_ENV"]), "LD_LIBRARY_PATH", path_variable)
+    if os.name != "nt":
+        prefix = [utils_root / "lib", utils_root / "bin", salts_root / "lib",
+                  host_utils / "lib", host_salts / "lib"]
+        for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+            append_env(Path(os.environ["GITHUB_ENV"]), name, os.pathsep.join(
+                [*(str(p) for p in prefix), os.environ.get(name, "")]
+            ))
     with Path(os.environ["GITHUB_PATH"]).open("a") as out:
-        out.write(str(utils_root / "bin") + "\n")
+        for prefix in (utils_root / "bin", salts_root / "bin",
+                       host_utils / "bin", host_salts / "bin"):
+            out.write(str(prefix) + "\n")
     record = {
-        "source_mode": "exact_published_sdk", "rid": RID,
+        "source_mode": "exact_published_sdk", "rid": args.rid,
+        "host_rid": args.host_rid,
         "packages": release_proof,
         "digests": {"Salts.Native": salts_digest,
                     "SaltsUtils.Native": utils_digest},
