@@ -35,6 +35,16 @@ def validate_inputs(args: argparse.Namespace) -> None:
     ):
         if pattern.fullmatch(value) is None:
             raise ValueError(f"{name} must be explicit and immutable: {value!r}")
+    # rc.14 and rc.9 are the previously released, pre-pthread_once graph.
+    # Do not accidentally "qualify" that known incompatible ABI epoch.
+    if args.salts_version.startswith("2.3.0-rc.") and (
+        int(args.salts_version.rsplit(".", 1)[1]) <= 14
+    ):
+        raise ValueError("Salts pre-pthread_once rc.14-or-earlier is ineligible")
+    if args.utils_version.startswith("4.3.0-rc.") and (
+        int(args.utils_version.rsplit(".", 1)[1]) <= 9
+    ):
+        raise ValueError("SaltsUtils pre-cutover rc.9-or-earlier is ineligible")
     if any(os.environ.get(name) for name in (
         "SALTS_CANDIDATE_ROOT", "SALTS_UTILS_CANDIDATE_ROOT"
     )):
