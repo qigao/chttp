@@ -2808,9 +2808,12 @@ spec("CHTTP background HTTP/1.1 server") {
     body = strstr(response, "\r\n\r\n");
     check_not_null(body);
     check_equal(response_size, (size_t)(body + 4u - response));
-    check_equal(probe.calls, (size_t)1u);
 
+    /* Failure after committed headers can finish its source callback after
+     * peer-visible EOF. Drain the Server before observing borrowed source
+     * accounting; raw socket completion does not publish callback terminal. */
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(probe.calls, (size_t)1u);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
@@ -2839,10 +2842,11 @@ spec("CHTTP background HTTP/1.1 server") {
     check_not_null(strstr(response, "Transfer-Encoding: chunked"));
     check_null(strstr(response, "Content-Length:"));
     check_not_null(strstr(response, "\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n1\r\ng\r\n0\r\n\r\n"));
+
+    /* Chunked terminal bytes do not themselves join the async body source. */
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(probe.offset, sizeof(payload) - 1u);
     check_equal(probe.calls, (size_t)4u);
-
-    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
