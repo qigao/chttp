@@ -308,6 +308,22 @@ static int chttp_server_test_wait_active(chttp_server *server, uint64_t expected
   }
 }
 
+
+/* A successful client connect is not proof of acceptor publication. Observe
+ * the actual rejected-connection counter with a bounded public-stats barrier. */
+static int chttp_server_test_wait_rejected(chttp_server *server, uint64_t minimum,
+                                           uint32_t timeout_ms) {
+  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  for (;;) {
+    chttp_server_stats stats = {0};
+    const int status = chttp_server_get_stats(server, &stats);
+    if (status != SALTS_OK) return status;
+    if (stats.rejected_connections >= minimum) return SALTS_OK;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    cmeta_thread_yield();
+  }
+}
+
 static int chttp_server_test_wait_stopping(chttp_server *server, uint32_t timeout_ms) {
   const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
   for (;;) {
@@ -3058,8 +3074,19 @@ spec("CHTTP background HTTP/1.1 server") {
                                               false, "\r\n\r\nstatic"),
                 SALTS_OK);
 
-    for (index = 0u; index < sizeof(flood) / sizeof(flood[0]); ++index)
+    /* First populate every live connection slot. A TCP connect completion
+     * alone can precede the IOCP Acceptor's admission publication. */
+    for (index = 0u; index + 1u < config.network.connection_capacity; ++index)
       check_equal(chttp_server_test_raw_connect(port, &flood[index]), SALTS_OK);
+    check_equal(chttp_server_test_wait_active(&server, config.network.connection_capacity,
+                                              CHTTP_SERVER_TEST_TIMEOUT_MS),
+                SALTS_OK);
+    /* Overflow the provably full Owner and observe an actual rejection before
+     * testing whether its already-admitted primary request can progress. */
+    for (; index < sizeof(flood) / sizeof(flood[0]); ++index)
+      check_equal(chttp_server_test_raw_connect(port, &flood[index]), SALTS_OK);
+    check_equal(chttp_server_test_wait_rejected(&server, 1u, CHTTP_SERVER_TEST_TIMEOUT_MS),
+                SALTS_OK);
     check_equal(chttp_server_test_raw_send(primary, second_request, sizeof(second_request) - 1u),
                 SALTS_OK);
     check_equal(chttp_server_test_raw_receive(primary, response, sizeof(response), &response_size,
