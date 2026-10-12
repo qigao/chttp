@@ -442,12 +442,20 @@ jobs:
           set -euo pipefail
           tests=ON
           if [[ "${{ matrix.cross }}" == true ]]; then tests=OFF; fi
+          # The Linux arm64 SDK is a new native CHttp consumer profile.
+          # Its exact llhttp/tree-sitter vcpkg ABI binaries are not yet cached;
+          # build those immutable ports from source instead of weakening any
+          # tested SDK identity or using a published/legacy runtime.
+          set --
+          if [[ "${{ matrix.rid }}" == linux-arm64 ]]; then
+            set -- "-DVCPKG_INSTALL_OPTIONS="
+          fi
           cmake --preset "${{ matrix.preset }}" \
             -DBUILD_TESTING="$tests" -DBUILD_TESTS="$tests" \
             -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
             -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
             "-DSaltsUtils_IDLC_EXECUTABLE=$EXACT_SALTS_IDLC" \
-            "-DSaltsUtils_IDLC_HOST_SALTS_ROOT=$SALTS_HOST_ROOT"
+            "-DSaltsUtils_IDLC_HOST_SALTS_ROOT=$SALTS_HOST_ROOT" "$@"
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           if [[ "${{ matrix.cross }}" != true ]]; then
             ctest --preset "${{ matrix.preset }}" --output-on-failure \
