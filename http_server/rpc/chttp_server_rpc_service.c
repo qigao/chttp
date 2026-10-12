@@ -362,9 +362,18 @@ static int chttp_rpc_service_native_type_valid(
 
 /* Each native storage region must begin at at least max_align_t alignment.
  * Padding is charged to the same bounded call-frame budget at mount time. */
+/* MSVC's C11 stddef.h does not expose max_align_t. This union covers
+ * fundamental malloc-aligned C11 storage on all supported compilers.
+ * Producer-declared over-alignment is explicitly rejected at mount. */
+typedef union chttp_rpc_frame_fundamental_alignment {
+  long double floating;
+  long long integer;
+  void *pointer;
+} chttp_rpc_frame_fundamental_alignment;
+
 static int chttp_rpc_service_add_aligned_size(
     size_t *total, size_t value, size_t limit) {
-  const size_t alignment = _Alignof(max_align_t);
+  const size_t alignment = _Alignof(chttp_rpc_frame_fundamental_alignment);
   size_t padding;
   if (total == NULL || alignment == 0u || *total > limit)
     return 0;
@@ -377,7 +386,7 @@ static int chttp_rpc_service_add_aligned_size(
 }
 
 static size_t chttp_rpc_service_align_offset(size_t offset) {
-  const size_t alignment = _Alignof(max_align_t);
+  const size_t alignment = _Alignof(chttp_rpc_frame_fundamental_alignment);
   return offset + (alignment - offset % alignment) % alignment;
 }
 
@@ -388,7 +397,7 @@ static int chttp_rpc_service_native_align_supported(
       binding->data->storage_type == NULL)
     return 0;
   alignment = binding->data->storage_type->align;
-  return alignment != 0u && alignment <= _Alignof(max_align_t) &&
+  return alignment != 0u && alignment <= _Alignof(chttp_rpc_frame_fundamental_alignment) &&
          (alignment & (alignment - 1u)) == 0u;
 }
 
