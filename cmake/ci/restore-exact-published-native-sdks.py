@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Fail-closed restoration of two EXACT, formally published native SDKs.
 
-Used only by the manual CHttp cutover preflight. No wildcard NuGet versions,
-candidate-source fallback, package publishing, or automatic release selection.
+Used by Draft PR #245's gated official-binary qualification and the
+manual cutover preflight. No wildcard NuGet versions, candidate-source
+fallback, package publishing, or automatic release selection.
 """
 from __future__ import annotations
 
