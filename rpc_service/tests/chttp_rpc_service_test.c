@@ -1,4 +1,5 @@
 #include <chttp_rpc_service/service.h>
+#include <http_server/rpc_service.h>
 
 #include <http_client/rpc.h>
 #include <cmeta_cmeta_fixed_width.h>
@@ -614,6 +615,77 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         SALTS_OK);
     check_equal(crpc_server_destroy(&server), SALTS_OK);
     check_equal(chttp_rpc_service_destroy(&service), SALTS_OK);
+
+    /* #241: same producer MethodPlan on an already initialized HTTP Server.
+     * No RpcService, CRPC Server, or additional HTTP listener owner. */
+    {
+      chttp_server host = {0};
+      chttp_server_config http_config = server_config.http;
+      chttp_server_rpc_config rpc_config = CHTTP_SERVER_RPC_CONFIG_INIT;
+      chttp_server_rpc_mount_options generated =
+          CHTTP_SERVER_RPC_MOUNT_OPTIONS_INIT;
+      crpc_client attached_client = {0};
+      char attached_uri[64];
+      uint16_t attached_port = 0u;
+
+      generated.target = "/rpc";
+      generated.method_plan = method_plan;
+      generated.native_binding = &native;
+      generated.execution = &execution;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
+      check_equal(chttp_server_init(&host, &http_config), SALTS_OK);
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
+      rpc_config.method_capacity = 2u;
+      rpc_config.max_inflight_calls = 2u;
+      rpc_config.native_max_items = 64u;
+      rpc_config.native_max_owned_bytes = 1024u;
+      check_equal(chttp_server_rpc_configure(&host, &rpc_config), SALTS_OK);
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_OK);
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EALREADY);
+      check_equal(chttp_server_start(&host), SALTS_OK);
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EBUSY);
+      check_equal(chttp_server_port(&host, &attached_port), SALTS_OK);
+      check_greater(
+          snprintf(attached_uri, sizeof(attached_uri), "tcp://127.0.0.1:%u",
+                   (unsigned int)attached_port), 0);
+      check_equal(crpc_client_init(&attached_client, &client_config), SALTS_OK);
+
+      typed_request = (AddRequest){.left = 3u, .right = 4u,
+                                   .scale = 2u, .presence = 1u};
+      typed_response = (AddResponse){0};
+      typed_outcome = (chttp_rpc_service_client_outcome)
+          CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+      typed_call.request_id = UINT64_C(200);
+      typed_call.connection_uri = attached_uri;
+      check_equal(
+          chttp_rpc_service_client_call(
+              &attached_client, &typed_call, &typed_outcome, &error),
+          SALTS_OK);
+      check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
+      check_equal(typed_response.sum, (uint32_t)14u);
+
+      typed_request = (AddRequest){.left = 99u, .right = 1u,
+                                   .scale = 1u, .presence = 1u};
+      typed_response = (AddResponse){0};
+      typed_outcome = (chttp_rpc_service_client_outcome)
+          CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+      typed_call.request_id = UINT64_C(201);
+      check_equal(
+          chttp_rpc_service_client_call(
+              &attached_client, &typed_call, &typed_outcome, &error),
+          SALTS_OK);
+      check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
+      check_equal(typed_outcome.remote_code, INT64_C(-32000));
+
+      check_equal(crpc_client_destroy(&attached_client,
+                                     CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
+                  SALTS_OK);
+      check_equal(chttp_server_stop(&host,
+                                    CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
+                  SALTS_OK);
+      check_equal(chttp_server_destroy(&host), SALTS_OK);
+    }
+
     data_bind_rpc_method_plan_free(unborrowed_request_plan);
     data_bind_rpc_method_plan_free(unknown_result_plan);
     data_bind_rpc_method_plan_free(method_plan);
