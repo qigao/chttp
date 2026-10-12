@@ -1,4 +1,5 @@
 #include <chttp_rpc_service/service.h>
+#include <http_client/rpc_service.h>
 #include <http_server/rpc_service.h>
 
 #include <http_client/rpc.h>
@@ -366,6 +367,14 @@ static cserde_status chttp_rpc_service_encode_params(
   return status;
 }
 
+static int chttp_rpc_service_test_health(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  (void)user;
+  (void)request;
+  return chttp_server_reply(response, 200u, "text/plain", "healthy", 7u);
+}
+
 spec("CHttp::RpcService generated RPC MethodPlan") {
   it("mounts generated wire mapping and preserves DataBind defaults") {
     static const char schema[] =
@@ -721,6 +730,8 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       generated.execution = &execution;
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
       check_equal(chttp_server_init(&host, &http_config), SALTS_OK);
+      check_equal(chttp_server_route(&host, CHTTP_METHOD_GET, "/health",
+                                    chttp_rpc_service_test_health, NULL), SALTS_OK);
       topology.owner_count = 2u;
       check_equal(chttp_server_set_execution_options(&host, &topology), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
@@ -768,6 +779,61 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
           SALTS_OK);
       check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
       check_equal(typed_outcome.remote_code, INT64_C(-32000));
+
+      /* #242: one initialized CHttp Client handles generated RPC, ordinary
+       * HTTP GET and another RPC, all through its same connection-pool owner. */
+      {
+        chttp_client http_client = {0};
+        chttp_client_rpc_call_options direct =
+            CHTTP_CLIENT_RPC_CALL_OPTIONS_INIT;
+        chttp_client_rpc_outcome direct_outcome =
+            CHTTP_CLIENT_RPC_OUTCOME_INIT;
+        chttp_response http_response = {0};
+        chttp_error http_error = {0};
+        chttp_options health = {0};
+        check_equal(chttp_client_init(&http_client, &client_config.http),
+                    SALTS_OK);
+        direct.connection_uri = attached_uri;
+        direct.authority = "localhost";
+        direct.target = "/rpc";
+        direct.request_id = UINT64_C(301);
+        direct.deadline_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+        direct.method_plan = method_plan;
+        direct.native_binding = &native;
+        direct.native_options = &client_native;
+        direct.request = &typed_request;
+        direct.request_bytes = sizeof(typed_request);
+        direct.response = &typed_response;
+        direct.response_bytes = sizeof(typed_response);
+        typed_request = (AddRequest){.left = 3u, .right = 4u,
+                                     .scale = 2u, .presence = 1u};
+        typed_response = (AddResponse){0};
+        check_equal(chttp_client_rpc_call(
+            &http_client, &direct, &direct_outcome, &error), SALTS_OK);
+        check_equal(direct_outcome.kind, CHTTP_CLIENT_RPC_SUCCESS);
+        check_equal(typed_response.sum, (uint32_t)11u);
+        health = (chttp_options){.connection_uri = attached_uri,
+                                 .authority = "localhost",
+                                 .target = "/health",
+                                 .timeout_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS};
+        check_equal(chttp_get(&http_client, &health,
+                              &http_response, &http_error), SALTS_OK);
+        check_equal(http_response.status_code, 200u);
+        check_equal(http_response.body, "healthy", 7u);
+        chttp_response_destroy(&http_response);
+        typed_request = (AddRequest){.left = 99u, .right = 1u,
+                                     .scale = 1u, .presence = 1u};
+        typed_response = (AddResponse){0};
+        direct.request_id = UINT64_C(302);
+        direct_outcome = (chttp_client_rpc_outcome)
+            CHTTP_CLIENT_RPC_OUTCOME_INIT;
+        check_equal(chttp_client_rpc_call(
+            &http_client, &direct, &direct_outcome, &error), SALTS_OK);
+        check_equal(direct_outcome.kind, CHTTP_CLIENT_RPC_REMOTE_ERROR);
+        check_equal(direct_outcome.remote_code, INT64_C(-32000));
+        check_equal(chttp_client_destroy(
+            &http_client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+      }
 
       /* Force overlapping same-method execution on two real HTTP Owners.
        * Immutable method descriptors must not share native call frames. */
