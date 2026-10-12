@@ -85,6 +85,33 @@ typedef struct crpc_client_config {
   size_t max_json_depth;
 } crpc_client_config;
 
+/**
+ * Explicit bounded projection limits for RPC over an existing HTTP client.
+ * HTTP itself independently enforces its initialized buffer/header limits.
+ * These cannot enlarge the HTTP client's capacities.
+ */
+typedef struct chttp_client_rpc_limits {
+  size_t size;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+  size_t max_request_body_bytes;
+  size_t max_http_header_count;
+} chttp_client_rpc_limits;
+
+#define CHTTP_CLIENT_RPC_LIMITS_INIT \
+  { sizeof(chttp_client_rpc_limits), 64u, 8u, 8192u, 16u }
+
+/**
+ * Execute a JSON-RPC 2.0 call over the passed already-initialized chttp_client.
+ * Reuses its HTTP/1 keepalive / HTTP/2 pool, TLS and single-owner busy rules.
+ * The CSerde response is owning; destroy with crpc_response_destroy().
+ * No additional RPC client/worker/poller, automatic retry or protocol fallback.
+ */
+int chttp_client_rpc_request_reply(
+    chttp_client *client, const chttp_client_rpc_limits *limits,
+    const crpc_options *options, crpc_response *out_response,
+    crpc_error *out_error);
+
 /** Initializes an ordinary sequential request/reply client. */
 int crpc_client_init(crpc_client *client, const crpc_client_config *config);
 
