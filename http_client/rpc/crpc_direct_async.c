@@ -1,6 +1,7 @@
 #include "crpc_client_internal.h"
 #include "../src/chttp_client_internal.h"
 
+#include <salts/clock.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -60,6 +61,8 @@ int chttp_async_client_rpc_submit(
   crpc_prepared_call prepared = {0};
   chttp_request_options http;
   chttp_rpc_direct_call *call;
+  uint64_t start_ms;
+  uint64_t deadline_at_ms = 0u;
   int status;
 
   if (out_request == NULL) return SALTS_EINVAL;
@@ -71,13 +74,20 @@ int chttp_async_client_rpc_submit(
       limits->max_request_body_bytes == 0u ||
       limits->max_http_header_count < 5u)
     return SALTS_EINVAL;
-  /* Explicit failure rather than a second timer or a weak deadline. */
-  if (options->deadline_ms != 0u) return SALTS_ENOTSUP;
+  start_ms = cmeta_monotonic_ms();
+  if (options->deadline_ms != 0u) {
+    if (UINT64_MAX - start_ms < options->deadline_ms) return SALTS_ERANGE;
+    deadline_at_ms = start_ms + options->deadline_ms;
+  }
   status = crpc_prepare_call(
       options, limits->max_method_bytes, limits->max_json_depth,
       limits->max_request_body_bytes, limits->max_http_header_count,
       &prepared);
   if (status != SALTS_OK) return status;
+  if (deadline_at_ms != 0u && cmeta_monotonic_ms() >= deadline_at_ms) {
+    crpc_prepared_call_destroy(&prepared);
+    return SALTS_ETIMEDOUT;
+  }
   call = (chttp_rpc_direct_call *)calloc(1u, sizeof(*call));
   if (call == NULL) {
     crpc_prepared_call_destroy(&prepared);
@@ -103,7 +113,7 @@ int chttp_async_client_rpc_submit(
       .tls = options->tls,
       .protocol = options->protocol};
   status = chttp_async_client_rpc_submit_transport(
-      client, &http, options->request_id, out_request);
+      client, &http, options->request_id, deadline_at_ms, out_request);
   crpc_prepared_call_destroy(&prepared);
   if (status != SALTS_OK) {
     free(call);

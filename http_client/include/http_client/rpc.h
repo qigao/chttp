@@ -117,9 +117,11 @@ int chttp_client_rpc_request_reply(
  * Progress, cancellation and shutdown use chttp_async_client_*.
  * No separate RPC owner/poller/pool is created.
  *
- * Current slice explicitly rejects nonzero deadline_ms with ENOTSUP. The
- * HTTP request-slot table rejects duplicate active JSON-RPC wire IDs as
- * SALTS_EALREADY, retaining identity through native terminal recycling.
+ * A nonzero deadline_ms is enforced by the existing HTTP Owner's bounded
+ * request-slot scan. Expiry submits ordinary HTTP cancel; ETIMEDOUT is
+ * delivered exactly once after native terminal completion, not on admission
+ * to the cancellation operation. The HTTP request-slot table rejects
+ * duplicate active JSON-RPC wire IDs as SALTS_EALREADY.
  * Callback response/readers are borrowed until the callback returns.
  */
 typedef void (*chttp_async_rpc_complete_fn)(

@@ -186,15 +186,7 @@ static int crpc_transport_test_direct_async(
   limits.max_http_header_count = config.http.max_header_count;
   status = chttp_async_client_init(&client, &config.http);
   if (status != SALTS_OK) return status;
-  options.deadline_ms = 1u;
-  if (chttp_async_client_rpc_submit(
-          &client, &limits, &options, crpc_transport_test_direct_complete,
-          &completion, &request) != SALTS_ENOTSUP ||
-      request.slot != 0u) {
-    status = SALTS_EPROTO;
-    goto done;
-  }
-  options.deadline_ms = 0u;
+  options.deadline_ms = CRPC_TRANSPORT_TEST_TIMEOUT_MS;
   status = chttp_async_client_rpc_submit(
       &client, &limits, &options, crpc_transport_test_direct_complete,
       &completion, &request);
