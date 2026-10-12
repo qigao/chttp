@@ -1,5 +1,6 @@
 #include <http_client/rpc_service.h>
 #include <http_server/rpc_service.h>
+#include "chttp_rpc_generation_dso.h"
 
 #include <http_client/rpc.h>
 #include <cmeta_cmeta_fixed_width.h>
@@ -163,11 +164,7 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_invoke(
   return true;
 }
 
-typedef struct chttp_rpc_service_test_race_probe {
-  atomic_int enabled;
-  atomic_int entered;
-  atomic_int release;
-} chttp_rpc_service_test_race_probe;
+typedef chttp_rpc_generation_dso_probe chttp_rpc_service_test_race_probe;
 
 static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_concurrent_invoke(
     void *context, void *return_storage, void *const *params,
@@ -555,7 +552,12 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       chttp_server_execution_options topology =
           CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
       DataBindNativeExecution concurrent_execution = execution;
+      DataBindNativeExecution dso_execution = execution;
       chttp_rpc_service_test_race_probe race = {0};
+      cmeta_plugin_lease dso_discovery_lease = {0};
+      const cmeta_plugin_manifest *dso_manifest = NULL;
+      const cmeta_plugin_export *dso_export = NULL;
+      const chttp_rpc_generation_dso_offer *dso_offer = NULL;
       char attached_uri[64];
       uint16_t attached_port = 0u;
 
@@ -566,6 +568,26 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
           CMETA_PLUGIN_OK);
       check_equal(cmeta_plugin_registry_start(
           &plugin_registry, plugin_ref), CMETA_PLUGIN_OK);
+      /* The only invocation address is a function export from the real DSO.
+       * Retain the discovery borrow until Server owns its own generation pin. */
+      check_equal(cmeta_plugin_registry_acquire(
+          &plugin_registry, plugin_ref, &dso_discovery_lease, &dso_manifest),
+          CMETA_PLUGIN_OK);
+      check_equal(cmeta_plugin_manifest_find_export(
+          dso_manifest, CHTTP_RPC_GENERATION_DSO_EXPORT, &dso_export),
+          CMETA_PLUGIN_OK);
+      check_equal(cmeta_plugin_export_require_function(
+          dso_export, CHTTP_RPC_GENERATION_DSO_CONTRACT,
+          CHTTP_RPC_GENERATION_DSO_VERSION, 0u), CMETA_PLUGIN_OK);
+      check_true(cmeta_function_abi_contract_compatible(
+          FunctionAbi(chttp_rpc_generation_dso_get_offer),
+          dso_export->value.function.abi));
+      check_true(dso_export->value.function.invoke(
+          dso_export->value.function.context, &dso_offer, NULL, 0u));
+      check_not_null(dso_offer);
+      check_not_null(dso_offer->invoke);
+      dso_execution.context = &race;
+      dso_execution.invoke = dso_offer->invoke;
 
       generated.target = "/rpc";
       generated.method_plan = method_plan;
@@ -600,7 +622,7 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_ENOTSUP);
       generated.method_plan = method_plan;
       generated.native_binding = &native;
-      generated.execution = &concurrent_execution;
+      generated.execution = &dso_execution;
       generated.plugin_ref = plugin_ref;
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
       generated.plugin_ref = (cmeta_plugin_ref){0};
@@ -608,6 +630,8 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
       generated.plugin_ref = plugin_ref;
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_OK);
+      check_equal(cmeta_plugin_registry_release(
+          &plugin_registry, &dso_discovery_lease), CMETA_PLUGIN_OK);
       check_equal(cmeta_plugin_registry_get_lifecycle(
           &plugin_registry, plugin_ref, &plugin_lifecycle), CMETA_PLUGIN_OK);
       check_equal(plugin_lifecycle.active_leases, (size_t)1u);
