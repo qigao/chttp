@@ -27,6 +27,19 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
         fields.update(changes)
         return argparse.Namespace(**fields)
 
+    def test_nuget_package_reference_uses_exact_bracket_range(self):
+        from xml.etree import ElementTree
+        project = ElementTree.fromstring(module["exact_nuget_project"](
+            "2.3.0-rc.15", "4.3.0-rc.10"))
+        refs = {item.attrib["Include"]: item.attrib["Version"]
+                for item in project.iter("PackageReference")}
+        self.assertEqual(refs, {
+            "Salts.Native": "[2.3.0-rc.15]",
+            "SaltsUtils.Native": "[4.3.0-rc.10]",
+        })
+        self.assertEqual(len(refs), 2)
+        self.assertNotIn("2.3.0-*", ElementTree.tostring(project).decode())
+
     def test_exact_versions_source_shas_and_digests_required(self):
         with mock.patch.dict(os.environ, {
             "SALTS_CANDIDATE_ROOT": "", "SALTS_UTILS_CANDIDATE_ROOT": ""
