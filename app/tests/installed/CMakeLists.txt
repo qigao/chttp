@@ -10,3 +10,11 @@ add_executable(chttp_app_consumer main.c)
 target_link_libraries(chttp_app_consumer PRIVATE CHttp::App)
 enable_testing()
 add_test(NAME chttp_app_installed_test COMMAND chttp_app_consumer)
+
+# Installed C11 conformance: native RPC links only CHttp::Server and CHttp::Client.
+add_executable(chttp_rpc_native_installed_consumer rpc_native.c)
+target_link_libraries(chttp_rpc_native_installed_consumer PRIVATE
+  CHttp::Server CHttp::Client)
+target_compile_features(chttp_rpc_native_installed_consumer PRIVATE c_std_11)
+set_target_properties(chttp_rpc_native_installed_consumer PROPERTIES C_EXTENSIONS OFF)
+add_test(NAME chttp_rpc_native_installed_test COMMAND chttp_rpc_native_installed_consumer)
