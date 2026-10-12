@@ -2,6 +2,7 @@
 #include "chttp_server_rpc_service_internal.h"
 
 #include <salts/error_codes.h>
+#include <salts/plugin.h>
 #include <cmeta_buffer.h>
 
 #include <cserde/cserde.h>
@@ -19,6 +20,8 @@ typedef struct chttp_rpc_service_method_record {
   const DataBindBindingPlan *binding;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
+  cmeta_plugin_registry *plugin_registry;
+  cmeta_plugin_lease plugin_lease;
 
   unsigned char *request_storage;
   size_t request_bytes;
@@ -564,8 +567,17 @@ static int chttp_rpc_service_execution_admit(
 
 static void chttp_rpc_service_method_release(
     chttp_rpc_service_method_record *record) {
-  /* Method registry records borrow producer descriptors, not call storage. */
-  if (record != NULL) memset(record, 0, sizeof(*record));
+  if (record == NULL) return;
+  /* Stable method record holds an optional DSO generation lease until all
+   * accepted native callbacks have drained. Unloading before this boundary
+   * is an ownership violation, not a recoverable best-effort cleanup. */
+  if (cmeta_plugin_lease_valid(record->plugin_lease)) {
+    if (record->plugin_registry == NULL ||
+        cmeta_plugin_registry_release(
+            record->plugin_registry, &record->plugin_lease) != CMETA_PLUGIN_OK)
+      abort();
+  }
+  memset(record, 0, sizeof(*record));
 }
 
 static void chttp_rpc_service_slots_release(chttp_rpc_service_impl *impl) {
@@ -909,6 +921,9 @@ int chttp_server_rpc_generated_mount(
       mount->method_plan == NULL || mount->native_binding == NULL ||
       mount->execution == NULL)
     return SALTS_EINVAL;
+  if ((mount->plugin_registry == NULL) !=
+      !cmeta_plugin_ref_valid(mount->plugin_ref))
+    return SALTS_EINVAL;
   if (!chttp_rpc_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
 
@@ -938,11 +953,23 @@ int chttp_server_rpc_generated_mount(
       .binding = binding,
       .native_binding = mount->native_binding,
       .execution = mount->execution,
+      .plugin_registry = mount->plugin_registry,
       .request_bytes = request_bytes,
       .response_bytes = response_bytes,
       .error_bytes = error_bytes,
       .param_count = param_count,
       .frame = (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT};
+
+  if (mount->plugin_registry != NULL) {
+    const cmeta_plugin_manifest *manifest = NULL;
+    if (cmeta_plugin_registry_acquire(
+            mount->plugin_registry, mount->plugin_ref,
+            &record->plugin_lease, &manifest) != CMETA_PLUGIN_OK ||
+        manifest == NULL) {
+      chttp_rpc_service_method_release(record);
+      return SALTS_EBUSY;
+    }
+  }
 
   status = chttp_server_rpc_register(
       server, mount->target, &method,
