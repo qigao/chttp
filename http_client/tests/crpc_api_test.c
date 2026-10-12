@@ -41,10 +41,11 @@ typedef struct crpc_test_probe {
 } crpc_test_probe;
 
 typedef struct crpc_test_reentrant_probe {
-  crpc_async_client *client;
-  crpc_request other_request;
+  chttp_async_client *client;
+  chttp_request other_request;
+  chttp_client_rpc_limits limits;
   crpc_options nested_options;
-  crpc_complete_fn nested_complete;
+  chttp_async_rpc_complete_fn nested_complete;
   void *nested_user;
   int called;
   int status;
@@ -192,7 +193,7 @@ static cserde_status crpc_test_encode_params(void *user, cserde_writer *writer) 
   return status;
 }
 
-static void crpc_test_complete(void *user, crpc_request request, const crpc_response_view *response,
+static void crpc_test_complete(void *user, chttp_request request, const crpc_response_view *response,
                                const crpc_error *error) {
   crpc_test_probe *probe = (crpc_test_probe *)user;
   cserde_token token = {0};
@@ -228,22 +229,23 @@ static void crpc_test_complete(void *user, crpc_request request, const crpc_resp
   }
 }
 
-static void crpc_test_reentrant_complete(void *user, crpc_request request,
+static void crpc_test_reentrant_complete(void *user, chttp_request request,
                                          const crpc_response_view *response,
                                          const crpc_error *error) {
   crpc_test_reentrant_probe *probe = (crpc_test_reentrant_probe *)user;
-  crpc_request nested_request = {7u, 9u};
+  chttp_request nested_request = {7u, 9u};
   (void)response;
   ++probe->called;
   probe->status = error != NULL ? error->status : SALTS_OK;
   probe->nested_call_status =
-      crpc_async_client_submit(probe->client, &probe->nested_options, probe->nested_complete,
-                               probe->nested_user, &nested_request);
-  probe->nested_poll_status = crpc_async_client_poll(probe->client, 0u, &probe->nested_completions);
-  probe->nested_stop_status = crpc_async_client_stop(probe->client, 0u);
-  probe->nested_destroy_status = crpc_async_client_destroy(probe->client);
-  probe->own_cancel_status = crpc_async_request_cancel(probe->client, request);
-  probe->other_cancel_status = crpc_async_request_cancel(probe->client, probe->other_request);
+      chttp_async_client_rpc_submit(
+          probe->client, &probe->limits, &probe->nested_options,
+          probe->nested_complete, probe->nested_user, &nested_request);
+  probe->nested_poll_status = chttp_async_client_poll(probe->client, 0u, &probe->nested_completions);
+  probe->nested_stop_status = chttp_async_client_stop(probe->client, 0u);
+  probe->nested_destroy_status = chttp_async_client_destroy(probe->client);
+  probe->own_cancel_status = chttp_async_request_cancel(probe->client, request);
+  probe->other_cancel_status = chttp_async_request_cancel(probe->client, probe->other_request);
 }
 
 static crpc_client_config crpc_test_config(void) {
@@ -279,24 +281,34 @@ static crpc_client_config crpc_test_config(void) {
   return config;
 }
 
-static int crpc_test_poll_until(crpc_async_client *client, crpc_test_probe *probe) {
+static chttp_client_rpc_limits crpc_test_limits(void) {
+  const crpc_client_config config = crpc_test_config();
+  chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
+  limits.max_method_bytes = config.max_method_bytes;
+  limits.max_json_depth = config.max_json_depth;
+  limits.max_request_body_bytes = config.http.max_request_body_bytes;
+  limits.max_http_header_count = config.http.max_header_count;
+  return limits;
+}
+
+static int crpc_test_poll_until(chttp_async_client *client, crpc_test_probe *probe) {
   const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TEST_TIMEOUT_MS;
   while (probe->called == 0) {
     size_t completions = 0u;
-    const int status = crpc_async_client_poll(client, 5u, &completions);
+    const int status = chttp_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
     if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
 }
 
-static int crpc_test_poll_until_both(crpc_async_client *client,
+static int crpc_test_poll_until_both(chttp_async_client *client,
                                      const crpc_test_reentrant_probe *first,
                                      const crpc_test_probe *second) {
   const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TEST_TIMEOUT_MS;
   while (first->called == 0 || second->called == 0) {
     size_t completions = 0u;
-    const int status = crpc_async_client_poll(client, 5u, &completions);
+    const int status = chttp_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
     if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
@@ -312,8 +324,9 @@ spec("CRPC blocking request/reply client") {
     static const char first_response_body[] = "{\"jsonrpc\":\"2.0\",\"result\":14,\"id\":9}";
     static const char second_response_body[] =
         "{\"jsonrpc\":\"2.0\",\"result\":\"ready\",\"id\":10}";
-    crpc_client client = {0};
+    chttp_client client = {0};
     crpc_client_config config = crpc_test_config();
+    chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_test_server server = {0};
     cmeta_thread_t thread = NULL;
@@ -334,7 +347,7 @@ spec("CRPC blocking request/reply client") {
     uint16_t port = 0u;
     int size;
 
-    check_equal(crpc_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_client_init(&client, &config.http), SALTS_OK);
     check_equal(crpc_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
@@ -405,7 +418,7 @@ spec("CRPC blocking request/reply client") {
         .request_id = UINT64_C(9),
         .encode_params = crpc_test_encode_params,
         .deadline_ms = CRPC_TEST_TIMEOUT_MS};
-    check_equal(crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
+    check_equal(chttp_client_rpc_request_reply(&client, &limits, &options, &response, &error), SALTS_OK);
     check_equal(response.kind, CRPC_RESPONSE_RESULT);
     check_equal(response.request_id, UINT64_C(9));
     check_not_null(response.callable);
@@ -420,7 +433,7 @@ spec("CRPC blocking request/reply client") {
                              .method = {.service = "system", .name = "status"},
                              .request_id = UINT64_C(10),
                              .deadline_ms = CRPC_TEST_TIMEOUT_MS};
-    check_equal(crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
+    check_equal(chttp_client_rpc_request_reply(&client, &limits, &options, &response, &error), SALTS_OK);
     check_equal(response.kind, CRPC_RESPONSE_RESULT);
     check_equal(response.request_id, UINT64_C(10));
     check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
@@ -429,7 +442,7 @@ spec("CRPC blocking request/reply client") {
     check_equal(token.value.slice.data, "ready", 5u);
     crpc_response_destroy(&response);
 
-    check_equal(crpc_client_destroy(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_client_destroy(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(cmeta_thread_join(&thread), SALTS_OK);
     cmeta_thread_destroy(&thread);
     check_equal(server.status, SALTS_OK);
@@ -442,8 +455,9 @@ spec("CRPC advanced async client API") {
     static const char request_body[] =
         "{\"jsonrpc\":\"2.0\",\"method\":\"math.double\",\"params\":[7],\"id\":9}";
     static const char response_body[] = "{\"jsonrpc\":\"2.0\",\"result\":14,\"id\":9}";
-    crpc_async_client client = {0};
+    chttp_async_client client = {0};
     crpc_client_config config = crpc_test_config();
+    chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_test_socket accepted = CRPC_TEST_INVALID_SOCKET;
@@ -459,7 +473,7 @@ spec("CRPC advanced async client API") {
     int expected_size;
     int response_size;
 
-    check_equal(crpc_async_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &config.http), SALTS_OK);
     check_equal(crpc_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
@@ -470,15 +484,15 @@ spec("CRPC advanced async client API") {
         .method = {.service = "math", .name = "double", .callable = &crpc_test_identity},
         .request_id = UINT64_C(9),
         .encode_params = crpc_test_encode_params};
-    check_equal(crpc_async_client_submit(&client, &options, crpc_test_complete, &probe, &request),
+    check_equal(chttp_async_client_rpc_submit(&client, &limits, &options, crpc_test_complete, &probe, &request),
                 SALTS_OK);
     check_true(request.slot != 0u && request.generation != 0u);
-    check_equal(crpc_async_client_poll(&client, CRPC_TEST_TIMEOUT_MS, &completions), SALTS_OK);
+    check_equal(chttp_async_client_poll(&client, CRPC_TEST_TIMEOUT_MS, &completions), SALTS_OK);
     check_equal(completions, (size_t)0u);
     accepted = accept(listener, NULL, NULL);
     check_true(accepted != CRPC_TEST_INVALID_SOCKET);
     check_equal(crpc_test_set_timeout(accepted), SALTS_OK);
-    check_equal(crpc_async_client_poll(&client, 10u, &completions), SALTS_OK);
+    check_equal(chttp_async_client_poll(&client, 10u, &completions), SALTS_OK);
 
     expected_size = snprintf(expected, sizeof(expected),
                              "POST /rpc HTTP/1.1\r\n"
@@ -515,17 +529,18 @@ spec("CRPC advanced async client API") {
     check_equal(probe.callable_protocol, CMETA_FN_PROTOCOL_VALUE);
     check_true(cmeta_effects_are_pure(probe.callable_effects));
     check_true(cmeta_properties_include(probe.callable_properties, CMETA_PROP_IDEMPOTENT));
-    check_equal(crpc_async_request_cancel(&client, request), SALTS_ENOENT);
+    check_equal(chttp_async_request_cancel(&client, request), SALTS_ENOENT);
 
-    check_equal(crpc_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     crpc_test_close_socket(accepted);
     crpc_test_close_socket(listener);
   }
 
   it("owns an overall deadline separately from socket read timeout") {
-    crpc_async_client client = {0};
+    chttp_async_client client = {0};
     crpc_client_config config = crpc_test_config();
+    chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_request request = {0};
@@ -534,7 +549,7 @@ spec("CRPC advanced async client API") {
     char authority[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_async_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &config.http), SALTS_OK);
     check_equal(crpc_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
@@ -544,32 +559,33 @@ spec("CRPC advanced async client API") {
                              .method = {.name = "wait"},
                              .request_id = UINT64_C(11),
                              .deadline_ms = 10u};
-    check_equal(crpc_async_client_submit(&client, &options, crpc_test_complete, &probe, &request),
+    check_equal(chttp_async_client_rpc_submit(&client, &limits, &options, crpc_test_complete, &probe, &request),
                 SALTS_OK);
     check_equal(crpc_test_poll_until(&client, &probe), SALTS_OK);
     check_equal(probe.called, 1);
     check_equal(probe.status, SALTS_ETIMEDOUT);
     check_equal(probe.stage, "rpc-deadline");
-    check_equal(crpc_async_request_cancel(&client, request), SALTS_ENOENT);
+    check_equal(chttp_async_request_cancel(&client, request), SALTS_ENOENT);
 
-    check_equal(crpc_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     crpc_test_close_socket(listener);
   }
 
   it("rejects a duplicate active JSON-RPC request id") {
-    crpc_async_client client = {0};
+    chttp_async_client client = {0};
     crpc_client_config config = crpc_test_config();
+    chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
-    crpc_request first = {0};
-    crpc_request duplicate = {7u, 9u};
+    chttp_request first = {0};
+    chttp_request duplicate = {7u, 9u};
     crpc_options options;
     char uri[64];
     char authority[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_async_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &config.http), SALTS_OK);
     check_equal(crpc_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
@@ -578,23 +594,24 @@ spec("CRPC advanced async client API") {
                              .target = "/rpc",
                              .method = {.name = "duplicate"},
                              .request_id = UINT64_C(23)};
-    check_equal(crpc_async_client_submit(&client, &options, crpc_test_complete, &probe, &first),
+    check_equal(chttp_async_client_rpc_submit(&client, &limits, &options, crpc_test_complete, &probe, &first),
                 SALTS_OK);
-    check_equal(crpc_async_client_submit(&client, &options, crpc_test_complete, &probe, &duplicate),
+    check_equal(chttp_async_client_rpc_submit(&client, &limits, &options, crpc_test_complete, &probe, &duplicate),
                 SALTS_EALREADY);
     check_equal(duplicate.slot, 0u);
     check_equal(duplicate.generation, 0u);
     check_equal(probe.called, 0);
-    check_equal(crpc_async_request_cancel(&client, first), SALTS_OK);
+    check_equal(chttp_async_request_cancel(&client, first), SALTS_OK);
     check_equal(crpc_test_poll_until(&client, &probe), SALTS_OK);
-    check_equal(crpc_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     crpc_test_close_socket(listener);
   }
 
   it("delivers manual cancellation exactly once") {
-    crpc_async_client client = {0};
+    chttp_async_client client = {0};
     crpc_client_config config = crpc_test_config();
+    chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_request request = {0};
@@ -603,7 +620,7 @@ spec("CRPC advanced async client API") {
     char authority[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_async_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &config.http), SALTS_OK);
     check_equal(crpc_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
@@ -612,36 +629,37 @@ spec("CRPC advanced async client API") {
                              .target = "/rpc",
                              .method = {.name = "cancel"},
                              .request_id = UINT64_C(29)};
-    check_equal(crpc_async_client_submit(&client, &options, crpc_test_complete, &probe, &request),
+    check_equal(chttp_async_client_rpc_submit(&client, &limits, &options, crpc_test_complete, &probe, &request),
                 SALTS_OK);
-    check_equal(crpc_async_request_cancel(&client, request), SALTS_OK);
-    check_equal(crpc_async_request_cancel(&client, request), SALTS_EALREADY);
+    check_equal(chttp_async_request_cancel(&client, request), SALTS_OK);
+    check_equal(chttp_async_request_cancel(&client, request), SALTS_EALREADY);
     check_equal(crpc_test_poll_until(&client, &probe), SALTS_OK);
     check_equal(probe.called, 1);
     check_equal(probe.status, SALTS_ECANCELED);
     check_equal(probe.stage, "cancel");
-    check_equal(crpc_async_request_cancel(&client, request), SALTS_ENOENT);
-    check_equal(crpc_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_async_request_cancel(&client, request), SALTS_ENOENT);
+    check_equal(chttp_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     crpc_test_close_socket(listener);
   }
 
   it("enforces callback reentrancy while allowing cancellation of another request") {
-    crpc_async_client client = {0};
+    chttp_async_client client = {0};
     crpc_client_config config = crpc_test_config();
+    chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe other_probe = {0};
     crpc_test_probe nested_probe = {0};
     crpc_test_reentrant_probe probe = {.client = &client};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
-    crpc_request first = {0};
-    crpc_request other = {0};
+    chttp_request first = {0};
+    chttp_request other = {0};
     crpc_options first_options;
     crpc_options other_options;
     char uri[64];
     char authority[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_async_client_init(&client, &config), SALTS_OK);
+    check_equal(chttp_async_client_init(&client, &config.http), SALTS_OK);
     check_equal(crpc_test_listener(&listener, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
@@ -655,6 +673,7 @@ spec("CRPC advanced async client API") {
                                    .target = "/rpc",
                                    .method = {.name = "first"},
                                    .request_id = UINT64_C(37)};
+    probe.limits = limits;
     probe.nested_options = (crpc_options){.connection_uri = uri,
                                           .authority = authority,
                                           .target = "/rpc",
@@ -663,13 +682,13 @@ spec("CRPC advanced async client API") {
     probe.nested_complete = crpc_test_complete;
     probe.nested_user = &nested_probe;
     check_equal(
-        crpc_async_client_submit(&client, &other_options, crpc_test_complete, &other_probe, &other),
+        chttp_async_client_rpc_submit(&client, &limits, &other_options, crpc_test_complete, &other_probe, &other),
         SALTS_OK);
     probe.other_request = other;
-    check_equal(crpc_async_client_submit(&client, &first_options, crpc_test_reentrant_complete,
+    check_equal(chttp_async_client_rpc_submit(&client, &limits, &first_options, crpc_test_reentrant_complete,
                                          &probe, &first),
                 SALTS_OK);
-    check_equal(crpc_async_request_cancel(&client, first), SALTS_OK);
+    check_equal(chttp_async_request_cancel(&client, first), SALTS_OK);
     check_equal(crpc_test_poll_until_both(&client, &probe, &other_probe), SALTS_OK);
     check_equal(probe.called, 1);
     check_equal(probe.status, SALTS_ECANCELED);
@@ -683,8 +702,8 @@ spec("CRPC advanced async client API") {
     check_equal(other_probe.called, 1);
     check_equal(other_probe.status, SALTS_ECANCELED);
     check_equal(nested_probe.called, 0);
-    check_equal(crpc_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_async_client_stop(&client, CRPC_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     crpc_test_close_socket(listener);
   }
 }
