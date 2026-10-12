@@ -694,6 +694,12 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
         static const char valid_after_failure[] =
             "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
             "\"params\":[3,4,2],\"id\":504}";
+        static const char invalid_native_output[] =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
+            "\"params\":[98,4,1],\"id\":505}";
+        static const char valid_after_output_failure[] =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
+            "\"params\":[3,4,2],\"id\":506}";
         const char *const invalid[] = {
             wrong_second, wrong_optional, duplicate_field};
         chttp_client json_client = {0};
@@ -722,6 +728,33 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
             &json_response, "\"result\":11"));
         check_equal(atomic_load_explicit(
             &race.invoked, memory_order_acquire), 1);
+        chttp_response_destroy(&json_response);
+
+        /* The Provider DSO runs and produces sum=102, beyond the compiled
+         * @Max(100) response contract. This is an egress/server error,
+         * not an invalid client argument. No staged scalar may publish. */
+        check_equal(chttp_rpc_service_test_post_json(
+                        &json_client, attached_uri, invalid_native_output,
+                        &json_response), SALTS_OK);
+        check_equal(json_response.status_code, 200u);
+        check_true(chttp_rpc_service_test_body_has(
+            &json_response, "\"error\""));
+        check_true(chttp_rpc_service_test_body_has(
+            &json_response, "\"code\":-32603"));
+        check_equal(atomic_load_explicit(
+            &race.invoked, memory_order_acquire), 2);
+        chttp_response_destroy(&json_response);
+
+        /* The same bounded slot is ready for the next successful call,
+         * without output from the rejected attempt or a second callback. */
+        check_equal(chttp_rpc_service_test_post_json(
+                        &json_client, attached_uri, valid_after_output_failure,
+                        &json_response), SALTS_OK);
+        check_equal(json_response.status_code, 200u);
+        check_true(chttp_rpc_service_test_body_has(
+            &json_response, "\"result\":11"));
+        check_equal(atomic_load_explicit(
+            &race.invoked, memory_order_acquire), 3);
         chttp_response_destroy(&json_response);
         check_equal(chttp_client_destroy(
             &json_client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
