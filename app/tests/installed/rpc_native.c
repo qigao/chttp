@@ -9,9 +9,13 @@ int main(void) {
       CHTTP_CLIENT_RPC_CALL_OPTIONS_INIT;
   chttp_client_rpc_outcome outcome = CHTTP_CLIENT_RPC_OUTCOME_INIT;
   crpc_error error = {0};
+  chttp_request request = {0};
   if (chttp_server_rpc_configure(NULL, &config) != SALTS_EINVAL) return 1;
   if (chttp_server_rpc_mount(NULL, &mount) != SALTS_EINVAL) return 2;
   if (chttp_client_rpc_call(NULL, &call, &outcome, &error) != SALTS_EINVAL)
     return 3;
+  if (chttp_async_client_rpc_call(
+          NULL, &call, NULL, NULL, &request) != SALTS_EINVAL)
+    return 4;
   return 0;
 }
