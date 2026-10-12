@@ -3074,17 +3074,13 @@ spec("CHTTP background HTTP/1.1 server") {
                                               false, "\r\n\r\nstatic"),
                 SALTS_OK);
 
-    /* First populate every live connection slot. A TCP connect completion
-     * alone can precede the IOCP Acceptor's admission publication. */
-    for (index = 0u; index + 1u < config.network.connection_capacity; ++index)
+    /* Both Listener-side and Owner-side bounded admission can reject a
+     * stream before every Owner slot becomes active. Do not infer rejection
+     * from connect() completion or require full active slot occupancy. */
+    for (index = 0u; index < sizeof(flood) / sizeof(flood[0]); ++index)
       check_equal(chttp_server_test_raw_connect(port, &flood[index]), SALTS_OK);
-    check_equal(chttp_server_test_wait_active(&server, config.network.connection_capacity,
-                                              CHTTP_SERVER_TEST_TIMEOUT_MS),
-                SALTS_OK);
-    /* Overflow the provably full Owner and observe an actual rejection before
-     * testing whether its already-admitted primary request can progress. */
-    for (; index < sizeof(flood) / sizeof(flood[0]); ++index)
-      check_equal(chttp_server_test_raw_connect(port, &flood[index]), SALTS_OK);
+    /* Observe one actual overflow rejection before probing the existing
+     * connection's progress; this waits only for asynchronous publication. */
     check_equal(chttp_server_test_wait_rejected(&server, 1u, CHTTP_SERVER_TEST_TIMEOUT_MS),
                 SALTS_OK);
     check_equal(chttp_server_test_raw_send(primary, second_request, sizeof(second_request) - 1u),
