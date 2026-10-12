@@ -16,6 +16,25 @@
 
 enum { CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS = 5000 };
 
+/* Test-only transport bounds: production exposes only CHttp Server/Client
+ * configuration and no independently owned CRPC Server/Client. */
+typedef struct chhttp_rpc_fixture_server_config {
+  chttp_server_config http;
+  size_t method_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+  size_t max_batch_items;
+} chhttp_rpc_fixture_server_config;
+
+typedef struct chhttp_rpc_fixture_client_config {
+  chttp_client_config http;
+  size_t request_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+} chhttp_rpc_fixture_client_config;
+
+
+
 typedef struct AddRequest {
   uint32_t left;
   uint32_t right;
@@ -169,7 +188,7 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_concurrent_invoke(
 }
 
 typedef struct chttp_rpc_service_test_call_thread {
-  crpc_client_config config;
+  chhttp_rpc_fixture_client_config config;
   char uri[64];
   const DataBindRpcMethodPlan *plan;
   const DataBindServiceNativeBinding *binding;
@@ -285,8 +304,8 @@ static cnet_client_config chttp_rpc_service_test_network(
   return config;
 }
 
-static crpc_server_config chttp_rpc_service_test_server_config(void) {
-  crpc_server_config config = {0};
+static chhttp_rpc_fixture_server_config chttp_rpc_service_test_server_config(void) {
+  chhttp_rpc_fixture_server_config config = {0};
   config.http.host = "127.0.0.1";
   config.http.port = 0u;
   config.http.backlog = 8u;
@@ -312,8 +331,8 @@ static crpc_server_config chttp_rpc_service_test_server_config(void) {
   return config;
 }
 
-static crpc_client_config chttp_rpc_service_test_client_config(void) {
-  crpc_client_config config = {0};
+static chhttp_rpc_fixture_client_config chttp_rpc_service_test_client_config(void) {
+  chhttp_rpc_fixture_client_config config = {0};
   config.http.network = chttp_rpc_service_test_network(4u);
   config.http.request_capacity = 4u;
   config.http.max_start_line_bytes = 256u;
@@ -439,9 +458,9 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindNativeExecution invalid_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-    crpc_server_config server_config =
+    chhttp_rpc_fixture_server_config server_config =
         chttp_rpc_service_test_server_config();
-    crpc_client_config client_config =
+    chhttp_rpc_fixture_client_config client_config =
         chttp_rpc_service_test_client_config();
     crpc_error error = {0};
     unsigned char client_workspace[4096];
