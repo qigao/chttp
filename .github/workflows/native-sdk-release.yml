@@ -262,18 +262,26 @@ jobs:
         run: |
           set -euo pipefail
           cmake --build --preset "install-${{ matrix.preset }}"
-      - name: Diagnose failed Linux upload connection through CTest
+      - name: Diagnose failed Linux CTest network calls
         if: failure() && matrix.family == 'linux' && steps.unix_tests.conclusion == 'failure'
         shell: bash
         run: |
           set +e
-          timeout --signal=TERM --kill-after=5s 60s \
-            strace -f -e trace=socket,connect,bind,listen,getsock,getsockname,getsockopt,setsockopt \
-              -o build/upload-connect.strace \
-              ctest --preset "${{ matrix.preset }}" -R '^chttp_web_upload_http_test$' \
-                --output-on-failure --timeout 45
+          # Re-run only the failed test under a bounded Linux network trace.
+          timeout --signal=TERM --kill-after=5s 75s \
+            strace -f -e trace=%network \
+              -o build/linux-ctest-network.strace \
+              ctest --preset "${{ matrix.preset }}" --rerun-failed \
+                --output-on-failure --timeout 45 --stop-on-failure
           status=$?
-          if [[ -f build/upload-connect.strace ]]; then cat build/upload-connect.strace; fi
+          echo "CTEST_TRACE_RERUN_STATUS=$status"
+          if [[ -f build/linux-ctest-network.strace ]]; then
+            echo 'Last failed-network syscalls:'
+            grep -E ' = -1 (EACCES|EPERM|EADDRINUSE|EADDRNOTAVAIL|EMFILE|ENFILE|ENOBUFS)' \
+              build/linux-ctest-network.strace | tail -n 80 || true
+            echo 'Last network syscalls:'
+            tail -n 80 build/linux-ctest-network.strace
+          fi
           exit "$status"
       - name: Configure, test and install Windows SDK
         if: matrix.family == 'windows'
