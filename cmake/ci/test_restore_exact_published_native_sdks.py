@@ -256,5 +256,102 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                     "a" * 40, digest)
 
 
+# This is a second genuine (synthetic) CMake SDK graph: it proves the
+# installed-consumer attestor checks all RIDs, provenance, IDL host tool and
+# removal of the independent RpcService public target before release.
+attest = runpy.run_path(
+    str(Path(__file__).with_name("attest-exact-published-consumer.py")),
+    run_name="exact_published_consumer_unit",
+)
+
+
+class ExactPublishedInstalledConsumerAttestationTest(unittest.TestCase):
+    SALTS_SHA = "a" * 40
+    UTILS_SHA = "b" * 40
+    CHTTP_SHA = "c" * 40
+
+    def fixture(self, base: Path, rid: str, family: str):
+        repo = base / "repo"
+        build = repo / ("build/android-native-sdk" if family == "android"
+                        else "build/" + rid if family == "ios"
+                        else "build/native-sdk")
+        root = repo / "stage/sdk" / rid / "lib/cmake/Chttp"
+        root.mkdir(parents=True)
+        (root / "ChttpConfig.cmake").write_text("set(CHttp_FOUND TRUE)\n")
+        (root / "ChttpTargets.cmake").write_text("add_library(CHttp::Server INTERFACE)\n")
+        salts = base / "salts"
+        utils = base / "utils"
+        (salts / "lib/cmake/Salts").mkdir(parents=True)
+        (utils / "lib/cmake/SaltsUtils").mkdir(parents=True)
+        (utils / "bin").mkdir()
+        tool = utils / "bin" / "salts-idlc"
+        tool.write_text("tool")
+        (salts / "salts-sdk-manifest.txt").write_text(
+            f"version=2.3.0-rc.15\ncommit={self.SALTS_SHA}\nprofile=release\n"
+        )
+        (utils / "salts-utils-sdk-manifest.txt").write_text(
+            f"version=4.3.0-rc.10\ncommit={self.UTILS_SHA}\n"
+            "profile=release\nsalts_version=2.3.0-rc.15\n"
+        )
+        build.mkdir(parents=True)
+        (build / "CMakeCache.txt").write_text(
+            f"Salts_DIR:PATH={salts / 'lib/cmake/Salts'}\n"
+            f"SaltsUtils_DIR:PATH={utils / 'lib/cmake/SaltsUtils'}\n"
+            f"SaltsUtils_IDLC_EXECUTABLE:FILEPATH={tool}\n"
+        )
+        env = {
+            "GITHUB_WORKSPACE": str(repo),
+            "EXPECTED_CHTTP": self.CHTTP_SHA,
+            "EXPECTED_SALTS": self.SALTS_SHA,
+            "EXPECTED_UTILS": self.UTILS_SHA,
+            "EXPECTED_SALTS_VERSION": "2.3.0-rc.15",
+            "EXPECTED_UTILS_VERSION": "4.3.0-rc.10",
+            "EXPECTED_SALTS_DIGEST": "d" * 64,
+            "EXPECTED_UTILS_DIGEST": "e" * 64,
+            "SALTS_ROOT": str(salts),
+            "SALTS_UTILS_ROOT": str(utils),
+            "EXACT_SALTS_IDLC": str(tool),
+        }
+        return repo, env, root, utils
+
+    def invoke(self, rid: str, family: str, env: dict):
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("sys.argv", ["attest", "--rid", rid, "--family", family]), \
+             mock.patch("subprocess.check_output", return_value=self.CHTTP_SHA + "\n"):
+            attest["main"]()
+
+    def test_all_six_rids_attest_actual_installed_cmake_and_sdk_graph(self):
+        for rid, family in (
+            ("linux-x64", "linux"), ("linux-arm64", "linux"),
+            ("windows-x64", "windows"), ("macos-arm64", "macos"),
+            ("android-arm64-v8a", "android"), ("ios-arm64", "ios"),
+        ):
+            with self.subTest(rid=rid), tempfile.TemporaryDirectory() as tmp:
+                repo, env, targets, utils = self.fixture(Path(tmp), rid, family)
+                self.invoke(rid, family, env)
+                proof = json.loads((repo / "build/published-cutover"
+                                    / f"provenance-{rid}.json").read_text())
+                self.assertEqual(proof["salts_source"], self.SALTS_SHA)
+                self.assertEqual(proof["utils_source"], self.UTILS_SHA)
+                self.assertTrue(proof["published_release_files_only"])
+                self.assertTrue(proof["no_silent_fallback"])
+                self.assertTrue((targets.parents[2] /
+                                 "salts-dependency-manifest.txt").is_file())
+
+    def test_reject_mixed_upstream_saltsutils_manifest_and_old_rpc_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, env, target, utils = self.fixture(Path(tmp), "linux-x64", "linux")
+            manifest = utils / "salts-utils-sdk-manifest.txt"
+            manifest.write_text(manifest.read_text().replace(
+                "salts_version=2.3.0-rc.15", "salts_version=2.3.0-rc.14"))
+            with self.assertRaisesRegex(SystemExit, "not built against exact"):
+                self.invoke("linux-x64", "linux", env)
+            manifest.write_text(manifest.read_text().replace(
+                "salts_version=2.3.0-rc.14", "salts_version=2.3.0-rc.15"))
+            (target / "ChttpTargets.cmake").write_text("CHttp::RpcService")
+            with self.assertRaisesRegex(SystemExit, "independent RpcService"):
+                self.invoke("linux-x64", "linux", env)
+
+
 if __name__ == "__main__":
     unittest.main()
