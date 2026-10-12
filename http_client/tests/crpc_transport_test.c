@@ -152,6 +152,73 @@ static int crpc_transport_test_poll_until(crpc_async_client *client,
   return completion->status;
 }
 
+static void crpc_transport_test_direct_complete(
+    void *user, chttp_request request, const crpc_response_view *response,
+    const crpc_error *error) {
+  crpc_request compatible = {.slot = request.slot, .generation = request.generation};
+  crpc_transport_test_complete(user, compatible, response, error);
+}
+
+static int crpc_transport_test_direct_async(
+    const char *uri, const chttp_tls_profile *tls, chttp_protocol protocol) {
+  crpc_client_config config = crpc_transport_test_client_config();
+  chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
+  chttp_async_client client = {0};
+  chttp_request request = {0};
+  crpc_transport_test_completion completion = {0};
+  crpc_options options = {.connection_uri = uri,
+                          .authority = "localhost",
+                          .target = "/rpc",
+                          .method = {.service = "math", .name = "double"},
+                          .request_id = UINT64_C(9),
+                          .tls = tls,
+                          .protocol = protocol};
+  int status;
+
+  limits.max_request_body_bytes = config.http.max_request_body_bytes;
+  limits.max_http_header_count = config.http.max_header_count;
+  status = chttp_async_client_init(&client, &config.http);
+  if (status != SALTS_OK) return status;
+  options.deadline_ms = 1u;
+  if (chttp_async_client_rpc_submit(
+          &client, &limits, &options, crpc_transport_test_direct_complete,
+          &completion, &request) != SALTS_ENOTSUP ||
+      request.slot != 0u) {
+    status = SALTS_EPROTO;
+    goto done;
+  }
+  options.deadline_ms = 0u;
+  status = chttp_async_client_rpc_submit(
+      &client, &limits, &options, crpc_transport_test_direct_complete,
+      &completion, &request);
+  if (status != SALTS_OK || request.slot == 0u) goto done;
+  {
+    const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    while (!completion.called) {
+      size_t count = 0u;
+      status = chttp_async_client_poll(&client, 5u, &count);
+      if (status != SALTS_OK) break;
+      if (cmeta_monotonic_ms() >= deadline) {
+        status = SALTS_ETIMEDOUT;
+        break;
+      }
+    }
+  }
+  if (status == SALTS_OK &&
+      (completion.status != SALTS_OK || completion.request_id != UINT64_C(9) ||
+       completion.result != UINT64_C(14)))
+    status = SALTS_EPROTO;
+done:
+  {
+    const int stop = chttp_async_client_stop(
+        &client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
+    const int destroy = chttp_async_client_destroy(&client);
+    if (status == SALTS_OK && stop != SALTS_OK) status = stop;
+    if (status == SALTS_OK && destroy != SALTS_OK) status = destroy;
+  }
+  return status;
+}
+
 static int crpc_transport_test_clients(const char *uri, const chttp_tls_profile *tls,
                                        chttp_protocol protocol) {
   crpc_client client = {0};
@@ -232,8 +299,9 @@ spec("CRPC CHTTP transport parity") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_equal(crpc_transport_test_clients(uri, NULL, CHTTP_HTTP_2), SALTS_OK);
+    check_equal(crpc_transport_test_direct_async(uri, NULL, CHTTP_HTTP_2), SALTS_OK);
     check_equal(probe.h1_requests, (size_t)0u);
-    check_equal(probe.h2_requests, (size_t)2u);
+    check_equal(probe.h2_requests, (size_t)3u);
     check_equal(chttp_server_stop(&server, CRPC_TRANSPORT_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
