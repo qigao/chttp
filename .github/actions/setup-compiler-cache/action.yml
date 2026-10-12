@@ -46,8 +46,11 @@ runs:
         "CCACHE_MAXSIZE=512M" >> $env:GITHUB_ENV
         "CCACHE_COMPILERCHECK=content" >> $env:GITHUB_ENV
         "CCACHE_BASEDIR=$env:GITHUB_WORKSPACE" >> $env:GITHUB_ENV
-        "CCACHE_NODIRECT=true" >> $env:GITHUB_ENV
+        # On GCC/Clang allow ccache's checked direct mode: it automatically
+        # falls back to preprocessing if an invocation is not direct-cacheable.
+        # Retain the conservative preprocessed path for MSVC.
         if ($env:RUNNER_OS -eq "Windows") {
+          "CCACHE_NODIRECT=true" >> $env:GITHUB_ENV
           "CCACHE_COMPILERTYPE=msvc" >> $env:GITHUB_ENV
         }
         "CMAKE_C_COMPILER_LAUNCHER=$ccache" >> $env:GITHUB_ENV
