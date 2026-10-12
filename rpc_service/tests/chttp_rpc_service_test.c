@@ -8,7 +8,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 #include <string.h>
 
 enum { CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS = 5000 };
@@ -139,6 +142,86 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_invoke(
       (const AddRequest *)params[0], (AddResponse *)params[1]);
   *(int *)return_storage = result;
   return true;
+}
+
+typedef struct chttp_rpc_service_test_race_probe {
+  atomic_int enabled;
+  atomic_int entered;
+  atomic_int release;
+} chttp_rpc_service_test_race_probe;
+
+static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_concurrent_invoke(
+    void *context, void *return_storage, void *const *params,
+    size_t param_count) {
+  chttp_rpc_service_test_race_probe *probe =
+      (chttp_rpc_service_test_race_probe *)context;
+  if (probe != NULL &&
+      atomic_load_explicit(&probe->enabled, memory_order_acquire)) {
+    const uint64_t deadline = cmeta_monotonic_ms() + 3000u;
+    atomic_fetch_add_explicit(&probe->entered, 1, memory_order_acq_rel);
+    while (!atomic_load_explicit(&probe->release, memory_order_acquire)) {
+      if (cmeta_monotonic_ms() >= deadline) return false;
+      cmeta_thread_yield();
+    }
+  }
+  return chttp_rpc_service_test_invoke(
+      NULL, return_storage, params, param_count);
+}
+
+typedef struct chttp_rpc_service_test_call_thread {
+  crpc_client_config config;
+  char uri[64];
+  const DataBindRpcMethodPlan *plan;
+  const DataBindServiceNativeBinding *binding;
+  AddRequest request;
+  AddResponse response;
+  uint64_t id;
+  int status;
+  chttp_rpc_service_client_outcome_kind outcome_kind;
+} chttp_rpc_service_test_call_thread;
+
+static void chttp_rpc_service_test_call_worker(void *user) {
+  chttp_rpc_service_test_call_thread *args =
+      (chttp_rpc_service_test_call_thread *)user;
+  crpc_client client = {0};
+  chttp_rpc_service_client_call_options options =
+      CHTTP_RPC_SERVICE_CLIENT_CALL_OPTIONS_INIT;
+  chttp_rpc_service_client_outcome outcome =
+      CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+  DataBindNativeOptions native = DATA_BIND_NATIVE_OPTIONS_INIT;
+  crpc_error error = {0};
+  unsigned char workspace[4096];
+  int status;
+  if (args == NULL) return;
+  status = crpc_client_init(&client, &args->config);
+  if (status == SALTS_OK) {
+    native.workspace = workspace;
+    native.workspace_bytes = sizeof(workspace);
+    native.max_depth = 16u;
+    native.max_items = 64u;
+    native.max_owned_bytes = 1024u;
+    options.connection_uri = args->uri;
+    options.authority = "localhost";
+    options.target = "/rpc";
+    options.request_id = args->id;
+    options.deadline_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+    options.method_plan = args->plan;
+    options.native_binding = args->binding;
+    options.native_options = &native;
+    options.request = &args->request;
+    options.request_bytes = sizeof(args->request);
+    options.response = &args->response;
+    options.response_bytes = sizeof(args->response);
+    status = chttp_rpc_service_client_call(
+        &client, &options, &outcome, &error);
+    args->outcome_kind = outcome.kind;
+    {
+      const int teardown = crpc_client_destroy(
+          &client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS);
+      if (status == SALTS_OK && teardown != SALTS_OK) status = teardown;
+    }
+  }
+  args->status = status;
 }
 
 FunctionDeclAsAbiResult(
@@ -625,6 +708,10 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       chttp_server_rpc_mount_options generated =
           CHTTP_SERVER_RPC_MOUNT_OPTIONS_INIT;
       crpc_client attached_client = {0};
+      chttp_server_execution_options topology =
+          CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+      DataBindNativeExecution concurrent_execution = execution;
+      chttp_rpc_service_test_race_probe race = {0};
       char attached_uri[64];
       uint16_t attached_port = 0u;
 
@@ -634,11 +721,16 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       generated.execution = &execution;
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
       check_equal(chttp_server_init(&host, &http_config), SALTS_OK);
+      topology.owner_count = 2u;
+      check_equal(chttp_server_set_execution_options(&host, &topology), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
       rpc_config.method_capacity = 2u;
       rpc_config.max_inflight_calls = 2u;
       rpc_config.native_max_items = 64u;
       rpc_config.native_max_owned_bytes = 1024u;
+      concurrent_execution.context = &race;
+      concurrent_execution.invoke = chttp_rpc_service_test_concurrent_invoke;
+      generated.execution = &concurrent_execution;
       check_equal(chttp_server_rpc_configure(&host, &rpc_config), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EALREADY);
@@ -676,6 +768,59 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
           SALTS_OK);
       check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
       check_equal(typed_outcome.remote_code, INT64_C(-32000));
+
+      /* Force overlapping same-method execution on two real HTTP Owners.
+       * Immutable method descriptors must not share native call frames. */
+      {
+        cmeta_thread_t t1 = {0};
+        cmeta_thread_t t2 = {0};
+        chttp_rpc_service_test_call_thread a = {0};
+        chttp_rpc_service_test_call_thread b = {0};
+        uint64_t deadline;
+        int ready;
+        a.config = client_config;
+        b.config = client_config;
+        a.plan = method_plan;
+        b.plan = method_plan;
+        a.binding = &native;
+        b.binding = &native;
+        a.id = UINT64_C(211);
+        b.id = UINT64_C(212);
+        a.request = (AddRequest){.left = 3u, .right = 4u,
+                                 .scale = 2u, .presence = 1u};
+        b.request = (AddRequest){.left = 2u, .right = 5u,
+                                 .scale = 3u, .presence = 1u};
+        check_greater(
+            snprintf(a.uri, sizeof(a.uri), "%s", attached_uri), 0);
+        check_greater(
+            snprintf(b.uri, sizeof(b.uri), "%s", attached_uri), 0);
+        atomic_store_explicit(&race.entered, 0, memory_order_release);
+        atomic_store_explicit(&race.release, 0, memory_order_release);
+        atomic_store_explicit(&race.enabled, 1, memory_order_release);
+        check_equal(cmeta_thread_create(
+            &t1, chttp_rpc_service_test_call_worker, &a), SALTS_OK);
+        check_equal(cmeta_thread_create(
+            &t2, chttp_rpc_service_test_call_worker, &b), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + 3000u;
+        while (atomic_load_explicit(&race.entered,
+                                    memory_order_acquire) < 2 &&
+               cmeta_monotonic_ms() < deadline)
+          cmeta_thread_yield();
+        ready = atomic_load_explicit(&race.entered,
+                                     memory_order_acquire);
+        atomic_store_explicit(&race.release, 1, memory_order_release);
+        check_equal(cmeta_thread_join(&t1), SALTS_OK);
+        check_equal(cmeta_thread_join(&t2), SALTS_OK);
+        cmeta_thread_destroy(&t1);
+        cmeta_thread_destroy(&t2);
+        check_equal(ready, 2);
+        check_equal(a.status, SALTS_OK);
+        check_equal(b.status, SALTS_OK);
+        check_equal(a.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
+        check_equal(b.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
+        check_equal(a.response.sum, (uint32_t)11u);
+        check_equal(b.response.sum, (uint32_t)17u);
+      }
 
       check_equal(crpc_client_destroy(&attached_client,
                                      CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
