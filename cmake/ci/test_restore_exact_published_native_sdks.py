@@ -150,7 +150,7 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                     "assets": [{"name": "Salts.Native.2.3.0-rc.15.nupkg"}],
                 })
             return json.dumps({"sha": "a" * 40})
-        with mock.patch.dict(module, {"run": fake_gh}):
+        with mock.patch.dict(module["verify_release_metadata"].__globals__, {"run": fake_gh}):
             module["verify_release_metadata"](
                 "Salts.Native", "qigao/salts", "2.3.0-rc.15", "a" * 40)
             with self.assertRaisesRegex(ValueError, "mismatch"):
