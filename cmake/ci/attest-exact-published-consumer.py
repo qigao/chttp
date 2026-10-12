@@ -9,9 +9,6 @@ from pathlib import Path
 import shutil
 import subprocess
 
-SALTS = os.environ.get("EXPECTED_SALTS", "")
-UTILS = os.environ.get("EXPECTED_UTILS", "")
-
 
 def require(condition: bool, reason: str) -> None:
     if not condition:
@@ -19,13 +16,15 @@ def require(condition: bool, reason: str) -> None:
 
 
 def main() -> None:
+    salts = os.environ.get("EXPECTED_SALTS", "")
+    utils = os.environ.get("EXPECTED_UTILS", "")
     p = argparse.ArgumentParser()
     p.add_argument("--rid", required=True)
     p.add_argument("--family", required=True)
     a = p.parse_args()
     repo = Path(os.environ["GITHUB_WORKSPACE"])
     exact_chttp = os.environ["EXPECTED_CHTTP"]
-    require(len(SALTS) == 40 and len(UTILS) == 40, "Missing source commits")
+    require(len(salts) == 40 and len(utils) == 40, "Missing source commits")
     salts_version = os.environ["EXPECTED_SALTS_VERSION"]
     utils_version = os.environ["EXPECTED_UTILS_VERSION"]
     require(a.rid in ("linux-x64", "linux-arm64", "windows-x64", "macos-arm64",
@@ -68,9 +67,9 @@ def main() -> None:
             f"{a.rid}: IDLC compiler came from another SDK")
     for source, name, sha, version in (
         (Path(os.environ["SALTS_ROOT"]) / "salts-sdk-manifest.txt",
-         "salts-dependency-manifest.txt", SALTS, salts_version),
+         "salts-dependency-manifest.txt", salts, salts_version),
         (Path(os.environ["SALTS_UTILS_ROOT"]) / "salts-utils-sdk-manifest.txt",
-         "saltsutils-dependency-manifest.txt", UTILS, utils_version),
+         "saltsutils-dependency-manifest.txt", utils, utils_version),
     ):
         require(source.is_file(), f"{a.rid}: candidate dependency manifest missing")
         info = dict(line.split("=", 1) for line in
@@ -87,9 +86,9 @@ def main() -> None:
     result.mkdir(parents=True, exist_ok=True)
     proof = {
         "chttp_source": exact_chttp, "rid": a.rid, "family": a.family,
-        "salts_source": SALTS, "salts_version": salts_version,
+        "salts_source": salts, "salts_version": salts_version,
         "salts_sha256": os.environ["EXPECTED_SALTS_DIGEST"],
-        "utils_source": UTILS, "utils_version": utils_version,
+        "utils_source": utils, "utils_version": utils_version,
         "utils_sha256": os.environ["EXPECTED_UTILS_DIGEST"],
         "owner_target": "CHttp::Server/Client",
         "legacy_rpc_owner_exported": False,
