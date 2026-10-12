@@ -8,8 +8,9 @@ message AddResponse {
 }
 message OwnedRequest {
   uint32 left;
-  string note;
   uint32 right;
+  string note;
+  string tag;
 }
 message OwnedResponse {
   uint32 sum;
