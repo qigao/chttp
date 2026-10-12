@@ -199,24 +199,8 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           timeout --signal=TERM --kill-after=10s 480s \
             ctest --test-dir build/rpc-fullsource-tsan/build-chttp \
-            -R '^(crpc_transport_test|crpc_server_test|chttp_rpc_service_test|crpc_api_test|chttp_server_test|chttp_h2_client_test) \
+            -R '^(crpc_transport_test|crpc_server_test|chttp_rpc_service_test|crpc_api_test|chttp_server_test|chttp_h2_client_test)$' \
             --repeat until-fail:5 --timeout 90 --no-tests=error --output-on-failure
-
-      - name: Preserve exact source-graph qualifications
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: chttp-245-rpc-owner-fullsource-tsan
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            build/rpc-fullsource-tsan/provenance.txt
-            build/rpc-fullsource-tsan/instrumentation.txt
-            build/rpc-fullsource-tsan/consumer-ldd.txt
-            build/rpc-fullsource-tsan/build-chttp/Testing/Temporary/LastTest.log
- \
-            --repeat until-fail:5 --timeout 90 --no-tests=error --output-on-failure
-
       - name: Preserve exact source-graph qualifications
         if: always()
         uses: actions/upload-artifact@v4
