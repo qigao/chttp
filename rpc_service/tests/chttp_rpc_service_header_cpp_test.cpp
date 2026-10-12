@@ -1,25 +1,17 @@
-#include <chttp_rpc_service/service.h>
-
+#include <http_server/rpc_service.h>
+#include <http_client/rpc_service.h>
 #include <type_traits>
 
-static_assert(std::is_standard_layout_v<chttp_rpc_service>);
-static_assert(std::is_standard_layout_v<chttp_rpc_service_config>);
-static_assert(std::is_standard_layout_v<chttp_rpc_service_mount_options>);
-static_assert(std::is_standard_layout_v<chttp_rpc_service_client_outcome>);
-static_assert(std::is_standard_layout_v<chttp_rpc_service_client_call_options>);
+static_assert(std::is_standard_layout_v<chttp_server_rpc_config>);
+static_assert(std::is_standard_layout_v<chttp_server_rpc_mount_options>);
+static_assert(std::is_standard_layout_v<chttp_client_rpc_call_options>);
+static_assert(std::is_standard_layout_v<chttp_client_rpc_outcome>);
 
 int main() {
-  chttp_rpc_service service{};
-  chttp_rpc_service_config config = CHTTP_RPC_SERVICE_CONFIG_INIT;
-  chttp_rpc_service_mount_options mount = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
-  chttp_rpc_service_client_outcome outcome =
-      CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
-  chttp_rpc_service_client_call_options call =
-      CHTTP_RPC_SERVICE_CLIENT_CALL_OPTIONS_INIT;
-  (void)service;
-  (void)config;
-  (void)mount;
-  (void)outcome;
-  (void)call;
+  chttp_server_rpc_config config = CHTTP_SERVER_RPC_CONFIG_INIT;
+  chttp_server_rpc_mount_options mount = CHTTP_SERVER_RPC_MOUNT_OPTIONS_INIT;
+  chttp_client_rpc_call_options call = CHTTP_CLIENT_RPC_CALL_OPTIONS_INIT;
+  chttp_client_rpc_outcome outcome = CHTTP_CLIENT_RPC_OUTCOME_INIT;
+  (void)config; (void)mount; (void)call; (void)outcome;
   return 0;
 }

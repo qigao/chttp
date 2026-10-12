@@ -1,4 +1,4 @@
-#include <chttp_rpc_service/service.h>
+#include <http_client/rpc_service.h>
 #include <http_client/rpc_service.h>
 #include <http_server/rpc_service.h>
 
@@ -180,23 +180,23 @@ typedef struct chttp_rpc_service_test_call_thread {
   int status;
   atomic_int completed;
   int64_t remote_code;
-  chttp_rpc_service_client_outcome_kind outcome_kind;
+  chttp_client_rpc_outcome_kind outcome_kind;
 } chttp_rpc_service_test_call_thread;
 
 static void chttp_rpc_service_test_call_worker(void *user) {
   chttp_rpc_service_test_call_thread *args =
       (chttp_rpc_service_test_call_thread *)user;
-  crpc_client client = {0};
-  chttp_rpc_service_client_call_options options =
-      CHTTP_RPC_SERVICE_CLIENT_CALL_OPTIONS_INIT;
-  chttp_rpc_service_client_outcome outcome =
-      CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+  chttp_client client = {0};
+  chttp_client_rpc_call_options options =
+      CHTTP_CLIENT_RPC_CALL_OPTIONS_INIT;
+  chttp_client_rpc_outcome outcome =
+      CHTTP_CLIENT_RPC_OUTCOME_INIT;
   DataBindNativeOptions native = DATA_BIND_NATIVE_OPTIONS_INIT;
   crpc_error error = {0};
   unsigned char workspace[4096];
   int status;
   if (args == NULL) return;
-  status = crpc_client_init(&client, &args->config);
+  status = chttp_client_init(&client, &args->config.http);
   if (status == SALTS_OK) {
     native.workspace = workspace;
     native.workspace_bytes = sizeof(workspace);
@@ -215,13 +215,13 @@ static void chttp_rpc_service_test_call_worker(void *user) {
     options.request_bytes = sizeof(args->request);
     options.response = &args->response;
     options.response_bytes = sizeof(args->response);
-    status = chttp_rpc_service_client_call(
+    status = chttp_client_rpc_call(
         &client, &options, &outcome, &error);
     args->outcome_kind = outcome.kind;
     args->remote_code = outcome.remote_code;
     atomic_store_explicit(&args->completed, 1, memory_order_release);
     {
-      const int teardown = crpc_client_destroy(
+      const int teardown = chttp_client_destroy(
           &client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS);
       if (status == SALTS_OK && teardown != SALTS_OK) status = teardown;
     }
@@ -400,8 +400,9 @@ static void chttp_rpc_service_test_async_typed_complete(
   probe->remote_code = outcome != NULL ? outcome->remote_code : 0;
 }
 
-spec("CHttp::RpcService generated RPC MethodPlan") {
-  it("mounts generated wire mapping and preserves DataBind defaults") {
+
+spec("CHttp Server/Client generated RPC MethodPlan") {
+  it("mounts immutable generated plans and qualifies client/Owner lifetimes") {
     static const char schema[] =
         "message AddRequest {"
         " @Min(1) uint32 left;"
@@ -427,52 +428,28 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
     DataBindServiceNativeBinding unknown_result_native = {0};
     DataBindNativeExecution unknown_result_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-    chttp_rpc_service_mount_options unknown_result_mount =
-        CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
     cmeta_param_desc unborrowed_request_params[2];
     cmeta_function_desc unborrowed_request_function = {0};
     cmeta_function_abi_desc unborrowed_request_abi = {0};
     DataBindServiceNativeBinding unborrowed_request_native = {0};
     DataBindNativeExecution unborrowed_request_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-    chttp_rpc_service_mount_options unborrowed_request_mount =
-        CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
-    chttp_rpc_service service = {0};
-    chttp_rpc_service_config service_config =
-        CHTTP_RPC_SERVICE_CONFIG_INIT;
-    chttp_rpc_service_mount_options mount = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
-    chttp_rpc_service_mount_options mismatch = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
-    chttp_rpc_service_mount_options invalid = CHTTP_RPC_SERVICE_MOUNT_OPTIONS_INIT;
     DataBindNativeExecution execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindNativeExecution other_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindNativeExecution invalid_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-    crpc_server server = {0};
     crpc_server_config server_config =
         chttp_rpc_service_test_server_config();
-    crpc_client client = {0};
     crpc_client_config client_config =
         chttp_rpc_service_test_client_config();
-    crpc_method method = {.name = "calc.add"};
-    crpc_options options = {0};
-    crpc_response response = {0};
     crpc_error error = {0};
-    chttp_rpc_service_params params = {{3u, 4u, 2u}, 3u, 0};
-    cserde_token token = {0};
     unsigned char client_workspace[4096];
     DataBindNativeOptions client_native =
         (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
-    chttp_rpc_service_client_call_options typed_call =
-        CHTTP_RPC_SERVICE_CLIENT_CALL_OPTIONS_INIT;
-    chttp_rpc_service_client_outcome typed_outcome =
-        CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
     AddRequest typed_request = {3u, 4u, 2u, 1u};
     AddResponse typed_response = {0};
-    char uri[64];
-    uint16_t port = 0u;
-
     execution.function = FunctionMeta(chttp_rpc_service_test_add);
     execution.abi = FunctionAbi(chttp_rpc_service_test_add);
     execution.invoke = chttp_rpc_service_test_invoke;
@@ -538,200 +515,11 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         DATA_BIND_OK);
     check_not_null(unborrowed_request_plan);
 
-    service_config.method_capacity = 1u;
-    service_config.max_output_value_bytes = 64u;
-    service_config.max_call_frame_bytes = 512u;
-    service_config.native_workspace_bytes = 4096u;
-    service_config.native_max_depth = 16u;
-    service_config.native_max_items = 64u;
-    service_config.native_max_owned_bytes = 1024u;
-    check_equal(
-        chttp_rpc_service_init(&service, &service_config), SALTS_OK);
-
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
-
-    mismatch.target = "/rpc";
-    mismatch.method_plan = method_plan;
-    mismatch.native_binding = &native;
-    mismatch.execution = &other_execution;
-    check_equal(
-        chttp_rpc_service_mount(&service, &server, &mismatch), SALTS_EINVAL);
-
-    invalid.target = "/rpc";
-    invalid.method_plan = method_plan;
-    invalid.native_binding = &native;
-    invalid.execution = &invalid_execution;
-    check_equal(
-        chttp_rpc_service_mount(&service, &server, &invalid), SALTS_EINVAL);
-
-    unknown_result_mount.target = "/rpc";
-    unknown_result_mount.method_plan = unknown_result_plan;
-    unknown_result_mount.native_binding = &unknown_result_native;
-    unknown_result_mount.execution = &unknown_result_execution;
-    check_equal(
-        chttp_rpc_service_mount(
-            &service, &server, &unknown_result_mount),
-        SALTS_ENOTSUP);
-
-    unborrowed_request_mount.target = "/rpc";
-    unborrowed_request_mount.method_plan = unborrowed_request_plan;
-    unborrowed_request_mount.native_binding = &unborrowed_request_native;
-    unborrowed_request_mount.execution = &unborrowed_request_execution;
-    check_equal(
-        chttp_rpc_service_mount(
-            &service, &server, &unborrowed_request_mount),
-        SALTS_ENOTSUP);
-
-    mount.target = "/rpc";
-    mount.method_plan = method_plan;
-    mount.native_binding = &native;
-    mount.execution = &execution;
-    check_equal(
-        chttp_rpc_service_mount(&service, &server, &mount), SALTS_OK);
-
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
-    check_greater(
-        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
-                 (unsigned int)port),
-        0);
-    check_equal(crpc_client_init(&client, &client_config), SALTS_OK);
-
     client_native.workspace = client_workspace;
     client_native.workspace_bytes = sizeof(client_workspace);
     client_native.max_depth = 16u;
     client_native.max_items = 64u;
     client_native.max_owned_bytes = 1024u;
-
-    typed_call.connection_uri = uri;
-    typed_call.authority = "localhost";
-    typed_call.target = "/rpc";
-    typed_call.request_id = UINT64_C(100);
-    typed_call.deadline_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
-    typed_call.method_plan = method_plan;
-    typed_call.native_binding = &native;
-    typed_call.native_options = &client_native;
-    typed_call.request = &typed_request;
-    typed_call.request_bytes = sizeof(typed_request);
-    typed_call.response = &typed_response;
-    typed_call.response_bytes = sizeof(typed_response);
-
-    check_equal(
-        chttp_rpc_service_client_call(
-            &client, &typed_call, &typed_outcome, &error),
-        SALTS_OK);
-    check_equal(
-        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
-    check_equal(typed_response.sum, (uint32_t)11u);
-
-    typed_request =
-        (AddRequest){.left = 3u, .right = 4u, .scale = 0u, .presence = 0u};
-    typed_response = (AddResponse){0};
-    typed_outcome =
-        (chttp_rpc_service_client_outcome)
-            CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
-    typed_call.request_id = UINT64_C(101);
-    check_equal(
-        chttp_rpc_service_client_call(
-            &client, &typed_call, &typed_outcome, &error),
-        SALTS_OK);
-    check_equal(
-        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
-    check_equal(typed_response.sum, (uint32_t)7u);
-
-    typed_request =
-        (AddRequest){.left = 99u, .right = 1u, .scale = 1u, .presence = 1u};
-    typed_response = (AddResponse){0};
-    typed_outcome =
-        (chttp_rpc_service_client_outcome)
-            CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
-    typed_call.request_id = UINT64_C(102);
-    check_equal(
-        chttp_rpc_service_client_call(
-            &client, &typed_call, &typed_outcome, &error),
-        SALTS_OK);
-    check_equal(
-        typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
-    check_equal(typed_outcome.remote_code, INT64_C(-32000));
-
-    options = (crpc_options){
-        .connection_uri = uri,
-        .authority = "localhost",
-        .target = "/rpc",
-        .method = method,
-        .request_id = UINT64_C(1),
-        .deadline_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS,
-        .encode_params = chttp_rpc_service_encode_params,
-        .params_user = &params};
-    check_equal(
-        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
-    check_equal(response.kind, CRPC_RESPONSE_RESULT);
-    check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
-    check_equal(token.kind, CSERDE_UINT);
-    check_equal(token.value.uint, UINT64_C(11));
-    crpc_response_destroy(&response);
-
-    params.count = 2u;
-    params.invalid_first = 0;
-    options.request_id = UINT64_C(2);
-    response = (crpc_response){0};
-    check_equal(
-        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
-    check_equal(response.kind, CRPC_RESPONSE_RESULT);
-    check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
-    check_equal(token.kind, CSERDE_UINT);
-    check_equal(token.value.uint, UINT64_C(7));
-    crpc_response_destroy(&response);
-
-    params.count = 2u;
-    params.invalid_first = 0;
-    params.values[0] = 0u;
-    options.request_id = UINT64_C(3);
-    response = (crpc_response){0};
-    check_equal(
-        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
-    check_equal(response.kind, CRPC_RESPONSE_REMOTE_ERROR);
-    check_equal(response.value.remote_error.code, (int64_t)-32602);
-    crpc_response_destroy(&response);
-
-    params.values[0] = 3u;
-    params.invalid_first = 1;
-    options.request_id = UINT64_C(4);
-    response = (crpc_response){0};
-    check_equal(
-        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
-    check_equal(response.kind, CRPC_RESPONSE_REMOTE_ERROR);
-    check_equal(response.value.remote_error.code, (int64_t)-32602);
-    crpc_response_destroy(&response);
-
-    params.count = 2u;
-    params.invalid_first = 0;
-    params.values[0] = 99u;
-    params.values[1] = 1u;
-    options.request_id = UINT64_C(5);
-    response = (crpc_response){0};
-    check_equal(
-        crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
-    check_equal(response.kind, CRPC_RESPONSE_REMOTE_ERROR);
-    check_equal(response.value.remote_error.code, (int64_t)-32000);
-    check_not_null(response.value.remote_error.data);
-    check_equal(
-        cserde_reader_next(response.value.remote_error.data, &token), CSERDE_OK);
-    check(token.kind == CSERDE_SINT || token.kind == CSERDE_UINT);
-    if (token.kind == CSERDE_SINT)
-      check_equal(token.value.sint, INT64_C(7));
-    else
-      check_equal(token.value.uint, UINT64_C(7));
-    crpc_response_destroy(&response);
-
-    check_equal(
-        crpc_client_destroy(&client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
-        SALTS_OK);
-    check_equal(
-        crpc_server_stop(&server, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
-        SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_rpc_service_destroy(&service), SALTS_OK);
 
     /* #241: same producer MethodPlan on an already initialized HTTP Server.
      * No RpcService, CRPC Server, or additional HTTP listener owner. */
@@ -741,7 +529,6 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       chttp_server_rpc_config rpc_config = CHTTP_SERVER_RPC_CONFIG_INIT;
       chttp_server_rpc_mount_options generated =
           CHTTP_SERVER_RPC_MOUNT_OPTIONS_INIT;
-      crpc_client attached_client = {0};
       chttp_server_execution_options topology =
           CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
       DataBindNativeExecution concurrent_execution = execution;
@@ -768,6 +555,21 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       concurrent_execution.invoke = chttp_rpc_service_test_concurrent_invoke;
       generated.execution = &concurrent_execution;
       check_equal(chttp_server_rpc_configure(&host, &rpc_config), SALTS_OK);
+      generated.execution = &other_execution;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
+      generated.execution = &invalid_execution;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
+      generated.method_plan = unknown_result_plan;
+      generated.native_binding = &unknown_result_native;
+      generated.execution = &unknown_result_execution;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_ENOTSUP);
+      generated.method_plan = unborrowed_request_plan;
+      generated.native_binding = &unborrowed_request_native;
+      generated.execution = &unborrowed_request_execution;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_ENOTSUP);
+      generated.method_plan = method_plan;
+      generated.native_binding = &native;
+      generated.execution = &concurrent_execution;
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EALREADY);
       check_equal(chttp_server_start(&host), SALTS_OK);
@@ -776,35 +578,6 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       check_greater(
           snprintf(attached_uri, sizeof(attached_uri), "tcp://127.0.0.1:%u",
                    (unsigned int)attached_port), 0);
-      check_equal(crpc_client_init(&attached_client, &client_config), SALTS_OK);
-
-      typed_request = (AddRequest){.left = 3u, .right = 4u,
-                                   .scale = 2u, .presence = 1u};
-      typed_response = (AddResponse){0};
-      typed_outcome = (chttp_rpc_service_client_outcome)
-          CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
-      typed_call.request_id = UINT64_C(200);
-      typed_call.connection_uri = attached_uri;
-      check_equal(
-          chttp_rpc_service_client_call(
-              &attached_client, &typed_call, &typed_outcome, &error),
-          SALTS_OK);
-      check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
-      check_equal(typed_response.sum, (uint32_t)11u);
-
-      typed_request = (AddRequest){.left = 99u, .right = 1u,
-                                   .scale = 1u, .presence = 1u};
-      typed_response = (AddResponse){0};
-      typed_outcome = (chttp_rpc_service_client_outcome)
-          CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
-      typed_call.request_id = UINT64_C(201);
-      check_equal(
-          chttp_rpc_service_client_call(
-              &attached_client, &typed_call, &typed_outcome, &error),
-          SALTS_OK);
-      check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
-      check_equal(typed_outcome.remote_code, INT64_C(-32000));
-
       /* #242: one initialized CHttp Client handles generated RPC, ordinary
        * HTTP GET and another RPC, all through its same connection-pool owner. */
       {
@@ -1029,10 +802,6 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         check_equal(a.response.sum, (uint32_t)11u);
         check_equal(b.response.sum, (uint32_t)17u);
       }
-
-      check_equal(crpc_client_destroy(&attached_client,
-                                     CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
-                  SALTS_OK);
 
       /* #243 stop-timeout gate: old generated descriptor graph and leased
        * native workspace cannot be released while an Owner callback blocks.

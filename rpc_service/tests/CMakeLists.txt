@@ -6,27 +6,24 @@ salts_idl_target(
   PROJECTION_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/chttp_rpc_service.projection.json")
 
-add_executable(chttp_rpc_service_test
-  chttp_rpc_service_test.c)
+# Tests compile and link exclusively against the integrated native Owners.
+add_executable(chttp_rpc_service_test chttp_rpc_service_test.c)
 target_link_libraries(chttp_rpc_service_test PRIVATE
-  CHttp::RpcService
-  CHttp::Client
-  Salts::TinyTest)
+  CHttp::Server CHttp::Client Salts::DataBind Salts::TinyTest)
 target_include_directories(chttp_rpc_service_test PRIVATE
   "${chttp_rpc_service_fixture_GENERATED_DIR}")
-add_dependencies(chttp_rpc_service_test
-  chttp_rpc_service_fixture_idl_codegen)
+add_dependencies(chttp_rpc_service_test chttp_rpc_service_fixture_idl_codegen)
 add_test(NAME chttp_rpc_service_test COMMAND chttp_rpc_service_test)
 set_target_properties(chttp_rpc_service_test PROPERTIES
-  FOLDER "rpc_service/tests"
-  C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
 
 add_executable(chttp_rpc_service_header_cpp_test
   chttp_rpc_service_header_cpp_test.cpp)
 target_link_libraries(chttp_rpc_service_header_cpp_test PRIVATE
-  CHttp::RpcService)
+  CHttp::Server CHttp::Client)
 add_test(NAME chttp_rpc_service_header_cpp_test
   COMMAND chttp_rpc_service_header_cpp_test)
 set_target_properties(chttp_rpc_service_header_cpp_test PROPERTIES
-  FOLDER "rpc_service/tests"
-  CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  FOLDER "http_server/tests" CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF)
