@@ -10,6 +10,10 @@ on:
         default: ''
   pull_request:
   push:
+    branches:
+      # One-time release source from PR #245: full native SDK CI must succeed
+      # before this run may mint its immutable RC tag and publish the nupkg.
+      - release/chttp-2.1.0-rc.5-rpc-owner-245
     tags:
       - "v*"
 
@@ -82,7 +86,9 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
           else
-            test "${{ github.event_name }}" = "pull_request" || test "${{ github.event_name }}" = "workflow_dispatch"
+            test "${{ github.event_name }}" = "pull_request" || \
+             test "${{ github.event_name }}" = "workflow_dispatch" || \
+             test "$GITHUB_REF" = "refs/heads/release/chttp-2.1.0-rc.5-rpc-owner-245"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -113,7 +119,7 @@ jobs:
         shell: bash
         run: python -m pip install -r openapi/tests/requirements-conformance.txt
       - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
         with:
           mode: read
       - uses: actions/setup-dotnet@v4
@@ -388,7 +394,7 @@ jobs:
         shell: bash
         run: echo "X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache" >> "$GITHUB_ENV"
       - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
         with:
           mode: read
       - uses: actions/setup-dotnet@v4
@@ -565,7 +571,7 @@ jobs:
 
   publish:
     name: Publish package and GitHub Release
-    if: needs.metadata.outputs.candidate_run_id == '' && needs.metadata.outputs.candidate_sha == '' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: needs.metadata.outputs.candidate_run_id == '' && needs.metadata.outputs.candidate_sha == '' && github.repository == 'qigao/chttp' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/release/chttp-2.1.0-rc.5-rpc-owner-245' && needs.metadata.outputs.version == '2.1.0-rc.5'))
     needs: [metadata, pack]
     runs-on: ubuntu-latest
     permissions:
@@ -576,6 +582,7 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.source_commit }}
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: chttp-native-nuget
@@ -583,6 +590,51 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: Qualify and create immutable rc.5 tag from exact release branch
+        if: github.ref == 'refs/heads/release/chttp-2.1.0-rc.5-rpc-owner-245'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_SOURCE_SHA: ${{ needs.metadata.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_VERSION" = '2.1.0-rc.5'
+          test "$RELEASE_TAG" = 'v2.1.0-rc.5'
+          test "$RELEASE_SOURCE_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(jq -r '."version-semver"' vcpkg.json)" = "$RELEASE_VERSION"
+          test -f "docs/releases/$RELEASE_VERSION.md"
+          test -f "dist/CHttp.Native.$RELEASE_VERSION.nupkg"
+          # Reject any unrelated source mutations: this release commit must
+          # descend from the fully qualified PR #245 exact source.
+          git merge-base --is-ancestor 'ebd4d90216b15bc9d05c9dec5f3171827ee72827' HEAD
+          diff -u <(printf '%s\n' '.github/workflows/native-sdk-release.yml' 'docs/releases/2.1.0-rc.5.md' 'vcpkg.json') \
+            <(git diff --name-only 'ebd4d90216b15bc9d05c9dec5f3171827ee72827' HEAD | sort)
+          # Authenticate the exact immutable upstream published graph.
+          test "$(gh api repos/qigao/salts/git/ref/tags/v2.3.0-rc.15 --jq '.object.sha')" = '21bdb1145fbb2b39ee3fa644173ec037adba7b87'
+          test "$(gh api repos/qigao/salts-utils/git/ref/tags/v4.3.0-rc.10 --jq '.object.sha')" = '1410c9fd479f9faab31503523d8e31cc506b5b25'
+          test "$(gh api repos/qigao/salts/releases/tags/v2.3.0-rc.15 --jq '.assets[] | select(.name=="Salts.Native.2.3.0-rc.15.nupkg") | .digest')" = 'sha256:fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1'
+          test "$(gh api repos/qigao/salts-utils/releases/tags/v4.3.0-rc.10 --jq '.assets[] | select(.name=="SaltsUtils.Native.4.3.0-rc.10.nupkg") | .digest')" = 'sha256:b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491'
+          grep -Fq 'Version="[2.3.0-rc.15]"' cmake/ci/restore-native-sdks.sh
+          grep -Fq 'Version="[4.3.0-rc.10]"' cmake/ci/restore-native-sdks.sh
+          grep -Fq 'Version="[2.3.0-rc.15]"' cmake/ci/restore-native-sdks.ps1
+          grep -Fq 'Version="[4.3.0-rc.10]"' cmake/ci/restore-native-sdks.ps1
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Immutable tag already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          # GitHub Actions GITHUB_TOKEN tag creations intentionally do not
+          # retrigger push workflows. This same fully-qualified CI run then
+          # publishes the package and GitHub Release through the canonical steps.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$RELEASE_SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')" = "$RELEASE_SOURCE_SHA"
       - name: Publish to GitHub Packages
         shell: bash
         env:
