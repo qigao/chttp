@@ -148,7 +148,7 @@ static crpc_client_config crpc_server_test_client_config(void) {
   const crpc_client_config config = {.http = crpc_server_test_http_client_config(),
                                      .request_capacity = 2u,
                                      .max_method_bytes = 64u,
-                                     .rpc.max_json_depth = 8u};
+                                     .max_json_depth = 8u};
   return config;
 }
 
