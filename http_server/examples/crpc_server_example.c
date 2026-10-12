@@ -46,8 +46,8 @@ int main(int argc, char **argv) {
     }
   }
   status = http_example_configure(&app, &config);
-  if (status == SALTS_OK) status = crpc_server_start(&app.rpc);
-  if (status == SALTS_OK) status = crpc_server_port(&app.rpc, &port);
+  if (status == SALTS_OK) status = chttp_server_start(&app.server);
+  if (status == SALTS_OK) status = chttp_server_port(&app.server, &port);
   if (status == SALTS_OK) {
     printf("Home page: http://127.0.0.1:%u/\n", (unsigned)port);
     printf("IDL endpoint: http://127.0.0.1:%u/api/add?left=3&right=4\n", (unsigned)port);

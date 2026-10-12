@@ -307,6 +307,9 @@ fail:
 void chttp_server_impl_free(chttp_server_impl *impl) {
   size_t index;
   if (impl == NULL) return;
+  /* Called only after connection/Owner terminal drain (or init rollback). */
+  chttp_server_rpc_owner_release(impl->rpc_owner);
+  impl->rpc_owner = NULL;
   if (impl->connections != NULL)
     for (index = 0u; index < impl->config.network.connection_capacity; ++index)
       chttp_server_connection_destroy(&impl->connections[index]);

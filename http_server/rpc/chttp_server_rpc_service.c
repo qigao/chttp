@@ -1,11 +1,14 @@
-#include <chttp_rpc_service/service.h>
+#include <http_server/rpc_service.h>
+#include "chttp_server_rpc_service_internal.h"
 
 #include <salts/error_codes.h>
+#include <salts/plugin.h>
 #include <cmeta_buffer.h>
 
 #include <cserde/cserde.h>
 
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,6 +20,8 @@ typedef struct chttp_rpc_service_method_record {
   const DataBindBindingPlan *binding;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
+  cmeta_plugin_registry *plugin_registry;
+  cmeta_plugin_lease plugin_lease;
 
   unsigned char *request_storage;
   size_t request_bytes;
@@ -31,6 +36,13 @@ typedef struct chttp_rpc_service_method_record {
   DataBindBindingCallFrame frame;
 } chttp_rpc_service_method_record;
 
+typedef struct chttp_rpc_service_call_slot {
+  atomic_bool claimed;
+  unsigned char *frame_storage;
+  unsigned char *native_workspace;
+  DataBindNativeOptions native_options;
+} chttp_rpc_service_call_slot;
+
 struct chttp_rpc_service_impl {
   chttp_rpc_service_method_record *methods;
   size_t method_capacity;
@@ -39,12 +51,15 @@ struct chttp_rpc_service_impl {
   size_t output_capacity;
   size_t max_call_frame_bytes;
 
-  unsigned char *native_workspace;
-  DataBindNativeOptions native_options;
+  /* All mutable native state is leased per call, never shared by methods. */
+  chttp_rpc_service_call_slot *call_slots;
+  size_t call_capacity;
+  size_t native_workspace_bytes;
 };
 
 typedef struct chttp_rpc_service_provider {
   chttp_rpc_service_impl *service;
+  const DataBindNativeOptions *native_options;
   const crpc_server_request_view *request;
   crpc_server_param_reader param_reader;
 
@@ -90,6 +105,19 @@ static int chttp_rpc_service_scalar_kind(const cmeta_data_desc *data) {
   default:
     return 0;
   }
+}
+
+/* An owned STRING has the exact CMeta v2 construction/restore contract
+ * needed by DataBind's per-call rollback. Keep response egress scalar-only:
+ * no borrowed or custom buffers and no independent ownership path. */
+static int chttp_rpc_service_ingress_kind(const cmeta_data_desc *data) {
+  const cmeta_data_buffer_ops *ops;
+  if (chttp_rpc_service_scalar_kind(data)) return 1;
+  if (data == NULL || data->kind != CMETA_DATA_STRING) return 0;
+  ops = cmeta_data_buffer_ops_of(data);
+  return ops != NULL && ops->ownership == CMETA_DATA_BUFFER_OWNED &&
+         ops->init_zero != NULL && ops->restore_zero != NULL &&
+         ops->move != NULL;
 }
 
 static DataBindStatus chttp_rpc_service_param_status(int status) {
@@ -284,7 +312,7 @@ static DataBindStatus chttp_rpc_service_write_output(
   provider->writer_started = 1;
 
   status = data_bind_native_encode(
-      &provider->service->native_options, entry->data,
+      provider->native_options, entry->data,
       value, value_bytes, &provider->writer, &diagnostic);
   if (status != DATA_BIND_OK && error != NULL)
     *error = diagnostic.error;
@@ -348,11 +376,45 @@ static int chttp_rpc_service_native_type_valid(
   return 1;
 }
 
-static int chttp_rpc_service_add_size(
+/* Each native storage region must begin at at least max_align_t alignment.
+ * Padding is charged to the same bounded call-frame budget at mount time. */
+/* MSVC's C11 stddef.h does not expose max_align_t. This union covers
+ * fundamental malloc-aligned C11 storage on all supported compilers.
+ * Producer-declared over-alignment is explicitly rejected at mount. */
+typedef union chttp_rpc_frame_fundamental_alignment {
+  long double floating;
+  long long integer;
+  void *pointer;
+} chttp_rpc_frame_fundamental_alignment;
+
+static int chttp_rpc_service_add_aligned_size(
     size_t *total, size_t value, size_t limit) {
-  if (total == NULL || value > SIZE_MAX - *total) return 0;
+  const size_t alignment = _Alignof(chttp_rpc_frame_fundamental_alignment);
+  size_t padding;
+  if (total == NULL || alignment == 0u || *total > limit)
+    return 0;
+  padding = (alignment - (*total % alignment)) % alignment;
+  if (padding > limit - *total) return 0;
+  *total += padding;
+  if (value > limit - *total) return 0;
   *total += value;
-  return *total <= limit;
+  return 1;
+}
+
+static size_t chttp_rpc_service_align_offset(size_t offset) {
+  const size_t alignment = _Alignof(chttp_rpc_frame_fundamental_alignment);
+  return offset + (alignment - offset % alignment) % alignment;
+}
+
+static int chttp_rpc_service_native_align_supported(
+    const DataBindNativeTypeBinding *binding) {
+  size_t alignment;
+  if (binding == NULL || binding->data == NULL ||
+      binding->data->storage_type == NULL)
+    return 0;
+  alignment = binding->data->storage_type->align;
+  return alignment != 0u && alignment <= _Alignof(chttp_rpc_frame_fundamental_alignment) &&
+         (alignment & (alignment - 1u)) == 0u;
 }
 
 static int chttp_rpc_service_function_semantics_admit(
@@ -400,6 +462,11 @@ static int chttp_rpc_service_execution_admit(
       !chttp_rpc_service_native_type_valid(native->request, request_bytes) ||
       !chttp_rpc_service_native_type_valid(native->response, response_bytes))
     return SALTS_EINVAL;
+  /* calloc guarantees fundamental alignment; over-aligned producer storage
+   * needs its own allocator contract and therefore fails closed here. */
+  if (!chttp_rpc_service_native_align_supported(native->request) ||
+      !chttp_rpc_service_native_align_supported(native->response))
+    return SALTS_ENOTSUP;
 
   binding = data_bind_rpc_method_plan_binding(method_plan);
   function = binding != NULL ? data_bind_binding_plan_function(binding) : NULL;
@@ -432,7 +499,7 @@ static int chttp_rpc_service_execution_admit(
           entry.function_param_index != 0u ||
           entry.address.space == NULL ||
           strcmp(entry.address.space, "rpc.params") != 0 ||
-          !chttp_rpc_service_scalar_kind(entry.data))
+          !chttp_rpc_service_ingress_kind(entry.data))
         return SALTS_ENOTSUP;
       bytes = entry.data->storage_type->size;
       if (entry.native_offset > *request_bytes ||
@@ -498,9 +565,13 @@ static int chttp_rpc_service_execution_admit(
   }
 
   if (max_frame_bytes == 0u ||
-      !chttp_rpc_service_add_size(&total, *request_bytes, max_frame_bytes) ||
-      !chttp_rpc_service_add_size(&total, *response_bytes, max_frame_bytes) ||
-      !chttp_rpc_service_add_size(&total, *error_bytes, max_frame_bytes))
+      !chttp_rpc_service_add_aligned_size(
+          &total, *request_bytes, max_frame_bytes) ||
+      !chttp_rpc_service_add_aligned_size(
+          &total, *response_bytes, max_frame_bytes) ||
+      (*error_bytes != 0u &&
+       !chttp_rpc_service_add_aligned_size(
+           &total, *error_bytes, max_frame_bytes)))
     return SALTS_EMSGSIZE;
 
   *param_count = expected_params;
@@ -510,10 +581,47 @@ static int chttp_rpc_service_execution_admit(
 static void chttp_rpc_service_method_release(
     chttp_rpc_service_method_record *record) {
   if (record == NULL) return;
-  free(record->error_storage);
-  free(record->response_storage);
-  free(record->request_storage);
+  /* Stable method record holds an optional DSO generation lease until all
+   * accepted native callbacks have drained. Unloading before this boundary
+   * is an ownership violation, not a recoverable best-effort cleanup. */
+  if (cmeta_plugin_lease_valid(record->plugin_lease)) {
+    if (record->plugin_registry == NULL ||
+        cmeta_plugin_registry_release(
+            record->plugin_registry, &record->plugin_lease) != CMETA_PLUGIN_OK)
+      abort();
+  }
   memset(record, 0, sizeof(*record));
+}
+
+static void chttp_rpc_service_slots_release(chttp_rpc_service_impl *impl) {
+  size_t i;
+  if (impl == NULL) return;
+  for (i = 0u; i < impl->call_capacity; ++i) {
+    free(impl->call_slots[i].native_workspace);
+    free(impl->call_slots[i].frame_storage);
+  }
+  free(impl->call_slots);
+  impl->call_slots = NULL;
+  impl->call_capacity = 0u;
+}
+
+static chttp_rpc_service_call_slot *chttp_rpc_service_slot_acquire(
+    chttp_rpc_service_impl *impl) {
+  size_t i;
+  if (impl == NULL) return NULL;
+  for (i = 0u; i < impl->call_capacity; ++i) {
+    bool expected = false;
+    if (atomic_compare_exchange_strong_explicit(
+            &impl->call_slots[i].claimed, &expected, true,
+            memory_order_acquire, memory_order_relaxed))
+      return &impl->call_slots[i];
+  }
+  return NULL;
+}
+
+static void chttp_rpc_service_slot_release(chttp_rpc_service_call_slot *slot) {
+  if (slot != NULL)
+    atomic_store_explicit(&slot->claimed, false, memory_order_release);
 }
 
 static int chttp_rpc_service_input_failure(DataBindStatus status) {
@@ -535,22 +643,26 @@ static cserde_status chttp_rpc_service_encode_native_status(
                            .value.sint = (int64_t)*status});
 }
 
-static int chttp_rpc_service_handler(
-    void *user, const crpc_server_request_view *request,
+static int chttp_rpc_service_handler_call(
+    chttp_rpc_service_method_record *record,
+    chttp_rpc_service_call_slot *slot,
+    DataBindBindingCallLifetime *lifetime,
+    const crpc_server_request_view *request,
     crpc_server_response *response) {
-  chttp_rpc_service_method_record *record =
-      (chttp_rpc_service_method_record *)user;
   chttp_rpc_service_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
   DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
   DataBindBindingPlanDiagnostic diagnostic =
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   DataBindStatus status;
+  /* Egress failures are server faults, never malformed client params. */
+  int ingress_failed = 0;
   int native_status = 0;
   int code = 0;
   int result;
 
-  if (record == NULL || record->owner == NULL ||
+  if (record == NULL || slot == NULL || lifetime == NULL ||
+      record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->execution == NULL ||
       record->request_storage == NULL || record->response_storage == NULL ||
@@ -564,6 +676,7 @@ static int chttp_rpc_service_handler(
 
   provider_context = (chttp_rpc_service_provider){
       .service = record->owner,
+      .native_options = &slot->native_options,
       .request = request,
       .param_reader = CRPC_SERVER_PARAM_READER_INIT};
 
@@ -574,9 +687,12 @@ static int chttp_rpc_service_handler(
   provider.commit_output = chttp_rpc_service_commit_output;
   provider.abort_output = chttp_rpc_service_abort_output;
 
-  status = data_bind_binding_plan_bind_inputs(
-      record->binding, &provider, &record->owner->native_options,
-      &record->frame, &diagnostic);
+  /* Publish a producer-owned exact-once lifetime only after complete ingress.
+   * On partial bind failure DataBind itself restores initialized staging. */
+  status = data_bind_binding_plan_bind_call(
+      record->binding, &provider, &slot->native_options,
+      &record->frame, lifetime, &diagnostic);
+  ingress_failed = (status != DATA_BIND_OK);
 
   if (status == DATA_BIND_OK &&
       !record->execution->invoke(
@@ -593,8 +709,7 @@ static int chttp_rpc_service_handler(
 
   if (status != DATA_BIND_OK) {
     chttp_rpc_service_release_token_storage(&provider_context);
-    if (!provider_context.output_attempted &&
-        chttp_rpc_service_input_failure(status))
+    if (ingress_failed && chttp_rpc_service_input_failure(status))
       return crpc_server_response_error(
           response, -32602, "Invalid params", NULL, NULL);
     return SALTS_EPROTO;
@@ -644,6 +759,62 @@ static int chttp_rpc_service_handler(
   return SALTS_EPROTO;
 }
 
+/* Lease a preallocated frame for this call. Shared method records are read-only.
+ * The response builder consumes all staged tokens synchronously. */
+static int chttp_rpc_service_handler(
+    void *user, const crpc_server_request_view *request,
+    crpc_server_response *response) {
+  const chttp_rpc_service_method_record *registered =
+      (const chttp_rpc_service_method_record *)user;
+  chttp_rpc_service_method_record call;
+  chttp_rpc_service_call_slot *slot;
+  DataBindBindingCallLifetime lifetime =
+      DATA_BIND_BINDING_CALL_LIFETIME_INIT;
+  DataBindBindingPlanDiagnostic cleanup =
+      DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+  size_t cursor;
+  int status;
+  if (registered == NULL || registered->owner == NULL)
+    return SALTS_EINVAL;
+  slot = chttp_rpc_service_slot_acquire(registered->owner);
+  if (slot == NULL) return SALTS_ENOBUFS;
+  call = *registered;
+  memset(slot->frame_storage, 0, registered->owner->max_call_frame_bytes);
+  cursor = 0u;
+  call.request_storage = slot->frame_storage + cursor;
+  cursor = chttp_rpc_service_align_offset(cursor + call.request_bytes);
+  call.response_storage = slot->frame_storage + cursor;
+  cursor = chttp_rpc_service_align_offset(cursor + call.response_bytes);
+  call.error_storage = call.error_bytes != 0u
+      ? slot->frame_storage + cursor : NULL;
+  call.params[0] = call.request_storage;
+  call.params[1] = call.response_storage;
+  call.param_bytes[0] = call.request_bytes;
+  call.param_bytes[1] = call.response_bytes;
+  if (call.param_count == 3u) {
+    call.params[2] = call.error_storage;
+    call.param_bytes[2] = call.error_bytes;
+  }
+  call.frame = (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT;
+  call.frame.request = call.request_storage;
+  call.frame.request_bytes = call.request_bytes;
+  call.frame.params = call.params;
+  call.frame.param_bytes = call.param_bytes;
+  call.frame.param_count = call.param_count;
+  status = chttp_rpc_service_handler_call(
+      &call, slot, &lifetime, request, response);
+  /* The response encoder runs synchronously. Restore native objects before
+   * returning the leased slot, even on native error or failed egress. */
+  if (data_bind_binding_call_is_live(&lifetime)) {
+    DataBindStatus restore =
+        data_bind_binding_call_restore_zero(&lifetime, &cleanup);
+    if (restore != DATA_BIND_OK && status == SALTS_OK)
+      status = SALTS_EPROTO;
+  }
+  chttp_rpc_service_slot_release(slot);
+  return status;
+}
+
 static int chttp_rpc_service_plan_supported(
     const DataBindRpcMethodPlan *plan) {
   const DataBindBindingPlan *binding;
@@ -680,13 +851,14 @@ static int chttp_rpc_service_plan_supported(
   return 1;
 }
 
-int chttp_rpc_service_init(
-    chttp_rpc_service *service,
-    const chttp_rpc_service_config *config) {
+int chttp_server_rpc_generated_init(
+    void **out_context,
+    const chttp_server_rpc_generated_config *config) {
   chttp_rpc_service_impl *impl;
+  size_t i;
+  size_t capacity;
 
-  if (service == NULL || config == NULL ||
-      config->size < sizeof(*config) ||
+  if (out_context == NULL || config == NULL ||
       config->method_capacity == 0u ||
       config->max_output_value_bytes == 0u ||
       config->max_call_frame_bytes == 0u ||
@@ -694,16 +866,20 @@ int chttp_rpc_service_init(
       config->native_max_depth == 0u ||
       config->native_max_items == 0u)
     return SALTS_EINVAL;
-  if (service->impl != NULL) return SALTS_EALREADY;
+  if (*out_context != NULL) return SALTS_EALREADY;
+  capacity = config->max_inflight_calls == 0u ? 4u : config->max_inflight_calls;
+  if (capacity > SIZE_MAX / sizeof(chttp_rpc_service_call_slot) ||
+      config->method_capacity > SIZE_MAX / sizeof(chttp_rpc_service_method_record))
+    return SALTS_ERANGE;
 
   impl = (chttp_rpc_service_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
   impl->methods = (chttp_rpc_service_method_record *)calloc(
       config->method_capacity, sizeof(*impl->methods));
-  impl->native_workspace =
-      (unsigned char *)malloc(config->native_workspace_bytes);
-  if (impl->methods == NULL || impl->native_workspace == NULL) {
-    free(impl->native_workspace);
+  impl->call_slots = (chttp_rpc_service_call_slot *)calloc(
+      capacity, sizeof(*impl->call_slots));
+  if (impl->methods == NULL || impl->call_slots == NULL) {
+    free(impl->call_slots);
     free(impl->methods);
     free(impl);
     return SALTS_ENOMEM;
@@ -712,22 +888,37 @@ int chttp_rpc_service_init(
   impl->method_capacity = config->method_capacity;
   impl->output_capacity = config->max_output_value_bytes;
   impl->max_call_frame_bytes = config->max_call_frame_bytes;
-  impl->native_options =
-      (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
-  impl->native_options.workspace = impl->native_workspace;
-  impl->native_options.workspace_bytes = config->native_workspace_bytes;
-  impl->native_options.max_depth = config->native_max_depth;
-  impl->native_options.max_items = config->native_max_items;
-  impl->native_options.max_owned_bytes = config->native_max_owned_bytes;
+  impl->native_workspace_bytes = config->native_workspace_bytes;
+  impl->call_capacity = capacity;
+  for (i = 0u; i < capacity; ++i) {
+    chttp_rpc_service_call_slot *slot = &impl->call_slots[i];
+    atomic_init(&slot->claimed, false);
+    slot->frame_storage =
+        (unsigned char *)calloc(1u, impl->max_call_frame_bytes);
+    slot->native_workspace =
+        (unsigned char *)calloc(1u, impl->native_workspace_bytes);
+    if (slot->frame_storage == NULL || slot->native_workspace == NULL) {
+      chttp_rpc_service_slots_release(impl);
+      free(impl->methods);
+      free(impl);
+      return SALTS_ENOMEM;
+    }
+    slot->native_options = (DataBindNativeOptions)DATA_BIND_NATIVE_OPTIONS_INIT;
+    slot->native_options.workspace = slot->native_workspace;
+    slot->native_options.workspace_bytes = impl->native_workspace_bytes;
+    slot->native_options.max_depth = config->native_max_depth;
+    slot->native_options.max_items = config->native_max_items;
+    slot->native_options.max_owned_bytes = config->native_max_owned_bytes;
+  }
 
-  service->impl = impl;
+  *out_context = impl;
   return SALTS_OK;
 }
 
-int chttp_rpc_service_mount(
-    chttp_rpc_service *service,
-    crpc_server *server,
-    const chttp_rpc_service_mount_options *mount) {
+int chttp_server_rpc_generated_mount(
+    void *context,
+    chttp_server *server,
+    const chttp_server_rpc_mount_options *mount) {
   chttp_rpc_service_impl *impl;
   chttp_rpc_service_method_record *record;
   crpc_method method = {0};
@@ -739,16 +930,19 @@ int chttp_rpc_service_mount(
   size_t param_count = 0u;
   int status;
 
-  if (service == NULL || service->impl == NULL || server == NULL ||
+  if (context == NULL || server == NULL ||
       mount == NULL || mount->size < sizeof(*mount) ||
       mount->target == NULL || mount->target[0] == '\0' ||
       mount->method_plan == NULL || mount->native_binding == NULL ||
       mount->execution == NULL)
     return SALTS_EINVAL;
+  if ((mount->plugin_registry == NULL) !=
+      !cmeta_plugin_ref_valid(mount->plugin_ref))
+    return SALTS_EINVAL;
   if (!chttp_rpc_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
 
-  impl = (chttp_rpc_service_impl *)service->impl;
+  impl = (chttp_rpc_service_impl *)context;
   if (impl->method_count == impl->method_capacity)
     return SALTS_ENOBUFS;
 
@@ -774,41 +968,25 @@ int chttp_rpc_service_mount(
       .binding = binding,
       .native_binding = mount->native_binding,
       .execution = mount->execution,
+      .plugin_registry = mount->plugin_registry,
       .request_bytes = request_bytes,
       .response_bytes = response_bytes,
       .error_bytes = error_bytes,
       .param_count = param_count,
       .frame = (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT};
 
-  record->request_storage =
-      (unsigned char *)calloc(1u, record->request_bytes);
-  record->response_storage =
-      (unsigned char *)calloc(1u, record->response_bytes);
-  if (record->error_bytes != 0u)
-    record->error_storage =
-        (unsigned char *)calloc(1u, record->error_bytes);
-  if (record->request_storage == NULL ||
-      record->response_storage == NULL ||
-      (record->error_bytes != 0u && record->error_storage == NULL)) {
-    chttp_rpc_service_method_release(record);
-    return SALTS_ENOMEM;
+  if (mount->plugin_registry != NULL) {
+    const cmeta_plugin_manifest *manifest = NULL;
+    if (cmeta_plugin_registry_acquire(
+            mount->plugin_registry, mount->plugin_ref,
+            &record->plugin_lease, &manifest) != CMETA_PLUGIN_OK ||
+        manifest == NULL) {
+      chttp_rpc_service_method_release(record);
+      return SALTS_EBUSY;
+    }
   }
 
-  record->params[0] = record->request_storage;
-  record->params[1] = record->response_storage;
-  record->param_bytes[0] = record->request_bytes;
-  record->param_bytes[1] = record->response_bytes;
-  if (record->param_count == 3u) {
-    record->params[2] = record->error_storage;
-    record->param_bytes[2] = record->error_bytes;
-  }
-  record->frame.request = record->request_storage;
-  record->frame.request_bytes = record->request_bytes;
-  record->frame.params = record->params;
-  record->frame.param_bytes = record->param_bytes;
-  record->frame.param_count = record->param_count;
-
-  status = crpc_server_register(
+  status = chttp_server_rpc_register(
       server, mount->target, &method,
       chttp_rpc_service_handler, record);
   if (status != SALTS_OK) {
@@ -820,17 +998,13 @@ int chttp_rpc_service_mount(
   return SALTS_OK;
 }
 
-int chttp_rpc_service_destroy(chttp_rpc_service *service) {
-  chttp_rpc_service_impl *impl;
+void chttp_server_rpc_generated_release(void *context) {
+  chttp_rpc_service_impl *impl = (chttp_rpc_service_impl *)context;
   size_t i;
-  if (service == NULL) return SALTS_EINVAL;
-  impl = (chttp_rpc_service_impl *)service->impl;
-  if (impl == NULL) return SALTS_OK;
+  if (impl == NULL) return;
   for (i = 0u; i < impl->method_count; ++i)
     chttp_rpc_service_method_release(&impl->methods[i]);
-  free(impl->native_workspace);
+  chttp_rpc_service_slots_release(impl);
   free(impl->methods);
   free(impl);
-  service->impl = NULL;
-  return SALTS_OK;
 }

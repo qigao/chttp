@@ -151,7 +151,7 @@ vendor/       local third-party integration
 
 ## HTTP server features
 
-The server supports Cookie Session plus global and route-level middleware. RPC users can obtain the HTTP owner through `crpc_server_http()` and configure middleware before startup.
+The server supports Cookie Session plus global and route-level middleware. RPC shares the same initialized `chttp_server`: attach its bounded registry with `chttp_server_rpc_configure()` and register methods before startup.
 
 See:
 

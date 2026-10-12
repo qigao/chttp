@@ -18,8 +18,8 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="2.3.0-*" Condition="'$(UseSaltsCandidate)' != 'true'" />
-    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+    <PackageReference Include="Salts.Native" Version="[2.3.0-rc.15]" Condition="'$(UseSaltsCandidate)' != 'true'" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.3.0-rc.10]" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project
@@ -30,6 +30,14 @@ $assets = Get-Content -LiteralPath (Join-Path $restoreRoot "obj/project.assets.j
 function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
   $keys = @($assets.libraries.Keys | Where-Object { $_.StartsWith("$packageName/", [StringComparison]::OrdinalIgnoreCase) })
   if ($keys.Count -ne 1) { throw "expected one resolved $packageName package" }
+  $expected = switch ($packageName.ToLowerInvariant()) {
+    'salts.native' { '2.3.0-rc.15' }
+    'saltsutils.native' { '4.3.0-rc.10' }
+    default { $null }
+  }
+  if ($expected -and $keys[0] -ine "${packageName}/${expected}") {
+    throw "unexpected native SDK release version: $($keys[0])"
+  }
   Write-Host "restored $($keys[0]) for $rid"
   return Join-Path (Join-Path $packages $assets.libraries[$keys[0]].path) "sdk/$rid"
 }

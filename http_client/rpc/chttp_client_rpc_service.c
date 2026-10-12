@@ -1,5 +1,6 @@
-#include <chttp_rpc_service/service.h>
+#include <http_client/rpc_service.h>
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef enum chttp_rpc_service_params_mode {
@@ -8,16 +9,16 @@ typedef enum chttp_rpc_service_params_mode {
   CHTTP_RPC_SERVICE_PARAMS_ARRAY
 } chttp_rpc_service_params_mode;
 
-typedef struct chttp_rpc_service_client_encode_context {
+typedef struct chttp_client_rpc_encode_context {
   const DataBindBindingPlan *binding;
   const DataBindNativeOptions *native_options;
   const unsigned char *request;
   size_t request_bytes;
   chttp_rpc_service_params_mode mode;
   DataBindStatus bind_status;
-} chttp_rpc_service_client_encode_context;
+} chttp_client_rpc_encode_context;
 
-static int chttp_rpc_service_client_scalar_kind(const cmeta_data_desc *data) {
+static int chttp_client_rpc_scalar_kind(const cmeta_data_desc *data) {
   if (data == NULL) return 0;
   switch (data->kind) {
   case CMETA_DATA_BOOL:
@@ -31,7 +32,7 @@ static int chttp_rpc_service_client_scalar_kind(const cmeta_data_desc *data) {
   }
 }
 
-static int chttp_rpc_service_client_native_type_valid(
+static int chttp_client_rpc_native_type_valid(
     const DataBindNativeTypeBinding *binding, size_t *out_bytes) {
   if (binding == NULL || out_bytes == NULL ||
       binding->size < sizeof(*binding) ||
@@ -44,7 +45,7 @@ static int chttp_rpc_service_client_native_type_valid(
   return 1;
 }
 
-static int chttp_rpc_service_client_bit(
+static int chttp_client_rpc_bit(
     const unsigned char *base, size_t bytes,
     size_t offset, unsigned bit, int *out) {
   if (base == NULL || out == NULL || offset >= bytes || bit >= 8u)
@@ -53,8 +54,8 @@ static int chttp_rpc_service_client_bit(
   return 1;
 }
 
-static int chttp_rpc_service_client_entry_state(
-    const chttp_rpc_service_client_encode_context *context,
+static int chttp_client_rpc_entry_state(
+    const chttp_client_rpc_encode_context *context,
     const DataBindBindingPlanEntry *entry,
     DataBindBindingValueState *out_state,
     const void **out_value,
@@ -74,12 +75,12 @@ static int chttp_rpc_service_client_entry_state(
     return 0;
 
   if (entry->has_presence &&
-      !chttp_rpc_service_client_bit(
+      !chttp_client_rpc_bit(
           context->request, context->request_bytes,
           entry->presence_offset, entry->presence_bit, &present))
     return 0;
   if (entry->has_null &&
-      !chttp_rpc_service_client_bit(
+      !chttp_client_rpc_bit(
           context->request, context->request_bytes,
           entry->null_offset, entry->null_bit, &is_null))
     return 0;
@@ -105,7 +106,7 @@ static int chttp_rpc_service_client_entry_state(
   return 1;
 }
 
-static cserde_status chttp_rpc_service_client_bind_status(
+static cserde_status chttp_client_rpc_bind_status(
     DataBindStatus status) {
   switch (status) {
   case DATA_BIND_OK:
@@ -125,13 +126,13 @@ static cserde_status chttp_rpc_service_client_bind_status(
   }
 }
 
-static cserde_status chttp_rpc_service_client_write_token(
+static cserde_status chttp_client_rpc_write_token(
     cserde_writer *writer, cserde_token token) {
   return cserde_writer_write(writer, &token);
 }
 
-static cserde_status chttp_rpc_service_client_encode_value(
-    chttp_rpc_service_client_encode_context *context,
+static cserde_status chttp_client_rpc_encode_value(
+    chttp_client_rpc_encode_context *context,
     const DataBindBindingPlanEntry *entry,
     cserde_writer *writer) {
   DataBindBindingValueState state = DATA_BIND_VALUE_STATE_ABSENT;
@@ -140,7 +141,7 @@ static cserde_status chttp_rpc_service_client_encode_value(
   size_t value_bytes = 0u;
   DataBindStatus status;
 
-  if (!chttp_rpc_service_client_entry_state(
+  if (!chttp_client_rpc_entry_state(
           context, entry, &state, &value, &value_bytes)) {
     context->bind_status = DATA_BIND_ERR_SCHEMA;
     return CSERDE_INVALID_TOKEN;
@@ -148,17 +149,17 @@ static cserde_status chttp_rpc_service_client_encode_value(
   if (state == DATA_BIND_VALUE_STATE_ABSENT)
     return CSERDE_INVALID_STATE;
   if (state == DATA_BIND_VALUE_STATE_NULL)
-    return chttp_rpc_service_client_write_token(
+    return chttp_client_rpc_write_token(
         writer, (cserde_token){.kind = CSERDE_NULL});
 
   status = data_bind_native_encode(
       context->native_options, entry->data,
       value, value_bytes, writer, &diagnostic);
   if (status != DATA_BIND_OK) context->bind_status = status;
-  return chttp_rpc_service_client_bind_status(status);
+  return chttp_client_rpc_bind_status(status);
 }
 
-static int chttp_rpc_service_client_entry_at_ordinal(
+static int chttp_client_rpc_entry_at_ordinal(
     const DataBindBindingPlan *binding, size_t ordinal,
     DataBindBindingPlanEntry *out) {
   size_t i;
@@ -175,10 +176,10 @@ static int chttp_rpc_service_client_entry_at_ordinal(
   return 0;
 }
 
-static cserde_status chttp_rpc_service_client_encode_params(
+static cserde_status chttp_client_rpc_encode_params(
     void *user, cserde_writer *writer) {
-  chttp_rpc_service_client_encode_context *context =
-      (chttp_rpc_service_client_encode_context *)user;
+  chttp_client_rpc_encode_context *context =
+      (chttp_client_rpc_encode_context *)user;
   size_t count;
   size_t i;
   cserde_status status;
@@ -189,7 +190,7 @@ static cserde_status chttp_rpc_service_client_encode_params(
   count = data_bind_binding_plan_ingress_count(context->binding);
 
   if (context->mode == CHTTP_RPC_SERVICE_PARAMS_OBJECT) {
-    status = chttp_rpc_service_client_write_token(
+    status = chttp_client_rpc_write_token(
         writer, (cserde_token){.kind = CSERDE_MAP_BEGIN});
     for (i = 0u; status == CSERDE_OK && i < count; ++i) {
       DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
@@ -197,13 +198,13 @@ static cserde_status chttp_rpc_service_client_encode_params(
       const void *value = NULL;
       size_t value_bytes = 0u;
       if (!data_bind_binding_plan_ingress_at(context->binding, i, &entry) ||
-          !chttp_rpc_service_client_entry_state(
+          !chttp_client_rpc_entry_state(
               context, &entry, &state, &value, &value_bytes)) {
         context->bind_status = DATA_BIND_ERR_SCHEMA;
         return CSERDE_INVALID_TOKEN;
       }
       if (state == DATA_BIND_VALUE_STATE_ABSENT) continue;
-      status = chttp_rpc_service_client_write_token(
+      status = chttp_client_rpc_write_token(
           writer,
           (cserde_token){
               .kind = CSERDE_STRING,
@@ -211,11 +212,11 @@ static cserde_status chttp_rpc_service_client_encode_params(
                   (const unsigned char *)entry.address.name,
                   strlen(entry.address.name), CSERDE_VIEW_STABLE}});
       if (status == CSERDE_OK)
-        status = chttp_rpc_service_client_encode_value(
+        status = chttp_client_rpc_encode_value(
             context, &entry, writer);
     }
     if (status == CSERDE_OK)
-      status = chttp_rpc_service_client_write_token(
+      status = chttp_client_rpc_write_token(
           writer, (cserde_token){.kind = CSERDE_MAP_END});
     return status;
   }
@@ -227,9 +228,9 @@ static cserde_status chttp_rpc_service_client_encode_params(
       DataBindBindingValueState state = DATA_BIND_VALUE_STATE_ABSENT;
       const void *value = NULL;
       size_t value_bytes = 0u;
-      if (!chttp_rpc_service_client_entry_at_ordinal(
+      if (!chttp_client_rpc_entry_at_ordinal(
               context->binding, length - 1u, &entry) ||
-          !chttp_rpc_service_client_entry_state(
+          !chttp_client_rpc_entry_state(
               context, &entry, &state, &value, &value_bytes)) {
         context->bind_status = DATA_BIND_ERR_SCHEMA;
         return CSERDE_INVALID_TOKEN;
@@ -238,16 +239,16 @@ static cserde_status chttp_rpc_service_client_encode_params(
       --length;
     }
 
-    status = chttp_rpc_service_client_write_token(
+    status = chttp_client_rpc_write_token(
         writer, (cserde_token){.kind = CSERDE_ARRAY_BEGIN});
     for (i = 0u; status == CSERDE_OK && i < length; ++i) {
       DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
       DataBindBindingValueState state = DATA_BIND_VALUE_STATE_ABSENT;
       const void *value = NULL;
       size_t value_bytes = 0u;
-      if (!chttp_rpc_service_client_entry_at_ordinal(
+      if (!chttp_client_rpc_entry_at_ordinal(
               context->binding, i, &entry) ||
-          !chttp_rpc_service_client_entry_state(
+          !chttp_client_rpc_entry_state(
               context, &entry, &state, &value, &value_bytes)) {
         context->bind_status = DATA_BIND_ERR_SCHEMA;
         return CSERDE_INVALID_TOKEN;
@@ -256,11 +257,11 @@ static cserde_status chttp_rpc_service_client_encode_params(
         context->bind_status = DATA_BIND_ERR_TYPE_NOT_FOUND;
         return CSERDE_INVALID_TOKEN;
       }
-      status = chttp_rpc_service_client_encode_value(
+      status = chttp_client_rpc_encode_value(
           context, &entry, writer);
     }
     if (status == CSERDE_OK)
-      status = chttp_rpc_service_client_write_token(
+      status = chttp_client_rpc_write_token(
           writer, (cserde_token){.kind = CSERDE_ARRAY_END});
     return status;
   }
@@ -268,7 +269,7 @@ static cserde_status chttp_rpc_service_client_encode_params(
   return CSERDE_INVALID_ARGUMENT;
 }
 
-static int chttp_rpc_service_client_plan_admit(
+static int chttp_client_rpc_plan_admit(
     const DataBindRpcMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
     size_t request_bytes, size_t response_bytes,
@@ -287,9 +288,9 @@ static int chttp_rpc_service_client_plan_admit(
       native->size < sizeof(*native) ||
       native->abi_version != DATA_BIND_BINDING_PLAN_ABI_VERSION ||
       !cmeta_function_desc_valid(native->function) ||
-      !chttp_rpc_service_client_native_type_valid(
+      !chttp_client_rpc_native_type_valid(
           native->request, &native_request_bytes) ||
-      !chttp_rpc_service_client_native_type_valid(
+      !chttp_client_rpc_native_type_valid(
           native->response, &native_response_bytes) ||
       request_bytes < native_request_bytes ||
       response_bytes < native_response_bytes)
@@ -345,7 +346,7 @@ static int chttp_rpc_service_client_plan_admit(
             native->error_envelope_bytes ||
         error_data->storage_type->size >
             native->error_envelope_bytes - native->errors[i].payload_offset ||
-        !chttp_rpc_service_client_scalar_kind(error_data))
+        !chttp_client_rpc_scalar_kind(error_data))
       return SALTS_ENOTSUP;
     for (j = 0u; j < i; ++j) {
       DataBindRpcErrorMapping previous = DATA_BIND_RPC_ERROR_MAPPING_INIT;
@@ -366,7 +367,7 @@ static int chttp_rpc_service_client_plan_admit(
         entry.address.binding_class != DATA_BIND_BINDING_VALUE ||
         entry.address.name == NULL || entry.address.name[0] == '\0' ||
         entry.function_param_index != 0u ||
-        entry.target_is_return || !chttp_rpc_service_client_scalar_kind(entry.data) ||
+        entry.target_is_return || !chttp_client_rpc_scalar_kind(entry.data) ||
         entry.data->storage_type == NULL)
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
@@ -416,7 +417,7 @@ static int chttp_rpc_service_client_plan_admit(
         strcmp(entry.address.space, "rpc.result") != 0 ||
         entry.address.binding_class != DATA_BIND_BINDING_RESULT ||
         entry.target_is_return || entry.function_param_index != 1u ||
-        !chttp_rpc_service_client_scalar_kind(entry.data) ||
+        !chttp_client_rpc_scalar_kind(entry.data) ||
         entry.data->storage_type == NULL)
       return SALTS_ENOTSUP;
     bytes = entry.data->storage_type->size;
@@ -438,7 +439,7 @@ static int chttp_rpc_service_client_plan_admit(
   return SALTS_OK;
 }
 
-static int chttp_rpc_service_client_bind_status_to_salts(
+static int chttp_client_rpc_bind_status_to_salts(
     DataBindStatus status) {
   switch (status) {
   case DATA_BIND_OK:
@@ -459,8 +460,8 @@ static int chttp_rpc_service_client_bind_status_to_salts(
   }
 }
 
-static int chttp_rpc_service_client_decode_success(
-    const chttp_rpc_service_client_call_options *options,
+static int chttp_client_rpc_decode_success(
+    const chttp_client_rpc_call_options *options,
     const crpc_response *response) {
   const DataBindBindingPlan *binding =
       data_bind_rpc_method_plan_binding(options->method_plan);
@@ -484,7 +485,7 @@ static int chttp_rpc_service_client_decode_success(
         options->native_options, entry.data, response->value.result,
         destination, bytes, &diagnostic);
     if (status != DATA_BIND_OK)
-      return chttp_rpc_service_client_bind_status_to_salts(status);
+      return chttp_client_rpc_bind_status_to_salts(status);
     if (entry.has_presence) {
       unsigned char *presence =
           (unsigned char *)options->response + entry.presence_offset;
@@ -501,7 +502,7 @@ static int chttp_rpc_service_client_decode_success(
   return SALTS_OK;
 }
 
-static int chttp_rpc_service_client_typed_error_index(
+static int chttp_client_rpc_typed_error_index(
     const DataBindRpcMethodPlan *plan, int64_t code, size_t *out_index) {
   size_t i;
   size_t count = data_bind_rpc_method_plan_error_count(plan);
@@ -518,8 +519,8 @@ static int chttp_rpc_service_client_typed_error_index(
   return 0;
 }
 
-static int chttp_rpc_service_client_decode_typed_error(
-    const chttp_rpc_service_client_call_options *options,
+static int chttp_client_rpc_decode_typed_error(
+    const chttp_client_rpc_call_options *options,
     const crpc_response *response, size_t index) {
   const DataBindNativeErrorBinding *error_binding;
   const cmeta_data_desc *payload = NULL;
@@ -557,7 +558,7 @@ static int chttp_rpc_service_client_decode_typed_error(
       options->native_options, payload, payload_storage,
       payload_bytes, &diagnostic);
   if (status != DATA_BIND_OK)
-    return chttp_rpc_service_client_bind_status_to_salts(status);
+    return chttp_client_rpc_bind_status_to_salts(status);
   status = data_bind_native_decode(
       options->native_options, payload,
       response->value.remote_error.data,
@@ -567,7 +568,7 @@ static int chttp_rpc_service_client_decode_typed_error(
         options->native_options, payload,
         payload_storage, payload_bytes, &diagnostic);
     memset(options->typed_error, 0, options->typed_error_bytes);
-    return chttp_rpc_service_client_bind_status_to_salts(status);
+    return chttp_client_rpc_bind_status_to_salts(status);
   }
 
   kind = error_binding->kind_value;
@@ -577,13 +578,13 @@ static int chttp_rpc_service_client_decode_typed_error(
   return SALTS_OK;
 }
 
-int chttp_rpc_service_client_call(
-    crpc_client *client,
-    const chttp_rpc_service_client_call_options *options,
-    chttp_rpc_service_client_outcome *outcome,
+int chttp_client_rpc_call(
+    chttp_client *client,
+    const chttp_client_rpc_call_options *options,
+    chttp_client_rpc_outcome *outcome,
     crpc_error *out_error) {
   const DataBindBindingPlan *binding;
-  chttp_rpc_service_client_encode_context encode = {0};
+  chttp_client_rpc_encode_context encode = {0};
   chttp_rpc_service_params_mode mode = CHTTP_RPC_SERVICE_PARAMS_NONE;
   crpc_options rpc_options = {0};
   crpc_response rpc_response = {0};
@@ -598,8 +599,8 @@ int chttp_rpc_service_client_call(
   if (outcome == NULL || out_error == NULL)
     return SALTS_EINVAL;
   *outcome =
-      (chttp_rpc_service_client_outcome)
-          CHTTP_RPC_SERVICE_CLIENT_OUTCOME_INIT;
+      (chttp_client_rpc_outcome)
+          CHTTP_CLIENT_RPC_OUTCOME_INIT;
   *out_error = (crpc_error){0};
 
   if (client == NULL || options == NULL ||
@@ -610,13 +611,13 @@ int chttp_rpc_service_client_call(
       options->authority == NULL || options->target == NULL)
     return SALTS_EINVAL;
 
-  if (!chttp_rpc_service_client_native_type_valid(
+  if (!chttp_client_rpc_native_type_valid(
           options->native_binding->request, &native_request_bytes) ||
-      !chttp_rpc_service_client_native_type_valid(
+      !chttp_client_rpc_native_type_valid(
           options->native_binding->response, &native_response_bytes))
     return SALTS_EINVAL;
 
-  status = chttp_rpc_service_client_plan_admit(
+  status = chttp_client_rpc_plan_admit(
       options->method_plan, options->native_binding,
       options->request_bytes, options->response_bytes, &mode);
   if (status != SALTS_OK) return status;
@@ -632,7 +633,7 @@ int chttp_rpc_service_client_call(
       options->native_options, options->native_binding->response->data,
       options->response, native_response_bytes, &diagnostic);
   if (bind_status != DATA_BIND_OK)
-    return chttp_rpc_service_client_bind_status_to_salts(bind_status);
+    return chttp_client_rpc_bind_status_to_salts(bind_status);
   if (options->typed_error != NULL && options->typed_error_bytes != 0u)
     memset(options->typed_error, 0, options->typed_error_bytes);
 
@@ -659,17 +660,17 @@ int chttp_rpc_service_client_call(
       .encode_params =
           mode == CHTTP_RPC_SERVICE_PARAMS_NONE
               ? NULL
-              : chttp_rpc_service_client_encode_params,
+              : chttp_client_rpc_encode_params,
       .params_user =
           mode == CHTTP_RPC_SERVICE_PARAMS_NONE ? NULL : &encode,
       .tls = options->tls,
       .protocol = options->protocol};
 
-  status = crpc_request_reply(
-      client, &rpc_options, &rpc_response, out_error);
+  status = chttp_client_rpc_request_reply(
+      client, &options->limits, &rpc_options, &rpc_response, out_error);
   if (status != SALTS_OK) {
     if (encode.bind_status != DATA_BIND_OK) {
-      status = chttp_rpc_service_client_bind_status_to_salts(
+      status = chttp_client_rpc_bind_status_to_salts(
           encode.bind_status);
       *out_error = (crpc_error){
           .status = status, .stage = "rpc-service-encode"};
@@ -678,7 +679,7 @@ int chttp_rpc_service_client_call(
   }
 
   if (rpc_response.kind == CRPC_RESPONSE_RESULT) {
-    status = chttp_rpc_service_client_decode_success(
+    status = chttp_client_rpc_decode_success(
         options, &rpc_response);
     if (status != SALTS_OK) {
       *out_error = (crpc_error){
@@ -687,7 +688,7 @@ int chttp_rpc_service_client_call(
           .stage = "rpc-service-result"};
       goto fail;
     }
-    outcome->kind = CHTTP_RPC_SERVICE_CLIENT_SUCCESS;
+    outcome->kind = CHTTP_CLIENT_RPC_SUCCESS;
     crpc_response_destroy(&rpc_response);
     return SALTS_OK;
   }
@@ -702,9 +703,9 @@ int chttp_rpc_service_client_call(
   }
 
   outcome->remote_code = rpc_response.value.remote_error.code;
-  if (chttp_rpc_service_client_typed_error_index(
+  if (chttp_client_rpc_typed_error_index(
           options->method_plan, outcome->remote_code, &typed_index)) {
-    status = chttp_rpc_service_client_decode_typed_error(
+    status = chttp_client_rpc_decode_typed_error(
         options, &rpc_response, typed_index);
     if (status != SALTS_OK) {
       *out_error = (crpc_error){
@@ -713,12 +714,12 @@ int chttp_rpc_service_client_call(
           .stage = "rpc-service-typed-error"};
       goto fail;
     }
-    outcome->kind = CHTTP_RPC_SERVICE_CLIENT_TYPED_ERROR;
+    outcome->kind = CHTTP_CLIENT_RPC_TYPED_ERROR;
     outcome->typed_error_index = typed_index;
     outcome->typed_error =
         data_bind_binding_plan_error_at(binding, typed_index);
   } else {
-    outcome->kind = CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR;
+    outcome->kind = CHTTP_CLIENT_RPC_REMOTE_ERROR;
   }
 
   crpc_response_destroy(&rpc_response);
@@ -729,5 +730,190 @@ fail:
   (void)data_bind_native_clear(
       options->native_options, options->native_binding->response->data,
       options->response, native_response_bytes, &diagnostic);
+  return status;
+}
+
+/* Async typed projection is a request-owned adapter over the same HTTP slot.
+ * No additional transport Client, poller or retry engine is created. */
+typedef struct chttp_client_rpc_async_context {
+  chttp_client_rpc_call_options options;
+  chttp_async_client_rpc_complete_fn on_complete;
+  void *user;
+  size_t native_response_bytes;
+} chttp_client_rpc_async_context;
+
+static void chttp_client_rpc_async_complete(
+    void *user, chttp_request request,
+    const crpc_response_view *view, const crpc_error *rpc_error) {
+  chttp_client_rpc_async_context *call =
+      (chttp_client_rpc_async_context *)user;
+  chttp_client_rpc_outcome outcome = CHTTP_CLIENT_RPC_OUTCOME_INIT;
+  crpc_error error = {0};
+  crpc_response mapped = {0};
+  DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+  const DataBindBindingPlan *binding;
+  size_t typed_index = SIZE_MAX;
+  int native_initialized = 0;
+  int status = SALTS_OK;
+  if (call == NULL) return;
+  binding = data_bind_rpc_method_plan_binding(call->options.method_plan);
+  if (rpc_error != NULL) {
+    error = *rpc_error;
+    status = error.status;
+  } else if (view == NULL) {
+    error = (crpc_error){.status = SALTS_EPROTO, .stage = "rpc-service-envelope"};
+    status = error.status;
+  } else {
+    /* The caller's destination is untouched until a real terminal RPC
+     * response exists. Rejected admission and transport cancellation cannot
+     * initialize or change it. Any initialized native value is then owned
+     * until this callback, or canonical DataBind cleanup on decode failure. */
+    memset(call->options.response, 0, call->options.response_bytes);
+    {
+      const DataBindStatus init = data_bind_native_init(
+          call->options.native_options,
+          call->options.native_binding->response->data,
+          call->options.response, call->native_response_bytes, &diagnostic);
+      if (init != DATA_BIND_OK) {
+        status = chttp_client_rpc_bind_status_to_salts(init);
+        error = (crpc_error){.status = status,
+                             .http_status = view->http_status,
+                             .stage = "rpc-service-init"};
+      } else {
+        native_initialized = 1;
+        if (call->options.typed_error != NULL &&
+            call->options.typed_error_bytes != 0u)
+          memset(call->options.typed_error, 0,
+                 call->options.typed_error_bytes);
+      }
+    }
+    mapped.request_id = view->request_id;
+    mapped.http_status = view->http_status;
+    mapped.kind = view->kind;
+    mapped.callable = view->callable;
+    if (status != SALTS_OK) {
+      /* Failed native initialization is already rolled back by DataBind. */
+    } else if (view->kind == CRPC_RESPONSE_RESULT) {
+      mapped.value.result = view->value.result;
+      status = chttp_client_rpc_decode_success(&call->options, &mapped);
+      if (status == SALTS_OK)
+        outcome.kind = CHTTP_CLIENT_RPC_SUCCESS;
+      else
+        error = (crpc_error){.status = status,
+                             .http_status = view->http_status,
+                             .stage = "rpc-service-result"};
+    } else if (view->kind == CRPC_RESPONSE_REMOTE_ERROR) {
+      mapped.value.remote_error = view->value.remote_error;
+      outcome.remote_code = view->value.remote_error.code;
+      if (chttp_client_rpc_typed_error_index(
+              call->options.method_plan, outcome.remote_code, &typed_index)) {
+        status = chttp_client_rpc_decode_typed_error(
+            &call->options, &mapped, typed_index);
+        if (status == SALTS_OK) {
+          outcome.kind = CHTTP_CLIENT_RPC_TYPED_ERROR;
+          outcome.typed_error_index = typed_index;
+          outcome.typed_error =
+              data_bind_binding_plan_error_at(binding, typed_index);
+        } else {
+          error = (crpc_error){.status = status,
+                               .http_status = view->http_status,
+                               .stage = "rpc-service-typed-error"};
+        }
+      } else {
+        outcome.kind = CHTTP_CLIENT_RPC_REMOTE_ERROR;
+      }
+    } else {
+      status = SALTS_EPROTO;
+      error = (crpc_error){.status = status,
+                           .http_status = view->http_status,
+                           .stage = "rpc-service-envelope"};
+    }
+  }
+  if (status != SALTS_OK && native_initialized) {
+    (void)data_bind_native_clear(
+        call->options.native_options,
+        call->options.native_binding->response->data,
+        call->options.response, call->native_response_bytes, &diagnostic);
+  }
+  call->on_complete(call->user, request,
+                    status == SALTS_OK ? &outcome : NULL,
+                    status == SALTS_OK ? NULL : &error);
+  free(call);
+}
+
+int chttp_async_client_rpc_call(
+    chttp_async_client *client,
+    const chttp_client_rpc_call_options *options,
+    chttp_async_client_rpc_complete_fn on_complete, void *user,
+    chttp_request *out_request) {
+  chttp_client_rpc_async_context *call;
+  chttp_client_rpc_encode_context encode = {0};
+  chttp_rpc_service_params_mode mode = CHTTP_RPC_SERVICE_PARAMS_NONE;
+  crpc_options rpc_options = {0};
+  crpc_method method = {0};
+  size_t native_request_bytes = 0u, native_response_bytes = 0u;
+  int status;
+  if (out_request == NULL) return SALTS_EINVAL;
+  *out_request = (chttp_request){0};
+  if (client == NULL || client->impl == NULL ||
+      options == NULL || options->size < sizeof(*options) ||
+      on_complete == NULL || options->method_plan == NULL ||
+      options->native_binding == NULL || options->native_options == NULL ||
+      options->request == NULL || options->response == NULL ||
+      options->connection_uri == NULL || options->authority == NULL ||
+      options->target == NULL)
+    return SALTS_EINVAL;
+  if (!chttp_client_rpc_native_type_valid(
+          options->native_binding->request, &native_request_bytes) ||
+      !chttp_client_rpc_native_type_valid(
+          options->native_binding->response, &native_response_bytes))
+    return SALTS_EINVAL;
+  status = chttp_client_rpc_plan_admit(
+      options->method_plan, options->native_binding,
+      options->request_bytes, options->response_bytes, &mode);
+  if (status != SALTS_OK) return status;
+  if (options->native_binding->error_count != 0u &&
+      (options->typed_error == NULL ||
+       options->typed_error_bytes <
+           options->native_binding->error_envelope_bytes))
+    return SALTS_EMSGSIZE;
+  call = (chttp_client_rpc_async_context *)calloc(1u, sizeof(*call));
+  if (call == NULL) return SALTS_ENOMEM;
+  call->options = *options;
+  call->on_complete = on_complete;
+  call->user = user;
+  call->native_response_bytes = native_response_bytes;
+  /* Do not mutate caller native storage until terminal RPC decoding.
+   * A failed or duplicate HTTP admission has no native side effects. */
+  encode.binding = data_bind_rpc_method_plan_binding(options->method_plan);
+  encode.native_options = options->native_options;
+  encode.request = (const unsigned char *)options->request;
+  encode.request_bytes = options->request_bytes;
+  encode.mode = mode;
+  encode.bind_status = DATA_BIND_OK;
+  method.name = data_bind_rpc_method_plan_wire_method(options->method_plan);
+  rpc_options = (crpc_options){
+      .connection_uri = options->connection_uri,
+      .authority = options->authority,
+      .target = options->target,
+      .method = method,
+      .request_id = options->request_id,
+      .metadata = options->metadata,
+      .metadata_count = options->metadata_count,
+      .deadline_ms = options->deadline_ms,
+      .encode_params = mode == CHTTP_RPC_SERVICE_PARAMS_NONE
+                           ? NULL : chttp_client_rpc_encode_params,
+      .params_user = mode == CHTTP_RPC_SERVICE_PARAMS_NONE ? NULL : &encode,
+      .tls = options->tls,
+      .protocol = options->protocol};
+  status = chttp_async_client_rpc_submit(
+      client, &options->limits, &rpc_options,
+      chttp_client_rpc_async_complete, call, out_request);
+  if (status != SALTS_OK) {
+    if (encode.bind_status != DATA_BIND_OK)
+      status = chttp_client_rpc_bind_status_to_salts(encode.bind_status);
+    free(call);
+    *out_request = (chttp_request){0};
+  }
   return status;
 }

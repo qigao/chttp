@@ -1,0 +1,441 @@
+name: CHttp exact published SDK cutover preflight (NO PUBLISH)
+
+'on':
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-rpc-owner-published-cutover-preflight.yml"
+      - "cmake/ci/restore-exact-published-native-sdks.py"
+      - "cmake/ci/test_restore_exact_published_native_sdks.py"
+      - "cmake/ci/attest-exact-published-consumer.py"
+      - "cmake/vcpkg-cache.nuget.config"
+      - "http_server/**"
+      - "http_client/**"
+      - "http_common/**"
+      - "app/tests/installed/**"
+      - "presets/**"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "vcpkg.json"
+  workflow_dispatch:
+    inputs:
+      salts_version:
+        description: Exact officially released Salts.Native version
+        required: true
+        type: string
+      utils_version:
+        description: Exact officially released SaltsUtils.Native version
+        required: true
+        type: string
+      salts_source_sha:
+        description: Full Salts source SHA of the official release tag
+        required: true
+        type: string
+      utils_source_sha:
+        description: Full SaltsUtils source SHA of the official release tag
+        required: true
+        type: string
+      salts_package_sha256:
+        description: SHA-256 of the published Salts.Native NuGet archive
+        required: true
+        type: string
+      utils_package_sha256:
+        description: SHA-256 of the published SaltsUtils.Native NuGet archive
+        required: true
+        type: string
+
+# PR #245 defaults to reviewed released IDs; manual dispatch retains explicit inputs.
+# These are exact immutable bytes, never a dynamic latest-version selector.
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: exact-published-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-contract:
+    name: Check strict published SDK release selection
+    if: >-
+      github.repository == 'qigao/chttp' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 245 &&
+      github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == 'qigao/chttp' &&
+      github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Exercise all version, tag, SHA and NuGet rejection contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s cmake/ci \
+            -p test_restore_exact_published_native_sdks.py -v
+
+  official-sdk-sanitizer:
+    name: Official exact Native DSO / ${{ matrix.mode }}
+    if: ${{ github.repository == 'qigao/chttp' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/chttp-rpc-owner-241') || (github.event_name == 'pull_request' && github.event.pull_request.number == 245 && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'qigao/chttp' && github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {mode: asan-ubsan, asan: "ON", ubsan: "ON", tsan: "OFF", repeats: 1}
+          - {mode: tsan, asan: "OFF", ubsan: "OFF", tsan: "ON", repeats: 5}
+    env:
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Use immutable vcpkg/cache tooling
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+        with:
+          mode: read
+      - name: Restore independent host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+      - name: Cache exact-identity compiler objects
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: official-sdk-${{ matrix.mode }}
+          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.15' }}-${{ inputs.utils_version || '4.3.0-rc.10' }}-${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}-${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
+      - name: Check official release/tag identities and restore exact binary graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          python3 cmake/ci/restore-exact-published-native-sdks.py \
+            --salts-version '${{ inputs.salts_version || '2.3.0-rc.15' }}' \
+            --utils-version '${{ inputs.utils_version || '4.3.0-rc.10' }}' \
+            --salts-sha '${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}' \
+            --utils-sha '${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}'
+      - name: Configure RPC Owner with exact published SDK files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset ci-linux-release-user -B 'build/published-cutover/${{ matrix.mode }}' \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DENABLE_SANITIZER_ADDRESS=${{ matrix.asan }} \
+            -DENABLE_SANITIZER_UNDEFINED=${{ matrix.ubsan }} \
+            -DENABLE_SANITIZER_THREAD=${{ matrix.tsan }} \
+            -DENABLE_SANITIZER_LEAK=OFF -DENABLE_SANITIZER_MEMORY=OFF
+      - name: Build complete RPC Owner conformance targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build 'build/published-cutover/${{ matrix.mode }}' --parallel 2 \
+            --target crpc_transport_test crpc_server_test crpc_api_test \
+                     chttp_rpc_service_test chttp_server_test chttp_h2_client_test \
+                     chttp_rpc_owned_native_test
+      - name: Assert exact CMake SDK roots and real CNet/TSan dynamic links
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "Salts_DIR:PATH=$SALTS_ROOT" 'build/published-cutover/${{ matrix.mode }}/CMakeCache.txt'
+          grep -F "SaltsUtils_DIR:PATH=$SALTS_UTILS_ROOT" 'build/published-cutover/${{ matrix.mode }}/CMakeCache.txt'
+          ldd 'build/published-cutover/${{ matrix.mode }}/bin/crpc_transport_test' \
+            | tee 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+          grep -F "$SALTS_ROOT/lib" 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+          grep -F "$SALTS_UTILS_ROOT/lib" 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+          if readelf -d "$SALTS_ROOT/lib/libcnet.so" | grep -q libtsan; then
+            echo "Expected ordinary native CNet DSO, not a TSan-rebuilt SDK" >&2
+            exit 1
+          fi
+          if [[ '${{ matrix.mode }}' == tsan ]]; then
+            grep -q libtsan 'build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt'
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          commands = json.loads(Path("build/published-cutover/tsan/compile_commands.json").read_text())
+          missing = [c["file"] for c in commands
+                     if "-fsanitize=thread" not in
+                        (c.get("command") or " ".join(c.get("arguments", [])))]
+          if not commands or missing:
+              raise SystemExit(f"Missing first-party TSan: {missing[:8]}")
+          print(f"Qualified CHttp TSan compilation units={len(commands)}")
+          PY
+          fi
+      - name: Run exact published SDK Owner/RPC contracts without suppression
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 480s \
+            ctest --test-dir 'build/published-cutover/${{ matrix.mode }}' \
+            -R '^(crpc_transport_test|crpc_server_test|crpc_api_test|chttp_rpc_service_test|chttp_server_test|chttp_h2_client_test|chttp_rpc_owned_native_test)$' \
+            --repeat until-fail:${{ matrix.repeats }} --no-tests=error \
+            --timeout 90 --output-on-failure
+      - name: Preserve immutable release and sanitizer qualifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-official-cutover-${{ matrix.mode }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/published-cutover/provenance.json
+            build/published-cutover/${{ matrix.mode }}/CMakeCache.txt
+            build/published-cutover/${{ matrix.mode }}/consumer-ldd.txt
+            build/published-cutover/${{ matrix.mode }}/Testing/Temporary/LastTest.log
+      - name: Require unchanged exact CHttp source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+  published-rid-consumers:
+    name: Official exact published CHttp SDK / ${{ matrix.rid }}
+    if: ${{ github.repository == 'qigao/chttp' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/chttp-rpc-owner-241') || (github.event_name == 'pull_request' && github.event.pull_request.number == 245 && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'qigao/chttp' && github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')) }}
+    needs: official-sdk-sanitizer
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, family: linux, rid: linux-x64, host_rid: linux-x64, triplet: x64-linux, host_triplet: x64-linux, preset: ci-sdk-release-user, cross: false}
+          - {runner: ubuntu-24.04-arm, family: linux, rid: linux-arm64, host_rid: linux-arm64, triplet: arm64-linux, host_triplet: arm64-linux, preset: ci-sdk-release-user, cross: false}
+          - {runner: windows-latest, family: windows, rid: windows-x64, host_rid: windows-x64, triplet: x64-windows, host_triplet: x64-windows, preset: ci-sdk-release-user, cross: false}
+          - {runner: macos-15, family: macos, rid: macos-arm64, host_rid: macos-arm64, triplet: arm64-osx, host_triplet: arm64-osx, preset: ci-macos-sdk-release-user, cross: false}
+          - {runner: ubuntu-24.04, family: android, rid: android-arm64-v8a, host_rid: linux-x64, triplet: arm64-android, host_triplet: x64-linux, preset: ci-android-sdk-release-user, cross: true}
+          - {runner: macos-15, family: ios, rid: ios-arm64, host_rid: macos-arm64, triplet: arm64-ios, host_triplet: arm64-osx, preset: ci-ios-sdk-release-user, cross: true}
+    env:
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SALTS: ${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}
+      EXPECTED_UTILS: ${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
+      EXPECTED_SALTS_VERSION: ${{ inputs.salts_version || '2.3.0-rc.15' }}
+      EXPECTED_UTILS_VERSION: ${{ inputs.utils_version || '4.3.0-rc.10' }}
+      EXPECTED_SALTS_DIGEST: ${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}
+      EXPECTED_UTILS_DIGEST: ${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      QIGAO_SDK_RID: ${{ matrix.rid }}
+      QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
+      QIGAO_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      QIGAO_IOS_SYSROOT: iphoneos
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Select canonical iOS binary cache namespace
+        if: matrix.family == 'ios'
+        shell: bash
+        run: echo 'X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache' >> "$GITHUB_ENV"
+      - name: Install OpenAPI conformance test prerequisites
+        if: matrix.cross == false
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install -r openapi/tests/requirements-conformance.txt
+      - name: Configure canonical vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+        with:
+          mode: read
+      - name: Restore independent re2c host tool
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+      - name: Require matching vcpkg target and host architecture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:VCPKG_CACHE_REPOSITORY_ROOT -or
+              -not (Test-Path (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'cmake/QigaoVcpkgToolchain.cmake') -PathType Leaf)) {
+            throw 'Missing canonical vcpkg toolchain'
+          }
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if (-not $env:QIGAO_VCPKG_WINDOWS_TRIPLET -or -not $env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET) {
+              throw 'Missing Windows vcpkg triplets'
+            }
+            "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+            "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" >> $env:GITHUB_ENV
+          }
+          if ($env:RUNNER_OS -eq 'macOS' -and $env:RUNNER_ARCH -ne 'ARM64') {
+            throw 'macOS runner must match arm64 SDK host'
+          }
+      - name: Prepare native Linux and Android toolchain
+        if: matrix.family == 'linux' || matrix.family == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build nasm pkg-config ccache
+          if [[ "${{ matrix.family }}" == android ]]; then test -n "$ANDROID_NDK_HOME"; fi
+      - name: Prepare Apple native and iOS toolchain
+        if: matrix.family == 'macos' || matrix.family == 'ios'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          brew install ninja nasm ccache
+          xcrun --find clang
+      - name: Prepare Windows x64 MSVC toolchain
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja nasm ccache -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Missing Windows compiler tools' }
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vs)) { throw 'MSVC x64 unavailable' }
+          "VSINSTALL=$vs" >> $env:GITHUB_ENV
+      - name: Restore exact six-RID officially published Salts and SaltsUtils NuGet pair
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          python3 cmake/ci/restore-exact-published-native-sdks.py \
+            --salts-version '${{ inputs.salts_version || '2.3.0-rc.15' }}' \
+            --utils-version '${{ inputs.utils_version || '4.3.0-rc.10' }}' \
+            --salts-sha '${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}' \
+            --utils-sha '${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}' \
+            --rid "${{ matrix.rid }}" --host-rid "${{ matrix.host_rid }}"
+      - name: Restore exact-published compiler object cache
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: cnet-once-nupkg-${{ matrix.rid }}
+          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.15' }}-${{ inputs.utils_version || '4.3.0-rc.10' }}-${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}-${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
+      - name: Build / CTest / install exact-published CHttp SDK on Unix
+        if: matrix.family != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=ON
+          if [[ "${{ matrix.cross }}" == true ]]; then tests=OFF; fi
+          # The Linux arm64 SDK is a new native CHttp consumer profile.
+          # Its exact llhttp/tree-sitter vcpkg ABI binaries are not yet cached;
+          # build those immutable ports from source instead of weakening any
+          # tested SDK identity or using a published/legacy runtime.
+          set --
+          if [[ "${{ matrix.rid }}" == linux-arm64 ]]; then
+            set -- "-DVCPKG_INSTALL_OPTIONS="
+          fi
+          cmake --preset "${{ matrix.preset }}" \
+            -DBUILD_TESTING="$tests" -DBUILD_TESTS="$tests" \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
+            "-DSaltsUtils_IDLC_EXECUTABLE=$EXACT_SALTS_IDLC" \
+            "-DSaltsUtils_IDLC_HOST_SALTS_ROOT=$SALTS_HOST_ROOT" "$@"
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
+          if [[ "${{ matrix.cross }}" != true ]]; then
+            ctest --preset "${{ matrix.preset }}" --output-on-failure \
+              --no-tests=error --timeout 90 --stop-on-failure
+          fi
+          # The one-slot WebSocket io_uring generation-reuse case must also
+          # withstand repeated first-close -> terminal-observation -> reconnect.
+          # Keep it as a hard CTest (no retries on failed connections/suppression).
+          if [[ "${{ matrix.rid }}" == linux-x64 ]]; then
+            timeout --signal=TERM --kill-after=10s 300s \
+              ctest --preset "${{ matrix.preset }}" \
+              -R '^chttp_websocket_io_uring_test$' \
+              --repeat until-fail:15 --no-tests=error \
+              --timeout 90 --output-on-failure
+          fi
+          cmake --build --preset "install-${{ matrix.preset }}"
+      - name: Build / CTest / install exact-published CHttp SDK on Windows
+        if: matrix.family == 'windows'
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
+          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "-DSaltsUtils_IDLC_EXECUTABLE=%EXACT_SALTS_IDLC%"
+          if errorlevel 1 exit /b 1
+          cmake --build --preset ci-sdk-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
+          if errorlevel 1 exit /b 1
+          cmake --build --preset install-ci-sdk-release-user
+          if errorlevel 1 exit /b 1
+      - name: Installed C11/C++ App and RPC consumer contracts on Unix
+        if: matrix.family == 'linux' || matrix.family == 'macos'
+        working-directory: app/tests/installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          preset=installed-release-user
+          if [[ "${{ matrix.family }}" == macos ]]; then preset=installed-macos-release-user; fi
+          # An installed consumer configures a second CMake/vcpkg graph.
+          # Linux arm64 must use the same immutable source-build policy as
+          # the official release, because its llhttp/tree-sitter ABIs are not cached.
+          set --
+          if [[ "${{ matrix.rid }}" == linux-arm64 ]]; then
+            set -- "-DVCPKG_INSTALL_OPTIONS="
+          fi
+          cmake --preset "$preset" -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "$@"
+          cmake --build --preset "$preset" --parallel 2
+          ctest --preset "$preset" --output-on-failure --no-tests=error
+      - name: Installed C11/C++ App and RPC consumer contracts on Windows
+        if: matrix.family == 'windows'
+        shell: cmd
+        working-directory: app/tests/installed
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
+          cmake --preset installed-release-user -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+          if errorlevel 1 exit /b 1
+          cmake --build --preset installed-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset installed-release-user --output-on-failure --no-tests=error
+          if errorlevel 1 exit /b 1
+      - name: Attest installed CHttp SDK exact published dependency paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 cmake/ci/attest-exact-published-consumer.py \
+            --rid "${{ matrix.rid }}" --family "${{ matrix.family }}"
+      - name: Upload exact installed SDK and consumer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-official-six-rid-installed-${{ matrix.rid }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/published-cutover/provenance-${{ matrix.rid }}.json
+            stage/sdk/${{ matrix.rid }}/salts-dependency-manifest.txt
+            stage/sdk/${{ matrix.rid }}/saltsutils-dependency-manifest.txt
+            stage/sdk/${{ matrix.rid }}/lib/cmake/Chttp/ChttpTargets.cmake
+            app/tests/installed/build/release/Testing/Temporary/LastTest.log

@@ -14,7 +14,7 @@ runs:
         dotnet-version: '8.0.x'
 
     - name: Configure shared vcpkg binary cache
-      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
       with:
         mode: read
 

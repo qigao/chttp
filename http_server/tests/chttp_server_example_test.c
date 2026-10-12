@@ -27,8 +27,8 @@ static void example_start(example_fixture *fixture, const http_example_config *c
   chttp_client_config client = {0};
   uint16_t port = 0u;
   check_equal(http_example_configure(&fixture->app, config), SALTS_OK);
-  check_equal(crpc_server_start(&fixture->app.rpc), SALTS_OK);
-  check_equal(crpc_server_port(&fixture->app.rpc, &port), SALTS_OK);
+  check_equal(chttp_server_start(&fixture->app.server), SALTS_OK);
+  check_equal(chttp_server_port(&fixture->app.server, &port), SALTS_OK);
   fixture->uri = tstr_format("tcp://127.0.0.1:{}", (unsigned)port);
   check_not_null(fixture->uri);
 #if defined(_WIN32)
@@ -138,15 +138,15 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
   it("releases the stopped application and plugin despite a retained runtime error") {
     example_start(&fixture, &config);
     example_get(&fixture, "/api/add?left=3&right=4", 200u);
-    check_equal(crpc_server_stop(&fixture.app.rpc, HTTP_EXAMPLE_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&fixture.app.server, HTTP_EXAMPLE_TIMEOUT_MS), SALTS_OK);
     /* Model the documented stopped-with-error state, without a platform I/O
      * failure hook. The real RPC/server, executor and DSO still own resources. */
-    chttp_server_impl *server = crpc_server_http(&fixture.app.rpc)->impl;
+    chttp_server_impl *server = fixture.app.server.impl;
     cmeta_mutex_lock(&server->mutex);
     server->stats.terminal_status = SALTS_EIO;
     cmeta_mutex_unlock(&server->mutex);
     check_equal(http_example_close(&fixture.app), SALTS_EIO);
-    check_null(fixture.app.rpc.impl);
+    check_null(fixture.app.server.impl);
     check_null(fixture.app.service.impl);
     check_null(fixture.app.plugins.impl);
     check_null(fixture.app.contract);
@@ -226,7 +226,7 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
   it("rolls back a late configuration failure and allows a clean retry") {
     config.rate.burst = 0u;
     check_equal(http_example_configure(&fixture.app, &config), SALTS_EINVAL);
-    check_null(fixture.app.rpc.impl);
+    check_null(fixture.app.server.impl);
     check_null(fixture.app.service.impl);
     check_null(fixture.app.renderer.impl);
     check_null(fixture.app.contract);
@@ -243,7 +243,7 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
     config.plugin_path = HTTP_EXAMPLE_PLUGIN_PATH ".missing";
     check_equal(http_example_configure(&fixture.app, &config), SALTS_EIO);
     check_null(fixture.app.plugins.impl);
-    check_null(fixture.app.rpc.impl);
+    check_null(fixture.app.server.impl);
     config.plugin_path = HTTP_EXAMPLE_PLUGIN_PATH;
     example_start(&fixture, &config);
     example_get(&fixture, "/api/add?left=3&right=4", 200u);
@@ -254,7 +254,7 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
     config.plugin_path = HTTP_EXAMPLE_BAD_PLUGIN_PATH;
     check_equal(http_example_configure(&fixture.app, &config), SALTS_EINVAL);
     check_null(fixture.app.plugins.impl);
-    check_null(fixture.app.rpc.impl);
+    check_null(fixture.app.server.impl);
     check_false(cflow_executor_valid(&fixture.app.executor));
     config.plugin_path = HTTP_EXAMPLE_PLUGIN_PATH;
     example_start(&fixture, &config);
@@ -289,7 +289,7 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
     check_equal(cmeta_plugin_registry_request_stop(&fixture.app.plugins, fixture.app.plugin_ref), CMETA_PLUGIN_OK);
     check_equal(cmeta_plugin_registry_unload(&fixture.app.plugins, fixture.app.plugin_ref), CMETA_PLUGIN_BUSY);
     check_equal(http_example_close(&fixture.app), SALTS_ETIMEDOUT);
-    check_not_null(fixture.app.rpc.impl);
+    check_not_null(fixture.app.server.impl);
     check_not_null(fixture.app.service.impl);
     check_not_null(fixture.app.plugins.impl);
     check_equal(cmeta_plugin_registry_get_lifecycle(&fixture.app.plugins,

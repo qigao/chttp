@@ -12,8 +12,6 @@ typedef struct crpc_prepared_call {
   bool has_callable;
 } crpc_prepared_call;
 
-bool crpc_client_config_valid(const crpc_client_config *config);
-
 int crpc_prepare_call(const crpc_options *options, size_t max_method_bytes, size_t max_json_depth,
                       size_t max_body_bytes, size_t max_http_header_count, crpc_prepared_call *out);
 

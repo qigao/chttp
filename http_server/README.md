@@ -8,7 +8,7 @@ Cookie Session、JWT admission、WebSocket server 与文件响应。
 Session 由 HTTP server 持有，具备显式容量与 idle timeout。
 使用 `chttp_session_get/set/remove/invalidate` 操作请求上的会话。
 中间件使用 `chttp_server_use()` 注册，通过 `chttp_server_next_call()` 继续处理链；
-路由也支持单独配置中间件。RPC server 通过 `crpc_server_http()` 暴露借用的 HTTP owner，允许在启动前配置这些能力。
+路由也支持单独配置中间件。RPC 直接通过 `chttp_server_rpc_configure()` 和 `chttp_server_rpc_register()` 附着在现有 `chttp_server`，并共享启动前中间件配置。
 
 服务端 owner、并发提交、deferred response 与关闭协议保持不变。
 服务端实现只引用本侧私有头、公共协议头和安装后的 Salts API，不访问客户端私有运行时。
@@ -32,8 +32,7 @@ if (status != SALTS_OK) return status;
 默认 `dedicated_h1 = 0` 保持既有 copied writer 的接纳行为。`1` 选择 CNet 专用
 bridge；H2 无论此值如何都使用现有 stream adapter。错误 size/version 或非 0/1
 的值返回 `SALTS_EINVAL`，start 之后返回 `SALTS_EBUSY`，失败不修改策略。
-选项按值复制，调用后无需保留 options。对 RPC server 可传入借用的
-`crpc_server_http(&rpc_server)`，仍须在启动前配置。
+选项按值复制，调用后无需保留 options。RPC 与普通 HTTP 共用 `chttp_server`，仍须在启动前配置。
 
 选择可配置策略的原因是容量契约不同：既有 H1 writer 可同时保有在途副本和一个
 engine 等待帧；专用 bridge 使用一个权威 output 槽。启用后，回调中的第二次发送
@@ -528,7 +527,7 @@ HTTP/1.1、HTTP/2、WebSocket 路由和 RPC 共用 HTTP 中间件链。
 | 全局 | `chttp_server_use(server, callback, user)` | 按注册顺序，在路由中间件之前执行，也覆盖内置 404/405 |
 | HTTP 路由 | `chttp_server_route_with()` 的 `middleware` / `middleware_count` | 全局中间件之后、路由 handler 之前 |
 | WebSocket 路由 | `chttp_server_websocket_with()` 的同名字段 | 开启握手的回调之前 |
-| RPC | `chttp_server_use(crpc_server_http(server), callback, user)` | JSON-RPC dispatch 之前；作用于 HTTP 请求，而非 batch 中每个方法 |
+| RPC | `chttp_server_use(server, callback, user)` | JSON-RPC dispatch 之前；作用于 HTTP 请求，而非 batch 中每个方法 |
 
 回调接收 `user`、只读 `request`、`response` 和 `next`。
 调用 `chttp_server_next_call(next)` 继续执行链，也可以直接调用 `chttp_server_reply()`
@@ -557,7 +556,7 @@ RPC 中间件回归见 [crpc_server_test.c](tests/crpc_server_test.c)。
 ### CORS 中间件
 
 `chttp_server_use_cors(server, &policy)` 在启动前注册全局 CORS 策略；RPC 使用
-`crpc_server_http()` 取得同一个 server。完整示例已允许 `http://localhost:3000`，
+同一个 `chttp_server`。完整示例已允许 `http://localhost:3000`，
 可从该来源访问 `/rpc` 与 `/file`。
 
 策略通过 `origins` / `origin_count` 指定精确来源；`methods` 指定预检允许的方法；
@@ -595,7 +594,7 @@ JWT admission 和流式 body sink 仍先于普通 middleware：此入口不会�
 ## 正文前 Admission 与阶段 Deadline
 
 这两个入口均在 `chttp_server_init()` 后、`start()` 前设置；RPC 使用
-`crpc_server_http()` 取得底层 server。未注册 hook、未设置预算时保持原行为，
+现有的 `chttp_server`。未注册 hook、未设置预算时保持原行为，
 已有 `chttp_server_config` 的布局不变。配置只在控制面修改，启动后返回 `SALTS_EBUSY`。
 
 `chttp_server_set_admission(server, callback, user)` 设置一个全局决策入口，NULL 清除。

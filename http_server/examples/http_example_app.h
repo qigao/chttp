@@ -28,7 +28,7 @@ typedef struct http_example_config {
 
 /* Private example owner; keep at a stable address until close releases it. */
 typedef struct http_example_app {
-  crpc_server rpc;
+  chttp_server server;
   chttp_rate_limiter limiter;
   chttp_service service;
   chttp_web_renderer renderer;

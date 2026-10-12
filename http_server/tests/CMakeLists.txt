@@ -198,3 +198,6 @@ target_include_directories(chttp_rate_limit_test PRIVATE ${PROJECT_SOURCE_DIR}/h
 add_test(NAME chttp_rate_limit_test COMMAND chttp_rate_limit_test)
 set_target_properties(chttp_rate_limit_test PROPERTIES FOLDER "http_server/tests"
   C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+# Generated RPC is a native Server/Client conformance fixture.
+add_subdirectory(rpc_generated)

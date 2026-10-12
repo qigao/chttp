@@ -139,6 +139,31 @@ static void chttp_h2_test_close_socket(chttp_h2_test_socket socket_value) {
 #endif
 }
 
+/* sockaddr_in.sin_addr is stored in network byte order. Copy the wire
+ * octets explicitly: Linux CI caught h2c test listeners binding 1.0.0.127
+ * instead of 127.0.0.1 after platform endian/header interactions.
+ * This is a test-only loopback address and does not alter CNet behavior. */
+static void chttp_h2_test_set_loopback(struct sockaddr_in *address) {
+  static const unsigned char k_loopback_ipv4[4] = {127u, 0u, 0u, 1u};
+  if (address != NULL)
+    memcpy(&address->sin_addr, k_loopback_ipv4, sizeof(k_loopback_ipv4));
+}
+
+/* Ports in sockaddr are two on-the-wire octets. Decode/encode them
+ * explicitly for this raw test peer so its URI, acceptor and direct peer
+ * agree independently of libc conversion macros or host endianness. */
+static uint16_t chttp_h2_test_port_from_wire(const struct sockaddr_in *address) {
+  unsigned char bytes[2];
+  memcpy(bytes, &address->sin_port, sizeof(bytes));
+  return (uint16_t)(((uint16_t)bytes[0] << 8u) | (uint16_t)bytes[1]);
+}
+
+static void chttp_h2_test_port_to_wire(struct sockaddr_in *address, uint16_t port) {
+  const unsigned char bytes[2] = {(unsigned char)(port >> 8u),
+                                  (unsigned char)(port & 0xffu)};
+  memcpy(&address->sin_port, bytes, sizeof(bytes));
+}
+
 static int chttp_h2_test_listener(chttp_h2_test_socket *out_listener, uint16_t *out_port) {
   struct sockaddr_in address;
 #if defined(_WIN32)
@@ -151,7 +176,7 @@ static int chttp_h2_test_listener(chttp_h2_test_socket *out_listener, uint16_t *
   if (*out_listener == CHTTP_H2_TEST_INVALID_SOCKET) return SALTS_EIO;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  chttp_h2_test_set_loopback(&address);
   if (bind(*out_listener, (const struct sockaddr *)&address, (int)sizeof(address)) != 0 ||
       getsockname(*out_listener, (struct sockaddr *)&address, &length) != 0 ||
       listen(*out_listener, 2) != 0) {
@@ -159,7 +184,7 @@ static int chttp_h2_test_listener(chttp_h2_test_socket *out_listener, uint16_t *
     *out_listener = CHTTP_H2_TEST_INVALID_SOCKET;
     return SALTS_EIO;
   }
-  *out_port = ntohs(address.sin_port);
+  *out_port = chttp_h2_test_port_from_wire(&address);
   return SALTS_OK;
 }
 
@@ -169,8 +194,8 @@ static chttp_h2_test_socket chttp_h2_test_connect_port(uint16_t port) {
   if (socket_value == CHTTP_H2_TEST_INVALID_SOCKET) return socket_value;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  address.sin_port = htons(port);
+  chttp_h2_test_set_loopback(&address);
+  chttp_h2_test_port_to_wire(&address, port);
   if (connect(socket_value, (const struct sockaddr *)&address, (int)sizeof(address)) != 0) {
     chttp_h2_test_close_socket(socket_value);
     return CHTTP_H2_TEST_INVALID_SOCKET;

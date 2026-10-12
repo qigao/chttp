@@ -9,6 +9,12 @@
 int chttp_destination_select(const chttp_destination_options *options,
                                const chttp_request_options *request,
                                cnet_destination_result *out, const char **out_uri);
+/* Optional JSON-RPC logical-ID admission is stored inside HTTP slots. */
+int chttp_async_client_rpc_submit_transport(
+    chttp_async_client *client, const chttp_request_options *options,
+    uint64_t wire_id, uint64_t deadline_at_ms,
+    chttp_request *out_request);
+
 int chttp_async_client_submit_destination(chttp_async_client *client,
                                            const chttp_request_options *options,
                                            const cnet_destination_result *destination,

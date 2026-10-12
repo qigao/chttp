@@ -59,6 +59,12 @@ typedef struct chttp_slot {
   void *user;
   uint32_t generation;
   chttp_protocol protocol;
+  /* JSON-RPC logical wire ID is stored in the existing HTTP request slot.
+   * No independent RPC registry or transport owner is allocated. */
+  uint64_t rpc_wire_id;
+  uint64_t rpc_deadline_at_ms;
+  bool rpc_wire_id_live;
+  bool rpc_deadline_cancelled;
   chttp_slot_state state;
   bool result_delivered;
   bool cancel_requested;
@@ -435,6 +441,15 @@ static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *resp
       slot->result_delivered)
     return;
   impl = slot->client;
+  /* The wire deadline includes response decode and callback delivery. An
+   * ordinary user cancel wins if already admitted before the timeout. */
+  if (slot->rpc_deadline_cancelled ||
+      (slot->rpc_deadline_at_ms != 0u && !slot->cancel_requested &&
+       cmeta_monotonic_ms() >= slot->rpc_deadline_at_ms)) {
+    status = SALTS_ETIMEDOUT;
+    native_status = 0;
+    stage = "rpc-deadline";
+  }
   slot->result_delivered = true;
   if (status != SALTS_OK) {
     error = (chttp_error){.status = status, .native_status = native_status, .stage = stage};
@@ -1507,6 +1522,42 @@ reject:
   return status;
 }
 
+/* The sole RPC identity admission boundary is the existing HTTP request
+ * table. A duplicated logical wire ID is rejected before any HTTP submit,
+ * and stays reserved until terminal transport recycling frees the slot.
+ * This is single-owner like chttp_async_client_submit itself. */
+int chttp_async_client_rpc_submit_transport(
+    chttp_async_client *client, const chttp_request_options *options,
+    uint64_t wire_id, uint64_t deadline_at_ms,
+    chttp_request *out_request) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  chttp_slot *slot;
+  size_t i;
+  int status;
+  if (out_request == NULL) return SALTS_EINVAL;
+  *out_request = (chttp_request){0};
+  if (impl == NULL || options == NULL) return SALTS_EINVAL;
+  if (impl->callback_active || impl->poll_active) return SALTS_EBUSY;
+  if (!impl->admission_open) return SALTS_ESHUTDOWN;
+  for (i = 0u; i < impl->request_capacity; ++i) {
+    const chttp_slot *active = &impl->slots[i];
+    if (active->state != CHTTP_SLOT_FREE &&
+        active->rpc_wire_id_live && active->rpc_wire_id == wire_id)
+      return SALTS_EALREADY;
+  }
+  status = chttp_async_client_submit_impl(
+      client, options, NULL, NULL, NULL, out_request);
+  if (status != SALTS_OK) return status;
+  /* The successful submit published this exact generation; callbacks cannot
+   * run before the owning HTTP progress loop executes again. */
+  slot = chttp_slot_find(impl, *out_request);
+  if (slot == NULL) return SALTS_EPROTO;
+  slot->rpc_wire_id = wire_id;
+  slot->rpc_wire_id_live = true;
+  slot->rpc_deadline_at_ms = deadline_at_ms;
+  return SALTS_OK;
+}
+
 int chttp_async_client_submit(chttp_async_client *client, const chttp_request_options *options,
                               chttp_request *out_request) {
   return chttp_async_client_submit_impl(client, options, NULL, NULL, NULL, out_request);
@@ -1578,26 +1629,86 @@ int chttp_async_request_cancel(chttp_async_client *client, chttp_request request
   return SALTS_OK;
 }
 
+/* RPC deadlines are properties of existing HTTP request slots. The Owner
+ * scans the same bounded table; no RPC poller/timer/connection is created.
+ * Cancellation follows the ordinary CNet/H2 terminal drain contract. */
+static int chttp_rpc_expire_deadlines(chttp_async_client *client,
+                                     chttp_client_impl *impl) {
+  const uint64_t now = cmeta_monotonic_ms();
+  size_t i;
+  int first_status = SALTS_OK;
+  for (i = 0u; i < impl->request_capacity; ++i) {
+    chttp_slot *slot = &impl->slots[i];
+    int status;
+    if (slot->state == CHTTP_SLOT_FREE || slot->result_delivered ||
+        !slot->rpc_wire_id_live || slot->rpc_deadline_at_ms == 0u ||
+        slot->rpc_deadline_cancelled || slot->cancel_requested ||
+        slot->rpc_deadline_at_ms > now)
+      continue;
+    /* H2 explicitly defers reset completion to session_progress, so mark
+     * deadline intent before admitting cancel; roll it back on failure. */
+    slot->rpc_deadline_cancelled = true;
+    status = chttp_async_request_cancel(client, slot->public_handle);
+    if (status != SALTS_OK) {
+      /* H1 may successfully admit close, then report a Pool drain error.
+       * Preserve timeout intent once native cancellation is committed. */
+      if (!slot->cancel_requested)
+        slot->rpc_deadline_cancelled = false;
+      if (status != SALTS_EALREADY && status != SALTS_ENOENT &&
+          first_status == SALTS_OK)
+        first_status = status;
+    }
+  }
+  return first_status;
+}
+
+static uint32_t chttp_rpc_deadline_poll_budget(const chttp_client_impl *impl,
+                                               uint32_t timeout_ms) {
+  const uint64_t now = cmeta_monotonic_ms();
+  uint64_t budget = timeout_ms;
+  size_t i;
+  for (i = 0u; i < impl->request_capacity; ++i) {
+    const chttp_slot *slot = &impl->slots[i];
+    uint64_t remaining;
+    if (slot->state == CHTTP_SLOT_FREE || slot->result_delivered ||
+        !slot->rpc_wire_id_live || slot->rpc_deadline_at_ms == 0u ||
+        slot->rpc_deadline_cancelled || slot->cancel_requested)
+      continue;
+    remaining = slot->rpc_deadline_at_ms > now
+                    ? slot->rpc_deadline_at_ms - now : 0u;
+    if (remaining < budget) budget = remaining;
+  }
+  return (uint32_t)budget;
+}
+
 int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
                             size_t *out_completions) {
   chttp_client_impl *impl = chttp_client_get(client);
   size_t network_events = 0u;
   int status;
   int close_status;
+  int deadline_status;
+  uint32_t wait_ms;
   if (impl == NULL || out_completions == NULL) return SALTS_EINVAL;
   *out_completions = 0u;
   if (impl->poll_active || impl->callback_active) return SALTS_EBUSY;
   if (impl->stopped) return SALTS_ESHUTDOWN;
   impl->poll_active = true;
   impl->completion_count = 0u;
+  deadline_status = chttp_rpc_expire_deadlines(client, impl);
   close_status = chttp_file_runtime_progress(impl);
   if (close_status == SALTS_OK) close_status = chttp_h2_progress_sessions(impl);
   {
     const int retry_status = chttp_retry_pending_closes(impl);
     if (close_status == SALTS_OK) close_status = retry_status;
   }
-  status = cnet_client_poll(&impl->network, chttp_file_runtime_poll_timeout(impl, timeout_ms),
+  wait_ms = chttp_rpc_deadline_poll_budget(impl, timeout_ms);
+  status = cnet_client_poll(&impl->network, chttp_file_runtime_poll_timeout(impl, wait_ms),
                             &network_events);
+  {
+    const int after_deadlines = chttp_rpc_expire_deadlines(client, impl);
+    if (deadline_status == SALTS_OK) deadline_status = after_deadlines;
+  }
   if (status == SALTS_OK) {
     int after_status = chttp_file_runtime_progress(impl);
     if (after_status == SALTS_OK) after_status = chttp_h2_progress_sessions(impl);
@@ -1612,7 +1723,8 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
   *out_completions = impl->completion_count;
   impl->poll_active = false;
   if (status != SALTS_OK) return status;
-  return close_status;
+  if (close_status != SALTS_OK) return close_status;
+  return deadline_status;
 }
 
 int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {

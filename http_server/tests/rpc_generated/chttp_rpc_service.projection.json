@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "rpc": {
+    "operations": [
+      {
+        "service": "Calc",
+        "operation": "Add",
+        "wire_method": "calc.add",
+        "fields": [
+          {
+            "direction": "ingress",
+            "field": "left",
+            "name": "left",
+            "ordinal": 0
+          },
+          {
+            "direction": "ingress",
+            "field": "right",
+            "name": "right",
+            "ordinal": 1
+          },
+          {
+            "direction": "ingress",
+            "field": "scale",
+            "name": "scale",
+            "ordinal": 2
+          },
+          {
+            "direction": "egress",
+            "field": "sum",
+            "name": "sum",
+            "ordinal": 0
+          }
+        ]
+      },
+      {
+        "service": "Calc",
+        "operation": "Note",
+        "wire_method": "calc.note",
+        "fields": [
+          {
+            "direction": "ingress",
+            "field": "left",
+            "name": "left",
+            "ordinal": 0
+          },
+          {
+            "direction": "ingress",
+            "field": "right",
+            "name": "right",
+            "ordinal": 1
+          },
+          {
+            "direction": "ingress",
+            "field": "note",
+            "name": "note",
+            "ordinal": 2
+          },
+          {
+            "direction": "ingress",
+            "field": "tag",
+            "name": "tag",
+            "ordinal": 3
+          },
+          {
+            "direction": "egress",
+            "field": "sum",
+            "name": "sum",
+            "ordinal": 0
+          }
+        ]
+      }
+    ]
+  }
+}

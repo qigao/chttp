@@ -17,6 +17,7 @@ add_library(chttp_server SHARED
   src/chttp_server_file_service.c
 
   rpc/crpc_server.c
+  rpc/chttp_server_rpc_service.c
 
   $<TARGET_OBJECTS:chttp_common>)
 add_library(CHttp::Server ALIAS chttp_server)
@@ -33,9 +34,9 @@ target_include_directories(chttp_server
           ${PROJECT_SOURCE_DIR}/http_common/rpc
           ${PROJECT_SOURCE_DIR}/vendor/cjwt/include)
 target_link_libraries(chttp_server
-  PUBLIC Salts::CNet Salts::CMeta Salts::CSerde
+  PUBLIC Salts::CNet Salts::CMeta Salts::CSerde Salts::DataBind
   PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
-          Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
+          Salts::Plugin Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
           chttp_cjwt Salts::DateTimeParser Salts::CSTL)
 install(TARGETS chttp_server EXPORT ChttpTargets)
 install(DIRECTORY include/http_server DESTINATION include)

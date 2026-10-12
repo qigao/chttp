@@ -1,0 +1,55 @@
+salts_idl_target(
+  TARGET chttp_rpc_service_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_rpc_service.schema"
+  ARTIFACT_NAME "chttp_rpc_service"
+  TRANSPORTS RPC
+  PROJECTION_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/chttp_rpc_service.projection.json")
+
+# Real provider fixture: the native DataBind execution callback lives in
+# this unloadable DSO, not in the test executable. Only Plugin owns its DSO.
+add_library(chttp_rpc_generation_dso SHARED chttp_rpc_generation_dso.c)
+target_link_libraries(chttp_rpc_generation_dso PRIVATE
+  Salts::PluginABI Salts::Platform Salts::DataBind)
+set_target_properties(chttp_rpc_generation_dso PROPERTIES
+  FOLDER "http_server/tests/fixtures" C_STANDARD 11 C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
+# Tests compile and link exclusively against the integrated native Owners.
+add_executable(chttp_rpc_service_test chttp_rpc_service_test.c)
+target_link_libraries(chttp_rpc_service_test PRIVATE
+  CHttp::Server CHttp::Client Salts::DataBind Salts::Plugin Salts::TinyTest)
+target_include_directories(chttp_rpc_service_test PRIVATE
+  "${chttp_rpc_service_fixture_GENERATED_DIR}")
+target_compile_definitions(chttp_rpc_service_test PRIVATE
+  HTTP_RPC_GENERATION_PLUGIN_PATH="$<TARGET_FILE:chttp_rpc_generation_dso>")
+add_dependencies(chttp_rpc_service_test
+  chttp_rpc_service_fixture_idl_codegen chttp_rpc_generation_dso)
+add_test(NAME chttp_rpc_service_test COMMAND chttp_rpc_service_test)
+set_target_properties(chttp_rpc_service_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
+# One explicit owned string is admitted through the canonical v2 CMeta
+# buffer lifecycle. This test checks real heap releases after Server drain.
+add_executable(chttp_rpc_owned_native_test chttp_rpc_owned_native_test.c)
+target_link_libraries(chttp_rpc_owned_native_test PRIVATE
+  CHttp::Server CHttp::Client Salts::DataBind Salts::CMeta Salts::TinyTest)
+target_include_directories(chttp_rpc_owned_native_test PRIVATE
+  "${chttp_rpc_service_fixture_GENERATED_DIR}")
+add_dependencies(chttp_rpc_owned_native_test
+  chttp_rpc_service_fixture_idl_codegen)
+add_test(NAME chttp_rpc_owned_native_test COMMAND chttp_rpc_owned_native_test)
+set_target_properties(chttp_rpc_owned_native_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
+add_executable(chttp_rpc_service_header_cpp_test
+  chttp_rpc_service_header_cpp_test.cpp)
+target_link_libraries(chttp_rpc_service_header_cpp_test PRIVATE
+  CHttp::Server CHttp::Client)
+add_test(NAME chttp_rpc_service_header_cpp_test
+  COMMAND chttp_rpc_service_header_cpp_test)
+set_target_properties(chttp_rpc_service_header_cpp_test PROPERTIES
+  FOLDER "http_server/tests" CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF)

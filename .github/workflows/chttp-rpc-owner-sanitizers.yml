@@ -1,0 +1,97 @@
+name: CHttp RPC Owner sanitizers
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-rpc-owner-sanitizers.yml"
+      - ".github/actions/setup-salts-sdk/**"
+      - "http_client/**"
+      - "http_server/**"
+      - "http_common/**"
+      - "cmake/**"
+      - "presets/**"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "vcpkg.json"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-rpc-owner-sanitizers-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rpc-sanitizers:
+    name: RPC ${{ matrix.mode }} (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { mode: asan-ubsan, asan: "ON", ubsan: "ON", tsan: "OFF" }
+          - { mode: tsan, asan: "OFF", ubsan: "OFF", tsan: "ON" }
+    env:
+      CHTTP_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+
+    steps:
+      - name: Checkout exact RPC integration head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_HEAD_SHA }}
+          persist-credentials: false
+      - name: Restore exact SDK dependencies
+        uses: ./.github/actions/setup-salts-sdk
+      - name: Install ccache and restore compiler object cache
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: rpc-${{ matrix.mode }}-ubuntu-24.04
+          sdk_identity: published-salts-2.3.0-rc.15-utils-4.3.0-rc.10
+
+      - name: Configure instrumented RPC/Owner graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          ccache --zero-stats
+          cmake --preset ci-linux-release-user \
+            -B "build/rpc-${{ matrix.mode }}" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
+            -DENABLE_SANITIZER_ADDRESS=${{ matrix.asan }} \
+            -DENABLE_SANITIZER_UNDEFINED=${{ matrix.ubsan }} \
+            -DENABLE_SANITIZER_THREAD=${{ matrix.tsan }} \
+            -DENABLE_SANITIZER_LEAK=OFF \
+            -DENABLE_SANITIZER_MEMORY=OFF
+
+      - name: Build instrumented RPC/Owner tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build "build/rpc-${{ matrix.mode }}" --parallel 2 \
+            --target chttp_rpc_service_test crpc_server_test crpc_api_test \
+                     crpc_transport_test chttp_server_test chttp_h2_client_test \
+                     chttp_rpc_owned_native_test
+          ccache --show-stats
+
+      - name: Execute instrumented RPC/Owner contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "build/rpc-${{ matrix.mode }}" \
+            -R '^(chttp_rpc_service_test|crpc_server_test|crpc_api_test|crpc_transport_test|chttp_server_test|chttp_h2_client_test|chttp_rpc_owned_native_test)$' \
+            --output-on-failure --no-tests=error --timeout 90 --stop-on-failure
+      - name: Assert exact source and no tracked modifications
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"

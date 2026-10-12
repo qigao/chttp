@@ -18,6 +18,14 @@ enum {
 
 typed_any(idempotent, int, crpc_server_test_identity, (int value)) { return value; }
 
+/* Local test bounds: no independent RPC Client or public owner config. */
+typedef struct chttp_rpc_test_client_config {
+  chttp_client_config http;
+  size_t request_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+} chttp_rpc_test_client_config;
+
 typedef struct crpc_server_test_probe {
   size_t calls;
   size_t notifications;
@@ -95,13 +103,37 @@ static chttp_server_config crpc_server_test_http_config(int enable_http2) {
   return config;
 }
 
-static crpc_server_config crpc_server_test_config(int enable_http2) {
-  const crpc_server_config config = {.http = crpc_server_test_http_config(enable_http2),
-                                     .method_capacity = 8u,
-                                     .max_method_bytes = 64u,
-                                     .max_json_depth = 8u,
-                                     .max_batch_items = 4u};
+typedef struct crpc_server_test_config {
+  chttp_server_config http;
+  chttp_server_rpc_config rpc;
+} crpc_server_test_config;
+
+static crpc_server_test_config crpc_server_test_config_for(int enable_http2) {
+  crpc_server_test_config config = {0};
+  config.http = crpc_server_test_http_config(enable_http2);
+  config.rpc = (chttp_server_rpc_config)CHTTP_SERVER_RPC_CONFIG_INIT;
+  config.rpc.method_capacity = 8u;
+  config.rpc.max_method_bytes = 64u;
+  config.rpc.max_json_depth = 8u;
+  config.rpc.max_batch_items = 4u;
   return config;
+}
+
+/* A test-only transaction spanning the two native pre-start admissions.
+ * This never constructs an independent RPC runtime or a second HTTP Owner. */
+static int crpc_server_test_init(chttp_server *server,
+                                 const crpc_server_test_config *config) {
+  int status;
+  if (server == NULL || config == NULL) return SALTS_EINVAL;
+  if (server->impl != NULL) return SALTS_EALREADY;
+  status = chttp_server_init(server, &config->http);
+  if (status != SALTS_OK) return status;
+  status = chttp_server_rpc_configure(server, &config->rpc);
+  if (status != SALTS_OK) {
+    const int cleanup = chttp_server_destroy(server);
+    if (cleanup != SALTS_OK) return cleanup;
+  }
+  return status;
 }
 
 static chttp_client_config crpc_server_test_http_client_config(void) {
@@ -120,8 +152,8 @@ static chttp_client_config crpc_server_test_http_client_config(void) {
   return config;
 }
 
-static crpc_client_config crpc_server_test_client_config(void) {
-  const crpc_client_config config = {.http = crpc_server_test_http_client_config(),
+static chttp_rpc_test_client_config crpc_server_test_client_config(void) {
+  const chttp_rpc_test_client_config config = {.http = crpc_server_test_http_client_config(),
                                      .request_capacity = 2u,
                                      .max_method_bytes = 64u,
                                      .max_json_depth = 8u};
@@ -293,6 +325,41 @@ static int crpc_server_test_error(void *user, const crpc_server_request_view *re
                                     "detail");
 }
 
+/* #243: a provider encoder may fail after the transport has staged tokens.
+ * The in-progress JSON-RPC result must be discarded, not partially exposed.
+ * Encode and handler invocation are counted independently. */
+typedef struct crpc_server_test_partial_encoder_probe {
+  size_t handler_calls;
+  size_t encoder_calls;
+} crpc_server_test_partial_encoder_probe;
+
+static cserde_status crpc_server_test_partial_result_encode(
+    void *user, cserde_writer *writer) {
+  crpc_server_test_partial_encoder_probe *probe =
+      (crpc_server_test_partial_encoder_probe *)user;
+  const cserde_token value = {
+      .kind = CSERDE_UINT, .value.uint = UINT64_C(123)};
+  cserde_status status;
+  if (probe == NULL || writer == NULL) return CSERDE_INVALID_ARGUMENT;
+  ++probe->encoder_calls;
+  status = cserde_writer_write(writer, &value);
+  if (status != CSERDE_OK) return status;
+  /* Deliberately fail after writing a real value to the staging writer. */
+  return CSERDE_SINK_ERROR;
+}
+
+static int crpc_server_test_failed_output(
+    void *user, const crpc_server_request_view *request,
+    crpc_server_response *response) {
+  crpc_server_test_partial_encoder_probe *probe =
+      (crpc_server_test_partial_encoder_probe *)user;
+  (void)request;
+  if (probe == NULL || response == NULL) return SALTS_EINVAL;
+  ++probe->handler_calls;
+  return crpc_server_response_result(
+      response, crpc_server_test_partial_result_encode, probe);
+}
+
 static int crpc_server_test_incomplete(void *user, const crpc_server_request_view *request,
                                        crpc_server_response *response) {
   crpc_server_test_probe *probe = (crpc_server_test_probe *)user;
@@ -334,72 +401,141 @@ static int crpc_server_test_http_post(chttp_client *client, const char *uri, con
   return chttp_post(client, &options, response, &error);
 }
 
+static int crpc_server_test_health(void *user,
+                                    const chttp_server_request_view *request,
+                                    chttp_server_response *response) {
+  (void)user;
+  (void)request;
+  return chttp_server_reply(response, 200u, "text/plain", "healthy", 7u);
+}
+
 spec("CRPC server") {
+  it("attaches a low-level RPC registry to the existing HTTP Server owner") {
+    static const char call[] = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
+    static const char reply[] = "{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":1}";
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_server_config http_config = crpc_server_test_http_config(0);
+    chttp_server_rpc_config rpc_config = CHTTP_SERVER_RPC_CONFIG_INIT;
+    chttp_client_config client_config = crpc_server_test_http_client_config();
+    crpc_server_test_probe probe = {0};
+    crpc_method ping = {.name = "ping"};
+    chttp_response response = {0};
+    chttp_options health = {0};
+    chttp_error error = {0};
+    uint16_t port = 0u;
+    char uri[64];
+
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EINVAL);
+    check_equal(chttp_server_init(&server, &http_config), SALTS_OK);
+    check_equal(chttp_server_route(&server, CHTTP_METHOD_GET, "/health",
+                                   crpc_server_test_health, NULL), SALTS_OK);
+    rpc_config.size = 0u;
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EINVAL);
+    rpc_config = (chttp_server_rpc_config)CHTTP_SERVER_RPC_CONFIG_INIT;
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_OK);
+    check_equal(chttp_server_rpc_configure(&server, &rpc_config), SALTS_EALREADY);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping,
+                                         crpc_server_test_ping, &probe), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping,
+                                         crpc_server_test_ping, &probe), SALTS_EALREADY);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/another", &ping,
+                                         crpc_server_test_ping, &probe), SALTS_EBUSY);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                           (unsigned)port), 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(crpc_server_test_http_post(&client, uri, "/rpc", call,
+                                           sizeof(call) - 1u, NULL,
+                                           CHTTP_HTTP_1_1, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, reply, sizeof(reply) - 1u);
+    chttp_response_destroy(&response);
+    health = (chttp_options){.connection_uri = uri, .authority = "localhost",
+                             .target = "/health",
+                             .timeout_ms = CRPC_SERVER_TEST_TIMEOUT_MS};
+    check_equal(chttp_get(&client, &health, &response, &error), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, "healthy", 7u);
+    chttp_response_destroy(&response);
+
+    check_equal(probe.calls, (size_t)1u);
+    check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
   it("validates bounded configuration, registry identity, and lifecycle") {
-    crpc_server server = {0};
-    crpc_server_config config = crpc_server_test_config(0);
+    chttp_server server = {0};
+    crpc_server_test_config config = crpc_server_test_config_for(0);
     crpc_method ping = {.name = "ping"};
     crpc_method status = {.service = "system", .name = "status"};
     crpc_server_test_probe probe = {0};
     uint16_t port = 0u;
 
-    check_equal(crpc_server_init(NULL, &config), SALTS_EINVAL);
-    check_equal(crpc_server_init(&server, NULL), SALTS_EINVAL);
-    config.method_capacity = 0u;
-    check_equal(crpc_server_init(&server, &config), SALTS_EINVAL);
-    config = crpc_server_test_config(0);
-    config.max_json_depth = 1u;
-    check_equal(crpc_server_init(&server, &config), SALTS_EINVAL);
-    config = crpc_server_test_config(0);
-    config.max_batch_items = 0u;
-    check_equal(crpc_server_init(&server, &config), SALTS_EINVAL);
-    config = crpc_server_test_config(0);
+    check_equal(crpc_server_test_init(NULL, &config), SALTS_EINVAL);
+    check_equal(crpc_server_test_init(&server, NULL), SALTS_EINVAL);
+    config.rpc.method_capacity = 0u;
+    check_equal(crpc_server_test_init(&server, &config), SALTS_EINVAL);
+    config = crpc_server_test_config_for(0);
+    config.rpc.max_json_depth = 1u;
+    check_equal(crpc_server_test_init(&server, &config), SALTS_EINVAL);
+    config = crpc_server_test_config_for(0);
+    config.rpc.max_batch_items = 0u;
+    check_equal(crpc_server_test_init(&server, &config), SALTS_EINVAL);
+    config = crpc_server_test_config_for(0);
     config.http.max_buffered_response_body_bytes = 0u;
-    check_equal(crpc_server_init(&server, &config), SALTS_EINVAL);
-    config = crpc_server_test_config(0);
+    /* Native HTTP Server selects its bounded buffered-body default on zero.
+     * The RPC registry consumes the effective Server configuration. */
+    check_equal(crpc_server_test_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    config = crpc_server_test_config_for(0);
     config.http.max_buffered_response_body_bytes = 95u;
-    check_equal(crpc_server_init(&server, &config), SALTS_EMSGSIZE);
-    config = crpc_server_test_config(0);
+    check_equal(crpc_server_test_init(&server, &config), SALTS_EMSGSIZE);
+    config = crpc_server_test_config_for(0);
     config.http.max_buffered_response_body_bytes = CRPC_SERVER_TEST_MIN_BATCH_RESPONSE_BYTES - 1u;
-    check_equal(crpc_server_init(&server, &config), SALTS_EMSGSIZE);
+    check_equal(crpc_server_test_init(&server, &config), SALTS_EMSGSIZE);
 
-    config = crpc_server_test_config(0);
-    config.method_capacity = 3u;
-    check_equal(crpc_server_init(&server, &config), SALTS_OK);
-    check_not_null(crpc_server_http(&server));
-    check_equal(crpc_server_init(&server, &config), SALTS_EALREADY);
-    check_equal(crpc_server_register(&server, "/rpc/:tenant", &ping, crpc_server_test_ping, &probe),
+    config = crpc_server_test_config_for(0);
+    config.rpc.method_capacity = 3u;
+    check_equal(crpc_server_test_init(&server, &config), SALTS_OK);
+    check_not_null(&server);
+    check_equal(crpc_server_test_init(&server, &config), SALTS_EALREADY);
+    check_equal(chttp_server_rpc_register(&server, "/rpc/:tenant", &ping, crpc_server_test_ping, &probe),
                 SALTS_EINVAL);
-    check_equal(crpc_server_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
                 SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
                 SALTS_EALREADY);
-    check_equal(crpc_server_register(&server, "/rpc", &status, crpc_server_test_status, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &status, crpc_server_test_status, &probe),
                 SALTS_OK);
-    check_equal(crpc_server_register(&server, "/other", &ping, crpc_server_test_ping, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/other", &ping, crpc_server_test_ping, &probe),
                 SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
                 SALTS_EALREADY);
-    check_equal(crpc_server_register(&server, "/full", &ping, crpc_server_test_ping, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/full", &ping, crpc_server_test_ping, &probe),
                 SALTS_ENOBUFS);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_true(port != 0u);
-    check_equal(crpc_server_start(&server), SALTS_EALREADY);
-    check_equal(crpc_server_register(&server, "/late", &ping, crpc_server_test_ping, &probe),
+    check_equal(chttp_server_start(&server), SALTS_EALREADY);
+    check_equal(chttp_server_rpc_register(&server, "/late", &ping, crpc_server_test_ping, &probe),
                 SALTS_EBUSY);
-    check_equal(crpc_server_destroy(&server), SALTS_EBUSY);
-    check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_EBUSY);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
     check_null(server.impl);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
   it("serves CMeta and CSerde unary methods on multiple endpoints with middleware sessions") {
-    crpc_server server = {0};
-    crpc_client client = {0};
-    crpc_server_config server_config = crpc_server_test_config(0);
-    crpc_client_config client_config = crpc_server_test_client_config();
+    chttp_server server = {0};
+    chttp_client client = {0};
+    crpc_server_test_config server_config = crpc_server_test_config_for(0);
+    chttp_rpc_test_client_config client_config = crpc_server_test_client_config();
+    chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
     crpc_server_test_probe method_probe = {0};
     crpc_server_test_probe middleware_probe = {0};
     crpc_method math = {
@@ -412,20 +548,24 @@ spec("CRPC server") {
     char uri[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
     check_equal(
-        chttp_server_use(crpc_server_http(&server), crpc_server_test_middleware, &middleware_probe),
+        chttp_server_use(&server, crpc_server_test_middleware, &middleware_probe),
         SALTS_OK);
     check_equal(
-        crpc_server_register(&server, "/rpc/math", &math, crpc_server_test_math, &method_probe),
+        chttp_server_rpc_register(&server, "/rpc/math", &math, crpc_server_test_math, &method_probe),
         SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc/status", &status, crpc_server_test_status,
+    check_equal(chttp_server_rpc_register(&server, "/rpc/status", &status, crpc_server_test_status,
                                      &method_probe),
                 SALTS_OK);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
-    check_equal(crpc_client_init(&client, &client_config), SALTS_OK);
+    limits.max_method_bytes = client_config.max_method_bytes;
+    limits.max_json_depth = client_config.max_json_depth;
+    limits.max_request_body_bytes = client_config.http.max_request_body_bytes;
+    limits.max_http_header_count = client_config.http.max_header_count;
+    check_equal(chttp_client_init(&client, &client_config.http), SALTS_OK);
 
     options = (crpc_options){.connection_uri = uri,
                              .authority = "localhost",
@@ -434,7 +574,7 @@ spec("CRPC server") {
                              .request_id = UINT64_C(9),
                              .deadline_ms = CRPC_SERVER_TEST_TIMEOUT_MS,
                              .encode_params = crpc_server_test_encode_params};
-    check_equal(crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
+    check_equal(chttp_client_rpc_request_reply(&client, &limits, &options, &response, &error), SALTS_OK);
     check_equal(response.kind, CRPC_RESPONSE_RESULT);
     check_not_null(response.callable);
     check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
@@ -448,7 +588,7 @@ spec("CRPC server") {
                              .method = status,
                              .request_id = UINT64_C(10),
                              .deadline_ms = CRPC_SERVER_TEST_TIMEOUT_MS};
-    check_equal(crpc_request_reply(&client, &options, &response, &error), SALTS_OK);
+    check_equal(chttp_client_rpc_request_reply(&client, &limits, &options, &response, &error), SALTS_OK);
     check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
     check_equal(token.kind, CSERDE_STRING);
     check_equal(token.value.slice.data, (const unsigned char *)"ready", 5u);
@@ -458,9 +598,9 @@ spec("CRPC server") {
     check_equal(method_probe.callable_calls, (size_t)1u);
     check_equal(method_probe.second_response_status, SALTS_EALREADY);
     check_equal(middleware_probe.middleware_calls, (size_t)2u);
-    check_equal(crpc_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
   it("selects object params by name without exposing the JSON DOM") {
@@ -475,9 +615,9 @@ spec("CRPC server") {
     static const char duplicate_reply[] =
         "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,"
         "\"message\":\"Internal error\"},\"id\":12}";
-    crpc_server server = {0};
+    chttp_server server = {0};
     chttp_client client = {0};
-    crpc_server_config server_config = crpc_server_test_config(0);
+    crpc_server_test_config server_config = crpc_server_test_config_for(0);
     chttp_client_config client_config =
         crpc_server_test_http_client_config();
     crpc_server_test_probe probe = {0};
@@ -486,13 +626,13 @@ spec("CRPC server") {
     char uri[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
     check_equal(
-        crpc_server_register(
+        chttp_server_rpc_register(
             &server, "/rpc", &named, crpc_server_test_named, &probe),
         SALTS_OK);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(
         snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
                  (unsigned int)port),
@@ -524,8 +664,8 @@ spec("CRPC server") {
         chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS),
         SALTS_OK);
     check_equal(
-        crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+        chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
   it("suppresses notifications and emits bounded ordered batch responses") {
@@ -571,9 +711,9 @@ spec("CRPC server") {
     static const char null_id[] = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":null}";
     static const char scalar_params[] =
         "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"params\":1,\"id\":7}";
-    crpc_server server = {0};
+    chttp_server server = {0};
     chttp_client client = {0};
-    crpc_server_config server_config = crpc_server_test_config(0);
+    crpc_server_test_config server_config = crpc_server_test_config_for(0);
     chttp_client_config client_config = crpc_server_test_http_client_config();
     crpc_server_test_probe probe = {0};
     crpc_method ping = {.name = "ping"};
@@ -583,16 +723,16 @@ spec("CRPC server") {
     char uri[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
                 SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc", &fail, crpc_server_test_error, &probe),
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &fail, crpc_server_test_error, &probe),
                 SALTS_OK);
     check_equal(
-        crpc_server_register(&server, "/rpc", &no_reply, crpc_server_test_incomplete, &probe),
+        chttp_server_rpc_register(&server, "/rpc", &no_reply, crpc_server_test_incomplete, &probe),
         SALTS_OK);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
@@ -688,8 +828,68 @@ spec("CRPC server") {
     check_equal(probe.calls, (size_t)6u);
     check_equal(probe.notifications, (size_t)3u);
     check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("discards partial result encoding and serves the next RPC exactly once") {
+    static const char fail_call[] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"broken\",\"id\":71}";
+    static const char fail_reply[] =
+        "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,"
+        "\"message\":\"Internal error\"},\"id\":71}";
+    static const char next_call[] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":72}";
+    static const char next_reply[] =
+        "{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":72}";
+    chttp_server server = {0};
+    chttp_client client = {0};
+    crpc_server_test_config server_config = crpc_server_test_config_for(0);
+    chttp_client_config client_config = crpc_server_test_http_client_config();
+    crpc_server_test_partial_encoder_probe bad = {0};
+    crpc_server_test_probe good = {0};
+    const crpc_method broken = {.name = "broken"};
+    const crpc_method ping = {.name = "ping"};
+    chttp_response response = {0};
+    char uri[64];
+    uint16_t port = 0u;
+
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_rpc_register(
+        &server, "/rpc", &broken, crpc_server_test_failed_output, &bad),
+        SALTS_OK);
+    check_equal(chttp_server_rpc_register(
+        &server, "/rpc", &ping, crpc_server_test_ping, &good), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                           (unsigned int)port), 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(crpc_server_test_http_post(
+        &client, uri, "/rpc", fail_call, sizeof(fail_call) - 1u, NULL,
+        CHTTP_HTTP_1_1, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, fail_reply, sizeof(fail_reply) - 1u);
+    chttp_response_destroy(&response);
+    /* On the identical HTTP Owner, neither stale partial result bytes nor
+     * a second terminal response may leak into the next request. */
+    check_equal(crpc_server_test_http_post(
+        &client, uri, "/rpc", next_call, sizeof(next_call) - 1u, NULL,
+        CHTTP_HTTP_1_1, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, next_reply, sizeof(next_reply) - 1u);
+    chttp_response_destroy(&response);
+    check_equal(chttp_client_destroy(
+        &client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(
+        &server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    /* The network response isn't itself a TSan-visible join of the Owner.
+     * Read callback-owned counters only after the stop/destroy barrier. */
+    check_equal(bad.handler_calls, (size_t)1u);
+    check_equal(bad.encoder_calls, (size_t)1u);
+    check_equal(good.calls, (size_t)1u);
   }
 
   it("maps per-item batch response overflow without skipping later calls") {
@@ -702,9 +902,9 @@ spec("CRPC server") {
         "error\"},\"id\":1},{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":"
         "\"Internal error\"},\"id\":2},{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,"
         "\"message\":\"Internal error\"},\"id\":3}]";
-    crpc_server server = {0};
+    chttp_server server = {0};
     chttp_client client = {0};
-    crpc_server_config server_config = crpc_server_test_config(0);
+    crpc_server_test_config server_config = crpc_server_test_config_for(0);
     chttp_client_config client_config = crpc_server_test_http_client_config();
     crpc_server_test_probe probe = {0};
     crpc_method method = {.name = "large"};
@@ -714,12 +914,12 @@ spec("CRPC server") {
 
     server_config.http.max_response_body_bytes = 400u;
     server_config.http.max_buffered_response_body_bytes = 400u;
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
     check_equal(
-        crpc_server_register(&server, "/rpc", &method, crpc_server_test_large_result, &probe),
+        chttp_server_rpc_register(&server, "/rpc", &method, crpc_server_test_large_result, &probe),
         SALTS_OK);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
     check_equal(crpc_server_test_http_post(&client, uri, "/rpc", batch, sizeof(batch) - 1u, NULL,
@@ -731,16 +931,16 @@ spec("CRPC server") {
     check_equal(probe.notifications, (size_t)1u);
     chttp_response_destroy(&response);
     check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
   it("serves the same RPC endpoint over cleartext HTTP/2") {
     static const char call[] = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
     static const char reply[] = "{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":1}";
-    crpc_server server = {0};
+    chttp_server server = {0};
     chttp_client client = {0};
-    crpc_server_config server_config = crpc_server_test_config(1);
+    crpc_server_test_config server_config = crpc_server_test_config_for(1);
     chttp_client_config client_config = crpc_server_test_http_client_config();
     crpc_server_test_probe probe = {0};
     crpc_method ping = {.name = "ping"};
@@ -748,11 +948,11 @@ spec("CRPC server") {
     char uri[64];
     uint16_t port = 0u;
 
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
                 SALTS_OK);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
     check_equal(crpc_server_test_http_post(&client, uri, "/rpc", call, sizeof(call) - 1u, NULL,
@@ -770,8 +970,8 @@ spec("CRPC server") {
                 sizeof(crpc_server_test_h2_batch_reply) - 1u);
     chttp_response_destroy(&response);
     check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
   it("serves the same RPC endpoint over TLS HTTP/1.1 and HTTP/2") {
@@ -780,11 +980,11 @@ spec("CRPC server") {
     static const char *h1[] = {"http/1.1"};
     static const char call[] = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
     static const char reply[] = "{\"jsonrpc\":\"2.0\",\"result\":1,\"id\":1}";
-    crpc_server server = {0};
+    chttp_server server = {0};
     chttp_client client = {0};
     chttp_tls_profile h2_profile = {0};
     chttp_tls_profile h1_profile = {0};
-    crpc_server_config server_config = crpc_server_test_config(1);
+    crpc_server_test_config server_config = crpc_server_test_config_for(1);
     chttp_client_config client_config = crpc_server_test_http_client_config();
     crpc_server_test_probe probe = {0};
     crpc_method ping = {.name = "ping"};
@@ -825,8 +1025,8 @@ spec("CRPC server") {
 
     check_equal(chttp_tls_profile_init(&h2_profile, &h2_tls), SALTS_OK);
     check_equal(chttp_tls_profile_init(&h1_profile, &h1_tls), SALTS_OK);
-    check_equal(crpc_server_init(&server, &server_config), SALTS_OK);
-    check_equal(crpc_server_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_rpc_register(&server, "/rpc", &ping, crpc_server_test_ping, &probe),
                 SALTS_OK);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
@@ -834,8 +1034,8 @@ spec("CRPC server") {
     free(cert_path);
     free(key_path);
     free(ca_path);
-    check_equal(crpc_server_start(&server), SALTS_OK);
-    check_equal(crpc_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);
     check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
     check_equal(crpc_server_test_http_post(&client, uri, "/rpc", call, sizeof(call) - 1u,
@@ -869,7 +1069,7 @@ spec("CRPC server") {
     check_equal(chttp_client_destroy(&client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_tls_profile_destroy(&h1_profile), SALTS_OK);
     check_equal(chttp_tls_profile_destroy(&h2_profile), SALTS_OK);
-    check_equal(crpc_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_server_destroy(&server), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 }

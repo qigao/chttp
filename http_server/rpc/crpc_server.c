@@ -1,5 +1,7 @@
 #include <http_server/rpc.h>
 #include "crpc_internal.h"
+#include "../src/chttp_server_runtime.h"
+#include "chttp_server_rpc_service_internal.h"
 
 #include <json_cserde_reader.h>
 #include <vstr.h>
@@ -22,6 +24,14 @@ static const char CRPC_SERVER_LARGEST_PROTOCOL_ERROR[] =
     "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32601,\"message\":\"Method not "
     "found\"},\"id\":18446744073709551615}";
 
+typedef struct chttp_rpc_registry_config {
+  chttp_server_config http;
+  size_t method_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+  size_t max_batch_items;
+} chttp_rpc_registry_config;
+
 typedef struct crpc_server_method_record {
   char *target;
   char *method;
@@ -33,14 +43,15 @@ typedef struct crpc_server_method_record {
 
 typedef struct crpc_server_impl {
   chttp_server http;
-  crpc_server_config config;
+  chttp_rpc_registry_config config;
   crpc_server_method_record *methods;
   char *target_storage;
   char *method_storage;
   char *method_scratch;
   size_t method_count;
   size_t response_body_limit;
-  bool started;
+  void *generated;
+  chttp_server_rpc_generated_config generated_config;
 } crpc_server_impl;
 
 typedef struct crpc_server_response_context {
@@ -63,14 +74,6 @@ typedef struct crpc_server_params_selection_context {
   const json_value_t *params;
   size_t max_depth;
 } crpc_server_params_selection_context;
-
-static crpc_server_impl *crpc_server_get(crpc_server *server) {
-  return server != NULL ? (crpc_server_impl *)server->impl : NULL;
-}
-
-static const crpc_server_impl *crpc_server_get_const(const crpc_server *server) {
-  return server != NULL ? (const crpc_server_impl *)server->impl : NULL;
-}
 
 int crpc_server_request_param_open(
     const crpc_server_request_view *request,
@@ -164,7 +167,7 @@ static int crpc_server_bounded_length(const char *text, size_t limit, size_t *ou
   return SALTS_ENAMETOOLONG;
 }
 
-static int crpc_server_config_validate(const crpc_server_config *config, size_t *out_target_bytes,
+static int chttp_rpc_registry_config_validate(const chttp_rpc_registry_config *config, size_t *out_target_bytes,
                                        size_t *out_method_bytes) {
   size_t minimum_response_size;
   if (config == NULL || config->method_capacity == 0u || config->max_method_bytes == 0u ||
@@ -190,6 +193,8 @@ static int crpc_server_config_validate(const crpc_server_config *config, size_t 
 
 static void crpc_server_impl_free(crpc_server_impl *impl) {
   if (impl == NULL) return;
+  chttp_server_rpc_generated_release(impl->generated);
+  impl->generated = NULL;
   free(impl->method_storage);
   free(impl->method_scratch);
   free(impl->target_storage);
@@ -438,15 +443,17 @@ static int crpc_server_route_handler(void *user, const chttp_server_request_view
   return status;
 }
 
-int crpc_server_init(crpc_server *server, const crpc_server_config *config) {
+/* Share one bounded registry constructor between legacy CRPC and attached HTTP.
+ * Only the former creates its own HTTP runtime. */
+static int crpc_server_impl_alloc(const chttp_rpc_registry_config *config,
+                                  crpc_server_impl **out_impl) {
   crpc_server_impl *impl;
   size_t target_bytes;
   size_t method_bytes;
   int status;
-
-  if (server == NULL || config == NULL) return SALTS_EINVAL;
-  if (server->impl != NULL) return SALTS_EALREADY;
-  status = crpc_server_config_validate(config, &target_bytes, &method_bytes);
+  if (config == NULL || out_impl == NULL) return SALTS_EINVAL;
+  *out_impl = NULL;
+  status = chttp_rpc_registry_config_validate(config, &target_bytes, &method_bytes);
   if (status != SALTS_OK) return status;
   impl = (crpc_server_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
@@ -455,31 +462,61 @@ int crpc_server_init(crpc_server *server, const crpc_server_config *config) {
   impl->target_storage = (char *)calloc(target_bytes, 1u);
   impl->method_storage = (char *)calloc(method_bytes, 1u);
   impl->method_scratch = (char *)calloc(config->max_method_bytes + 1u, 1u);
-  if (impl->methods == NULL || impl->target_storage == NULL || impl->method_storage == NULL ||
-      impl->method_scratch == NULL) {
+  if (impl->methods == NULL || impl->target_storage == NULL ||
+      impl->method_storage == NULL || impl->method_scratch == NULL) {
     crpc_server_impl_free(impl);
     return SALTS_ENOMEM;
-  }
-  status = chttp_server_init(&impl->http, &config->http);
-  if (status != SALTS_OK) {
-    crpc_server_impl_free(impl);
-    return status;
   }
   impl->config = *config;
   impl->config.http.tls = NULL;
   impl->response_body_limit = config->http.max_buffered_response_body_bytes;
-  server->impl = impl;
+  *out_impl = impl;
   return SALTS_OK;
 }
 
-chttp_server *crpc_server_http(crpc_server *server) {
-  crpc_server_impl *impl = crpc_server_get(server);
-  return impl != NULL ? &impl->http : NULL;
+/* Host HTTP Server owns all network/runtime lifecycle. */
+int chttp_server_rpc_configure(chttp_server *server,
+                              const chttp_server_rpc_config *config) {
+  chttp_server_impl *host;
+  chttp_rpc_registry_config rpc_config;
+  crpc_server_impl *impl;
+  int status;
+  if (server == NULL || server->impl == NULL || config == NULL ||
+      config->size != sizeof(*config))
+    return SALTS_EINVAL;
+  host = (chttp_server_impl *)server->impl;
+  if (host->start_called) return SALTS_EBUSY;
+  if (host->rpc_owner != NULL) return SALTS_EALREADY;
+  rpc_config = (chttp_rpc_registry_config){0};
+  rpc_config.http = host->config;
+  rpc_config.method_capacity = config->method_capacity;
+  rpc_config.max_method_bytes = config->max_method_bytes;
+  rpc_config.max_json_depth = config->max_json_depth;
+  rpc_config.max_batch_items = config->max_batch_items;
+  status = crpc_server_impl_alloc(&rpc_config, &impl);
+  if (status != SALTS_OK) return status;
+  impl->http = *server;
+  impl->generated_config = (chttp_server_rpc_generated_config){
+      .method_capacity = config->method_capacity,
+      .max_output_value_bytes = config->max_output_value_bytes,
+      .max_call_frame_bytes = config->max_call_frame_bytes,
+      .native_workspace_bytes = config->native_workspace_bytes,
+      .native_max_depth = config->native_max_depth,
+      .native_max_items = config->native_max_items,
+      .native_max_owned_bytes = config->native_max_owned_bytes,
+      .max_inflight_calls = config->max_inflight_calls};
+  host->rpc_owner = impl;
+  return SALTS_OK;
 }
 
-int crpc_server_register(crpc_server *server, const char *target, const crpc_method *method,
-                         crpc_server_method_fn handler, void *user) {
-  crpc_server_impl *impl = crpc_server_get(server);
+void chttp_server_rpc_owner_release(void *rpc_owner) {
+  /* No accepted HTTP/RPC callback may still access this registry. */
+  crpc_server_impl_free((crpc_server_impl *)rpc_owner);
+}
+
+static int crpc_server_register_impl(
+    crpc_server_impl *impl, const char *target, const crpc_method *method,
+    crpc_server_method_fn handler, void *user) {
   crpc_server_method_record *record;
   cmeta_callable callable = {0};
   bool has_callable = false;
@@ -489,7 +526,6 @@ int crpc_server_register(crpc_server *server, const char *target, const crpc_met
   int status;
 
   if (impl == NULL || target == NULL || method == NULL || handler == NULL) return SALTS_EINVAL;
-  if (impl->started) return SALTS_EBUSY;
   status = crpc_server_bounded_length(target, impl->config.http.max_target_bytes, &target_size);
   if (status != SALTS_OK || target_size == 0u) return status != SALTS_OK ? status : SALTS_EINVAL;
   if (memchr(target, ':', target_size) != NULL) return SALTS_EINVAL;
@@ -520,6 +556,37 @@ int crpc_server_register(crpc_server *server, const char *target, const crpc_met
   record->user = user;
   ++impl->method_count;
   return SALTS_OK;
+}
+
+int chttp_server_rpc_register(chttp_server *server, const char *target,
+                              const crpc_method *method,
+                              crpc_server_method_fn handler, void *user) {
+  chttp_server_impl *host;
+  if (server == NULL || server->impl == NULL) return SALTS_EINVAL;
+  host = (chttp_server_impl *)server->impl;
+  if (host->start_called) return SALTS_EBUSY;
+  if (host->rpc_owner == NULL) return SALTS_EINVAL;
+  return crpc_server_register_impl(
+      (crpc_server_impl *)host->rpc_owner, target, method, handler, user);
+}
+
+int chttp_server_rpc_mount(chttp_server *server,
+                           const chttp_server_rpc_mount_options *mount) {
+  chttp_server_impl *host;
+  crpc_server_impl *impl;
+  int status;
+  if (server == NULL || server->impl == NULL || mount == NULL)
+    return SALTS_EINVAL;
+  host = (chttp_server_impl *)server->impl;
+  if (host->start_called) return SALTS_EBUSY;
+  impl = (crpc_server_impl *)host->rpc_owner;
+  if (impl == NULL) return SALTS_EINVAL;
+  if (impl->generated == NULL) {
+    status = chttp_server_rpc_generated_init(
+        &impl->generated, &impl->generated_config);
+    if (status != SALTS_OK) return status;
+  }
+  return chttp_server_rpc_generated_mount(impl->generated, server, mount);
 }
 
 int crpc_server_response_result(crpc_server_response *response, crpc_encode_value_fn encode,
@@ -560,39 +627,3 @@ int crpc_server_response_error(crpc_server_response *response, int64_t code, con
   return status;
 }
 
-int crpc_server_start(crpc_server *server) {
-  crpc_server_impl *impl = crpc_server_get(server);
-  int status;
-  if (impl == NULL) return SALTS_EINVAL;
-  if (impl->started) return SALTS_EALREADY;
-  status = chttp_server_start(&impl->http);
-  if (status == SALTS_OK) impl->started = true;
-  return status;
-}
-
-int crpc_server_port(const crpc_server *server, uint16_t *out_port) {
-  const crpc_server_impl *impl = crpc_server_get_const(server);
-  if (impl == NULL) {
-    if (out_port != NULL) *out_port = 0u;
-    return SALTS_EINVAL;
-  }
-  return chttp_server_port(&impl->http, out_port);
-}
-
-int crpc_server_stop(crpc_server *server, uint32_t timeout_ms) {
-  crpc_server_impl *impl = crpc_server_get(server);
-  return impl != NULL ? chttp_server_stop(&impl->http, timeout_ms) : SALTS_EINVAL;
-}
-
-int crpc_server_destroy(crpc_server *server) {
-  crpc_server_impl *impl;
-  int status;
-  if (server == NULL) return SALTS_EINVAL;
-  impl = crpc_server_get(server);
-  if (impl == NULL) return SALTS_OK;
-  status = chttp_server_destroy(&impl->http);
-  if (status != SALTS_OK) return status;
-  crpc_server_impl_free(impl);
-  server->impl = NULL;
-  return SALTS_OK;
-}

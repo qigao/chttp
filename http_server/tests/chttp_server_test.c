@@ -215,8 +215,15 @@ static int chttp_server_test_raw_connect(uint16_t port, chttp_server_test_socket
   if (socket_value == CHTTP_SERVER_TEST_INVALID_SOCKET) return SALTS_EIO;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  /* Raw fixture sockaddr expects wire octets (not host-order integers).
+   * Explicit bytes avoid endianness-dependent bind/peer mismatches on Linux. */
+  {
+    const unsigned char endpoint_port[2] = {
+        (unsigned char)(port >> 8u), (unsigned char)(port & 0xffu)};
+    const unsigned char endpoint_address[4] = {127u, 0u, 0u, 1u};
+    memcpy(&address.sin_port, endpoint_port, sizeof(endpoint_port));
+    memcpy(&address.sin_addr, endpoint_address, sizeof(endpoint_address));
+  }
   if (chttp_server_test_socket_timeout(socket_value) != SALTS_OK ||
       connect(socket_value, (const struct sockaddr *)&address, sizeof(address)) != 0) {
     chttp_server_test_close_socket(socket_value);
@@ -296,6 +303,22 @@ static int chttp_server_test_wait_active(chttp_server *server, uint64_t expected
     const int status = chttp_server_get_stats(server, &stats);
     if (status != SALTS_OK) return status;
     if (stats.active_connections == expected) return SALTS_OK;
+    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    cmeta_thread_yield();
+  }
+}
+
+
+/* A successful client connect is not proof of acceptor publication. Observe
+ * the actual rejected-connection counter with a bounded public-stats barrier. */
+static int chttp_server_test_wait_rejected(chttp_server *server, uint64_t minimum,
+                                           uint32_t timeout_ms) {
+  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  for (;;) {
+    chttp_server_stats stats = {0};
+    const int status = chttp_server_get_stats(server, &stats);
+    if (status != SALTS_OK) return status;
+    if (stats.rejected_connections >= minimum) return SALTS_OK;
     if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
     cmeta_thread_yield();
   }
@@ -2760,10 +2783,13 @@ spec("CHTTP background HTTP/1.1 server") {
     check_not_null(strstr(response, "HTTP/1.1 200 OK"));
     check_not_null(strstr(response, "Content-Length: 17"));
     check_not_null(strstr(response, "\r\n\r\nstreamed-response"));
+
+    /* Receiving the wire body does not join the asynchronous source callback.
+     * Stop is the actual Owner terminal/drain barrier for the borrowed source
+     * state: inspect producer counters only after every callback has exited. */
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(probe.offset, sizeof(payload) - 1u);
     check_equal(probe.calls, (size_t)7u);
-
-    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
@@ -2798,9 +2824,12 @@ spec("CHTTP background HTTP/1.1 server") {
     body = strstr(response, "\r\n\r\n");
     check_not_null(body);
     check_equal(response_size, (size_t)(body + 4u - response));
-    check_equal(probe.calls, (size_t)1u);
 
+    /* Failure after committed headers can finish its source callback after
+     * peer-visible EOF. Drain the Server before observing borrowed source
+     * accounting; raw socket completion does not publish callback terminal. */
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(probe.calls, (size_t)1u);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
@@ -2829,10 +2858,11 @@ spec("CHTTP background HTTP/1.1 server") {
     check_not_null(strstr(response, "Transfer-Encoding: chunked"));
     check_null(strstr(response, "Content-Length:"));
     check_not_null(strstr(response, "\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n1\r\ng\r\n0\r\n\r\n"));
+
+    /* Chunked terminal bytes do not themselves join the async body source. */
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(probe.offset, sizeof(payload) - 1u);
     check_equal(probe.calls, (size_t)4u);
-
-    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
@@ -3044,8 +3074,15 @@ spec("CHTTP background HTTP/1.1 server") {
                                               false, "\r\n\r\nstatic"),
                 SALTS_OK);
 
+    /* Both Listener-side and Owner-side bounded admission can reject a
+     * stream before every Owner slot becomes active. Do not infer rejection
+     * from connect() completion or require full active slot occupancy. */
     for (index = 0u; index < sizeof(flood) / sizeof(flood[0]); ++index)
       check_equal(chttp_server_test_raw_connect(port, &flood[index]), SALTS_OK);
+    /* Observe one actual overflow rejection before probing the existing
+     * connection's progress; this waits only for asynchronous publication. */
+    check_equal(chttp_server_test_wait_rejected(&server, 1u, CHTTP_SERVER_TEST_TIMEOUT_MS),
+                SALTS_OK);
     check_equal(chttp_server_test_raw_send(primary, second_request, sizeof(second_request) - 1u),
                 SALTS_OK);
     check_equal(chttp_server_test_raw_receive(primary, response, sizeof(response), &response_size,

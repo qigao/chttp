@@ -12,9 +12,10 @@ add_library(chttp_client SHARED
   src/chttp_websocket_pool.c
   src/chttp_auth.c
 
-  rpc/crpc_client.c
   rpc/crpc_prepare_call.c
   rpc/crpc_request_reply.c
+  rpc/crpc_direct_async.c
+  rpc/chttp_client_rpc_service.c
 
   $<TARGET_OBJECTS:chttp_common>)
 add_library(CHttp::Client ALIAS chttp_client)
@@ -31,7 +32,7 @@ target_include_directories(chttp_client
           ${PROJECT_SOURCE_DIR}/http_common/rpc
           ${PROJECT_SOURCE_DIR}/vendor/cjwt/include)
 target_link_libraries(chttp_client
-  PUBLIC Salts::CNet Salts::CMeta Salts::CSerde
+  PUBLIC Salts::CNet Salts::CMeta Salts::CSerde Salts::DataBind
   PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
           Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
           chttp_cjwt)

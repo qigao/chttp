@@ -4,6 +4,9 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
 
+#include <salts/clock.h>
+#include <salts/thread.h>
+
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -210,6 +213,26 @@ static int chttp_websocket_test_jwt_open(void *user, chttp_websocket *websocket,
   memcpy(probe->subject, request->jwt_claims->subject, subject_size + 1u);
   atomic_fetch_add_explicit(&probe->opened, 1, memory_order_relaxed);
   return SALTS_OK;
+}
+
+/* A peer CLOSE frame and Client destroy do not synchronously retire the
+ * Server's one bounded CNet slot. Observe Server's published terminal state
+ * before opening the replacement connection; never retry a failed connect. */
+static bool chttp_websocket_test_wait_retired_connection(
+    const chttp_server *server, uint64_t minimum_accepted, uint32_t timeout_ms) {
+  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  for (;;) {
+    chttp_server_stats stats = {0};
+    if (chttp_server_get_stats(server, &stats) != SALTS_OK ||
+        !stats.running || stats.stopping)
+      return false;
+    if (stats.accepted_connections >= minimum_accepted &&
+        stats.active_connections == 0u)
+      return true;
+    if (cmeta_monotonic_ms() >= deadline)
+      return false;
+    cmeta_sleep_ms(1u);
+  }
 }
 
 static int chttp_websocket_test_capture_open(void *user, chttp_websocket *websocket,
@@ -594,6 +617,11 @@ spec("CHTTP WebSocket client/server") {
     check_equal(event.kind, CHTTP_WEBSOCKET_EVENT_CLOSE);
     check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
 
+    /* The WebSocket CLOSE is a peer protocol event, not an Owner terminal
+     * barrier. Wait for the server's thread-safe connection-close publication
+     * before asserting generation-safe reuse of its only connection slot. */
+    check_true(chttp_websocket_test_wait_retired_connection(
+        &server, 1u, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS));
     client = (chttp_websocket_client){0};
     http_status = 0u;
     atomic_store_explicit(&probe.captured, 0, memory_order_release);
