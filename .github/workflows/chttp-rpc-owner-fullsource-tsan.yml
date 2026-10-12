@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      EXPECTED_SALTS: 4da233059d98f6f53bb6b99b9c98bd17659347f2
+      EXPECTED_SALTS: 06ecf2179691e197b108d39ebd12dc994148eada
       EXPECTED_UTILS: 234c4a73bcefc455d48b3550ec2142d7ff1c3f5a
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
       TSAN_OPTIONS: halt_on_error=1:exitcode=66
@@ -83,6 +83,15 @@ jobs:
             printf 'sdk_published=false\n'
             printf 'prebuilt_firstparty_salts=false\n'
           } | tee build/rpc-fullsource-tsan/provenance.txt
+      - name: Verify POSIX once barrier candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qF 'pthread_once(&guard->native, callback)' \
+            build/rpc-fullsource-tsan/sources/salts/platform/src/thread_posix.c
+          grep -qF 'pthread_once_t native;' \
+            build/rpc-fullsource-tsan/sources/salts/platform/include/salts/thread.h
+
       - name: Build and install source-instrumented Salts
         shell: bash
         run: |
