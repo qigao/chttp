@@ -57,7 +57,8 @@ def run(*argv: str) -> str:
 
 
 def verify_release_metadata(
-    package_id: str, repo: str, version: str, expected_commit: str
+    package_id: str, repo: str, version: str, expected_commit: str,
+    expected_digest: str,
 ) -> dict:
     tag = "v" + version
     release = json.loads(run("gh", "api", f"repos/{repo}/releases/tags/{tag}"))
@@ -70,9 +71,19 @@ def verify_release_metadata(
         raise ValueError(f"{repo}: release/tag/source/asset mismatch for {tag}")
     if release.get("prerelease") != ("-rc." in version):
         raise ValueError(f"{repo}: incorrect release channel for {tag}")
+    # Package-source bytes and the official release attachment must be the
+    # SAME immutable payload; the caller-supplied digest alone is insufficient.
+    # GitHub's release-asset digest is available for both rc.14 and rc.9.
+    asset = assets[0]
+    if (asset.get("digest") != "sha256:" + expected_digest or
+            asset.get("state") != "uploaded" or
+            not isinstance(asset.get("size"), int) or
+            asset["size"] <= 0):
+        raise ValueError(f"{repo}: release asset digest/state mismatch for {tag}")
     return {
         "repository": repo, "tag": tag, "commit": expected_commit,
-        "asset": expected_asset, "release_url": release.get("html_url", ""),
+        "asset": expected_asset, "asset_sha256": expected_digest,
+        "release_url": release.get("html_url", ""),
     }
 
 
@@ -157,9 +168,11 @@ def main() -> int:
             raise ValueError(f"Missing CI environment: {name}")
     release_proof = [
         verify_release_metadata("Salts.Native", "qigao/salts",
-                                args.salts_version, args.salts_sha),
+                                args.salts_version, args.salts_sha,
+                                args.salts_digest),
         verify_release_metadata("SaltsUtils.Native", "qigao/salts-utils",
-                                args.utils_version, args.utils_sha),
+                                args.utils_version, args.utils_sha,
+                                args.utils_digest),
     ]
     work = Path(os.environ["RUNNER_TEMP"]) / "chttp-exact-published-cutover"
     if work.exists():
