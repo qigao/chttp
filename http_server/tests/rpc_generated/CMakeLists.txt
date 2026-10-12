@@ -30,6 +30,20 @@ set_target_properties(chttp_rpc_service_test PROPERTIES
   FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
 
+# One explicit owned string is admitted through the canonical v2 CMeta
+# buffer lifecycle. This test checks real heap releases after Server drain.
+add_executable(chttp_rpc_owned_native_test chttp_rpc_owned_native_test.c)
+target_link_libraries(chttp_rpc_owned_native_test PRIVATE
+  CHttp::Server CHttp::Client Salts::DataBind Salts::CMeta Salts::TinyTest)
+target_include_directories(chttp_rpc_owned_native_test PRIVATE
+  "${chttp_rpc_service_fixture_GENERATED_DIR}")
+add_dependencies(chttp_rpc_owned_native_test
+  chttp_rpc_service_fixture_idl_codegen)
+add_test(NAME chttp_rpc_owned_native_test COMMAND chttp_rpc_owned_native_test)
+set_target_properties(chttp_rpc_owned_native_test PROPERTIES
+  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+
 add_executable(chttp_rpc_service_header_cpp_test
   chttp_rpc_service_header_cpp_test.cpp)
 target_link_libraries(chttp_rpc_service_header_cpp_test PRIVATE
