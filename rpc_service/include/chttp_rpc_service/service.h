@@ -27,10 +27,12 @@ typedef struct chttp_rpc_service_config {
   size_t native_max_depth;
   size_t native_max_items;
   size_t native_max_owned_bytes;
+  /** Bounded concurrently active generated calls; zero selects four. */
+  size_t max_inflight_calls;
 } chttp_rpc_service_config;
 
 #define CHTTP_RPC_SERVICE_CONFIG_INIT \
-  { sizeof(chttp_rpc_service_config), 0u, 4096u, 65536u, 16384u, 16u, 256u, 65536u }
+  { sizeof(chttp_rpc_service_config), 0u, 4096u, 65536u, 16384u, 16u, 256u, 65536u, 4u }
 
 /**
  * One generated RPC operation mount.
@@ -58,7 +60,9 @@ typedef struct chttp_rpc_service_mount_options {
   { sizeof(chttp_rpc_service_mount_options), NULL, NULL, NULL, NULL }
 
 /**
- * Initialize bounded owner-thread execution storage for generated RPC MethodPlans.
+ * Initialize a bounded pool of independent invocation frames for generated RPC MethodPlans.
+ * Immutable method records can be dispatched concurrently on multiple HTTP Owners.
+ * FULL returns a protocol-internal error; no shared mutable native frame is reused.
  *
  * Current slice supports independent name/ordinal params selection and one
  * scalar/string/bytes result or typed-error data value. Structured output
@@ -72,7 +76,8 @@ int chttp_rpc_service_init(
  * Register one already-compiled DataBind RPC MethodPlan on CRPC.
  *
  * method_plan, native_binding, execution, and all referenced descriptors are
- * borrowed until chttp_rpc_service_destroy(). Function/ABI/layout admission is
+ * borrowed until chttp_rpc_service_destroy(). Invocation-local native buffers
+ * and DataBind workspace are leased from a bounded concurrent slot pool. Function/ABI/layout admission is
  * performed once before CRPC method registration; the call hot path performs no
  * reflection lookup or dynamic ABI reconstruction.
  */
