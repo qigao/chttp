@@ -77,7 +77,8 @@ jobs:
           set -euo pipefail
           cmake --build "build/rpc-${{ matrix.mode }}" --parallel 2 \
             --target chttp_rpc_service_test crpc_server_test crpc_api_test \
-                     crpc_transport_test chttp_server_test chttp_h2_client_test
+                     crpc_transport_test chttp_server_test chttp_h2_client_test \
+                     chttp_rpc_owned_native_test
           ccache --show-stats
 
       - name: Execute instrumented RPC/Owner contracts
@@ -85,7 +86,16 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir "build/rpc-${{ matrix.mode }}" \
-            -R '^(chttp_rpc_service_test|crpc_server_test|crpc_api_test|crpc_transport_test|chttp_server_test|chttp_h2_client_test)$' \
+            -R '^(chttp_rpc_service_test|crpc_server_test|crpc_api_test|crpc_transport_test|chttp_server_test|chttp_h2_client_test|chttp_rpc_owned_native_test) \
+            --output-on-failure --no-tests=error --timeout 90 --stop-on-failure
+      - name: Assert exact source and no tracked modifications
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
             --output-on-failure --no-tests=error --timeout 90 --stop-on-failure
       - name: Assert exact source and no tracked modifications
         if: always()
