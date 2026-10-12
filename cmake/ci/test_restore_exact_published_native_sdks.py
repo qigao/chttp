@@ -128,6 +128,17 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                 module["verify_package"](
                     pkg, "Salts.Native", version, "b" * 40, digest, version)
 
+    def test_packaged_salts_rejects_old_native_once_abi(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pkg = Path(temp)
+            version, sha = "2.3.0-rc.15", "a" * 40
+            archive = self.synthetic_archive(
+                pkg, "Salts.Native", version, sha, version, bad_abi=True)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "pthread_once ABI"):
+                module["verify_package"](
+                    pkg, "Salts.Native", version, sha, digest, version)
+
     def test_utils_package_must_record_exact_salts_dependency(self):
         with tempfile.TemporaryDirectory() as temp:
             pkg = Path(temp)
@@ -144,20 +155,62 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                     digest, "2.3.0-rc.14")
 
     def test_published_tags_must_match_real_commit_and_asset(self):
+        digest = "d" * 64
+        release = {
+            "tag_name": "v2.3.0-rc.15", "draft": False,
+            "prerelease": True,
+            "assets": [{
+                "name": "Salts.Native.2.3.0-rc.15.nupkg",
+                "digest": "sha256:" + digest, "state": "uploaded", "size": 1058,
+            }],
+        }
         def fake_gh(*argv):
             if "/releases/tags/" in argv[-1]:
-                return json.dumps({
-                    "tag_name": "v2.3.0-rc.15", "draft": False,
-                    "prerelease": True,
-                    "assets": [{"name": "Salts.Native.2.3.0-rc.15.nupkg"}],
-                })
+                return json.dumps(release)
             return json.dumps({"sha": "a" * 40})
         with mock.patch.dict(module["verify_release_metadata"].__globals__, {"run": fake_gh}):
-            module["verify_release_metadata"](
-                "Salts.Native", "qigao/salts", "2.3.0-rc.15", "a" * 40)
+            proof = module["verify_release_metadata"](
+                "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                "a" * 40, digest)
+            self.assertEqual(proof["asset_sha256"], digest)
             with self.assertRaisesRegex(ValueError, "mismatch"):
                 module["verify_release_metadata"](
-                    "Salts.Native", "qigao/salts", "2.3.0-rc.15", "b" * 40)
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "b" * 40, digest)
+            with self.assertRaisesRegex(ValueError, "digest/state mismatch"):
+                module["verify_release_metadata"](
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "a" * 40, "0" * 64)
+            # Release asset integrity, not just NuGet identity, is a hard gate.
+            for overrides in (
+                {"digest": None},
+                {"digest": "sha256:" + "0" * 64},
+                {"state": "new"},
+                {"size": 0},
+                {"size": None},
+            ):
+                with self.subTest(overrides=overrides):
+                    release["assets"][0].update(overrides)
+                    with self.assertRaisesRegex(ValueError, "digest/state mismatch"):
+                        module["verify_release_metadata"](
+                            "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                            "a" * 40, digest)
+                    release["assets"][0] = {
+                        "name": "Salts.Native.2.3.0-rc.15.nupkg",
+                        "digest": "sha256:" + digest, "state": "uploaded",
+                        "size": 1058,
+                    }
+            release["assets"].append(dict(release["assets"][0]))
+            with self.assertRaisesRegex(ValueError, "mismatch"):
+                module["verify_release_metadata"](
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "a" * 40, digest)
+            release["assets"].pop()
+            release["prerelease"] = False
+            with self.assertRaisesRegex(ValueError, "release channel"):
+                module["verify_release_metadata"](
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "a" * 40, digest)
 
 
 if __name__ == "__main__":
