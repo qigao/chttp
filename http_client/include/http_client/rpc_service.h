@@ -89,6 +89,31 @@ int chttp_client_rpc_call(
     crpc_error *out_error);
 
 
+/**
+ * Typed generated JSON-RPC on the caller's existing asynchronous HTTP Owner.
+ * Immediate admission failure produces no callback; success produces exactly
+ * one callback after the underlying HTTP request reaches terminal completion.
+ * `out_request` is a normal HTTP generation-checked handle, used unchanged
+ * for chttp_async_request_cancel, poll, stop and destroy.
+ *
+ * The immutable method plan, native binding, options.native_options,
+ * response/error storage and callback user are borrowed until the terminal
+ * callback returns. Request values are consumed synchronously by submit.
+ * On remote response, outcome points to callback-scoped projection metadata.
+ * On transport/parse/native failure, error points to callback-scoped failure.
+ * The adapter clears initialized response storage on failures; on successful
+ * outcome the caller owns its normal DataBind lifecycle/cleanup.
+ */
+typedef void (*chttp_async_client_rpc_complete_fn)(
+    void *user, chttp_request request,
+    const chttp_client_rpc_outcome *outcome, const crpc_error *error);
+
+int chttp_async_client_rpc_call(
+    chttp_async_client *client,
+    const chttp_client_rpc_call_options *options,
+    chttp_async_client_rpc_complete_fn on_complete, void *user,
+    chttp_request *out_request);
+
 #ifdef __cplusplus
 }
 #endif

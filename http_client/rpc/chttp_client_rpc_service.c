@@ -731,3 +731,175 @@ fail:
       options->response, native_response_bytes, &diagnostic);
   return status;
 }
+
+/* Async typed projection is a request-owned adapter over the same HTTP slot.
+ * No additional transport Client, poller or retry engine is created. */
+typedef struct chttp_client_rpc_async_context {
+  chttp_client_rpc_call_options options;
+  chttp_async_client_rpc_complete_fn on_complete;
+  void *user;
+  size_t native_response_bytes;
+} chttp_client_rpc_async_context;
+
+static void chttp_client_rpc_async_complete(
+    void *user, chttp_request request,
+    const crpc_response_view *view, const crpc_error *rpc_error) {
+  chttp_client_rpc_async_context *call =
+      (chttp_client_rpc_async_context *)user;
+  chttp_client_rpc_outcome outcome = CHTTP_CLIENT_RPC_OUTCOME_INIT;
+  crpc_error error = {0};
+  crpc_response mapped = {0};
+  DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+  const DataBindBindingPlan *binding;
+  size_t typed_index = SIZE_MAX;
+  int status = SALTS_OK;
+  if (call == NULL) return;
+  binding = data_bind_rpc_method_plan_binding(call->options.method_plan);
+  if (rpc_error != NULL) {
+    error = *rpc_error;
+    status = error.status;
+  } else if (view == NULL) {
+    error = (crpc_error){.status = SALTS_EPROTO, .stage = "rpc-service-envelope"};
+    status = error.status;
+  } else {
+    mapped.request_id = view->request_id;
+    mapped.http_status = view->http_status;
+    mapped.kind = view->kind;
+    mapped.callable = view->callable;
+    if (view->kind == CRPC_RESPONSE_RESULT) {
+      mapped.value.result = view->value.result;
+      status = chttp_client_rpc_decode_success(&call->options, &mapped);
+      if (status == SALTS_OK)
+        outcome.kind = CHTTP_CLIENT_RPC_SUCCESS;
+      else
+        error = (crpc_error){.status = status,
+                             .http_status = view->http_status,
+                             .stage = "rpc-service-result"};
+    } else if (view->kind == CRPC_RESPONSE_REMOTE_ERROR) {
+      mapped.value.remote_error = view->value.remote_error;
+      outcome.remote_code = view->value.remote_error.code;
+      if (chttp_client_rpc_typed_error_index(
+              call->options.method_plan, outcome.remote_code, &typed_index)) {
+        status = chttp_client_rpc_decode_typed_error(
+            &call->options, &mapped, typed_index);
+        if (status == SALTS_OK) {
+          outcome.kind = CHTTP_CLIENT_RPC_TYPED_ERROR;
+          outcome.typed_error_index = typed_index;
+          outcome.typed_error =
+              data_bind_binding_plan_error_at(binding, typed_index);
+        } else {
+          error = (crpc_error){.status = status,
+                               .http_status = view->http_status,
+                               .stage = "rpc-service-typed-error"};
+        }
+      } else {
+        outcome.kind = CHTTP_CLIENT_RPC_REMOTE_ERROR;
+      }
+    } else {
+      status = SALTS_EPROTO;
+      error = (crpc_error){.status = status,
+                           .http_status = view->http_status,
+                           .stage = "rpc-service-envelope"};
+    }
+  }
+  if (status != SALTS_OK) {
+    (void)data_bind_native_clear(
+        call->options.native_options,
+        call->options.native_binding->response->data,
+        call->options.response, call->native_response_bytes, &diagnostic);
+  }
+  call->on_complete(call->user, request,
+                    status == SALTS_OK ? &outcome : NULL,
+                    status == SALTS_OK ? NULL : &error);
+  free(call);
+}
+
+int chttp_async_client_rpc_call(
+    chttp_async_client *client,
+    const chttp_client_rpc_call_options *options,
+    chttp_async_client_rpc_complete_fn on_complete, void *user,
+    chttp_request *out_request) {
+  chttp_client_rpc_async_context *call;
+  chttp_client_rpc_encode_context encode = {0};
+  chttp_rpc_service_params_mode mode = CHTTP_RPC_SERVICE_PARAMS_NONE;
+  DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+  crpc_options rpc_options = {0};
+  crpc_method method = {0};
+  size_t native_request_bytes = 0u, native_response_bytes = 0u;
+  DataBindStatus bind_status;
+  int status;
+  if (out_request == NULL) return SALTS_EINVAL;
+  *out_request = (chttp_request){0};
+  if (client == NULL || client->impl == NULL ||
+      options == NULL || options->size < sizeof(*options) ||
+      on_complete == NULL || options->method_plan == NULL ||
+      options->native_binding == NULL || options->native_options == NULL ||
+      options->request == NULL || options->response == NULL ||
+      options->connection_uri == NULL || options->authority == NULL ||
+      options->target == NULL)
+    return SALTS_EINVAL;
+  if (!chttp_client_rpc_native_type_valid(
+          options->native_binding->request, &native_request_bytes) ||
+      !chttp_client_rpc_native_type_valid(
+          options->native_binding->response, &native_response_bytes))
+    return SALTS_EINVAL;
+  status = chttp_client_rpc_plan_admit(
+      options->method_plan, options->native_binding,
+      options->request_bytes, options->response_bytes, &mode);
+  if (status != SALTS_OK) return status;
+  if (options->native_binding->error_count != 0u &&
+      (options->typed_error == NULL ||
+       options->typed_error_bytes <
+           options->native_binding->error_envelope_bytes))
+    return SALTS_EMSGSIZE;
+  call = (chttp_client_rpc_async_context *)calloc(1u, sizeof(*call));
+  if (call == NULL) return SALTS_ENOMEM;
+  call->options = *options;
+  call->on_complete = on_complete;
+  call->user = user;
+  call->native_response_bytes = native_response_bytes;
+  memset(options->response, 0, options->response_bytes);
+  bind_status = data_bind_native_init(
+      options->native_options, options->native_binding->response->data,
+      options->response, native_response_bytes, &diagnostic);
+  if (bind_status != DATA_BIND_OK) {
+    free(call);
+    return chttp_client_rpc_bind_status_to_salts(bind_status);
+  }
+  if (options->typed_error != NULL && options->typed_error_bytes != 0u)
+    memset(options->typed_error, 0, options->typed_error_bytes);
+  encode.binding = data_bind_rpc_method_plan_binding(options->method_plan);
+  encode.native_options = options->native_options;
+  encode.request = (const unsigned char *)options->request;
+  encode.request_bytes = options->request_bytes;
+  encode.mode = mode;
+  encode.bind_status = DATA_BIND_OK;
+  method.name = data_bind_rpc_method_plan_wire_method(options->method_plan);
+  rpc_options = (crpc_options){
+      .connection_uri = options->connection_uri,
+      .authority = options->authority,
+      .target = options->target,
+      .method = method,
+      .request_id = options->request_id,
+      .metadata = options->metadata,
+      .metadata_count = options->metadata_count,
+      .deadline_ms = options->deadline_ms,
+      .encode_params = mode == CHTTP_RPC_SERVICE_PARAMS_NONE
+                           ? NULL : chttp_client_rpc_encode_params,
+      .params_user = mode == CHTTP_RPC_SERVICE_PARAMS_NONE ? NULL : &encode,
+      .tls = options->tls,
+      .protocol = options->protocol};
+  status = chttp_async_client_rpc_submit(
+      client, &options->limits, &rpc_options,
+      chttp_client_rpc_async_complete, call, out_request);
+  if (status != SALTS_OK) {
+    if (encode.bind_status != DATA_BIND_OK)
+      status = chttp_client_rpc_bind_status_to_salts(encode.bind_status);
+    (void)data_bind_native_clear(
+        options->native_options, options->native_binding->response->data,
+        options->response, native_response_bytes, &diagnostic);
+    free(call);
+    *out_request = (chttp_request){0};
+  }
+  return status;
+}
