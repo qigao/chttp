@@ -152,7 +152,10 @@ def verify_package(
             raise ValueError(f"{package_id}: NuGet metadata mismatch")
         if package_id == "Salts.Native":
             header = archive.read(expected_prefix + "include/salts/thread.h")
-            if b"pthread_once_t native;" not in header:
+            if rid == "windows-x64":
+                if b"volatile int state;" not in header or b"SALTS_ONCE_INIT {0}" not in header:
+                    raise ValueError("Published Windows Salts lacks native once ABI")
+            elif b"pthread_once_t native;" not in header:
                 raise ValueError("Published native Salts lacks qualified pthread_once ABI")
     root = package / "sdk" / rid
     config = ("Salts" if package_id == "Salts.Native" else "SaltsUtils")
