@@ -121,13 +121,14 @@ static int crpc_transport_test_handler(void *user, const chttp_server_request_vi
   return chttp_server_reply(response, 200u, "application/json", body, sizeof(body) - 1u);
 }
 
-static void crpc_transport_test_complete(void *user, crpc_request request,
+static void crpc_transport_test_complete(void *user, chttp_request request,
                                          const crpc_response_view *response,
                                          const crpc_error *error) {
   crpc_transport_test_completion *completion = (crpc_transport_test_completion *)user;
   cserde_token token = {0};
   (void)request;
   if (completion == NULL) return;
+  ++completion->terminal_calls;
   completion->called = 1;
   if (error != NULL) {
     completion->status = error->status;
@@ -144,26 +145,16 @@ static void crpc_transport_test_complete(void *user, crpc_request request,
   completion->result = token.value.uint;
 }
 
-static int crpc_transport_test_poll_until(crpc_async_client *client,
+static int crpc_transport_test_poll_until(chttp_async_client *client,
                                           crpc_transport_test_completion *completion) {
   const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
   while (!completion->called) {
     size_t count = 0u;
-    const int status = crpc_async_client_poll(client, 5u, &count);
+    const int status = chttp_async_client_poll(client, 5u, &count);
     if (status != SALTS_OK) return status;
     if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return completion->status;
-}
-
-static void crpc_transport_test_direct_complete(
-    void *user, chttp_request request, const crpc_response_view *response,
-    const crpc_error *error) {
-  crpc_transport_test_completion *completion =
-      (crpc_transport_test_completion *)user;
-  crpc_request compatible = {.slot = request.slot, .generation = request.generation};
-  if (completion != NULL) ++completion->terminal_calls;
-  crpc_transport_test_complete(user, compatible, response, error);
 }
 
 static int crpc_transport_test_direct_async(
@@ -188,7 +179,7 @@ static int crpc_transport_test_direct_async(
   if (status != SALTS_OK) return status;
   options.deadline_ms = CRPC_TRANSPORT_TEST_TIMEOUT_MS;
   status = chttp_async_client_rpc_submit(
-      &client, &limits, &options, crpc_transport_test_direct_complete,
+      &client, &limits, &options, crpc_transport_test_complete,
       &completion, &request);
   if (status != SALTS_OK || request.slot == 0u) goto done;
   /* Same Client, same in-flight wire ID: no second HTTP admission and no
@@ -196,7 +187,7 @@ static int crpc_transport_test_direct_async(
   {
     chttp_request duplicate = {0};
     const int duplicate_status = chttp_async_client_rpc_submit(
-        &client, &limits, &options, crpc_transport_test_direct_complete,
+        &client, &limits, &options, crpc_transport_test_complete,
         &completion, &duplicate);
     if (duplicate_status != SALTS_EALREADY || duplicate.slot != 0u) {
       status = SALTS_EPROTO;
@@ -232,9 +223,10 @@ done:
 
 static int crpc_transport_test_clients(const char *uri, const chttp_tls_profile *tls,
                                        chttp_protocol protocol) {
-  crpc_client client = {0};
-  crpc_async_client async_client = {0};
+  chttp_client client = {0};
+  chttp_async_client async_client = {0};
   crpc_client_config config = crpc_transport_test_client_config();
+  chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
   crpc_options options = {.connection_uri = uri,
                           .authority = "localhost",
                           .target = "/rpc",
@@ -245,17 +237,22 @@ static int crpc_transport_test_clients(const char *uri, const chttp_tls_profile 
                           .protocol = protocol};
   crpc_response response = {0};
   crpc_error error = {0};
-  crpc_request request = {0};
+  chttp_request request = {0};
   crpc_transport_test_completion completion = {0};
   cserde_token token = {0};
   int client_initialized = 0;
   int async_initialized = 0;
   int status;
 
-  status = crpc_client_init(&client, &config);
+  limits.max_method_bytes = config.max_method_bytes;
+  limits.max_json_depth = config.max_json_depth;
+  limits.max_request_body_bytes = config.http.max_request_body_bytes;
+  limits.max_http_header_count = config.http.max_header_count;
+  status = chttp_client_init(&client, &config.http);
   if (status != SALTS_OK) goto done;
   client_initialized = 1;
-  status = crpc_request_reply(&client, &options, &response, &error);
+  status = chttp_client_rpc_request_reply(
+      &client, &limits, &options, &response, &error);
   if (status != SALTS_OK) goto done;
   if (response.kind != CRPC_RESPONSE_RESULT || response.request_id != UINT64_C(9) ||
       cserde_reader_next(response.value.result, &token) != CSERDE_OK || token.kind != CSERDE_UINT ||
@@ -264,15 +261,16 @@ static int crpc_transport_test_clients(const char *uri, const chttp_tls_profile 
     goto done;
   }
   crpc_response_destroy(&response);
-  status = crpc_client_destroy(&client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
+  status = chttp_client_destroy(&client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
   client_initialized = 0;
   if (status != SALTS_OK) goto done;
 
-  status = crpc_async_client_init(&async_client, &config);
+  status = chttp_async_client_init(&async_client, &config.http);
   if (status != SALTS_OK) goto done;
   async_initialized = 1;
-  status = crpc_async_client_submit(&async_client, &options, crpc_transport_test_complete,
-                                    &completion, &request);
+  status = chttp_async_client_rpc_submit(
+      &async_client, &limits, &options, crpc_transport_test_complete,
+      &completion, &request);
   if (status != SALTS_OK) goto done;
   status = crpc_transport_test_poll_until(&async_client, &completion);
   if (status != SALTS_OK || completion.request_id != UINT64_C(9) ||
@@ -284,13 +282,13 @@ static int crpc_transport_test_clients(const char *uri, const chttp_tls_profile 
 done:
   crpc_response_destroy(&response);
   if (async_initialized) {
-    const int stop_status = crpc_async_client_stop(&async_client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
-    const int destroy_status = crpc_async_client_destroy(&async_client);
+    const int stop_status = chttp_async_client_stop(&async_client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
+    const int destroy_status = chttp_async_client_destroy(&async_client);
     if (status == SALTS_OK && stop_status != SALTS_OK) status = stop_status;
     if (status == SALTS_OK && destroy_status != SALTS_OK) status = destroy_status;
   }
   if (client_initialized) {
-    const int destroy_status = crpc_client_destroy(&client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
+    const int destroy_status = chttp_client_destroy(&client, CRPC_TRANSPORT_TEST_TIMEOUT_MS);
     if (status == SALTS_OK && destroy_status != SALTS_OK) status = destroy_status;
   }
   return status;
@@ -359,7 +357,7 @@ spec("CRPC CHTTP transport parity") {
     check_equal(chttp_async_client_init(&client, &client_config.http), SALTS_OK);
     client_started = 1;
     check_equal(chttp_async_client_rpc_submit(
-        &client, &limits, &options, crpc_transport_test_direct_complete,
+        &client, &limits, &options, crpc_transport_test_complete,
         &completed, &request), SALTS_OK);
     check(request.slot != 0u);
 
@@ -442,7 +440,7 @@ spec("CRPC CHTTP transport parity") {
     options.connection_uri = uri;
     check_equal(chttp_async_client_init(&client, &client_config.http), SALTS_OK);
     check_equal(chttp_async_client_rpc_submit(
-        &client, &limits, &options, crpc_transport_test_direct_complete,
+        &client, &limits, &options, crpc_transport_test_complete,
         &completed, &request), SALTS_OK);
     check(request.slot != 0u);
     end = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
@@ -559,13 +557,13 @@ spec("CRPC CHTTP transport parity") {
 
   it("rejects a TLS ALPN profile that contradicts the selected RPC protocol") {
     static const char *h2[] = {"h2"};
-    crpc_async_client client = {0};
+    chttp_async_client client = {0};
     chttp_tls_profile profile = {0};
     crpc_client_config config = crpc_transport_test_client_config();
     cnet_tls_client_config tls = {
         .size = sizeof(tls), .alpn_protocols = h2, .alpn_protocol_count = 1u};
     crpc_transport_test_completion completion = {0};
-    crpc_request request = {7u, 9u};
+    chttp_request request = {7u, 9u};
     crpc_options options = {.connection_uri = "tls://127.0.0.1:443",
                             .authority = "localhost",
                             .target = "/rpc",
@@ -575,15 +573,20 @@ spec("CRPC CHTTP transport parity") {
                             .protocol = CHTTP_HTTP_1_1};
 
     check_equal(chttp_tls_profile_init(&profile, &tls), SALTS_OK);
-    check_equal(crpc_async_client_init(&client, &config), SALTS_OK);
-    check_equal(crpc_async_client_submit(&client, &options, crpc_transport_test_complete,
-                                         &completion, &request),
-                SALTS_EPROTONOSUPPORT);
+    chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
+    limits.max_method_bytes = config.max_method_bytes;
+    limits.max_json_depth = config.max_json_depth;
+    limits.max_request_body_bytes = config.http.max_request_body_bytes;
+    limits.max_http_header_count = config.http.max_header_count;
+    check_equal(chttp_async_client_init(&client, &config.http), SALTS_OK);
+    check_equal(chttp_async_client_rpc_submit(
+        &client, &limits, &options, crpc_transport_test_complete,
+        &completion, &request), SALTS_EPROTONOSUPPORT);
     check_equal(request.slot, 0u);
     check_equal(request.generation, 0u);
     check_equal(completion.called, 0);
-    check_equal(crpc_async_client_stop(&client, CRPC_TRANSPORT_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(crpc_async_client_destroy(&client), SALTS_OK);
+    check_equal(chttp_async_client_stop(&client, CRPC_TRANSPORT_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
   }
 }
