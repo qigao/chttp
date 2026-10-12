@@ -12,7 +12,10 @@ target_link_libraries(chttp_rpc_service_test PRIVATE
   CHttp::Server CHttp::Client Salts::DataBind Salts::TinyTest)
 target_include_directories(chttp_rpc_service_test PRIVATE
   "${chttp_rpc_service_fixture_GENERATED_DIR}")
-add_dependencies(chttp_rpc_service_test chttp_rpc_service_fixture_idl_codegen)
+target_compile_definitions(chttp_rpc_service_test PRIVATE
+  HTTP_RPC_GENERATION_PLUGIN_PATH="$<TARGET_FILE:http_example_contract_plugin>")
+add_dependencies(chttp_rpc_service_test
+  chttp_rpc_service_fixture_idl_codegen http_example_contract_plugin)
 add_test(NAME chttp_rpc_service_test COMMAND chttp_rpc_service_test)
 set_target_properties(chttp_rpc_service_test PROPERTIES
   FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON

@@ -543,6 +543,11 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
      * No RpcService, CRPC Server, or additional HTTP listener owner. */
     {
       chttp_server host = {0};
+      cmeta_plugin_registry plugin_registry = {0};
+      cmeta_plugin_ref plugin_ref = {0};
+      cmeta_plugin_lifecycle_info plugin_lifecycle = {0};
+      const cmeta_plugin_registry_config plugin_config = {.capacity = 1u};
+      bool plugin_quiet = false;
       chttp_server_config http_config = server_config.http;
       chttp_server_rpc_config rpc_config = CHTTP_SERVER_RPC_CONFIG_INIT;
       chttp_server_rpc_mount_options generated =
@@ -553,6 +558,14 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       chttp_rpc_service_test_race_probe race = {0};
       char attached_uri[64];
       uint16_t attached_port = 0u;
+
+      check_equal(cmeta_plugin_registry_init(
+          &plugin_registry, &plugin_config), CMETA_PLUGIN_OK);
+      check_equal(cmeta_plugin_registry_load(
+          &plugin_registry, HTTP_RPC_GENERATION_PLUGIN_PATH, &plugin_ref),
+          CMETA_PLUGIN_OK);
+      check_equal(cmeta_plugin_registry_start(
+          &plugin_registry, plugin_ref), CMETA_PLUGIN_OK);
 
       generated.target = "/rpc";
       generated.method_plan = method_plan;
@@ -588,8 +601,20 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       generated.method_plan = method_plan;
       generated.native_binding = &native;
       generated.execution = &concurrent_execution;
+      generated.plugin_ref = plugin_ref;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
+      generated.plugin_ref = (cmeta_plugin_ref){0};
+      generated.plugin_registry = &plugin_registry;
+      check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
+      generated.plugin_ref = plugin_ref;
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_OK);
+      check_equal(cmeta_plugin_registry_get_lifecycle(
+          &plugin_registry, plugin_ref, &plugin_lifecycle), CMETA_PLUGIN_OK);
+      check_equal(plugin_lifecycle.active_leases, (size_t)1u);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EALREADY);
+      check_equal(cmeta_plugin_registry_get_lifecycle(
+          &plugin_registry, plugin_ref, &plugin_lifecycle), CMETA_PLUGIN_OK);
+      check_equal(plugin_lifecycle.active_leases, (size_t)1u);
       check_equal(chttp_server_start(&host), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EBUSY);
       check_equal(chttp_server_port(&host, &attached_port), SALTS_OK);
@@ -849,8 +874,15 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
           cmeta_thread_yield();
         admitted = atomic_load_explicit(&race.entered, memory_order_acquire);
         if (admitted != 0) {
+          check_equal(cmeta_plugin_registry_request_stop(
+              &plugin_registry, plugin_ref), CMETA_PLUGIN_OK);
+          check_equal(cmeta_plugin_registry_unload(
+              &plugin_registry, plugin_ref), CMETA_PLUGIN_BUSY);
           check_equal(chttp_server_stop(&host, 10u), SALTS_ETIMEDOUT);
           check_equal(chttp_server_destroy(&host), SALTS_EBUSY);
+          check_equal(cmeta_plugin_registry_get_lifecycle(
+              &plugin_registry, plugin_ref, &plugin_lifecycle), CMETA_PLUGIN_OK);
+          check_equal(plugin_lifecycle.active_leases, (size_t)1u);
         }
         atomic_store_explicit(&race.release, 1, memory_order_release);
         check_equal(cmeta_thread_join(&blocked), SALTS_OK);
@@ -862,7 +894,16 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       check_equal(chttp_server_stop(&host,
                                     CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
                   SALTS_OK);
+      check_equal(cmeta_plugin_registry_unload(
+          &plugin_registry, plugin_ref), CMETA_PLUGIN_BUSY);
       check_equal(chttp_server_destroy(&host), SALTS_OK);
+      check_equal(cmeta_plugin_registry_poll_quiescent(
+          &plugin_registry, plugin_ref, &plugin_quiet), CMETA_PLUGIN_OK);
+      check_true(plugin_quiet);
+      check_equal(cmeta_plugin_registry_unload(
+          &plugin_registry, plugin_ref), CMETA_PLUGIN_OK);
+      check_equal(cmeta_plugin_registry_destroy(&plugin_registry),
+                  CMETA_PLUGIN_OK);
     }
 
     data_bind_rpc_method_plan_free(unborrowed_request_plan);
