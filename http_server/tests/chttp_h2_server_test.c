@@ -687,8 +687,15 @@ static int chttp_h2_server_test_socket_connect(uint16_t port,
   }
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  /* This raw peer uses sockaddr wire octets; avoid platform-endian
+   * ambiguity while keeping the HTTP/2 transport contract unchanged. */
+  {
+    const unsigned char endpoint_port[2] = {
+        (unsigned char)(port >> 8u), (unsigned char)(port & 0xffu)};
+    const unsigned char endpoint_address[4] = {127u, 0u, 0u, 1u};
+    memcpy(&address.sin_port, endpoint_port, sizeof(endpoint_port));
+    memcpy(&address.sin_addr, endpoint_address, sizeof(endpoint_address));
+  }
   if (chttp_h2_server_test_socket_timeout(socket_value) != SALTS_OK ||
       connect(socket_value, (const struct sockaddr *)&address, sizeof(address)) != 0) {
     chttp_h2_server_test_socket_close(socket_value);
