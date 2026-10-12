@@ -585,7 +585,7 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       check_true(dso_export->value.function.invoke(
           dso_export->value.function.context, &dso_offer, NULL, 0u));
       check_not_null(dso_offer);
-      check_not_null(dso_offer->invoke);
+      check_true(dso_offer->invoke != NULL);
       dso_execution.context = &race;
       dso_execution.invoke = dso_offer->invoke;
 
