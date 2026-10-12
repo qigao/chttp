@@ -319,3 +319,191 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           test -z "$(git status --porcelain --untracked-files=no)"
+
+
+  exact-rid-consumers:
+    name: Exact candidate installed CHttp SDK / ${{ matrix.rid }}
+    if: >-
+      github.repository == 'qigao/chttp' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 245 &&
+      github.event.pull_request.draft
+    needs: exact-upstream-packages
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, family: linux, rid: linux-x64, host_rid: linux-x64, triplet: x64-linux, host_triplet: x64-linux, preset: ci-sdk-release-user, cross: false}
+          - {runner: ubuntu-24.04-arm, family: linux, rid: linux-arm64, host_rid: linux-arm64, triplet: arm64-linux, host_triplet: arm64-linux, preset: ci-sdk-release-user, cross: false}
+          - {runner: windows-latest, family: windows, rid: windows-x64, host_rid: windows-x64, triplet: x64-windows, host_triplet: x64-windows, preset: ci-sdk-release-user, cross: false}
+          - {runner: macos-15, family: macos, rid: macos-arm64, host_rid: macos-arm64, triplet: arm64-osx, host_triplet: arm64-osx, preset: ci-macos-sdk-release-user, cross: false}
+          - {runner: ubuntu-24.04, family: android, rid: android-arm64-v8a, host_rid: linux-x64, triplet: arm64-android, host_triplet: x64-linux, preset: ci-android-sdk-release-user, cross: true}
+          - {runner: macos-15, family: ios, rid: ios-arm64, host_rid: macos-arm64, triplet: arm64-ios, host_triplet: arm64-osx, preset: ci-ios-sdk-release-user, cross: true}
+    env:
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha }}
+      QIGAO_SDK_RID: ${{ matrix.rid }}
+      QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
+      QIGAO_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      QIGAO_IOS_SYSROOT: iphoneos
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure canonical vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - name: Restore independent re2c host tool
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - name: Require matching vcpkg target and host architecture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:VCPKG_CACHE_REPOSITORY_ROOT -or
+              -not (Test-Path (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'cmake/QigaoVcpkgToolchain.cmake') -PathType Leaf)) {
+            throw 'Missing canonical vcpkg toolchain'
+          }
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if (-not $env:QIGAO_VCPKG_WINDOWS_TRIPLET -or -not $env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET) {
+              throw 'Missing Windows vcpkg triplets'
+            }
+            "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+            "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" >> $env:GITHUB_ENV
+          }
+          if ($env:RUNNER_OS -eq 'macOS' -and $env:RUNNER_ARCH -ne 'ARM64') {
+            throw 'macOS runner must match arm64 SDK host'
+          }
+      - name: Prepare native Linux and Android toolchain
+        if: matrix.family == 'linux' || matrix.family == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build nasm pkg-config ccache
+          if [[ "${{ matrix.family }}" == android ]]; then test -n "$ANDROID_NDK_HOME"; fi
+      - name: Prepare Apple native and iOS toolchain
+        if: matrix.family == 'macos' || matrix.family == 'ios'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          brew install ninja nasm ccache
+          xcrun --find clang
+      - name: Prepare Windows x64 MSVC toolchain
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja nasm ccache -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Missing Windows compiler tools' }
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vs)) { throw 'MSVC x64 unavailable' }
+          "VSINSTALL=$vs" >> $env:GITHUB_ENV
+      - name: Restore exact six-RID unpublished Salts and SaltsUtils NuGet pair
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          python3 cmake/ci/restore-cnet-once-six-rid-nupkgs.py \
+            --rid "${{ matrix.rid }}" --host-rid "${{ matrix.host_rid }}"
+      - name: Restore exact-candidate compiler object cache
+        uses: ./.github/actions/setup-compiler-cache
+        with:
+          profile: cnet-once-nupkg-${{ matrix.rid }}
+          sdk_identity: cnet-once-21bdb114-utils-01cbc2f0
+      - name: Build / CTest / install exact-candidate CHttp SDK on Unix
+        if: matrix.family != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=ON
+          if [[ "${{ matrix.cross }}" == true ]]; then tests=OFF; fi
+          cmake --preset "${{ matrix.preset }}" \
+            -DBUILD_TESTING="$tests" -DBUILD_TESTS="$tests" \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
+            "-DSaltsUtils_IDLC_EXECUTABLE=$EXACT_SALTS_IDLC" \
+            "-DSaltsUtils_IDLC_HOST_SALTS_ROOT=$SALTS_HOST_ROOT"
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
+          if [[ "${{ matrix.cross }}" != true ]]; then
+            ctest --preset "${{ matrix.preset }}" --output-on-failure \
+              --no-tests=error --timeout 90 --stop-on-failure
+          fi
+          cmake --build --preset "install-${{ matrix.preset }}"
+      - name: Build / CTest / install exact-candidate CHttp SDK on Windows
+        if: matrix.family == 'windows'
+        shell: cmd
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
+          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "-DSaltsUtils_IDLC_EXECUTABLE=%EXACT_SALTS_IDLC%"
+          if errorlevel 1 exit /b 1
+          cmake --build --preset ci-sdk-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset ci-sdk-release-user --output-on-failure --no-tests=error
+          if errorlevel 1 exit /b 1
+          cmake --build --preset install-ci-sdk-release-user
+          if errorlevel 1 exit /b 1
+      - name: Installed C11/C++ App and RPC consumer contracts on Unix
+        if: matrix.family == 'linux' || matrix.family == 'macos'
+        working-directory: app/tests/installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          preset=installed-release-user
+          if [[ "${{ matrix.family }}" == macos ]]; then preset=installed-macos-release-user; fi
+          cmake --preset "$preset" -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+          cmake --build --preset "$preset" --parallel 2
+          ctest --preset "$preset" --output-on-failure --no-tests=error
+      - name: Installed C11/C++ App and RPC consumer contracts on Windows
+        if: matrix.family == 'windows'
+        shell: cmd
+        working-directory: app/tests/installed
+        run: |
+          set "QIGAO_CANONICAL_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
+          cmake --preset installed-release-user -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+          if errorlevel 1 exit /b 1
+          cmake --build --preset installed-release-user --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --preset installed-release-user --output-on-failure --no-tests=error
+          if errorlevel 1 exit /b 1
+      - name: Attest installed CHttp SDK exact candidate dependency paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 cmake/ci/attest-cnet-once-six-rid-consumer.py \
+            --rid "${{ matrix.rid }}" --family "${{ matrix.family }}"
+      - name: Upload exact installed SDK and consumer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-245-six-rid-installed-${{ matrix.rid }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/upstream-cnet-once-candidate/provenance-${{ matrix.rid }}.txt
+            stage/sdk/${{ matrix.rid }}/salts-dependency-manifest.txt
+            stage/sdk/${{ matrix.rid }}/saltsutils-dependency-manifest.txt
+            stage/sdk/${{ matrix.rid }}/lib/cmake/Chttp/ChttpTargets.cmake
+            app/tests/installed/build/release/Testing/Temporary/LastTest.log
