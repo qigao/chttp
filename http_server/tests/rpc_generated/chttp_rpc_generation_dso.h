@@ -12,6 +12,8 @@ typedef struct chttp_rpc_generation_dso_probe {
   atomic_int enabled;
   atomic_int entered;
   atomic_int release;
+  /* Count actual provider entries, including unblocked requests. */
+  atomic_int invoked;
 } chttp_rpc_generation_dso_probe;
 
 typedef struct chttp_rpc_generation_dso_offer {
