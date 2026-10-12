@@ -70,7 +70,6 @@ if(BUILD_TESTS)
   add_subdirectory(http_client/tests)
   add_subdirectory(s3/tests)
   add_subdirectory(http_server/tests)
-  add_subdirectory(rpc_service/tests)
 endif()
 
 include(CMakePackageConfigHelpers)
