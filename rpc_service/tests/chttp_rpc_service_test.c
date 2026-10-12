@@ -178,6 +178,8 @@ typedef struct chttp_rpc_service_test_call_thread {
   AddResponse response;
   uint64_t id;
   int status;
+  atomic_int completed;
+  int64_t remote_code;
   chttp_rpc_service_client_outcome_kind outcome_kind;
 } chttp_rpc_service_test_call_thread;
 
@@ -216,6 +218,8 @@ static void chttp_rpc_service_test_call_worker(void *user) {
     status = chttp_rpc_service_client_call(
         &client, &options, &outcome, &error);
     args->outcome_kind = outcome.kind;
+    args->remote_code = outcome.remote_code;
+    atomic_store_explicit(&args->completed, 1, memory_order_release);
     {
       const int teardown = crpc_client_destroy(
           &client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS);
@@ -223,6 +227,7 @@ static void chttp_rpc_service_test_call_worker(void *user) {
     }
   }
   args->status = status;
+  atomic_store_explicit(&args->completed, 1, memory_order_release);
 }
 
 FunctionDeclAsAbiResult(
@@ -732,7 +737,7 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       check_equal(chttp_server_init(&host, &http_config), SALTS_OK);
       check_equal(chttp_server_route(&host, CHTTP_METHOD_GET, "/health",
                                     chttp_rpc_service_test_health, NULL), SALTS_OK);
-      topology.owner_count = 2u;
+      topology.owner_count = 3u;
       check_equal(chttp_server_set_execution_options(&host, &topology), SALTS_OK);
       check_equal(chttp_server_rpc_mount(&host, &generated), SALTS_EINVAL);
       rpc_config.method_capacity = 2u;
@@ -840,26 +845,40 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       {
         cmeta_thread_t t1 = {0};
         cmeta_thread_t t2 = {0};
+        cmeta_thread_t t3 = {0};
         chttp_rpc_service_test_call_thread a = {0};
         chttp_rpc_service_test_call_thread b = {0};
+        chttp_rpc_service_test_call_thread c = {0};
         uint64_t deadline;
         int ready;
+        int rejected_before_release;
         a.config = client_config;
         b.config = client_config;
         a.plan = method_plan;
         b.plan = method_plan;
         a.binding = &native;
         b.binding = &native;
+        c.config = client_config;
+        c.plan = method_plan;
+        c.binding = &native;
         a.id = UINT64_C(211);
         b.id = UINT64_C(212);
+        c.id = UINT64_C(213);
         a.request = (AddRequest){.left = 3u, .right = 4u,
                                  .scale = 2u, .presence = 1u};
         b.request = (AddRequest){.left = 2u, .right = 5u,
                                  .scale = 3u, .presence = 1u};
+        c.request = (AddRequest){.left = 5u, .right = 2u,
+                                 .scale = 1u, .presence = 1u};
         check_greater(
             snprintf(a.uri, sizeof(a.uri), "%s", attached_uri), 0);
         check_greater(
             snprintf(b.uri, sizeof(b.uri), "%s", attached_uri), 0);
+        check_greater(
+            snprintf(c.uri, sizeof(c.uri), "%s", attached_uri), 0);
+        atomic_init(&a.completed, 0);
+        atomic_init(&b.completed, 0);
+        atomic_init(&c.completed, 0);
         atomic_store_explicit(&race.entered, 0, memory_order_release);
         atomic_store_explicit(&race.release, 0, memory_order_release);
         atomic_store_explicit(&race.enabled, 1, memory_order_release);
@@ -874,12 +893,30 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
           cmeta_thread_yield();
         ready = atomic_load_explicit(&race.entered,
                                      memory_order_acquire);
+        /* With two slots already leased, a third actual Owner must return
+         * bounded FULL without executing the business adapter. */
+        check_equal(cmeta_thread_create(
+            &t3, chttp_rpc_service_test_call_worker, &c), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + 2500u;
+        while (!atomic_load_explicit(&c.completed, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+          cmeta_thread_yield();
+        rejected_before_release =
+            atomic_load_explicit(&c.completed, memory_order_acquire);
         atomic_store_explicit(&race.release, 1, memory_order_release);
         check_equal(cmeta_thread_join(&t1), SALTS_OK);
         check_equal(cmeta_thread_join(&t2), SALTS_OK);
+        check_equal(cmeta_thread_join(&t3), SALTS_OK);
         cmeta_thread_destroy(&t1);
         cmeta_thread_destroy(&t2);
+        cmeta_thread_destroy(&t3);
         check_equal(ready, 2);
+        check_equal(rejected_before_release, 1);
+        check_equal(c.status, SALTS_OK);
+        check_equal(c.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
+        check_equal(c.remote_code, INT64_C(-32603));
+        check_equal(atomic_load_explicit(&race.entered,
+                                        memory_order_acquire), 2);
         check_equal(a.status, SALTS_OK);
         check_equal(b.status, SALTS_OK);
         check_equal(a.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
