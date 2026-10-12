@@ -4,6 +4,9 @@
 #include <http_client/rpc.h>
 #include <http_server/rpc.h>
 #include <salts/clock.h>
+#include <salts/thread.h>
+
+#include <stdatomic.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +26,7 @@ typedef struct crpc_transport_test_probe {
 
 typedef struct crpc_transport_test_completion {
   int called;
+  int terminal_calls;
   int status;
   uint64_t request_id;
   uint64_t result;
@@ -155,7 +159,10 @@ static int crpc_transport_test_poll_until(crpc_async_client *client,
 static void crpc_transport_test_direct_complete(
     void *user, chttp_request request, const crpc_response_view *response,
     const crpc_error *error) {
+  crpc_transport_test_completion *completion =
+      (crpc_transport_test_completion *)user;
   crpc_request compatible = {.slot = request.slot, .generation = request.generation};
+  if (completion != NULL) ++completion->terminal_calls;
   crpc_transport_test_complete(user, compatible, response, error);
 }
 
@@ -297,7 +304,116 @@ done:
   return status;
 }
 
+typedef struct crpc_transport_test_blocking_rpc {
+  atomic_int entered;
+  atomic_int release;
+} crpc_transport_test_blocking_rpc;
+
+static int crpc_transport_test_blocking_handler(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  static const char body[] =
+      "{\"jsonrpc\":\"2.0\",\"result\":14,\"id\":99}";
+  crpc_transport_test_blocking_rpc *gate =
+      (crpc_transport_test_blocking_rpc *)user;
+  const uint64_t end = cmeta_monotonic_ms() + 4000u;
+  (void)request;
+  if (gate == NULL) return SALTS_EINVAL;
+  atomic_store_explicit(&gate->entered, 1, memory_order_release);
+  while (!atomic_load_explicit(&gate->release, memory_order_acquire) &&
+         cmeta_monotonic_ms() < end)
+    cmeta_thread_yield();
+  return chttp_server_reply(
+      response, 200u, "application/json", body, sizeof(body) - 1u);
+}
+
 spec("CRPC CHTTP transport parity") {
+  it("cancels a blocked direct H2 RPC exactly once and drains its HTTP slot") {
+    chttp_server server = {0};
+    chttp_async_client client = {0};
+    const chttp_server_config server_config =
+        crpc_transport_test_server_config();
+    const crpc_client_config client_config =
+        crpc_transport_test_client_config();
+    chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
+    crpc_transport_test_blocking_rpc gate = {0};
+    crpc_transport_test_completion completed = {0};
+    crpc_options options = {.authority = "localhost",
+                            .target = "/rpc",
+                            .method = {.service = "math", .name = "double"},
+                            .request_id = UINT64_C(99),
+                            .protocol = CHTTP_HTTP_2};
+    chttp_request request = {0};
+    uint16_t port = 0u;
+    char uri[64];
+    uint64_t end;
+    int entered;
+    int status = SALTS_OK;
+    int server_started = 0;
+    int client_started = 0;
+    atomic_init(&gate.entered, 0);
+    atomic_init(&gate.release, 0);
+    limits.max_request_body_bytes = client_config.http.max_request_body_bytes;
+    limits.max_http_header_count = client_config.http.max_header_count;
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_post(
+        &server, "/rpc", crpc_transport_test_blocking_handler, &gate), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    server_started = 1;
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                           (unsigned)port), 0);
+    options.connection_uri = uri;
+    check_equal(chttp_async_client_init(&client, &client_config.http), SALTS_OK);
+    client_started = 1;
+    check_equal(chttp_async_client_rpc_submit(
+        &client, &limits, &options, crpc_transport_test_direct_complete,
+        &completed, &request), SALTS_OK);
+    check(request.slot != 0u);
+
+    end = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    while (!atomic_load_explicit(&gate.entered, memory_order_acquire) &&
+           cmeta_monotonic_ms() < end) {
+      size_t count = 0u;
+      status = chttp_async_client_poll(&client, 5u, &count);
+      if (status != SALTS_OK) break;
+    }
+    entered = atomic_load_explicit(&gate.entered, memory_order_acquire);
+    check_equal(status, SALTS_OK);
+    check_equal(entered, 1);
+    if (entered) {
+      check_equal(chttp_async_request_cancel(&client, request), SALTS_OK);
+      check_equal(chttp_async_request_cancel(&client, request), SALTS_EALREADY);
+    }
+    atomic_store_explicit(&gate.release, 1, memory_order_release);
+    end = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    while (completed.terminal_calls == 0 && cmeta_monotonic_ms() < end) {
+      size_t count = 0u;
+      status = chttp_async_client_poll(&client, 5u, &count);
+      if (status != SALTS_OK) break;
+    }
+    check_equal(status, SALTS_OK);
+    check_equal(completed.terminal_calls, 1);
+    check_equal(completed.status, SALTS_ECANCELED);
+    for (size_t i = 0u; i < 3u; ++i) {
+      size_t count = 0u;
+      check_equal(chttp_async_client_poll(&client, 1u, &count), SALTS_OK);
+    }
+    check_equal(completed.terminal_calls, 1);
+    atomic_store_explicit(&gate.release, 1, memory_order_release);
+    if (client_started) {
+      check_equal(chttp_async_client_stop(
+          &client, CRPC_TRANSPORT_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+    }
+    if (server_started) {
+      check_equal(chttp_server_stop(
+          &server, CRPC_TRANSPORT_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_server_destroy(&server), SALTS_OK);
+    }
+  }
+
+
   it("supports synchronous and asynchronous JSON-RPC over cleartext HTTP/2") {
     chttp_server server = {0};
     chttp_server_config config = crpc_transport_test_server_config();
