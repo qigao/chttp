@@ -380,6 +380,26 @@ static int chttp_rpc_service_test_health(
   return chttp_server_reply(response, 200u, "text/plain", "healthy", 7u);
 }
 
+typedef struct chttp_rpc_service_test_async_typed_probe {
+  int terminal_calls;
+  int status;
+  chttp_client_rpc_outcome_kind kind;
+  int64_t remote_code;
+} chttp_rpc_service_test_async_typed_probe;
+
+static void chttp_rpc_service_test_async_typed_complete(
+    void *user, chttp_request request,
+    const chttp_client_rpc_outcome *outcome, const crpc_error *error) {
+  chttp_rpc_service_test_async_typed_probe *probe =
+      (chttp_rpc_service_test_async_typed_probe *)user;
+  (void)request;
+  if (probe == NULL) return;
+  ++probe->terminal_calls;
+  probe->status = error == NULL ? SALTS_OK : error->status;
+  probe->kind = outcome != NULL ? outcome->kind : CHTTP_CLIENT_RPC_NONE;
+  probe->remote_code = outcome != NULL ? outcome->remote_code : 0;
+}
+
 spec("CHttp::RpcService generated RPC MethodPlan") {
   it("mounts generated wire mapping and preserves DataBind defaults") {
     static const char schema[] =
@@ -838,6 +858,76 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
         check_equal(direct_outcome.remote_code, INT64_C(-32000));
         check_equal(chttp_client_destroy(
             &http_client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+      }
+
+      /* Generated async native result/remote error are projected from
+       * the same HTTP Owner terminal callback, with no RpcService client. */
+      {
+        chttp_async_client async_client = {0};
+        chttp_client_rpc_call_options async_options =
+            CHTTP_CLIENT_RPC_CALL_OPTIONS_INIT;
+        chttp_rpc_service_test_async_typed_probe completed = {0};
+        chttp_request handle = {0};
+        uint64_t deadline;
+        int poll_status = SALTS_OK;
+        check_equal(chttp_async_client_init(
+            &async_client, &client_config.http), SALTS_OK);
+        async_options.connection_uri = attached_uri;
+        async_options.authority = "localhost";
+        async_options.target = "/rpc";
+        async_options.request_id = UINT64_C(401);
+        async_options.deadline_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+        async_options.method_plan = method_plan;
+        async_options.native_binding = &native;
+        async_options.native_options = &client_native;
+        async_options.request = &typed_request;
+        async_options.request_bytes = sizeof(typed_request);
+        async_options.response = &typed_response;
+        async_options.response_bytes = sizeof(typed_response);
+        typed_request = (AddRequest){.left = 3u, .right = 4u,
+                                     .scale = 2u, .presence = 1u};
+        typed_response = (AddResponse){0};
+        check_equal(chttp_async_client_rpc_call(
+            &async_client, &async_options,
+            chttp_rpc_service_test_async_typed_complete,
+            &completed, &handle), SALTS_OK);
+        check(handle.slot != 0u);
+        deadline = cmeta_monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+        while (completed.terminal_calls == 0 &&
+               cmeta_monotonic_ms() < deadline) {
+          size_t events = 0u;
+          poll_status = chttp_async_client_poll(&async_client, 5u, &events);
+          if (poll_status != SALTS_OK) break;
+        }
+        check_equal(poll_status, SALTS_OK);
+        check_equal(completed.terminal_calls, 1);
+        check_equal(completed.status, SALTS_OK);
+        check_equal(completed.kind, CHTTP_CLIENT_RPC_SUCCESS);
+        check_equal(typed_response.sum, (uint32_t)11u);
+        typed_request = (AddRequest){.left = 99u, .right = 1u,
+                                     .scale = 1u, .presence = 1u};
+        typed_response = (AddResponse){0};
+        completed = (chttp_rpc_service_test_async_typed_probe){0};
+        async_options.request_id = UINT64_C(402);
+        check_equal(chttp_async_client_rpc_call(
+            &async_client, &async_options,
+            chttp_rpc_service_test_async_typed_complete,
+            &completed, &handle), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+        while (completed.terminal_calls == 0 &&
+               cmeta_monotonic_ms() < deadline) {
+          size_t events = 0u;
+          poll_status = chttp_async_client_poll(&async_client, 5u, &events);
+          if (poll_status != SALTS_OK) break;
+        }
+        check_equal(poll_status, SALTS_OK);
+        check_equal(completed.terminal_calls, 1);
+        check_equal(completed.status, SALTS_OK);
+        check_equal(completed.kind, CHTTP_CLIENT_RPC_REMOTE_ERROR);
+        check_equal(completed.remote_code, INT64_C(-32000));
+        check_equal(chttp_async_client_stop(
+            &async_client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&async_client), SALTS_OK);
       }
 
       /* Force overlapping same-method execution on two real HTTP Owners.
