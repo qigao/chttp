@@ -461,7 +461,7 @@ spec("CRPC advanced async client API") {
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_test_socket accepted = CRPC_TEST_INVALID_SOCKET;
-    crpc_request request = {0};
+    chttp_request request = {0};
     crpc_options options;
     char uri[64];
     char authority[64];
@@ -543,7 +543,7 @@ spec("CRPC advanced async client API") {
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
-    crpc_request request = {0};
+    chttp_request request = {0};
     crpc_options options;
     char uri[64];
     char authority[64];
@@ -614,7 +614,7 @@ spec("CRPC advanced async client API") {
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
-    crpc_request request = {0};
+    chttp_request request = {0};
     crpc_options options;
     char uri[64];
     char authority[64];
