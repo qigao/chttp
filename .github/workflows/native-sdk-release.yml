@@ -400,9 +400,12 @@ jobs:
           if [ "${{ matrix.family }}" = ios ]; then
             test -f "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
             test -f "$prefix/include/chttp_app/service.h"
-            test -f "$prefix/include/chttp_rpc_service/service.h"
+            test -f "$prefix/include/http_server/rpc_service.h"
             grep -q 'CHttp::App' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
-            grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::Server' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::Client' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
+            test -f "$prefix/include/http_client/rpc_service.h"
+            ! grep -q 'CHttp::RpcService' "$prefix/lib/cmake/Chttp/ChttpTargets.cmake"
             cat > "$prefix/chttp-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=${{ needs.metadata.outputs.source_commit }}
@@ -460,17 +463,22 @@ jobs:
           test -f package/sdk/linux-x64/include/chttp_app/service.h
           test -f package/sdk/windows-x64/include/chttp_app/service.h
           test -f package/sdk/android-arm64-v8a/include/chttp_app/service.h
-          test -f package/sdk/linux-x64/include/chttp_rpc_service/service.h
-          test -f package/sdk/windows-x64/include/chttp_rpc_service/service.h
-          test -f package/sdk/android-arm64-v8a/include/chttp_rpc_service/service.h
+          test -f package/sdk/linux-x64/include/http_server/rpc_service.h
+          test -f package/sdk/windows-x64/include/http_server/rpc_service.h
+          test -f package/sdk/android-arm64-v8a/include/http_server/rpc_service.h
           for rid in ios-arm64; do
             test -f "package/sdk/$rid/include/chttp_app/service.h"
-            test -f "package/sdk/$rid/include/chttp_rpc_service/service.h"
+            test -f "package/sdk/$rid/include/http_server/rpc_service.h"
             grep -q 'CHttp::App' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
-            grep -q 'CHttp::RpcService' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::Server' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+            grep -q 'CHttp::Client' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
+            test -f "package/sdk/$rid/include/http_client/rpc_service.h"
+            ! grep -q 'CHttp::RpcService' "package/sdk/$rid/lib/cmake/Chttp/ChttpTargets.cmake"
           done
           grep -q 'CHttp::App' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
-          grep -q 'CHttp::RpcService' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          grep -q 'CHttp::Server' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          grep -q 'CHttp::Client' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+          ! grep -q 'CHttp::RpcService' package/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
           test "$(find package/sdk -maxdepth 2 -name chttp-sdk-manifest.txt | wc -l)" -eq 5
       - uses: actions/setup-dotnet@v4
         with:

@@ -1,5 +1,4 @@
 #include <http_client/rpc_service.h>
-#include <http_client/rpc_service.h>
 #include <http_server/rpc_service.h>
 
 #include <http_client/rpc.h>
