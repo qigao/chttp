@@ -387,6 +387,36 @@ static cserde_status chttp_rpc_service_encode_params(
   return status;
 }
 
+/* Bounded raw JSON-RPC probe deliberately avoids the typed client encoder:
+ * invalid wire params must enter the generated Server BindingPlan, fail after
+ * partial ingress, and never invoke the DSO business callback. */
+static int chttp_rpc_service_test_post_json(
+    chttp_client *client, const char *uri, const char *body,
+    chttp_response *response) {
+  static const chttp_header headers[] = {
+      {"Content-Type", "application/json"}, {"Accept", "application/json"}};
+  const chttp_options options = {
+      .connection_uri = uri, .authority = "localhost", .target = "/rpc",
+      .headers = headers, .header_count = 2u,
+      .body = body, .body_size = strlen(body),
+      .timeout_ms = CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS};
+  chttp_error error = {0};
+  return chttp_post(client, &options, response, &error);
+}
+
+static int chttp_rpc_service_test_body_has(
+    const chttp_response *response, const char *part) {
+  const unsigned char *body;
+  size_t i, bytes;
+  if (response == NULL || response->body == NULL || part == NULL) return 0;
+  body = (const unsigned char *)response->body;
+  bytes = strlen(part);
+  if (bytes > response->body_size) return 0;
+  for (i = 0u; i <= response->body_size - bytes; ++i)
+    if (memcmp(body + i, part, bytes) == 0) return 1;
+  return 0;
+}
+
 static int chttp_rpc_service_test_health(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
@@ -645,6 +675,58 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       check_greater(
           snprintf(attached_uri, sizeof(attached_uri), "tcp://127.0.0.1:%u",
                    (unsigned int)attached_port), 0);
+      /* #243 partial ingress regression. A prior scalar is already decoded
+       * when the next value fails type/duplicate selection. DataBind must
+       * discard that staged request, release the per-call Owner slot, and
+       * avoid invoking any code in the real Provider DSO. A subsequent valid
+       * request must reuse the same bounded runtime without stale state. */
+      {
+        static const char wrong_second[] =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
+            "\"params\":[3,\"wrong\",2],\"id\":501}";
+        static const char wrong_optional[] =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
+            "\"params\":[3,4,\"wrong\"],\"id\":502}";
+        static const char duplicate_field[] =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
+            "\"params\":{\"left\":3,\"right\":4,\"right\":5,"
+            "\"scale\":2},\"id\":503}";
+        static const char valid_after_failure[] =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"calc.add\","
+            "\"params\":[3,4,2],\"id\":504}";
+        const char *const invalid[] = {
+            wrong_second, wrong_optional, duplicate_field};
+        chttp_client json_client = {0};
+        chttp_response json_response = {0};
+        check_equal(chttp_client_init(&json_client, &client_config.http),
+                    SALTS_OK);
+        atomic_store_explicit(&race.invoked, 0, memory_order_release);
+        for (size_t i = 0u; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
+          check_equal(chttp_rpc_service_test_post_json(
+                          &json_client, attached_uri, invalid[i],
+                          &json_response), SALTS_OK);
+          check_equal(json_response.status_code, 200u);
+          check_true(chttp_rpc_service_test_body_has(
+              &json_response, "\"error\""));
+          check_true(chttp_rpc_service_test_body_has(
+              &json_response, "\"code\":-32602"));
+          check_equal(atomic_load_explicit(
+              &race.invoked, memory_order_acquire), 0);
+          chttp_response_destroy(&json_response);
+        }
+        check_equal(chttp_rpc_service_test_post_json(
+                        &json_client, attached_uri, valid_after_failure,
+                        &json_response), SALTS_OK);
+        check_equal(json_response.status_code, 200u);
+        check_true(chttp_rpc_service_test_body_has(
+            &json_response, "\"result\":11"));
+        check_equal(atomic_load_explicit(
+            &race.invoked, memory_order_acquire), 1);
+        chttp_response_destroy(&json_response);
+        check_equal(chttp_client_destroy(
+            &json_client, CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+      }
+
       /* #242: one initialized CHttp Client handles generated RPC, ordinary
        * HTTP GET and another RPC, all through its same connection-pool owner. */
       {
