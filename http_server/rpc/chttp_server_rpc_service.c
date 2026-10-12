@@ -107,6 +107,19 @@ static int chttp_rpc_service_scalar_kind(const cmeta_data_desc *data) {
   }
 }
 
+/* An owned STRING has the exact CMeta v2 construction/restore contract
+ * needed by DataBind's per-call rollback. Keep response egress scalar-only:
+ * no borrowed or custom buffers and no independent ownership path. */
+static int chttp_rpc_service_ingress_kind(const cmeta_data_desc *data) {
+  const cmeta_data_buffer_ops *ops;
+  if (chttp_rpc_service_scalar_kind(data)) return 1;
+  if (data == NULL || data->kind != CMETA_DATA_STRING) return 0;
+  ops = cmeta_data_buffer_ops_of(data);
+  return ops != NULL && ops->ownership == CMETA_DATA_BUFFER_OWNED &&
+         ops->init_zero != NULL && ops->restore_zero != NULL &&
+         ops->move != NULL;
+}
+
 static DataBindStatus chttp_rpc_service_param_status(int status) {
   if (status == SALTS_ENOMEM) return DATA_BIND_ERR_OOM;
   if (status == SALTS_EPROTO) return DATA_BIND_ERR_PARSE;
@@ -486,7 +499,7 @@ static int chttp_rpc_service_execution_admit(
           entry.function_param_index != 0u ||
           entry.address.space == NULL ||
           strcmp(entry.address.space, "rpc.params") != 0 ||
-          !chttp_rpc_service_scalar_kind(entry.data))
+          !chttp_rpc_service_ingress_kind(entry.data))
         return SALTS_ENOTSUP;
       bytes = entry.data->storage_type->size;
       if (entry.native_offset > *request_bytes ||
