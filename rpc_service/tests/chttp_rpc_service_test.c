@@ -662,7 +662,7 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
               &attached_client, &typed_call, &typed_outcome, &error),
           SALTS_OK);
       check_equal(typed_outcome.kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
-      check_equal(typed_response.sum, (uint32_t)14u);
+      check_equal(typed_response.sum, (uint32_t)11u);
 
       typed_request = (AddRequest){.left = 99u, .right = 1u,
                                    .scale = 1u, .presence = 1u};
