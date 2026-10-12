@@ -45,6 +45,8 @@ chttp_server_start(&server);
 
 Registration is bounded by configured method capacity. Each generated native invocation leases an independent preallocated request/response/error frame and DataBind workspace; immutable MethodPlan descriptors are borrowed until Server drain/destroy. Native frame alignment and padding are charged to the configured frame capacity. Ingress uses canonical DataBind binding, and `DataBindBindingCallLifetime` is restored exactly once before the slot is returned. Unsupported generated ABI/ownership/layout is rejected during mount. Server stop/destroy controls the entire RPC registry; there is no independent RPC stop or teardown.
 
+Generated RPC ingress admits numeric/boolean/enum scalar fields and **owned strings with complete CMeta v2 buffer operations** (`init_zero`, `restore_zero`, `move`). The owned native string is initialized inside a bounded per-call frame and released by canonical DataBind rollback on partial decode failure or by the terminal `DataBindBindingCallLifetime` restoration on success/native failure. Borrowed and custom buffer providers do not gain ingress admission; output remains a single scalar result or supported scalar typed error, not arbitrary structured/string egress. `native_max_owned_bytes`, `native_max_items`, `native_workspace_bytes`, and `max_inflight_calls` remain independent hard bounds. A provider's descriptor and callback pointers must outlive Server drain/destroy, with an explicit Plugin generation lease when DSO-owned.
+
 ## Client
 
 Include `<http_client/rpc.h>` for JSON-RPC envelopes and `<http_client/rpc_service.h>` for typed generated projection. Link **only** `CHttp::Client`. These APIs operate on an already initialized `chttp_client` or `chttp_async_client`:
@@ -60,7 +62,7 @@ Generated input binding uses the immutable DataBind plan: optional presence/null
 
 ## Conformance and lifecycle
 
-Tests include mixed HTTP GET / JSON-RPC POST on one Server; generated native success, defaulting and remote error; three HTTP Owners contending for two bounded generated frame slots; H1/H2 asynchronous request cancellation and absolute RPC deadline; duplicate active wire IDs; rejected typed-call output staying unchanged; and stop-timeout/drain before descriptor release.
+Tests include mixed HTTP GET / JSON-RPC POST on one Server; generated native success, defaulting and remote error; three HTTP Owners contending for two bounded generated frame slots; H1/H2 asynchronous request cancellation and absolute RPC deadline; duplicate active wire IDs; rejected typed-call output staying unchanged; and stop-timeout/drain before descriptor release. The owned-native conformance uses two heap-backed string fields in a real Server-mounted RPC method, with partial-ingress/duplicate-field rollback, successful and failed native execution, and counted exactly-once buffer releases checked only after stop/destroy. Separately, the CSerde failure test rejects a partially written result and checks the next RPC does not inherit staged bytes.
 
 The standalone C11 and C++17 public API/installed SDK conformance links only `CHttp::Server` and `CHttp::Client` (plus their declared transitive dependencies), never `CHttp::RpcService`.
 
