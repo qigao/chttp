@@ -359,11 +359,36 @@ static int chttp_rpc_service_native_type_valid(
   return 1;
 }
 
-static int chttp_rpc_service_add_size(
+/* Each native storage region must begin at at least max_align_t alignment.
+ * Padding is charged to the same bounded call-frame budget at mount time. */
+static int chttp_rpc_service_add_aligned_size(
     size_t *total, size_t value, size_t limit) {
-  if (total == NULL || value > SIZE_MAX - *total) return 0;
+  const size_t alignment = _Alignof(max_align_t);
+  size_t padding;
+  if (total == NULL || alignment == 0u) return 0;
+  padding = (alignment - (*total % alignment)) % alignment;
+  if (padding > limit - (*total <= limit ? *total : limit))
+    return 0;
+  *total += padding;
+  if (value > limit - *total) return 0;
   *total += value;
-  return *total <= limit;
+  return 1;
+}
+
+static size_t chttp_rpc_service_align_offset(size_t offset) {
+  const size_t alignment = _Alignof(max_align_t);
+  return offset + (alignment - offset % alignment) % alignment;
+}
+
+static int chttp_rpc_service_native_align_supported(
+    const DataBindNativeTypeBinding *binding) {
+  size_t alignment;
+  if (binding == NULL || binding->data == NULL ||
+      binding->data->storage_type == NULL)
+    return 0;
+  alignment = binding->data->storage_type->align;
+  return alignment != 0u && alignment <= _Alignof(max_align_t) &&
+         (alignment & (alignment - 1u)) == 0u;
 }
 
 static int chttp_rpc_service_function_semantics_admit(
@@ -411,6 +436,11 @@ static int chttp_rpc_service_execution_admit(
       !chttp_rpc_service_native_type_valid(native->request, request_bytes) ||
       !chttp_rpc_service_native_type_valid(native->response, response_bytes))
     return SALTS_EINVAL;
+  /* calloc guarantees fundamental alignment; over-aligned producer storage
+   * needs its own allocator contract and therefore fails closed here. */
+  if (!chttp_rpc_service_native_align_supported(native->request) ||
+      !chttp_rpc_service_native_align_supported(native->response))
+    return SALTS_ENOTSUP;
 
   binding = data_bind_rpc_method_plan_binding(method_plan);
   function = binding != NULL ? data_bind_binding_plan_function(binding) : NULL;
@@ -509,9 +539,13 @@ static int chttp_rpc_service_execution_admit(
   }
 
   if (max_frame_bytes == 0u ||
-      !chttp_rpc_service_add_size(&total, *request_bytes, max_frame_bytes) ||
-      !chttp_rpc_service_add_size(&total, *response_bytes, max_frame_bytes) ||
-      !chttp_rpc_service_add_size(&total, *error_bytes, max_frame_bytes))
+      !chttp_rpc_service_add_aligned_size(
+          &total, *request_bytes, max_frame_bytes) ||
+      !chttp_rpc_service_add_aligned_size(
+          &total, *response_bytes, max_frame_bytes) ||
+      (*error_bytes != 0u &&
+       !chttp_rpc_service_add_aligned_size(
+           &total, *error_bytes, max_frame_bytes)))
     return SALTS_EMSGSIZE;
 
   *param_count = expected_params;
@@ -703,9 +737,9 @@ static int chttp_rpc_service_handler(
   memset(slot->frame_storage, 0, registered->owner->max_call_frame_bytes);
   cursor = 0u;
   call.request_storage = slot->frame_storage + cursor;
-  cursor += call.request_bytes;
+  cursor = chttp_rpc_service_align_offset(cursor + call.request_bytes);
   call.response_storage = slot->frame_storage + cursor;
-  cursor += call.response_bytes;
+  cursor = chttp_rpc_service_align_offset(cursor + call.response_bytes);
   call.error_storage = call.error_bytes != 0u
       ? slot->frame_storage + cursor : NULL;
   call.params[0] = call.request_storage;
