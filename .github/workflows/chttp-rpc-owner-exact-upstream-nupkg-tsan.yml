@@ -1,0 +1,314 @@
+name: CHttp RPC Owner exact six-RID upstream NuGet consumer TSan
+
+'on':
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-rpc-owner-exact-upstream-nupkg-tsan.yml"
+      - "http_client/**"
+      - "http_server/**"
+      - "http_common/**"
+      - "app/tests/installed/**"
+      - "cmake/**"
+      - "presets/**"
+      - "CMakeLists.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+concurrency:
+  group: chttp-rpc-upstream-nupkg-tsan-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  exact-upstream-packages:
+    name: Uninstrumented exact six-RID NuGet pair with TSan CHttp + installed SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SALTS: 21bdb1145fbb2b39ee3fa644173ec037adba7b87
+      EXPECTED_UTILS: 01cbc2f0e9566927331e783c1246e9d61636e6a6
+      SALTS_RUN_ID: "38248972051"
+      UTILS_RUN_ID: "38250938281"
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+      CCACHE_DIR: ${{ github.workspace }}/build/rpc-nupkg-tsan/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      QIGAO_SDK_RID: linux-x64
+      QIGAO_TARGET_TRIPLET: x64-linux
+      QIGAO_HOST_TRIPLET: x64-linux
+    steps:
+      - name: Checkout exact CHttp Draft source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout immutable Salts host-action tools only
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: 21bdb1145fbb2b39ee3fa644173ec037adba7b87
+          path: build/rpc-nupkg-tsan/salts-build-host
+          persist-credentials: false
+      - name: Use pinned shared vcpkg dependency graph
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - name: Restore re2c host generator
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - name: Prepare Linux build host
+        uses: ./build/rpc-nupkg-tsan/salts-build-host/.github/actions/setup-build-host
+
+      - name: Restore and attest exact previously packaged NuGet pair
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends ccache
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          mkdir -p build/rpc-nupkg-tsan/dist
+          gh api "repos/qigao/salts/actions/runs/$SALTS_RUN_ID" \
+            > build/rpc-nupkg-tsan/salts-run.json
+          gh api "repos/qigao/salts-utils/actions/runs/$UTILS_RUN_ID" \
+            > build/rpc-nupkg-tsan/utils-run.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          checks = (
+              ("salts", "qigao/salts", ".github/workflows/cnet-once-six-rid-candidate.yml",
+               "test/cnet-module-once-tsan-1143", 1150, os.environ["EXPECTED_SALTS"]),
+              ("utils", "qigao/salts-utils", ".github/workflows/cnet-once-six-rid-candidate.yml",
+               "test/cnet-once-six-rid-sdk-1143", 623, os.environ["EXPECTED_UTILS"]),
+          )
+          for key, repo, workflow, branch, pr, sha in checks:
+              run = json.loads(Path(f"build/rpc-nupkg-tsan/{key}-run.json").read_text())
+              expected = {"path": workflow, "head_sha": sha,
+                          "head_branch": branch, "event": "pull_request",
+                          "status": "completed", "conclusion": "success"}
+              for field, want in expected.items():
+                  if run.get(field) != want:
+                      raise SystemExit(f"{key} producer {field}: {run.get(field)} != {want}")
+              if run["repository"]["full_name"] != repo or not any(
+                  p["number"] == pr and p["head"]["sha"] == sha
+                  for p in run.get("pull_requests", [])):
+                  raise SystemExit(f"{key} producer PR identity mismatch")
+          PY
+          gh run download "$SALTS_RUN_ID" --repo qigao/salts \
+            --name salts-native-nuget --dir build/rpc-nupkg-tsan/dist
+          gh run download "$UTILS_RUN_ID" --repo qigao/salts-utils \
+            --name salts-utils-native-nuget --dir build/rpc-nupkg-tsan/dist
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import stat
+          import zipfile
+          from xml.etree import ElementTree
+
+          salts = os.environ["EXPECTED_SALTS"]
+          utils = os.environ["EXPECTED_UTILS"]
+          dist = Path("build/rpc-nupkg-tsan/dist")
+          runtime = Path(os.environ["RUNNER_TEMP"]) / "chttp-exact-nupkgs"
+          rids = ("linux-x64", "linux-arm64", "windows-x64", "macos-arm64",
+                  "android-arm64-v8a", "ios-arm64")
+          pairs = (
+              ("Salts.Native", "2.3.0-cnet.once.sha" + salts,
+               "aba3cc5242a80c162daa9155cdf8986baaa308d74e476db3d2982d9e263e1100",
+               "salts-sdk-manifest.txt", salts, runtime / "salts"),
+              ("SaltsUtils.Native", "4.3.0-cnet.once.sha" + utils + ".salts.sha" + salts,
+               "9449f11acde09f55a70d0855af297079bda1003271d573f1533a7bb88fec3bb1",
+               "salts-utils-sdk-manifest.txt", utils, runtime / "utils"),
+          )
+          facts = [f"salts_source={salts}", f"saltsutils_source={utils}",
+                   "candidate_published=false", "consumer_uses_unpacked_nupkg=true"]
+          for package_id, version, expected_digest, manifest_name, sha, output_root in pairs:
+              pkg = dist / f"{package_id}.{version}.nupkg"
+              if not pkg.is_file():
+                  raise SystemExit(f"Missing exact NuGet package {pkg}")
+              digest = hashlib.sha256(pkg.read_bytes()).hexdigest()
+              if digest != expected_digest:
+                  raise SystemExit(f"{package_id} SHA256 mismatch: {digest}")
+              with zipfile.ZipFile(pkg) as archive:
+                  names = set(archive.namelist())
+                  manifests = {n for n in names if n.endswith("/" + manifest_name)}
+                  expected = {f"sdk/{rid}/{manifest_name}" for rid in rids}
+                  if manifests != expected:
+                      raise SystemExit(f"{package_id} wrong RID manifests: {manifests ^ expected}")
+                  specs = [n for n in names if n.endswith(".nuspec")]
+                  if len(specs) != 1:
+                      raise SystemExit(f"{package_id} NuGet identity missing")
+                  metadata = {n.tag.rsplit("}", 1)[-1]: n.text
+                              for n in ElementTree.fromstring(archive.read(specs[0])).iter()
+                              if n.tag.rsplit("}", 1)[-1] in ("id", "version")}
+                  if (metadata.get("id"), metadata.get("version")) != (package_id, version):
+                      raise SystemExit(f"{package_id} NuGet ID/version mismatch")
+                  for rid in rids:
+                      prefix = f"sdk/{rid}/"
+                      manifest = dict(line.split("=", 1) for line in
+                          archive.read(prefix + manifest_name).decode("utf-8-sig").splitlines()
+                          if "=" in line)
+                      expected_facts = [("version", version), ("commit", sha), ("profile", "release")]
+                      if package_id == "SaltsUtils.Native":
+                          expected_facts.append(("salts_version", "candidate-" + salts))
+                      for key, want in expected_facts:
+                          if manifest.get(key) != want:
+                              raise SystemExit(f"{package_id}/{rid}: {key} incorrect")
+                  if package_id == "Salts.Native" and \
+                          b"pthread_once_t native;" not in archive.read(
+                              "sdk/linux-x64/include/salts/thread.h"):
+                      raise SystemExit("Packed Salts CMeta pthread_once ABI missing")
+                  prefix = "sdk/linux-x64/"
+                  for member in archive.infolist():
+                      if not member.filename.startswith(prefix):
+                          continue
+                      relative = member.filename[len(prefix):]
+                      if not relative:
+                          continue
+                      path = Path(relative)
+                      if path.is_absolute() or ".." in path.parts:
+                          raise SystemExit("Unsafe archive member")
+                      target = output_root / "sdk" / "linux-x64" / path
+                      if member.is_dir():
+                          target.mkdir(parents=True, exist_ok=True)
+                      else:
+                          target.parent.mkdir(parents=True, exist_ok=True)
+                          target.write_bytes(archive.read(member))
+                          mode = (member.external_attr >> 16) & 0o777
+                          if mode:
+                              target.chmod(mode)
+              assert (output_root / "sdk/linux-x64").is_dir()
+              facts += [f"{package_id}_version={version}",
+                        f"{package_id}_sha256={digest}"]
+          sr = runtime / "salts/sdk/linux-x64"
+          ur = runtime / "utils/sdk/linux-x64"
+          if not (sr / "lib/cmake/Salts/SaltsConfig.cmake").is_file():
+              raise SystemExit("Missing Salts package CMake config")
+          if not (ur / "lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake").is_file():
+              raise SystemExit("Missing SaltsUtils package CMake config")
+          compiler = ur / "bin/salts-idlc"
+          if not compiler.is_file():
+              raise SystemExit("Missing extracted IDL compiler")
+          compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"SALTS_ROOT={sr}\nSALTS_UTILS_ROOT={ur}\nDATABIND_ROOT={ur}\n")
+              env.write(f"LD_LIBRARY_PATH={ur}/lib:{ur}/bin:{sr}/lib:"
+                        f"{os.environ['GITHUB_WORKSPACE']}/vcpkg_installed/x64-linux/lib:"
+                        f"{os.environ.get('LD_LIBRARY_PATH','')}\n")
+          with open(os.environ["GITHUB_PATH"], "a") as env:
+              env.write(str(ur / "bin") + "\n")
+          (dist / "provenance.txt").write_text("\n".join(facts) + "\n")
+          print("\n".join(facts))
+          PY
+
+      - name: Build CHttp TSan consumer against unpacked packages only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$SALTS_ROOT/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          cmake --preset ci-linux-release-user -S "$GITHUB_WORKSPACE" \
+            -B build/rpc-nupkg-tsan/build-chttp \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$SALTS_ROOT;$SALTS_UTILS_ROOT" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_THREAD=ON \
+            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build/rpc-nupkg-tsan/build-chttp --parallel 2 \
+            --target crpc_transport_test crpc_server_test chttp_rpc_service_test \
+                     crpc_api_test chttp_server_test chttp_h2_client_test \
+                     chttp_rpc_owned_native_test
+          grep -F "Salts_DIR:PATH=$SALTS_ROOT" build/rpc-nupkg-tsan/build-chttp/CMakeCache.txt
+          grep -F "SaltsUtils_DIR:PATH=$SALTS_UTILS_ROOT" build/rpc-nupkg-tsan/build-chttp/CMakeCache.txt
+
+      - name: Enforce instrumentation and exact packaged dynamic links
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee build/rpc-nupkg-tsan/instrumentation.txt
+          import json
+          from pathlib import Path
+          cmds = json.loads(Path("build/rpc-nupkg-tsan/build-chttp/compile_commands.json").read_text())
+          instrumented = [c for c in cmds
+              if "-fsanitize=thread" in (c.get("command") or " ".join(c.get("arguments", [])))]
+          required = ("http_client/src/chttp_client.c", "http_server/src/chttp_server.c",
+                      "http_server/rpc/chttp_server_rpc_service.c",
+                      "http_server/tests/rpc_generated/chttp_rpc_owned_native_test.c")
+          print(f"chttp_firstparty={len(cmds)} instrumented={len(instrumented)}")
+          if not cmds or len(cmds) != len(instrumented):
+              raise SystemExit("Missing CHttp TSan instrumentation")
+          for name in required:
+              if not any(c["file"].endswith(name) for c in cmds):
+                  raise SystemExit(f"Missing tested CHttp source: {name}")
+          PY
+          if readelf -d "$SALTS_ROOT/lib/libcnet.so" | grep -q libtsan; then
+            echo 'Expected an ordinary uninstrumented candidate CNet DSO' >&2
+            exit 1
+          fi
+          ldd build/rpc-nupkg-tsan/build-chttp/bin/crpc_transport_test \
+            | tee build/rpc-nupkg-tsan/consumer-ldd.txt
+          grep -F "$SALTS_ROOT/lib" build/rpc-nupkg-tsan/consumer-ldd.txt
+          grep -F "$SALTS_UTILS_ROOT/lib" build/rpc-nupkg-tsan/consumer-ldd.txt
+          grep -q libtsan build/rpc-nupkg-tsan/consumer-ldd.txt
+
+      - name: Repeat RPC Owner mixed-package TSan tests without suppressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 480s \
+            ctest --test-dir build/rpc-nupkg-tsan/build-chttp \
+            -R '^(crpc_transport_test|crpc_server_test|chttp_rpc_service_test|crpc_api_test|chttp_server_test|chttp_h2_client_test|chttp_rpc_owned_native_test)$' \
+            --repeat until-fail:5 --timeout 90 --no-tests=error --output-on-failure
+
+      - name: Build and install CHttp SDK against packaged dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/rpc-nupkg-tsan/build-chttp --parallel 2
+          cmake --install build/rpc-nupkg-tsan/build-chttp \
+            --prefix "$GITHUB_WORKSPACE/stage/sdk/linux-x64"
+          test -f stage/sdk/linux-x64/lib/cmake/Chttp/ChttpConfig.cmake
+          ! grep -q 'CHttp::RpcService' stage/sdk/linux-x64/lib/cmake/Chttp/ChttpTargets.cmake
+
+      - name: Qualify installed C11/C++ App consumer
+        shell: bash
+        working-directory: app/tests/installed
+        run: |
+          set -euo pipefail
+          cmake --preset installed-release-user
+          cmake --build --preset installed-release-user --parallel 2
+          ctest --preset installed-release-user --no-tests=error --output-on-failure
+
+      - name: Preserve exact package + SDK/TSan qualifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-245-upstream-six-rid-nupkg-tsan
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rpc-nupkg-tsan/dist/*.nupkg
+            build/rpc-nupkg-tsan/dist/provenance.txt
+            build/rpc-nupkg-tsan/instrumentation.txt
+            build/rpc-nupkg-tsan/consumer-ldd.txt
+            build/rpc-nupkg-tsan/build-chttp/Testing/Temporary/LastTest.log
+            app/tests/installed/build/release/Testing/Temporary/LastTest.log
+
+      - name: Verify unchanged exact CHttp source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
