@@ -18,6 +18,14 @@ enum {
 
 typed_any(idempotent, int, crpc_server_test_identity, (int value)) { return value; }
 
+/* Local test bounds: no independent RPC Client or public owner config. */
+typedef struct chttp_rpc_test_client_config {
+  chttp_client_config http;
+  size_t request_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+} chttp_rpc_test_client_config;
+
 typedef struct crpc_server_test_probe {
   size_t calls;
   size_t notifications;
@@ -144,8 +152,8 @@ static chttp_client_config crpc_server_test_http_client_config(void) {
   return config;
 }
 
-static crpc_client_config crpc_server_test_client_config(void) {
-  const crpc_client_config config = {.http = crpc_server_test_http_client_config(),
+static chttp_rpc_test_client_config crpc_server_test_client_config(void) {
+  const chttp_rpc_test_client_config config = {.http = crpc_server_test_http_client_config(),
                                      .request_capacity = 2u,
                                      .max_method_bytes = 64u,
                                      .max_json_depth = 8u};
@@ -488,7 +496,7 @@ spec("CRPC server") {
     chttp_server server = {0};
     chttp_client client = {0};
     crpc_server_test_config server_config = crpc_server_test_config_for(0);
-    crpc_client_config client_config = crpc_server_test_client_config();
+    chttp_rpc_test_client_config client_config = crpc_server_test_client_config();
     chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
     crpc_server_test_probe method_probe = {0};
     crpc_server_test_probe middleware_probe = {0};

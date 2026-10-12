@@ -19,6 +19,14 @@ enum {
   CRPC_TRANSPORT_TEST_H2_SETTINGS_CAPACITY = 16
 };
 
+/* Local test bounds: no independent RPC Client or public owner config. */
+typedef struct chttp_rpc_test_client_config {
+  chttp_client_config http;
+  size_t request_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+} chttp_rpc_test_client_config;
+
 typedef struct crpc_transport_test_probe {
   size_t h1_requests;
   size_t h2_requests;
@@ -87,8 +95,8 @@ static chttp_server_config crpc_transport_test_server_config(void) {
   return config;
 }
 
-static crpc_client_config crpc_transport_test_client_config(void) {
-  const crpc_client_config config = {
+static chttp_rpc_test_client_config crpc_transport_test_client_config(void) {
+  const chttp_rpc_test_client_config config = {
       .http = {.network = crpc_transport_test_network(4u),
                .request_capacity = 4u,
                .max_start_line_bytes = 256u,
@@ -159,7 +167,7 @@ static int crpc_transport_test_poll_until(chttp_async_client *client,
 
 static int crpc_transport_test_direct_async(
     const char *uri, const chttp_tls_profile *tls, chttp_protocol protocol) {
-  crpc_client_config config = crpc_transport_test_client_config();
+  chttp_rpc_test_client_config config = crpc_transport_test_client_config();
   chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
   chttp_async_client client = {0};
   chttp_request request = {0};
@@ -225,7 +233,7 @@ static int crpc_transport_test_clients(const char *uri, const chttp_tls_profile 
                                        chttp_protocol protocol) {
   chttp_client client = {0};
   chttp_async_client async_client = {0};
-  crpc_client_config config = crpc_transport_test_client_config();
+  chttp_rpc_test_client_config config = crpc_transport_test_client_config();
   chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
   crpc_options options = {.connection_uri = uri,
                           .authority = "localhost",
@@ -323,7 +331,7 @@ spec("CRPC CHTTP transport parity") {
     chttp_async_client client = {0};
     const chttp_server_config server_config =
         crpc_transport_test_server_config();
-    const crpc_client_config client_config =
+    const chttp_rpc_test_client_config client_config =
         crpc_transport_test_client_config();
     chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
     crpc_transport_test_blocking_rpc gate = {0};
@@ -410,7 +418,7 @@ spec("CRPC CHTTP transport parity") {
     chttp_async_client client = {0};
     const chttp_server_config server_config =
         crpc_transport_test_server_config();
-    const crpc_client_config client_config =
+    const chttp_rpc_test_client_config client_config =
         crpc_transport_test_client_config();
     chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
     crpc_transport_test_blocking_rpc gate = {0};
@@ -559,7 +567,7 @@ spec("CRPC CHTTP transport parity") {
     static const char *h2[] = {"h2"};
     chttp_async_client client = {0};
     chttp_tls_profile profile = {0};
-    crpc_client_config config = crpc_transport_test_client_config();
+    chttp_rpc_test_client_config config = crpc_transport_test_client_config();
     cnet_tls_client_config tls = {
         .size = sizeof(tls), .alpn_protocols = h2, .alpn_protocol_count = 1u};
     crpc_transport_test_completion completion = {0};

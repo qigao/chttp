@@ -26,6 +26,14 @@ enum { CRPC_TEST_TIMEOUT_MS = 5000, CRPC_TEST_LISTEN_BACKLOG = 4 };
 
 typed_any(idempotent, int, crpc_test_identity, (int value)) { return value; }
 
+/* Local test bounds: no independent RPC Client or public owner config. */
+typedef struct chttp_rpc_test_client_config {
+  chttp_client_config http;
+  size_t request_capacity;
+  size_t max_method_bytes;
+  size_t max_json_depth;
+} chttp_rpc_test_client_config;
+
 typedef struct crpc_test_probe {
   int called;
   int status;
@@ -248,8 +256,8 @@ static void crpc_test_reentrant_complete(void *user, chttp_request request,
   probe->other_cancel_status = chttp_async_request_cancel(probe->client, probe->other_request);
 }
 
-static crpc_client_config crpc_test_config(void) {
-  const crpc_client_config config = {
+static chttp_rpc_test_client_config crpc_test_config(void) {
+  const chttp_rpc_test_client_config config = {
       .http = {.network = {.backend =
 #if defined(_WIN32)
                                NATIVE_IO_BACKEND_IOCP,
@@ -282,7 +290,7 @@ static crpc_client_config crpc_test_config(void) {
 }
 
 static chttp_client_rpc_limits crpc_test_limits(void) {
-  const crpc_client_config config = crpc_test_config();
+  const chttp_rpc_test_client_config config = crpc_test_config();
   chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
   limits.max_method_bytes = config.max_method_bytes;
   limits.max_json_depth = config.max_json_depth;
@@ -325,7 +333,7 @@ spec("CRPC blocking request/reply client") {
     static const char second_response_body[] =
         "{\"jsonrpc\":\"2.0\",\"result\":\"ready\",\"id\":10}";
     chttp_client client = {0};
-    crpc_client_config config = crpc_test_config();
+    chttp_rpc_test_client_config config = crpc_test_config();
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
     crpc_test_server server = {0};
@@ -456,7 +464,7 @@ spec("CRPC advanced async client API") {
         "{\"jsonrpc\":\"2.0\",\"method\":\"math.double\",\"params\":[7],\"id\":9}";
     static const char response_body[] = "{\"jsonrpc\":\"2.0\",\"result\":14,\"id\":9}";
     chttp_async_client client = {0};
-    crpc_client_config config = crpc_test_config();
+    chttp_rpc_test_client_config config = crpc_test_config();
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
@@ -539,7 +547,7 @@ spec("CRPC advanced async client API") {
 
   it("owns an overall deadline separately from socket read timeout") {
     chttp_async_client client = {0};
-    crpc_client_config config = crpc_test_config();
+    chttp_rpc_test_client_config config = crpc_test_config();
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
@@ -574,7 +582,7 @@ spec("CRPC advanced async client API") {
 
   it("rejects a duplicate active JSON-RPC request id") {
     chttp_async_client client = {0};
-    crpc_client_config config = crpc_test_config();
+    chttp_rpc_test_client_config config = crpc_test_config();
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
@@ -610,7 +618,7 @@ spec("CRPC advanced async client API") {
 
   it("delivers manual cancellation exactly once") {
     chttp_async_client client = {0};
-    crpc_client_config config = crpc_test_config();
+    chttp_rpc_test_client_config config = crpc_test_config();
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe probe = {0};
     crpc_test_socket listener = CRPC_TEST_INVALID_SOCKET;
@@ -645,7 +653,7 @@ spec("CRPC advanced async client API") {
 
   it("enforces callback reentrancy while allowing cancellation of another request") {
     chttp_async_client client = {0};
-    crpc_client_config config = crpc_test_config();
+    chttp_rpc_test_client_config config = crpc_test_config();
     chttp_client_rpc_limits limits = crpc_test_limits();
     crpc_test_probe other_probe = {0};
     crpc_test_probe nested_probe = {0};
