@@ -2767,10 +2767,13 @@ spec("CHTTP background HTTP/1.1 server") {
     check_not_null(strstr(response, "HTTP/1.1 200 OK"));
     check_not_null(strstr(response, "Content-Length: 17"));
     check_not_null(strstr(response, "\r\n\r\nstreamed-response"));
+
+    /* Receiving the wire body does not join the asynchronous source callback.
+     * Stop is the actual Owner terminal/drain barrier for the borrowed source
+     * state: inspect producer counters only after every callback has exited. */
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(probe.offset, sizeof(payload) - 1u);
     check_equal(probe.calls, (size_t)7u);
-
-    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
