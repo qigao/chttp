@@ -454,7 +454,7 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
         " uint32 right;"
         " optional uint32 scale default 1;"
         "}"
-        "message AddResponse { uint32 sum; }"
+        "message AddResponse { @Max(100) uint32 sum; }"
         "service Calc { Add: AddRequest -> AddResponse; }";
     DataBind *contract = NULL;
     DataBindError bind_error = DATA_BIND_ERROR_INIT;
