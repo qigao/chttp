@@ -753,6 +753,7 @@ static void chttp_client_rpc_async_complete(
   DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
   const DataBindBindingPlan *binding;
   size_t typed_index = SIZE_MAX;
+  int native_initialized = 0;
   int status = SALTS_OK;
   if (call == NULL) return;
   binding = data_bind_rpc_method_plan_binding(call->options.method_plan);
@@ -763,11 +764,36 @@ static void chttp_client_rpc_async_complete(
     error = (crpc_error){.status = SALTS_EPROTO, .stage = "rpc-service-envelope"};
     status = error.status;
   } else {
+    /* The caller's destination is untouched until a real terminal RPC
+     * response exists. Rejected admission and transport cancellation cannot
+     * initialize or change it. Any initialized native value is then owned
+     * until this callback, or canonical DataBind cleanup on decode failure. */
+    memset(call->options.response, 0, call->options.response_bytes);
+    {
+      const DataBindStatus init = data_bind_native_init(
+          call->options.native_options,
+          call->options.native_binding->response->data,
+          call->options.response, call->native_response_bytes, &diagnostic);
+      if (init != DATA_BIND_OK) {
+        status = chttp_client_rpc_bind_status_to_salts(init);
+        error = (crpc_error){.status = status,
+                             .http_status = view->http_status,
+                             .stage = "rpc-service-init"};
+      } else {
+        native_initialized = 1;
+        if (call->options.typed_error != NULL &&
+            call->options.typed_error_bytes != 0u)
+          memset(call->options.typed_error, 0,
+                 call->options.typed_error_bytes);
+      }
+    }
     mapped.request_id = view->request_id;
     mapped.http_status = view->http_status;
     mapped.kind = view->kind;
     mapped.callable = view->callable;
-    if (view->kind == CRPC_RESPONSE_RESULT) {
+    if (status != SALTS_OK) {
+      /* Failed native initialization is already rolled back by DataBind. */
+    } else if (view->kind == CRPC_RESPONSE_RESULT) {
       mapped.value.result = view->value.result;
       status = chttp_client_rpc_decode_success(&call->options, &mapped);
       if (status == SALTS_OK)
@@ -803,7 +829,7 @@ static void chttp_client_rpc_async_complete(
                            .stage = "rpc-service-envelope"};
     }
   }
-  if (status != SALTS_OK) {
+  if (status != SALTS_OK && native_initialized) {
     (void)data_bind_native_clear(
         call->options.native_options,
         call->options.native_binding->response->data,
@@ -823,11 +849,9 @@ int chttp_async_client_rpc_call(
   chttp_client_rpc_async_context *call;
   chttp_client_rpc_encode_context encode = {0};
   chttp_rpc_service_params_mode mode = CHTTP_RPC_SERVICE_PARAMS_NONE;
-  DataBindNativeDiagnostic diagnostic = DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
   crpc_options rpc_options = {0};
   crpc_method method = {0};
   size_t native_request_bytes = 0u, native_response_bytes = 0u;
-  DataBindStatus bind_status;
   int status;
   if (out_request == NULL) return SALTS_EINVAL;
   *out_request = (chttp_request){0};
@@ -859,16 +883,8 @@ int chttp_async_client_rpc_call(
   call->on_complete = on_complete;
   call->user = user;
   call->native_response_bytes = native_response_bytes;
-  memset(options->response, 0, options->response_bytes);
-  bind_status = data_bind_native_init(
-      options->native_options, options->native_binding->response->data,
-      options->response, native_response_bytes, &diagnostic);
-  if (bind_status != DATA_BIND_OK) {
-    free(call);
-    return chttp_client_rpc_bind_status_to_salts(bind_status);
-  }
-  if (options->typed_error != NULL && options->typed_error_bytes != 0u)
-    memset(options->typed_error, 0, options->typed_error_bytes);
+  /* Do not mutate caller native storage until terminal RPC decoding.
+   * A failed or duplicate HTTP admission has no native side effects. */
   encode.binding = data_bind_rpc_method_plan_binding(options->method_plan);
   encode.native_options = options->native_options;
   encode.request = (const unsigned char *)options->request;
@@ -896,9 +912,6 @@ int chttp_async_client_rpc_call(
   if (status != SALTS_OK) {
     if (encode.bind_status != DATA_BIND_OK)
       status = chttp_client_rpc_bind_status_to_salts(encode.bind_status);
-    (void)data_bind_native_clear(
-        options->native_options, options->native_binding->response->data,
-        options->response, native_response_bytes, &diagnostic);
     free(call);
     *out_request = (chttp_request){0};
   }
