@@ -45,6 +45,10 @@ unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
 find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+# SaltsUtils.Native 4.3 exports Salts::Crypto with GmSSL::GmSSL in
+# INTERFACE_LINK_LIBRARIES. Resolve its declared vendor target explicitly
+# before CMake generates the imported SDK link closure.
+find_package(GmSSL CONFIG REQUIRED)
 find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
              NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 if(NOT TARGET Salts::DataBind)
