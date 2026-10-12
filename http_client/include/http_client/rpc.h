@@ -112,6 +112,24 @@ int chttp_client_rpc_request_reply(
     const crpc_options *options, crpc_response *out_response,
     crpc_error *out_error);
 
+/** Direct asynchronous JSON-RPC over an existing CHttp async Client.
+ * The returned chttp_request is the sole generation-safe cancel handle.
+ * Progress, cancellation and shutdown use chttp_async_client_*.
+ * No separate RPC owner/poller/pool is created.
+ *
+ * Current slice explicitly rejects nonzero deadline_ms with ENOTSUP. The
+ * caller must provide distinct active wire IDs; no RPC-ID registry is added.
+ * Callback response/readers are borrowed until the callback returns.
+ */
+typedef void (*chttp_async_rpc_complete_fn)(
+    void *user, chttp_request request, const crpc_response_view *response,
+    const crpc_error *error);
+
+int chttp_async_client_rpc_submit(
+    chttp_async_client *client, const chttp_client_rpc_limits *limits,
+    const crpc_options *options, chttp_async_rpc_complete_fn on_complete,
+    void *user, chttp_request *out_request);
+
 /** Initializes an ordinary sequential request/reply client. */
 int crpc_client_init(crpc_client *client, const crpc_client_config *config);
 

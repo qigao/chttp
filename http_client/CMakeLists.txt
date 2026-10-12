@@ -15,6 +15,7 @@ add_library(chttp_client SHARED
   rpc/crpc_client.c
   rpc/crpc_prepare_call.c
   rpc/crpc_request_reply.c
+  rpc/crpc_direct_async.c
   rpc/chttp_client_rpc_service.c
 
   $<TARGET_OBJECTS:chttp_common>)
