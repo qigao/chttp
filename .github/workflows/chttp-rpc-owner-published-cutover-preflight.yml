@@ -87,17 +87,7 @@ jobs:
 
   official-sdk-sanitizer:
     name: Official exact Native DSO / ${{ matrix.mode }}
-    if: >-
-      github.repository == 'qigao/chttp' &&
-      (
-        (github.event_name == 'workflow_dispatch' &&
-         github.ref == 'refs/heads/feature/chttp-rpc-owner-241') ||
-        (github.event_name == 'pull_request' &&
-         github.event.pull_request.number == 245 &&
-         github.event.pull_request.draft &&
-         github.event.pull_request.head.repo.full_name == 'qigao/chttp' &&
-         github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')
-      )
+    if: ${{ github.repository == 'qigao/chttp' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/chttp-rpc-owner-241') || (github.event_name == 'pull_request' && github.event.pull_request.number == 245 && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'qigao/chttp' && github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -225,17 +215,7 @@ jobs:
 
   published-rid-consumers:
     name: Official exact published CHttp SDK / ${{ matrix.rid }}
-    if: >-
-      github.repository == 'qigao/chttp' &&
-      (
-        (github.event_name == 'workflow_dispatch' &&
-         github.ref == 'refs/heads/feature/chttp-rpc-owner-241') ||
-        (github.event_name == 'pull_request' &&
-         github.event.pull_request.number == 245 &&
-         github.event.pull_request.draft &&
-         github.event.pull_request.head.repo.full_name == 'qigao/chttp' &&
-         github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')
-      )
+    if: ${{ github.repository == 'qigao/chttp' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/chttp-rpc-owner-241') || (github.event_name == 'pull_request' && github.event.pull_request.number == 245 && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'qigao/chttp' && github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')) }}
     needs: official-sdk-sanitizer
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
