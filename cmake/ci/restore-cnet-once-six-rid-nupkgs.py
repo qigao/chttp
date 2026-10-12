@@ -159,7 +159,7 @@ def main() -> None:
     for key in required_env:
         if not os.getenv(key):
             raise RuntimeError(f"{key} missing")
-    if ns.host_rid not in ("linux-x64", "macos-arm64", "windows-x64"):
+    if ns.host_rid not in ("linux-x64", "linux-arm64", "macos-arm64", "windows-x64"):
         raise ValueError("Unsupported non-host compiler RID")
     temp = Path(os.environ["RUNNER_TEMP"]) / "chttp-cnet-once-candidate-nupkgs"
     if temp.exists():
