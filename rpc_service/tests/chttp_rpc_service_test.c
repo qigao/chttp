@@ -928,6 +928,45 @@ spec("CHttp::RpcService generated RPC MethodPlan") {
       check_equal(crpc_client_destroy(&attached_client,
                                      CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
                   SALTS_OK);
+
+      /* #243 stop-timeout gate: old generated descriptor graph and leased
+       * native workspace cannot be released while an Owner callback blocks.
+       * The successful second stop is the sole lifetime release boundary. */
+      {
+        cmeta_thread_t blocked = {0};
+        chttp_rpc_service_test_call_thread pending = {0};
+        uint64_t deadline;
+        int admitted;
+        pending.config = client_config;
+        pending.plan = method_plan;
+        pending.binding = &native;
+        pending.id = UINT64_C(314);
+        pending.request = (AddRequest){.left = 3u, .right = 4u,
+                                       .scale = 1u, .presence = 1u};
+        check_greater(
+            snprintf(pending.uri, sizeof(pending.uri), "%s", attached_uri), 0);
+        atomic_init(&pending.completed, 0);
+        atomic_store_explicit(&race.entered, 0, memory_order_release);
+        atomic_store_explicit(&race.release, 0, memory_order_release);
+        atomic_store_explicit(&race.enabled, 1, memory_order_release);
+        check_equal(cmeta_thread_create(
+            &blocked, chttp_rpc_service_test_call_worker, &pending), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + 2500u;
+        while (atomic_load_explicit(&race.entered, memory_order_acquire) == 0 &&
+               cmeta_monotonic_ms() < deadline)
+          cmeta_thread_yield();
+        admitted = atomic_load_explicit(&race.entered, memory_order_acquire);
+        if (admitted != 0) {
+          check_equal(chttp_server_stop(&host, 10u), SALTS_ETIMEDOUT);
+          check_equal(chttp_server_destroy(&host), SALTS_EBUSY);
+        }
+        atomic_store_explicit(&race.release, 1, memory_order_release);
+        check_equal(cmeta_thread_join(&blocked), SALTS_OK);
+        cmeta_thread_destroy(&blocked);
+        check_equal(admitted, 1);
+        check_equal(atomic_load_explicit(&pending.completed,
+                                        memory_order_acquire), 1);
+      }
       check_equal(chttp_server_stop(&host,
                                     CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS),
                   SALTS_OK);
