@@ -364,6 +364,12 @@ jobs:
         if: matrix.family == 'ios'
         shell: bash
         run: echo 'X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache' >> "$GITHUB_ENV"
+      - name: Install OpenAPI conformance test prerequisites
+        if: matrix.cross == false
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install -r openapi/tests/requirements-conformance.txt
       - name: Configure canonical vcpkg binary cache
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
