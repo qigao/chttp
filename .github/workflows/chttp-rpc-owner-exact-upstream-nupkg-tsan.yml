@@ -461,6 +461,16 @@ jobs:
             ctest --preset "${{ matrix.preset }}" --output-on-failure \
               --no-tests=error --timeout 90 --stop-on-failure
           fi
+          # The one-slot WebSocket io_uring generation-reuse case must also
+          # withstand repeated first-close -> terminal-observation -> reconnect.
+          # Keep it as a hard CTest (no retries on failed connections/suppression).
+          if [[ "${{ matrix.rid }}" == linux-x64 ]]; then
+            timeout --signal=TERM --kill-after=10s 300s \
+              ctest --preset "${{ matrix.preset }}" \
+              -R '^chttp_websocket_io_uring_test$' \
+              --repeat until-fail:15 --no-tests=error \
+              --timeout 90 --output-on-failure
+          fi
           cmake --build --preset "install-${{ matrix.preset }}"
       - name: Build / CTest / install exact-candidate CHttp SDK on Windows
         if: matrix.family == 'windows'
