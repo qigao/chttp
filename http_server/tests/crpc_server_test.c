@@ -452,7 +452,10 @@ spec("CRPC server") {
     check_equal(crpc_server_test_init(&server, &config), SALTS_EINVAL);
     config = crpc_server_test_config_for(0);
     config.http.max_buffered_response_body_bytes = 0u;
-    check_equal(crpc_server_test_init(&server, &config), SALTS_EINVAL);
+    /* Native HTTP Server selects its bounded buffered-body default on zero.
+     * The RPC registry consumes the effective Server configuration. */
+    check_equal(crpc_server_test_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
     config = crpc_server_test_config_for(0);
     config.http.max_buffered_response_body_bytes = 95u;
     check_equal(crpc_server_test_init(&server, &config), SALTS_EMSGSIZE);
