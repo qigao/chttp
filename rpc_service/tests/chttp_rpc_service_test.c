@@ -790,14 +790,14 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
         check_equal(ready, 2);
         check_equal(rejected_before_release, 1);
         check_equal(c.status, SALTS_OK);
-        check_equal(c.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_REMOTE_ERROR);
+        check_equal(c.outcome_kind, CHTTP_CLIENT_RPC_REMOTE_ERROR);
         check_equal(c.remote_code, INT64_C(-32603));
         check_equal(atomic_load_explicit(&race.entered,
                                         memory_order_acquire), 2);
         check_equal(a.status, SALTS_OK);
         check_equal(b.status, SALTS_OK);
-        check_equal(a.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
-        check_equal(b.outcome_kind, CHTTP_RPC_SERVICE_CLIENT_SUCCESS);
+        check_equal(a.outcome_kind, CHTTP_CLIENT_RPC_SUCCESS);
+        check_equal(b.outcome_kind, CHTTP_CLIENT_RPC_SUCCESS);
         check_equal(a.response.sum, (uint32_t)11u);
         check_equal(b.response.sum, (uint32_t)17u);
       }
