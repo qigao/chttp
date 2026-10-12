@@ -487,7 +487,14 @@ jobs:
           set -euo pipefail
           preset=installed-release-user
           if [[ "${{ matrix.family }}" == macos ]]; then preset=installed-macos-release-user; fi
-          cmake --preset "$preset" -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+          # An installed consumer configures a second CMake/vcpkg graph.
+          # Linux arm64 must use the same immutable source-build policy as
+          # the producer, because its llhttp/tree-sitter ABIs are not cached.
+          set --
+          if [[ "${{ matrix.rid }}" == linux-arm64 ]]; then
+            set -- "-DVCPKG_INSTALL_OPTIONS="
+          fi
+          cmake --preset "$preset" -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "$@"
           cmake --build --preset "$preset" --parallel 2
           ctest --preset "$preset" --output-on-failure --no-tests=error
       - name: Installed C11/C++ App and RPC consumer contracts on Windows
