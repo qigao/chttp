@@ -39,6 +39,8 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                 {"utils_version": "4.3.0-*"},
                 {"salts_version": "2.3.0-rc.0"},
                 {"utils_version": "4.3.0-rc.00"},
+                {"salts_version": "2.3.0-rc.14"},
+                {"utils_version": "4.3.0-rc.9"},
                 {"salts_version": "3.0.0"},
                 {"salts_sha": "x" * 40},
                 {"utils_sha": "B" * 40},
