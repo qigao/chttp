@@ -43,16 +43,8 @@ name: CHttp exact published SDK cutover preflight (NO PUBLISH)
         required: true
         type: string
 
-# Auto-qualification: official immutable release bytes on this Draft PR.
-# Manual dispatch still accepts explicit identities and verifies them exactly.
-# Never silently fall back to a Draft package or dynamic latest release.
-env:
-  PUBLISHED_SALTS_VERSION: ${{ inputs.salts_version || '2.3.0-rc.15' }}
-  PUBLISHED_UTILS_VERSION: ${{ inputs.utils_version || '4.3.0-rc.10' }}
-  PUBLISHED_SALTS_SHA: ${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}
-  PUBLISHED_UTILS_SHA: ${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
-  PUBLISHED_SALTS_DIGEST: ${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}
-  PUBLISHED_UTILS_DIGEST: ${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}
+# PR #245 defaults to reviewed released IDs; manual dispatch retains explicit inputs.
+# These are exact immutable bytes, never a dynamic latest-version selector.
 
 permissions:
   contents: read
@@ -121,19 +113,19 @@ jobs:
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: official-sdk-${{ matrix.mode }}
-          sdk_identity: published-${{ env.PUBLISHED_SALTS_VERSION }}-${{ env.PUBLISHED_UTILS_VERSION }}-${{ env.PUBLISHED_SALTS_SHA }}-${{ env.PUBLISHED_UTILS_SHA }}
+          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.15' }}-${{ inputs.utils_version || '4.3.0-rc.10' }}-${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}-${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
       - name: Check official release/tag identities and restore exact binary graph
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           python3 cmake/ci/restore-exact-published-native-sdks.py \
-            --salts-version '${{ env.PUBLISHED_SALTS_VERSION }}' \
-            --utils-version '${{ env.PUBLISHED_UTILS_VERSION }}' \
-            --salts-sha '${{ env.PUBLISHED_SALTS_SHA }}' \
-            --utils-sha '${{ env.PUBLISHED_UTILS_SHA }}' \
-            --salts-digest '${{ env.PUBLISHED_SALTS_DIGEST }}' \
-            --utils-digest '${{ env.PUBLISHED_UTILS_DIGEST }}'
+            --salts-version '${{ inputs.salts_version || '2.3.0-rc.15' }}' \
+            --utils-version '${{ inputs.utils_version || '4.3.0-rc.10' }}' \
+            --salts-sha '${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}' \
+            --utils-sha '${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}'
       - name: Configure RPC Owner with exact published SDK files
         shell: bash
         run: |
@@ -231,12 +223,12 @@ jobs:
           - {runner: macos-15, family: ios, rid: ios-arm64, host_rid: macos-arm64, triplet: arm64-ios, host_triplet: arm64-osx, preset: ci-ios-sdk-release-user, cross: true}
     env:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
-      EXPECTED_SALTS: ${{ env.PUBLISHED_SALTS_SHA }}
-      EXPECTED_UTILS: ${{ env.PUBLISHED_UTILS_SHA }}
-      EXPECTED_SALTS_VERSION: ${{ env.PUBLISHED_SALTS_VERSION }}
-      EXPECTED_UTILS_VERSION: ${{ env.PUBLISHED_UTILS_VERSION }}
-      EXPECTED_SALTS_DIGEST: ${{ env.PUBLISHED_SALTS_DIGEST }}
-      EXPECTED_UTILS_DIGEST: ${{ env.PUBLISHED_UTILS_DIGEST }}
+      EXPECTED_SALTS: ${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}
+      EXPECTED_UTILS: ${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
+      EXPECTED_SALTS_VERSION: ${{ inputs.salts_version || '2.3.0-rc.15' }}
+      EXPECTED_UTILS_VERSION: ${{ inputs.utils_version || '4.3.0-rc.10' }}
+      EXPECTED_SALTS_DIGEST: ${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}
+      EXPECTED_UTILS_DIGEST: ${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}
       GH_TOKEN: ${{ github.token }}
       GITHUB_TOKEN: ${{ github.token }}
       QIGAO_SDK_RID: ${{ matrix.rid }}
@@ -328,18 +320,18 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           python3 cmake/ci/restore-exact-published-native-sdks.py \
-            --salts-version '${{ env.PUBLISHED_SALTS_VERSION }}' \
-            --utils-version '${{ env.PUBLISHED_UTILS_VERSION }}' \
-            --salts-sha '${{ env.PUBLISHED_SALTS_SHA }}' \
-            --utils-sha '${{ env.PUBLISHED_UTILS_SHA }}' \
-            --salts-digest '${{ env.PUBLISHED_SALTS_DIGEST }}' \
-            --utils-digest '${{ env.PUBLISHED_UTILS_DIGEST }}' \
+            --salts-version '${{ inputs.salts_version || '2.3.0-rc.15' }}' \
+            --utils-version '${{ inputs.utils_version || '4.3.0-rc.10' }}' \
+            --salts-sha '${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}' \
+            --utils-sha '${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}' \
             --rid "${{ matrix.rid }}" --host-rid "${{ matrix.host_rid }}"
       - name: Restore exact-published compiler object cache
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: cnet-once-nupkg-${{ matrix.rid }}
-          sdk_identity: published-${{ env.PUBLISHED_SALTS_VERSION }}-${{ env.PUBLISHED_UTILS_VERSION }}-${{ env.PUBLISHED_SALTS_SHA }}-${{ env.PUBLISHED_UTILS_SHA }}
+          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.15' }}-${{ inputs.utils_version || '4.3.0-rc.10' }}-${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}-${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
       - name: Build / CTest / install exact-published CHttp SDK on Unix
         if: matrix.family != 'windows'
         shell: bash
