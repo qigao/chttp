@@ -612,6 +612,7 @@ static cserde_status chttp_rpc_service_encode_native_status(
 static int chttp_rpc_service_handler_call(
     chttp_rpc_service_method_record *record,
     chttp_rpc_service_call_slot *slot,
+    DataBindBindingCallLifetime *lifetime,
     const crpc_server_request_view *request,
     crpc_server_response *response) {
   chttp_rpc_service_provider provider_context;
@@ -624,7 +625,8 @@ static int chttp_rpc_service_handler_call(
   int code = 0;
   int result;
 
-  if (record == NULL || slot == NULL || record->owner == NULL ||
+  if (record == NULL || slot == NULL || lifetime == NULL ||
+      record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->execution == NULL ||
       record->request_storage == NULL || record->response_storage == NULL ||
@@ -649,9 +651,11 @@ static int chttp_rpc_service_handler_call(
   provider.commit_output = chttp_rpc_service_commit_output;
   provider.abort_output = chttp_rpc_service_abort_output;
 
-  status = data_bind_binding_plan_bind_inputs(
+  /* Publish a producer-owned exact-once lifetime only after complete ingress.
+   * On partial bind failure DataBind itself restores initialized staging. */
+  status = data_bind_binding_plan_bind_call(
       record->binding, &provider, &slot->native_options,
-      &record->frame, &diagnostic);
+      &record->frame, lifetime, &diagnostic);
 
   if (status == DATA_BIND_OK &&
       !record->execution->invoke(
@@ -728,6 +732,10 @@ static int chttp_rpc_service_handler(
       (const chttp_rpc_service_method_record *)user;
   chttp_rpc_service_method_record call;
   chttp_rpc_service_call_slot *slot;
+  DataBindBindingCallLifetime lifetime =
+      DATA_BIND_BINDING_CALL_LIFETIME_INIT;
+  DataBindBindingPlanDiagnostic cleanup =
+      DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   size_t cursor;
   int status;
   if (registered == NULL || registered->owner == NULL)
@@ -757,7 +765,16 @@ static int chttp_rpc_service_handler(
   call.frame.params = call.params;
   call.frame.param_bytes = call.param_bytes;
   call.frame.param_count = call.param_count;
-  status = chttp_rpc_service_handler_call(&call, slot, request, response);
+  status = chttp_rpc_service_handler_call(
+      &call, slot, &lifetime, request, response);
+  /* The response encoder runs synchronously. Restore native objects before
+   * returning the leased slot, even on native error or failed egress. */
+  if (data_bind_binding_call_is_live(&lifetime)) {
+    DataBindStatus restore =
+        data_bind_binding_call_restore_zero(&lifetime, &cleanup);
+    if (restore != DATA_BIND_OK && status == SALTS_OK)
+      status = SALTS_EPROTO;
+  }
   chttp_rpc_service_slot_release(slot);
   return status;
 }
