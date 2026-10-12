@@ -24,6 +24,8 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_generation_dso_invoke(
   if (return_storage == NULL || params == NULL || param_count != 2u ||
       params[0] == NULL || params[1] == NULL)
     return false;
+  if (probe != NULL)
+    atomic_fetch_add_explicit(&probe->invoked, 1, memory_order_acq_rel);
   if (probe != NULL &&
       atomic_load_explicit(&probe->enabled, memory_order_acquire)) {
     const uint64_t deadline = cmeta_monotonic_ms() + 3000u;
