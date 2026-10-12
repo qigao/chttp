@@ -8,7 +8,7 @@ salts_idl_target(
 
 # Real provider fixture: the native DataBind execution callback lives in
 # this unloadable DSO, not in the test executable. Only Plugin owns its DSO.
-add_library(chttp_rpc_generation_dso SHARED chhttp_rpc_generation_dso.c)
+add_library(chttp_rpc_generation_dso SHARED chttp_rpc_generation_dso.c)
 target_link_libraries(chttp_rpc_generation_dso PRIVATE
   Salts::PluginABI Salts::Platform Salts::DataBind)
 set_target_properties(chttp_rpc_generation_dso PROPERTIES
