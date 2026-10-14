@@ -25,6 +25,13 @@ concurrency:
 jobs:
   exact-upstream-packages:
     name: Uninstrumented exact six-RID NuGet pair with TSan CHttp + installed SDK
+    # This workflow preserves Draft PR #245's candidate-package evidence. Its
+    # source artifacts are not a reusable current-release dependency feed.
+    if: >-
+      github.repository == 'qigao/chttp' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 245 &&
+      github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
