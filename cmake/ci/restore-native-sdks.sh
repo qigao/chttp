@@ -20,8 +20,8 @@ cat > "$project" <<'EOF'
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[2.3.0-rc.15]" Condition="'$(UseSaltsCandidate)' != 'true'" />
-    <PackageReference Include="SaltsUtils.Native" Version="[4.3.0-rc.10]" />
+    <PackageReference Include="Salts.Native" Version="[2.3.0-rc.16]" Condition="'$(UseSaltsCandidate)' != 'true'" />
+    <PackageReference Include="SaltsUtils.Native" Version="[4.3.0-rc.11]" />
     <PackageReference Include="TurboWasm.Native" Version="*" Condition="'$(WithTurboWasm)' == 'true'" />
   </ItemGroup>
 </Project>
@@ -39,8 +39,8 @@ matches = [(k, v['path']) for k, v in assets['libraries'].items()
 if len(matches) != 1:
     raise SystemExit('expected one resolved ' + sys.argv[3] + ' package')
 # Verify the *resolved* graph in addition to NuGet's exact [version] range.
-required = {'salts.native': '2.3.0-rc.15',
-            'saltsutils.native': '4.3.0-rc.10'}
+required = {'salts.native': '2.3.0-rc.16',
+            'saltsutils.native': '4.3.0-rc.11'}
 want = required.get(sys.argv[3].lower())
 if want and matches[0][0].lower() != sys.argv[3].lower() + '/' + want:
     raise SystemExit('unexpected native SDK release version: ' + matches[0][0])

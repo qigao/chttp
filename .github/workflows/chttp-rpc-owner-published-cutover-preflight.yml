@@ -43,8 +43,8 @@ name: CHttp exact published SDK cutover preflight (NO PUBLISH)
         required: true
         type: string
 
-# PR #245 defaults to reviewed released IDs; manual dispatch retains explicit inputs.
-# These are exact immutable bytes, never a dynamic latest-version selector.
+# Pull requests use the reviewed release defaults below; manual dispatch retains
+# explicit inputs. These are exact immutable bytes, never a dynamic selector.
 
 permissions:
   contents: read
@@ -59,16 +59,14 @@ jobs:
     name: Check strict published SDK release selection
     if: >-
       github.repository == 'qigao/chttp' &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.number == 245 &&
-      github.event.pull_request.draft &&
-      github.event.pull_request.head.repo.full_name == 'qigao/chttp' &&
-      github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241'
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Exercise all version, tag, SHA and NuGet rejection contracts
         shell: bash
@@ -79,7 +77,7 @@ jobs:
 
   official-sdk-sanitizer:
     name: Official exact Native DSO / ${{ matrix.mode }}
-    if: ${{ github.repository == 'qigao/chttp' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/chttp-rpc-owner-241') || (github.event_name == 'pull_request' && github.event.pull_request.number == 245 && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'qigao/chttp' && github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')) }}
+    if: ${{ github.repository == 'qigao/chttp' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -113,19 +111,19 @@ jobs:
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: official-sdk-${{ matrix.mode }}
-          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.15' }}-${{ inputs.utils_version || '4.3.0-rc.10' }}-${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}-${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
+          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.16' }}-${{ inputs.utils_version || '4.3.0-rc.11' }}-${{ inputs.salts_source_sha || '6cf093dc053db98bb21b1788eb2fc1ada4df195e' }}-${{ inputs.utils_source_sha || 'fbb5f3ee19589836ced0f3b98414e71e6dcc1388' }}
       - name: Check official release/tag identities and restore exact binary graph
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           python3 cmake/ci/restore-exact-published-native-sdks.py \
-            --salts-version '${{ inputs.salts_version || '2.3.0-rc.15' }}' \
-            --utils-version '${{ inputs.utils_version || '4.3.0-rc.10' }}' \
-            --salts-sha '${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}' \
-            --utils-sha '${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}' \
-            --salts-digest '${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}' \
-            --utils-digest '${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}'
+            --salts-version '${{ inputs.salts_version || '2.3.0-rc.16' }}' \
+            --utils-version '${{ inputs.utils_version || '4.3.0-rc.11' }}' \
+            --salts-sha '${{ inputs.salts_source_sha || '6cf093dc053db98bb21b1788eb2fc1ada4df195e' }}' \
+            --utils-sha '${{ inputs.utils_source_sha || 'fbb5f3ee19589836ced0f3b98414e71e6dcc1388' }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 || '0b8592cb0b27e91fb5a3ee2c5a888ca53c7593cf9eb8cd5adfbc38fac43659b7' }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 || '0d15b3dba534b55a42069dc665070cf177062d0bd029b31639dfb2bb2d4bdf64' }}'
       - name: Configure RPC Owner with exact published SDK files
         shell: bash
         run: |
@@ -207,7 +205,7 @@ jobs:
 
   published-rid-consumers:
     name: Official exact published CHttp SDK / ${{ matrix.rid }}
-    if: ${{ github.repository == 'qigao/chttp' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/chttp-rpc-owner-241') || (github.event_name == 'pull_request' && github.event.pull_request.number == 245 && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == 'qigao/chttp' && github.event.pull_request.head.ref == 'feature/chttp-rpc-owner-241')) }}
+    if: ${{ github.repository == 'qigao/chttp' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
     needs: official-sdk-sanitizer
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -223,12 +221,12 @@ jobs:
           - {runner: macos-15, family: ios, rid: ios-arm64, host_rid: macos-arm64, triplet: arm64-ios, host_triplet: arm64-osx, preset: ci-ios-sdk-release-user, cross: true}
     env:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
-      EXPECTED_SALTS: ${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}
-      EXPECTED_UTILS: ${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
-      EXPECTED_SALTS_VERSION: ${{ inputs.salts_version || '2.3.0-rc.15' }}
-      EXPECTED_UTILS_VERSION: ${{ inputs.utils_version || '4.3.0-rc.10' }}
-      EXPECTED_SALTS_DIGEST: ${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}
-      EXPECTED_UTILS_DIGEST: ${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}
+      EXPECTED_SALTS: ${{ inputs.salts_source_sha || '6cf093dc053db98bb21b1788eb2fc1ada4df195e' }}
+      EXPECTED_UTILS: ${{ inputs.utils_source_sha || 'fbb5f3ee19589836ced0f3b98414e71e6dcc1388' }}
+      EXPECTED_SALTS_VERSION: ${{ inputs.salts_version || '2.3.0-rc.16' }}
+      EXPECTED_UTILS_VERSION: ${{ inputs.utils_version || '4.3.0-rc.11' }}
+      EXPECTED_SALTS_DIGEST: ${{ inputs.salts_package_sha256 || '0b8592cb0b27e91fb5a3ee2c5a888ca53c7593cf9eb8cd5adfbc38fac43659b7' }}
+      EXPECTED_UTILS_DIGEST: ${{ inputs.utils_package_sha256 || '0d15b3dba534b55a42069dc665070cf177062d0bd029b31639dfb2bb2d4bdf64' }}
       GH_TOKEN: ${{ github.token }}
       GITHUB_TOKEN: ${{ github.token }}
       QIGAO_SDK_RID: ${{ matrix.rid }}
@@ -320,18 +318,18 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           python3 cmake/ci/restore-exact-published-native-sdks.py \
-            --salts-version '${{ inputs.salts_version || '2.3.0-rc.15' }}' \
-            --utils-version '${{ inputs.utils_version || '4.3.0-rc.10' }}' \
-            --salts-sha '${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}' \
-            --utils-sha '${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}' \
-            --salts-digest '${{ inputs.salts_package_sha256 || 'fa73229c7b2506b393fe779bb56f8d42c387a79d30db54c0cf17b408b7ba7ad1' }}' \
-            --utils-digest '${{ inputs.utils_package_sha256 || 'b4e5207b9e1f49fab6bddfcd36a4f27d9e99cabe09c28b41913c26f20e366491' }}' \
+            --salts-version '${{ inputs.salts_version || '2.3.0-rc.16' }}' \
+            --utils-version '${{ inputs.utils_version || '4.3.0-rc.11' }}' \
+            --salts-sha '${{ inputs.salts_source_sha || '6cf093dc053db98bb21b1788eb2fc1ada4df195e' }}' \
+            --utils-sha '${{ inputs.utils_source_sha || 'fbb5f3ee19589836ced0f3b98414e71e6dcc1388' }}' \
+            --salts-digest '${{ inputs.salts_package_sha256 || '0b8592cb0b27e91fb5a3ee2c5a888ca53c7593cf9eb8cd5adfbc38fac43659b7' }}' \
+            --utils-digest '${{ inputs.utils_package_sha256 || '0d15b3dba534b55a42069dc665070cf177062d0bd029b31639dfb2bb2d4bdf64' }}' \
             --rid "${{ matrix.rid }}" --host-rid "${{ matrix.host_rid }}"
       - name: Restore exact-published compiler object cache
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: cnet-once-nupkg-${{ matrix.rid }}
-          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.15' }}-${{ inputs.utils_version || '4.3.0-rc.10' }}-${{ inputs.salts_source_sha || '21bdb1145fbb2b39ee3fa644173ec037adba7b87' }}-${{ inputs.utils_source_sha || '1410c9fd479f9faab31503523d8e31cc506b5b25' }}
+          sdk_identity: published-${{ inputs.salts_version || '2.3.0-rc.16' }}-${{ inputs.utils_version || '4.3.0-rc.11' }}-${{ inputs.salts_source_sha || '6cf093dc053db98bb21b1788eb2fc1ada4df195e' }}-${{ inputs.utils_source_sha || 'fbb5f3ee19589836ced0f3b98414e71e6dcc1388' }}
       - name: Build / CTest / install exact-published CHttp SDK on Unix
         if: matrix.family != 'windows'
         shell: bash
