@@ -52,7 +52,7 @@ jobs:
         uses: ./.github/actions/setup-compiler-cache
         with:
           profile: rpc-${{ matrix.mode }}-ubuntu-24.04
-          sdk_identity: published-salts-2.3.0-rc.15-utils-4.3.0-rc.10
+          sdk_identity: published-salts-2.3.0-rc.16-utils-4.3.0-rc.11
 
       - name: Configure instrumented RPC/Owner graph
         shell: bash

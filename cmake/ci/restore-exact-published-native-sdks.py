@@ -64,7 +64,8 @@ def validate_inputs(args: argparse.Namespace) -> None:
 
 
 def run(*argv: str) -> str:
-    p = subprocess.run(argv, check=True, capture_output=True, text=True)
+    p = subprocess.run(
+        argv, check=True, capture_output=True, text=True, encoding="utf-8")
     return p.stdout.strip()
 
 

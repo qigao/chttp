@@ -19,8 +19,8 @@ module = runpy.run_path(
 class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def inputs(self, **changes):
         fields = dict(
-            salts_version="2.3.0-rc.15",
-            utils_version="4.3.0-rc.10",
+            salts_version="2.3.0-rc.16",
+            utils_version="4.3.0-rc.11",
             salts_sha="a" * 40, utils_sha="b" * 40,
             salts_digest="c" * 64, utils_digest="d" * 64,
         )
@@ -30,12 +30,12 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_nuget_package_reference_uses_exact_bracket_range(self):
         from xml.etree import ElementTree
         project = ElementTree.fromstring(module["exact_nuget_project"](
-            "2.3.0-rc.15", "4.3.0-rc.10"))
+            "2.3.0-rc.16", "4.3.0-rc.11"))
         refs = {item.attrib["Include"]: item.attrib["Version"]
                 for item in project.iter("PackageReference")}
         self.assertEqual(refs, {
-            "Salts.Native": "[2.3.0-rc.15]",
-            "SaltsUtils.Native": "[4.3.0-rc.10]",
+            "Salts.Native": "[2.3.0-rc.16]",
+            "SaltsUtils.Native": "[4.3.0-rc.11]",
         })
         self.assertEqual(len(refs), 2)
         self.assertNotIn("2.3.0-*", ElementTree.tostring(project).decode())
@@ -92,7 +92,7 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
         for rid in module["RIDS"]:
             with self.subTest(rid=rid), tempfile.TemporaryDirectory() as tmp:
                 pkg = Path(tmp)
-                version, sha = "2.3.0-rc.15", "a" * 40
+                version, sha = "2.3.0-rc.16", "a" * 40
                 archive = self.synthetic_archive(pkg, "Salts.Native",
                                                  version, sha, version, rid=rid)
                 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -104,7 +104,7 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_windows_once_abi_rejects_old_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             pkg = Path(tmp)
-            version, sha = "2.3.0-rc.15", "a" * 40
+            version, sha = "2.3.0-rc.16", "a" * 40
             archive = self.synthetic_archive(
                 pkg, "Salts.Native", version, sha, version,
                 bad_abi=True, rid="windows-x64")
@@ -117,21 +117,21 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_nuget_graph_selection_is_exact_and_unique(self):
         with tempfile.TemporaryDirectory() as temp:
             packages = Path(temp)
-            (packages / "salts.native/2.3.0-rc.15").mkdir(parents=True)
+            (packages / "salts.native/2.3.0-rc.16").mkdir(parents=True)
             assets = {"libraries": {
-                "Salts.Native/2.3.0-rc.15": {"path": "salts.native/2.3.0-rc.15"}}}
+                "Salts.Native/2.3.0-rc.16": {"path": "salts.native/2.3.0-rc.16"}}}
             selected = module["select_package"](
-                assets, "Salts.Native", "2.3.0-rc.15", packages)
-            self.assertEqual(selected, packages / "salts.native/2.3.0-rc.15")
+                assets, "Salts.Native", "2.3.0-rc.16", packages)
+            self.assertEqual(selected, packages / "salts.native/2.3.0-rc.16")
             with self.assertRaisesRegex(ValueError, "not exactly"):
                 module["select_package"](
-                    assets, "Salts.Native", "2.3.0-rc.16", packages)
+                    assets, "Salts.Native", "2.3.0-rc.15", packages)
             extra = {"libraries": dict(assets["libraries"],
                                       **{"Salts.Native/2.3.0-rc.14": {
                                           "path": "salts.native/2.3.0-rc.14"}})}
             with self.assertRaisesRegex(ValueError, "not exactly"):
                 module["select_package"](
-                    extra, "Salts.Native", "2.3.0-rc.15", packages)
+                    extra, "Salts.Native", "2.3.0-rc.16", packages)
 
     @staticmethod
     def synthetic_archive(
@@ -168,7 +168,7 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_real_zip_nuspec_manifest_source_abi_and_digest(self):
         with tempfile.TemporaryDirectory() as temp:
             pkg = Path(temp)
-            version = "2.3.0-rc.15"
+            version = "2.3.0-rc.16"
             src = "a" * 40
             archive = self.synthetic_archive(pkg, "Salts.Native", version,
                                              src, version)
@@ -187,7 +187,7 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_packaged_salts_rejects_old_native_once_abi(self):
         with tempfile.TemporaryDirectory() as temp:
             pkg = Path(temp)
-            version, sha = "2.3.0-rc.15", "a" * 40
+            version, sha = "2.3.0-rc.16", "a" * 40
             archive = self.synthetic_archive(
                 pkg, "Salts.Native", version, sha, version, bad_abi=True)
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -198,13 +198,13 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_utils_package_must_record_exact_salts_dependency(self):
         with tempfile.TemporaryDirectory() as temp:
             pkg = Path(temp)
-            version = "4.3.0-rc.10"
+            version = "4.3.0-rc.11"
             archive = self.synthetic_archive(
-                pkg, "SaltsUtils.Native", version, "b" * 40, "2.3.0-rc.15")
+                pkg, "SaltsUtils.Native", version, "b" * 40, "2.3.0-rc.16")
             digest = hashlib.sha256(archive.read_bytes()).hexdigest()
             module["verify_package"](
                 pkg, "SaltsUtils.Native", version, "b" * 40,
-                digest, "2.3.0-rc.15")
+                digest, "2.3.0-rc.16")
             with self.assertRaisesRegex(ValueError, "salts_version"):
                 module["verify_package"](
                     pkg, "SaltsUtils.Native", version, "b" * 40,
@@ -213,10 +213,10 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
     def test_published_tags_must_match_real_commit_and_asset(self):
         digest = "d" * 64
         release = {
-            "tag_name": "v2.3.0-rc.15", "draft": False,
+            "tag_name": "v2.3.0-rc.16", "draft": False,
             "prerelease": True,
             "assets": [{
-                "name": "Salts.Native.2.3.0-rc.15.nupkg",
+                "name": "Salts.Native.2.3.0-rc.16.nupkg",
                 "digest": "sha256:" + digest, "state": "uploaded", "size": 1058,
             }],
         }
@@ -226,16 +226,16 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
             return json.dumps({"sha": "a" * 40})
         with mock.patch.dict(module["verify_release_metadata"].__globals__, {"run": fake_gh}):
             proof = module["verify_release_metadata"](
-                "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                "Salts.Native", "qigao/salts", "2.3.0-rc.16",
                 "a" * 40, digest)
             self.assertEqual(proof["asset_sha256"], digest)
             with self.assertRaisesRegex(ValueError, "mismatch"):
                 module["verify_release_metadata"](
-                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.16",
                     "b" * 40, digest)
             with self.assertRaisesRegex(ValueError, "digest/state mismatch"):
                 module["verify_release_metadata"](
-                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.16",
                     "a" * 40, "0" * 64)
             # Release asset integrity, not just NuGet identity, is a hard gate.
             for overrides in (
@@ -249,23 +249,23 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                     release["assets"][0].update(overrides)
                     with self.assertRaisesRegex(ValueError, "digest/state mismatch"):
                         module["verify_release_metadata"](
-                            "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                            "Salts.Native", "qigao/salts", "2.3.0-rc.16",
                             "a" * 40, digest)
                     release["assets"][0] = {
-                        "name": "Salts.Native.2.3.0-rc.15.nupkg",
+                        "name": "Salts.Native.2.3.0-rc.16.nupkg",
                         "digest": "sha256:" + digest, "state": "uploaded",
                         "size": 1058,
                     }
             release["assets"].append(dict(release["assets"][0]))
             with self.assertRaisesRegex(ValueError, "mismatch"):
                 module["verify_release_metadata"](
-                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.16",
                     "a" * 40, digest)
             release["assets"].pop()
             release["prerelease"] = False
             with self.assertRaisesRegex(ValueError, "release channel"):
                 module["verify_release_metadata"](
-                    "Salts.Native", "qigao/salts", "2.3.0-rc.15",
+                    "Salts.Native", "qigao/salts", "2.3.0-rc.16",
                     "a" * 40, digest)
 
 
@@ -300,11 +300,11 @@ class ExactPublishedInstalledConsumerAttestationTest(unittest.TestCase):
         tool = utils / "bin" / "salts-idlc"
         tool.write_text("tool")
         (salts / "salts-sdk-manifest.txt").write_text(
-            f"version=2.3.0-rc.15\ncommit={self.SALTS_SHA}\nprofile=release\n"
+            f"version=2.3.0-rc.16\ncommit={self.SALTS_SHA}\nprofile=release\n"
         )
         (utils / "salts-utils-sdk-manifest.txt").write_text(
-            f"version=4.3.0-rc.10\ncommit={self.UTILS_SHA}\n"
-            "profile=release\nsalts_version=2.3.0-rc.15\n"
+            f"version=4.3.0-rc.11\ncommit={self.UTILS_SHA}\n"
+            "profile=release\nsalts_version=2.3.0-rc.16\n"
         )
         build.mkdir(parents=True)
         (build / "CMakeCache.txt").write_text(
@@ -317,8 +317,8 @@ class ExactPublishedInstalledConsumerAttestationTest(unittest.TestCase):
             "EXPECTED_CHTTP": self.CHTTP_SHA,
             "EXPECTED_SALTS": self.SALTS_SHA,
             "EXPECTED_UTILS": self.UTILS_SHA,
-            "EXPECTED_SALTS_VERSION": "2.3.0-rc.15",
-            "EXPECTED_UTILS_VERSION": "4.3.0-rc.10",
+            "EXPECTED_SALTS_VERSION": "2.3.0-rc.16",
+            "EXPECTED_UTILS_VERSION": "4.3.0-rc.11",
             "EXPECTED_SALTS_DIGEST": "d" * 64,
             "EXPECTED_UTILS_DIGEST": "e" * 64,
             "SALTS_ROOT": str(salts),
@@ -356,11 +356,11 @@ class ExactPublishedInstalledConsumerAttestationTest(unittest.TestCase):
             repo, env, target, utils = self.fixture(Path(tmp), "linux-x64", "linux")
             manifest = utils / "salts-utils-sdk-manifest.txt"
             manifest.write_text(manifest.read_text().replace(
-                "salts_version=2.3.0-rc.15", "salts_version=2.3.0-rc.14"))
+                "salts_version=2.3.0-rc.16", "salts_version=2.3.0-rc.14"))
             with self.assertRaisesRegex(SystemExit, "not built against exact"):
                 self.invoke("linux-x64", "linux", env)
             manifest.write_text(manifest.read_text().replace(
-                "salts_version=2.3.0-rc.14", "salts_version=2.3.0-rc.15"))
+                "salts_version=2.3.0-rc.14", "salts_version=2.3.0-rc.16"))
             (target / "ChttpTargets.cmake").write_text("CHttp::RpcService")
             with self.assertRaisesRegex(SystemExit, "independent RpcService"):
                 self.invoke("linux-x64", "linux", env)
