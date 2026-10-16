@@ -917,6 +917,31 @@ static int chttp_service_test_call(
   return chttp_get(client, &options, response, &error);
 }
 
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+/* HTTP Interceptor remains a synchronous continuation, not a deferred terminal
+ * owner. The mounted ServiceHost Scope protects the async provider separately. */
+typedef struct chttp_service_host_interceptor_counts {
+  _Atomic size_t entered;
+  _Atomic size_t returned;
+} chttp_service_host_interceptor_counts;
+
+static int chttp_service_host_interceptor(
+    void *user, const chttp_server_request_view *request,
+    chttp_server_response *response, chttp_server_next *next) {
+  chttp_service_host_interceptor_counts *counts =
+      (chttp_service_host_interceptor_counts *)user;
+  (void)request;
+  (void)response;
+  if (counts == NULL || next == NULL) return SALTS_EINVAL;
+  (void)atomic_fetch_add_explicit(
+      &counts->entered, 1u, memory_order_relaxed);
+  const int status = chttp_server_next_call(next);
+  (void)atomic_fetch_add_explicit(
+      &counts->returned, 1u, memory_order_relaxed);
+  return status;
+}
+#endif
+
 spec("CHttp::App generated HTTP MethodPlan") {
   it("mounts generated transport projection without IDL HTTP annotations") {
     static const char schema[] =
@@ -1855,6 +1880,10 @@ spec("CHttp::App generated HTTP MethodPlan") {
     salts_service_host_scope rejected_scope =
         SALTS_SERVICE_HOST_SCOPE_INIT;
 
+    chttp_service_host_interceptor_counts counts = {0};
+    const chttp_server_middleware host_interceptor = {
+        chttp_service_host_interceptor, &counts};
+
     cflow_executor executor = {0};
     chttp_service service = {0};
     chttp_service second_service = {0};
@@ -1975,6 +2004,8 @@ spec("CHttp::App generated HTTP MethodPlan") {
     mount.method_plan = method_plan;
     mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
     mount.executor = &executor;
+    mount.middleware = &host_interceptor;
+    mount.middleware_count = 1u;
     check_equal(
         chttp_service_mount_host_candidate(
             &service, &server, &mount, &host_runtime, "CHttpPlugin_Calc_Add"),
@@ -2093,6 +2124,13 @@ spec("CHttp::App generated HTTP MethodPlan") {
         "/plugin/3?right=4&scale=2", &response), SALTS_OK);
     check_equal(response.body, "11", 2u);
     chttp_response_destroy(&response);
+
+    /* One admitted deferred N, one N+1 and one post-close admitted N route.
+     * Each HTTP middleware continuation is entered and returned once. */
+    check_equal(atomic_load_explicit(&counts.entered, memory_order_relaxed),
+                (size_t)3u);
+    check_equal(atomic_load_explicit(&counts.returned, memory_order_relaxed),
+                (size_t)3u);
 
     check_equal(
         chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
