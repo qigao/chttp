@@ -17,6 +17,12 @@
 #ifndef CHTTP_SERVICE_HOST_TEST_H2
 #define CHTTP_SERVICE_HOST_TEST_H2 0
 #endif
+#ifndef CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+#define CHTTP_SERVICE_HOST_TEST_MULTIPLEX 0
+#endif
+#if CHTTP_SERVICE_HOST_TEST_MULTIPLEX && !CHTTP_SERVICE_HOST_TEST_H2
+#error "The multiplex conformance requires explicit h2c"
+#endif
 
 enum { HOST_TEST_TIMEOUT_MS = 10000 };
 #define REQUIRE(x) do { if (!(x)) { \
@@ -230,6 +236,80 @@ static bool host_pending_at_least(
   return false;
 }
 
+
+#if CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+/* An advanced H2 owner is the only client of its transport. Hard physical
+ * connection bound=1, HTTP request/stream slots=2, fixed origin and protocol.
+ * The test verifies two simultaneously admitted streams on that one H2
+ * session; a third request must fail ENOBUFS before cancellation recycles one. */
+typedef struct host_h2_result {
+  size_t completions;
+  int status;
+  unsigned int http_major;
+  unsigned int response_status;
+  char body[32];
+  size_t body_size;
+  chttp_request request;
+} host_h2_result;
+
+static void host_h2_complete(
+    void *user, chttp_request request,
+    const chttp_response_view *view, const chttp_error *error) {
+  host_h2_result *result = (host_h2_result *)user;
+  if (result == NULL) return;
+  result->completions++;
+  result->request = request;
+  result->status = error != NULL ? error->status : SALTS_OK;
+  if (view == NULL) return;
+  result->http_major = view->http_major;
+  result->response_status = view->status_code;
+  if (view->body_size >= sizeof(result->body)) {
+    result->status = SALTS_EMSGSIZE;
+    return;
+  }
+  if (view->body_size != 0u && view->body != NULL)
+    memcpy(result->body, view->body, view->body_size);
+  result->body[view->body_size] = '\0';
+  result->body_size = view->body_size;
+}
+
+/* Test-only explicit bounded progress; the CHttp client is caller-driven.
+ * No background implicit poller or retry into a different connection. */
+static bool host_h2_poll_until_pending(
+    chttp_async_client *client, cflow_executor *executor,
+    size_t expected) {
+  const uint64_t deadline = cmeta_monotonic_ms() + HOST_TEST_TIMEOUT_MS;
+  while (cmeta_monotonic_ms() < deadline) {
+    cflow_executor_stats stats = {0};
+    size_t completions = 0u;
+    if (!cflow_executor_get_stats(executor, &stats))
+      return false;
+    if (stats.pending >= expected)
+      return true;
+    if (chttp_async_client_poll(client, 5u, &completions) != SALTS_OK)
+      return false;
+  }
+  return false;
+}
+
+static bool host_h2_poll_until_completions(
+    chttp_async_client *client,
+    const host_h2_result *a, const host_h2_result *b,
+    const host_h2_result *c) {
+  const uint64_t deadline = cmeta_monotonic_ms() + HOST_TEST_TIMEOUT_MS;
+  while (cmeta_monotonic_ms() < deadline) {
+    size_t completions = 0u;
+    if ((a == NULL || a->completions == 1u) &&
+        (b == NULL || b->completions == 1u) &&
+        (c == NULL || c->completions == 1u))
+      return true;
+    if (chttp_async_client_poll(client, 5u, &completions) != SALTS_OK)
+      return false;
+  }
+  return false;
+}
+#endif
+
 int main(void) {
   const cmeta_plugin_registry_config registry_config = {2u};
   cmeta_plugin_registry registry = {0};
@@ -237,8 +317,12 @@ int main(void) {
   host_generation_fixture old_generation = {0};
   host_generation_fixture new_generation = {0};
   host_generation_fixture overflow_generation = {0};
+#if CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+  host_generation_fixture multiplex_generation = {0};
+#endif
   salts_service_host_runtime runtime = SALTS_SERVICE_HOST_RUNTIME_INIT;
   salts_service_host_generation *previous = NULL;
+  salts_service_host_generation *last_generation = &overflow_generation.generation;
   cflow_executor executor = {0};
   host_worker_gate gate = {0};
   host_middleware_counts counts = {0};
@@ -426,6 +510,99 @@ int main(void) {
   REQUIRE(salts_service_host_generation_drain(
           &runtime, &new_generation.generation) == SALTS_SERVICE_HOST_OK);
 
+#if CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+  /* Release the old N+1 slot before preparing N+3. Salts and CHttp both
+   * enforce the same two-generation upper bound: no silent third owner. */
+  REQUIRE(chttp_service_host_switch_retire_candidate(
+          &service, &new_generation.generation) == SALTS_OK);
+  REQUIRE(host_build(&multiplex_generation, UINT64_C(4),
+                     &registry, plugin_next) == 0);
+
+  chttp_async_client async = {0};
+  chttp_client_config async_config = host_client_config();
+  async_config.network.connection_capacity = 1u; /* physical H2 cap */
+  async_config.request_capacity = 2u;            /* stream/admission cap */
+  host_h2_result warm = {0}, old = {0}, sibling = {0}, later = {0};
+  chttp_request warm_req = {0}, old_req = {0};
+  chttp_request sibling_req = {0}, later_req = {0};
+  chttp_request rejected_req = {0};
+  chttp_request_options opts = {
+      .connection_uri = uri, .authority = "127.0.0.1",
+      .target = "/plugin/3?right=4&scale=2", .method = CHTTP_METHOD_GET,
+      .protocol = CHTTP_HTTP_2, .on_complete = host_h2_complete, .user = &warm
+  };
+  size_t polled = 0u;
+  REQUIRE(chttp_async_client_init(&async, &async_config) == SALTS_OK);
+  /* Successful warmup proves the single physical H2 connection is READY
+   * and has exchanged SETTINGS before the concurrent stream test begins. */
+  REQUIRE(chttp_async_client_submit(&async, &opts, &warm_req) == SALTS_OK);
+  REQUIRE(host_h2_poll_until_completions(&async, &warm, NULL, NULL));
+  REQUIRE(warm.status == SALTS_OK && warm.completions == 1u);
+  REQUIRE(warm.http_major == 2u && warm.response_status == 201u);
+  REQUIRE(warm.body_size == 2u && strcmp(warm.body, "11") == 0);
+
+  /* Occupy the existing one-worker executor to hold N+2's native task
+   * after real H2 stream admission and before its Provider executes. */
+  atomic_store_explicit(&gate.started, 0, memory_order_relaxed);
+  atomic_store_explicit(&gate.release, 0, memory_order_relaxed);
+  REQUIRE(cflow_executor_try_post_task(&executor, &gate_task)
+          == CFLOW_ADMISSION_ACCEPTED);
+  const uint64_t gate_deadline = cmeta_monotonic_ms() + HOST_TEST_TIMEOUT_MS;
+  while (!atomic_load_explicit(&gate.started, memory_order_acquire) &&
+         cmeta_monotonic_ms() < gate_deadline)
+    cmeta_thread_yield();
+  REQUIRE(atomic_load_explicit(&gate.started, memory_order_acquire));
+
+  opts.user = &old;
+  REQUIRE(chttp_async_client_submit(&async, &opts, &old_req) == SALTS_OK);
+  REQUIRE(host_h2_poll_until_pending(&async, &executor, 2u));
+
+  REQUIRE(chttp_service_host_switch_prepare_candidate(
+          &service, &multiplex_generation.generation) == SALTS_OK);
+  REQUIRE(salts_service_host_runtime_publish(
+          &runtime, &multiplex_generation.generation, &previous)
+          == SALTS_SERVICE_HOST_OK);
+  REQUIRE(previous == &overflow_generation.generation);
+  last_generation = &multiplex_generation.generation;
+
+  opts.user = &sibling;
+  REQUIRE(chttp_async_client_submit(&async, &opts, &sibling_req) == SALTS_OK);
+  REQUIRE(host_h2_poll_until_pending(&async, &executor, 3u));
+  /* A third simultaneous HTTP/2 stream must fail promptly at the bound,
+   * rather than opening another connection or falling back to HTTP/1. */
+  REQUIRE(chttp_async_client_submit(&async, &opts, &rejected_req)
+          == SALTS_ENOBUFS);
+  REQUIRE(rejected_req.slot == 0u && rejected_req.generation == 0u);
+  REQUIRE(sibling.completions == 0u);
+  REQUIRE(salts_service_host_generation_drain(
+          &runtime, &overflow_generation.generation)
+          == SALTS_SERVICE_HOST_BUSY);
+  REQUIRE(chttp_async_request_cancel(&async, old_req) == SALTS_OK);
+  REQUIRE(host_h2_poll_until_completions(&async, &old, NULL, NULL));
+  REQUIRE(old.status == SALTS_ECANCELED && old.completions == 1u);
+  REQUIRE(chttp_async_request_cancel(&async, old_req) == SALTS_ENOENT);
+  REQUIRE(sibling.completions == 0u);
+
+  /* The canceled stream's request slot is recyclable while the sibling
+   * remains live on the same single-capacity H2 session. */
+  opts.user = &later;
+  REQUIRE(chttp_async_client_submit(&async, &opts, &later_req) == SALTS_OK);
+  REQUIRE(host_h2_poll_until_pending(&async, &executor, 4u));
+
+  atomic_store_explicit(&gate.release, 1, memory_order_release);
+  REQUIRE(host_h2_poll_until_completions(&async, &sibling, &later, NULL));
+  REQUIRE(sibling.completions == 1u && later.completions == 1u);
+  REQUIRE(sibling.status == SALTS_OK && later.status == SALTS_OK);
+  REQUIRE(sibling.http_major == 2u && later.http_major == 2u);
+  REQUIRE(sibling.response_status == 201u && later.response_status == 201u);
+  REQUIRE(strcmp(sibling.body, "111") == 0 && strcmp(later.body, "111") == 0);
+  REQUIRE(chttp_async_client_stop(&async, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
+  REQUIRE(chttp_async_client_destroy(&async) == SALTS_OK);
+  REQUIRE(cflow_executor_wait_idle(&executor));
+  REQUIRE(salts_service_host_generation_drain(
+          &runtime, &overflow_generation.generation) == SALTS_SERVICE_HOST_OK);
+#endif
+
   /* A malformed request does not invoke the Provider or escape its Scope.
    * Preserve the existing DataBind ingress -> HTTP 400 contract. */
   const chttp_options malformed = {
@@ -442,11 +619,15 @@ int main(void) {
 
   REQUIRE(salts_service_host_runtime_close(&runtime, &previous) ==
           SALTS_SERVICE_HOST_OK);
-  REQUIRE(previous == &overflow_generation.generation);
+  REQUIRE(previous == last_generation);
   REQUIRE(host_http_get(&client, uri, &code, body, &body_size) == SALTS_OK);
   REQUIRE(code == 503u);
-  REQUIRE(atomic_load_explicit(&counts.entered, memory_order_acquire) == 6u);
-  REQUIRE(atomic_load_explicit(&counts.returned, memory_order_acquire) == 6u);
+  const size_t expected_callbacks =
+      CHTTP_SERVICE_HOST_TEST_MULTIPLEX ? 10u : 6u;
+  REQUIRE(atomic_load_explicit(&counts.entered, memory_order_acquire)
+          == expected_callbacks);
+  REQUIRE(atomic_load_explicit(&counts.returned, memory_order_acquire)
+          == expected_callbacks);
 
   REQUIRE(chttp_client_destroy(&client, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
   REQUIRE(chttp_server_stop(&server, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
@@ -458,7 +639,7 @@ int main(void) {
   REQUIRE(cflow_executor_wait_idle(&executor));
   cflow_executor_destroy(&executor);
   REQUIRE(salts_service_host_generation_drain(
-          &runtime, &overflow_generation.generation) == SALTS_SERVICE_HOST_OK);
+          &runtime, last_generation) == SALTS_SERVICE_HOST_OK);
   REQUIRE(salts_service_host_runtime_destroy(&runtime) == SALTS_SERVICE_HOST_OK);
 
   REQUIRE(cmeta_plugin_registry_request_stop(&registry, plugin_n) ==
@@ -478,8 +659,10 @@ int main(void) {
   REQUIRE(cmeta_plugin_registry_destroy(&registry) == CMETA_PLUGIN_OK);
   data_bind_http_method_plan_free(method_plan);
   data_bind_free(contract);
-  puts(CHTTP_SERVICE_HOST_TEST_H2
-      ? "Same H2c MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS"
-      : "Same H1 MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS");
+  puts(CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+      ? "Same H2 connection: N+2 canceled stream, N+3 siblings unaffected, FULL/retire PASS"
+      : CHTTP_SERVICE_HOST_TEST_H2
+        ? "Same H2c MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS"
+        : "Same H1 MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS");
   return 0;
 }
