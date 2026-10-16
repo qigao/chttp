@@ -12,6 +12,7 @@ REQUIRED = (
     "app/src/chttp_service.c",
     "app/tests/service/chttp_service_host_single_listener_test.c",
     "app/tests/service/chttp_service_host_methodplan_switch_test.c",
+    "app/tests/service/chttp_service_host_h2_connection_window_test.c",
     "app/tests/service/chttp_service_host_provider.c",
     "app/tests/service/chttp_service_host_second_business.c",
     "component-runtime/src/configurator.c",
