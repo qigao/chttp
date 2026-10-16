@@ -154,9 +154,13 @@ static int host_build(
       ? 0 : -1;
 }
 
-/* Control-plane only: binding is prepared in its final, address-stable slot
- * before publication. A real Component projection is used, not a fixed return
- * value or an imitation provider. The HTTP hot path never re-enters lookup. */
+/* The control thread prepares the final address-stable binding *before*
+ * publication. It is the only writer for this not-yet-ready slot.
+ *
+ * Provider callbacks and CMeta projections run OUTSIDE the HTTP admission
+ * mutex. The mutex publishes ready=true after all pointer-bearing native
+ * binding fields have been constructed; readers may only inspect operation
+ * bytes after seeing ready under the same mutex. No hot-path lookup. */
 static int host_prepare(
     host_router *router, size_t slot, host_generation_fixture *fixture) {
   salts_configurator_service service = {0};
@@ -167,25 +171,30 @@ static int host_prepare(
     return -1;
   cmeta_mutex_lock(&router->lock);
   binding = &router->generations[slot];
-  if (binding->ready ||
-      salts_configurator_context_find_service_from(
+  const bool already_ready = binding->ready;
+  cmeta_mutex_unlock(&router->lock);
+  if (already_ready)
+    return -1;
+
+  /* These provider/reflective calls may invoke arbitrary DSO code. They must
+   * not run while the domain admission mutex is held. Unpublished storage is
+   * exclusive to the control thread until ready is set. */
+  if (salts_configurator_context_find_service_from(
         &fixture->generation.components, "CHttpPlugin_Calc_Add",
         chttp_service_operation_provider_interface(),
         &service) != SALTS_COMPONENT_OK ||
       chttp_service_operation_provider_borrow_from_object(
         service.object, service.interfaces, &provider) != CMETA_OK ||
-      !chttp_service_operation_provider_valid(&provider)) {
-    cmeta_mutex_unlock(&router->lock);
+      !chttp_service_operation_provider_valid(&provider))
     return -1;
-  }
   binding->operation =
       (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
   if (!chttp_service_operation_provider_get_operation(
           &provider, &binding->operation) ||
-      !chttp_service_component_operation_valid(&binding->operation)) {
-    cmeta_mutex_unlock(&router->lock);
+      !chttp_service_component_operation_valid(&binding->operation))
     return -1;
-  }
+
+  cmeta_mutex_lock(&router->lock);
   binding->id = fixture->generation.id;
   binding->ready = true;
   cmeta_mutex_unlock(&router->lock);
