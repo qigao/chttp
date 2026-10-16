@@ -1,0 +1,125 @@
+name: CHttp ServiceHostCandidate Windows private SDK consumer
+
+on:
+  push:
+    branches: [feature/chttp-servicehost-candidate-224]
+    paths:
+      - ".github/workflows/chttp-servicehost-windows-staged.yml"
+      - "app/tests/service/private_sdk/**"
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-servicehost-windows-staged.yml"
+      - "app/tests/service/private_sdk/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-host-windows-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  windows-private:
+    name: Windows v145 installed Salts plus private ServiceHost C11/C++ DSO
+    runs-on: windows-2025
+    timeout-minutes: 80
+    env:
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SALTS_CANDIDATE: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+      QIGAO_SDK_RID: windows-x64
+    steps:
+      - name: Checkout exact CHttp candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_CHTTP }}
+          persist-credentials: false
+      - name: Checkout original Salts candidate source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+          path: _salts_candidate
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Configure exact v145 cache and toolchain
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
+        with:
+          mode: read
+      - name: Restore exact host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
+      - name: Verify v145 MSVC / source / NuGet contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja nasm -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Ninja/nasm unavailable' }
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vs) -or
+              -not (Test-Path (Join-Path $vs 'VC\Tools\MSVC\14.51.36231'))) {
+            throw 'exact MSVC v145 toolchain missing'
+          }
+          if ($env:QIGAO_VCPKG_WINDOWS_TRIPLET -ne 'qigao-x64-windows-v145' -or
+              $env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET -ne 'qigao-x64-windows-v145' -or
+              $env:VCPKG_BINARY_SOURCES -notmatch 'nugetconfig') {
+            throw 'canonical v145 NuGet read-only cache unavailable'
+          }
+          if ((& git rev-parse HEAD).Trim() -ne $env:EXPECTED_CHTTP -or
+              (& git -C _salts_candidate rev-parse HEAD).Trim() -ne $env:EXPECTED_SALTS_CANDIDATE) {
+            throw 'exact source identity mismatch'
+          }
+          $gmssl = Get-Content (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'ports/gmssl/vcpkg.json') -Raw | ConvertFrom-Json
+          if ($gmssl.version -ne '3.2.0' -or $gmssl.'port-version' -ne 12) {
+            throw 'GmSSL 3.2.0#12 required'
+          }
+          "VSINSTALL=$vs" >> $env:GITHUB_ENV
+          "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+          "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" >> $env:GITHUB_ENV
+      - name: Restore exact published Salts/SaltsUtils SDK pair
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
+          if ($LASTEXITCODE -ne 0) { throw 'installed SDK restore failed' }
+          if (Test-Path (Join-Path $env:SALTS_ROOT 'include/salts/service_host.h')) {
+            throw 'draft ServiceHost exported by published Salts SDK'
+          }
+      - name: Build candidate and test external staged C11/C++ Provider lifetimes
+        shell: cmd
+        run: |
+          set "PINNED_VCPKG_ROOT=%VCPKG_ROOT%"
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%PINNED_VCPKG_ROOT%"
+          set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
+          cmake --preset ci-sdk-release-user -B build\servicehost-windows -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF -DCHTTP_ENABLE_SERVICE_HOST_CANDIDATE=ON "-DCHTTP_SALTS_CANDIDATE_SOURCE_DIR=%GITHUB_WORKSPACE%\_salts_candidate" -DVCPKG_INSTALL_OPTIONS=--only-binarycaching -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+          if errorlevel 1 exit /b 1
+          cmake --build build\servicehost-windows --target chttp_service_http_test --parallel 2
+          if errorlevel 1 exit /b 1
+          cmake --build build\servicehost-windows --target install >nul 2>&1
+          if not errorlevel 1 (echo unexpected private candidate install target & exit /b 1)
+          ctest --test-dir build\servicehost-windows -R "^chttp_service_host_staged_sdk_consumer$" --repeat until-fail:3 --no-tests=error --timeout 180 --output-on-failure
+          if errorlevel 1 exit /b 1
+      - name: Preserve compiler/CTest ownership evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-servicehost-windows-private-sdk
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/servicehost-windows/app/tests/service/private-staged-sdk/consumer-build/Testing/Temporary/LastTest.log
+            build/servicehost-windows/Testing/Temporary/LastTest.log
+      - name: Assert unchanged CHttp sources
+        if: always()
+        shell: pwsh
+        run: |
+          if ((& git rev-parse HEAD).Trim() -ne $env:EXPECTED_CHTTP -or
+              (& git status --porcelain --untracked-files=no)) {
+            throw 'candidate changed tracked files during verification'
+          }
