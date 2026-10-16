@@ -1,0 +1,274 @@
+name: CHttp ServiceHost complete first-party source TSan
+
+'on':
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-servicehost-fullsource-tsan.yml"
+      - "app/**"
+      - "http_client/**"
+      - "http_server/**"
+      - "http_common/**"
+      - "cmake/**"
+      - "presets/**"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "vcpkg.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-servicehost-fullsource-tsan-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  full-source:
+    name: Pinned Salts / SaltsUtils / CHttp ServiceHost H2 source TSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXPECTED_SALTS: 06ecf2179691e197b108d39ebd12dc994148eada
+      EXPECTED_UTILS: 234c4a73bcefc455d48b3550ec2142d7ff1c3f5a
+      EXPECTED_HOST_CANDIDATE: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
+      CCACHE_DIR: ${{ github.workspace }}/build/rpc-fullsource-tsan/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      ASAN_OPTIONS: detect_leaks=0
+    steps:
+      - name: Checkout exact CHttp RPC Owner head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_CHTTP }}
+          persist-credentials: false
+      - name: Checkout exact unpublished Salts source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.EXPECTED_SALTS }}
+          path: build/rpc-fullsource-tsan/sources/salts
+          persist-credentials: false
+      - name: Checkout immutable SaltsUtils source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.EXPECTED_UTILS }}
+          path: build/rpc-fullsource-tsan/sources/salts-utils
+          persist-credentials: false
+      - name: Checkout exact Salts-owned ServiceHostCandidate code
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+          path: build/rpc-fullsource-tsan/sources/salts-candidate
+          persist-credentials: false
+      - name: Use pinned shared vcpkg dependency graph
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+        with:
+          mode: read
+      - name: Restore re2c host generator
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+      - name: Prepare native host tools
+        uses: ./build/rpc-fullsource-tsan/sources/salts/.github/actions/setup-build-host
+      - name: Check exact first-party source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends ccache
+          mkdir -p build/rpc-fullsource-tsan
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts rev-parse HEAD)" = "$EXPECTED_SALTS"
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts-utils rev-parse HEAD)" = "$EXPECTED_UTILS"
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts-candidate rev-parse HEAD)" = "$EXPECTED_HOST_CANDIDATE"
+          test -f build/rpc-fullsource-tsan/sources/salts-candidate/component-runtime/src/service_host.c
+          {
+            printf 'chttp_source=%s\n' "$EXPECTED_CHTTP"
+            printf 'salts_source=%s\n' "$EXPECTED_SALTS"
+            printf 'saltsutils_source=%s\n' "$EXPECTED_UTILS"
+            printf 'servicehost_candidate_source=%s\n' "$EXPECTED_HOST_CANDIDATE"
+            printf 'qualification=complete-original-source-tsan\n'
+            printf 'sdk_published=false\n'
+            printf 'prebuilt_firstparty_salts=false\n'
+          } | tee build/rpc-fullsource-tsan/provenance.txt
+      - name: Verify POSIX once barrier candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -qF 'pthread_once(&guard->native, callback)' \
+            build/rpc-fullsource-tsan/sources/salts/platform/src/thread_posix.c
+          grep -qF 'pthread_once_t native;' \
+            build/rpc-fullsource-tsan/sources/salts/platform/include/salts/thread.h
+
+      - name: Build and install source-instrumented Salts
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/chttp-source-tsan/salts"
+          cmake --preset linux-tsan-ci -S "$GITHUB_WORKSPACE/build/rpc-fullsource-tsan/sources/salts" \
+            -B build/rpc-fullsource-tsan/build-salts \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX="$root" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_THREAD=ON -DENABLE_SANITIZER_ADDRESS=OFF
+          cmake --build build/rpc-fullsource-tsan/build-salts --parallel 2
+          cmake --install build/rpc-fullsource-tsan/build-salts
+          test -f "$root/lib/cmake/Salts/SaltsConfig.cmake"
+
+      - name: Build and install source-instrumented SaltsUtils
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-source-tsan/salts"
+          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          src="$GITHUB_WORKSPACE/build/rpc-fullsource-tsan/sources/salts-utils"
+          root="$RUNNER_TEMP/chttp-source-tsan/salts-utils"
+          cmake --preset ci-linux-release-user -S "$src" \
+            -B build/rpc-fullsource-tsan/build-utils \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX="$root" \
+            -DCMAKE_PREFIX_PATH="$SALTS_ROOT" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_THREAD=ON \
+            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build/rpc-fullsource-tsan/build-utils --parallel 2
+          cmake --install build/rpc-fullsource-tsan/build-utils
+          test -f "$root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          grep -F "Salts_DIR:PATH=$SALTS_ROOT" build/rpc-fullsource-tsan/build-utils/CMakeCache.txt
+
+      - name: Build exact CHttp ServiceHost HTTP tests from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-source-tsan/salts"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-source-tsan/salts-utils"
+          export DATABIND_ROOT="$SALTS_UTILS_ROOT"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          src="$GITHUB_WORKSPACE"
+          cmake --preset ci-linux-release-user -S "$src" \
+            -B build/rpc-fullsource-tsan/build-chttp \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$SALTS_ROOT;$SALTS_UTILS_ROOT" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DCHTTP_ENABLE_SERVICE_HOST_CANDIDATE=ON \
+            -DCHTTP_SALTS_CANDIDATE_SOURCE_DIR="$GITHUB_WORKSPACE/build/rpc-fullsource-tsan/sources/salts-candidate" \
+            -DENABLE_SANITIZER_THREAD=ON \
+            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build/rpc-fullsource-tsan/build-chttp --parallel 2 \
+            --target chttp_service_http_test \
+                     chttp_service_host_single_listener_test \
+                     chttp_service_host_methodplan_switch_test \
+                     chttp_service_host_methodplan_h2c_test \
+                     chttp_service_host_h2_multiplex_test \
+                     chttp_service_host_h2_stream_window_test \
+                     chttp_service_generated_cflow_http_test
+          grep -F "Salts_DIR:PATH=$SALTS_ROOT" build/rpc-fullsource-tsan/build-chttp/CMakeCache.txt
+          grep -F "SaltsUtils_DIR:PATH=$SALTS_UTILS_ROOT" build/rpc-fullsource-tsan/build-chttp/CMakeCache.txt
+
+      - name: Require TSan on all ServiceHost first-party compilation units
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee build/rpc-fullsource-tsan/instrumentation.txt
+          import json
+          from pathlib import Path
+          root=Path("build/rpc-fullsource-tsan")
+          required=[
+            ("Salts", "build-salts", "cnet/src/cnet_module.c"),
+            ("Salts", "build-salts", "platform/src/thread_posix.c"),
+            ("SaltsUtils", "build-utils", "databind/runtime/data_bind_binding_plan.c"),
+            ("CHttp", "build-chttp", "http_client/src/chttp_client.c"),
+            ("CHttp", "build-chttp", "http_server/src/chttp_server.c"),
+            ("CHttp", "build-chttp", "app/src/chttp_service.c"),
+            ("CHttp", "build-chttp", "chttp_service_host_methodplan_switch_test.c"),
+            ("CHttp", "build-chttp", "component-runtime/src/service_host.c"),
+          ]
+          for label, directory in [
+              ("Salts", "build-salts"), ("SaltsUtils", "build-utils"),
+              ("CHttp", "build-chttp"),
+          ]:
+              commands=json.loads((root / directory / "compile_commands.json").read_text())
+              missing=[c["file"] for c in commands
+                       if "-fsanitize=thread" not in (
+                           c.get("command") or " ".join(c.get("arguments", [])))]
+              print(f"{label}: first_party_commands={len(commands)} missing_tsan={len(missing)}")
+              if not commands or missing:
+                  raise SystemExit(f"missing original-source TSan: {missing[:5]}")
+              for name, folder, suffix in required:
+                  if name!=label: continue
+                  if not any(c["file"].endswith(suffix) for c in commands):
+                      raise SystemExit(f"{label} missing expected source: {suffix}")
+          PY
+          python3 app/tests/service/verify_servicehost_tsan_compiles.py \
+            build/rpc-fullsource-tsan/build-chttp/compile_commands.json
+          ldd build/rpc-fullsource-tsan/build-chttp/bin/chttp_service_host_h2_stream_window_test \
+            | tee build/rpc-fullsource-tsan/consumer-ldd.txt
+          grep -F "$RUNNER_TEMP/chttp-source-tsan/salts/lib" \
+            build/rpc-fullsource-tsan/consumer-ldd.txt
+          grep -q libtsan build/rpc-fullsource-tsan/consumer-ldd.txt
+
+      - name: Repeat real ServiceHost H1/H2 native HTTP TSan conformance unsuppressed
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-source-tsan/salts"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-source-tsan/salts-utils"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          timeout --signal=TERM --kill-after=10s 600s \
+            ctest --test-dir build/rpc-fullsource-tsan/build-chttp \
+            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_generated_cflow_http_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract)
+      - name: Preserve exact source-graph qualifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-249-servicehost-fullsource-tsan
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rpc-fullsource-tsan/provenance.txt
+            build/rpc-fullsource-tsan/instrumentation.txt
+            build/rpc-fullsource-tsan/consumer-ldd.txt
+            build/rpc-fullsource-tsan/build-chttp/Testing/Temporary/LastTest.log
+      - name: Verify exact CHttp HEAD remains unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
+            --repeat until-fail:3 --timeout 120 --no-tests=error --output-on-failure
+      - name: Preserve exact source-graph qualifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-249-servicehost-fullsource-tsan
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rpc-fullsource-tsan/provenance.txt
+            build/rpc-fullsource-tsan/instrumentation.txt
+            build/rpc-fullsource-tsan/consumer-ldd.txt
+            build/rpc-fullsource-tsan/build-chttp/Testing/Temporary/LastTest.log
+      - name: Verify exact CHttp HEAD remains unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
