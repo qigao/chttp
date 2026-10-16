@@ -359,6 +359,8 @@ int main(void) {
   REQUIRE(host_pending_at_least(&executor, 3u));
 
   REQUIRE(chttp_service_destroy(&service) == SALTS_EBUSY);
+  REQUIRE(chttp_service_host_switch_retire_candidate(
+          &service, &old_generation.generation) == SALTS_EBUSY);
   REQUIRE(salts_service_host_generation_drain(
           &runtime, &old_generation.generation) == SALTS_SERVICE_HOST_BUSY);
   REQUIRE(cmeta_plugin_registry_unload(&registry, plugin_n) ==
@@ -382,6 +384,27 @@ int main(void) {
   REQUIRE(host_http_get(&client, uri, &code, body, &body_size) == SALTS_OK);
   REQUIRE(code == 201u);
   REQUIRE(body_size == 3u && strcmp(body, "111") == 0);
+  REQUIRE(cflow_executor_wait_idle(&executor));
+
+  /* Two candidate slots remained full until the original N truly drained.
+   * Explicit retire now reclaims that slot without touching the live N+1. */
+  REQUIRE(chttp_service_host_switch_retire_candidate(
+          &service, &old_generation.generation) == SALTS_OK);
+  REQUIRE(chttp_service_host_switch_retire_candidate(
+          &service, &old_generation.generation) == SALTS_EINVAL);
+  REQUIRE(host_build(&overflow_generation, UINT64_C(3), &registry, plugin_n) == 0);
+  REQUIRE(chttp_service_host_switch_prepare_candidate(
+          &service, &overflow_generation.generation) == SALTS_OK);
+  REQUIRE(salts_service_host_runtime_publish(
+          &runtime, &overflow_generation.generation, &previous)
+          == SALTS_SERVICE_HOST_OK);
+  REQUIRE(previous == &new_generation.generation);
+  REQUIRE(host_http_get(&client, uri, &code, body, &body_size) == SALTS_OK);
+  REQUIRE(code == 201u);
+  REQUIRE(body_size == 2u && strcmp(body, "11") == 0);
+  REQUIRE(cflow_executor_wait_idle(&executor));
+  REQUIRE(salts_service_host_generation_drain(
+          &runtime, &new_generation.generation) == SALTS_SERVICE_HOST_OK);
 
   /* A malformed request does not invoke the Provider or escape its Scope.
    * Preserve the existing DataBind ingress -> HTTP 400 contract. */
@@ -397,11 +420,11 @@ int main(void) {
 
   REQUIRE(salts_service_host_runtime_close(&runtime, &previous) ==
           SALTS_SERVICE_HOST_OK);
-  REQUIRE(previous == &new_generation.generation);
+  REQUIRE(previous == &overflow_generation.generation);
   REQUIRE(host_http_get(&client, uri, &code, body, &body_size) == SALTS_OK);
   REQUIRE(code == 503u);
-  REQUIRE(atomic_load_explicit(&counts.entered, memory_order_acquire) == 5u);
-  REQUIRE(atomic_load_explicit(&counts.returned, memory_order_acquire) == 5u);
+  REQUIRE(atomic_load_explicit(&counts.entered, memory_order_acquire) == 6u);
+  REQUIRE(atomic_load_explicit(&counts.returned, memory_order_acquire) == 6u);
 
   REQUIRE(chttp_client_destroy(&client, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
   REQUIRE(chttp_server_stop(&server, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
@@ -413,7 +436,7 @@ int main(void) {
   REQUIRE(cflow_executor_wait_idle(&executor));
   cflow_executor_destroy(&executor);
   REQUIRE(salts_service_host_generation_drain(
-          &runtime, &new_generation.generation) == SALTS_SERVICE_HOST_OK);
+          &runtime, &overflow_generation.generation) == SALTS_SERVICE_HOST_OK);
   REQUIRE(salts_service_host_runtime_destroy(&runtime) == SALTS_SERVICE_HOST_OK);
 
   REQUIRE(cmeta_plugin_registry_request_stop(&registry, plugin_n) ==
@@ -433,6 +456,6 @@ int main(void) {
   REQUIRE(cmeta_plugin_registry_destroy(&registry) == CMETA_PLUGIN_OK);
   data_bind_http_method_plan_free(method_plan);
   data_bind_free(contract);
-  puts("Same CHttp MethodPlan+Listener: N(11), N+1(111), BUSY/drain, close 503 PASS");
+  puts("Same CHttp MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS");
   return 0;
 }
