@@ -424,10 +424,6 @@
         },
         {
             "name": "install-ci-sdk-release-tests-user",
-            "inherits": [
-                "ci-sdk-release-tests-user",
-                "base-install"
-            ],
             "configurePreset": "ci-sdk-release-tests-user",
             "targets": [
                 "install"
@@ -439,10 +435,6 @@
         },
         {
             "name": "install-ci-macos-sdk-release-tests-user",
-            "inherits": [
-                "ci-macos-sdk-release-tests-user",
-                "base-install"
-            ],
             "configurePreset": "ci-macos-sdk-release-tests-user",
             "targets": [
                 "install"
