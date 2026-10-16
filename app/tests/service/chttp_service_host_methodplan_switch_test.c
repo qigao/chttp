@@ -582,6 +582,11 @@ int main(void) {
   REQUIRE(old.status == SALTS_ECANCELED && old.completions == 1u);
   REQUIRE(chttp_async_request_cancel(&async, old_req) == SALTS_ENOENT);
   REQUIRE(sibling.completions == 0u);
+  /* The client-owned Stream terminal does not settle the Provider's native
+   * work: old DSO/Scope must remain BUSY until CFlow task.finalize. */
+  REQUIRE(salts_service_host_generation_drain(
+          &runtime, &overflow_generation.generation)
+          == SALTS_SERVICE_HOST_BUSY);
 
   /* The canceled stream's request slot is recyclable while the sibling
    * remains live on the same single-capacity H2 session. */
