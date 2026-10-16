@@ -408,6 +408,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
       "-DEXT_STAGE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/private-staged-sdk"
       "-DEXT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/private_sdk"
       "-DEXT_SALTS_ROOT=${SALTS_ROOT_PATH}"
+      "-DEXT_UTILS_ROOT=${SALTS_UTILS_ROOT_PATH}"
       "-DEXT_HEADERS=${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime/include"
       "-DEXT_CONFIG_ARCHIVE=$<TARGET_FILE:salts_configurator_candidate>"
       "-DEXT_HOST_ARCHIVE=$<TARGET_FILE:salts_service_host_candidate>"
