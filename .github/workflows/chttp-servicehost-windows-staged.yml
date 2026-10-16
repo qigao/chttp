@@ -109,6 +109,11 @@ jobs:
           rem No per-platform fallback: H1/H2 and cancellation must pass on IOCP.
           ctest --test-dir build\servicehost-windows -R "^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_host_staged_sdk_consumer|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test)$" --repeat until-fail:2 --no-tests=error --timeout 180 --output-on-failure
           if errorlevel 1 exit /b 1
+          rem Stress the same real Windows IOCP Owner/Listener, MethodPlan,
+          rem H2 cancel and 1-byte/48KiB receive WINDOW_UPDATE paths.
+          rem Never hide a failure by rerun or introduce an alternate Provider.
+          ctest --test-dir build\servicehost-windows -R "^(chttp_service_host_methodplan_switch_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test)$" --repeat until-fail:20 --output-on-failure --no-tests=error --timeout 180
+          if errorlevel 1 exit /b 1
           rem Retain additional three-pass DSO consumer proof separately.
           ctest --test-dir build\servicehost-windows -R "^chttp_service_host_staged_sdk_consumer$" --repeat until-fail:3 --no-tests=error --timeout 180 --output-on-failure
           if errorlevel 1 exit /b 1
