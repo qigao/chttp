@@ -91,15 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           ctest --test-dir "build/servicehost-${{ matrix.mode }}" \
-            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test) \
-            --output-on-failure --no-tests=error --timeout 180
-      - name: Require opt-out production build surface
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$CHTTP_SOURCE_SHA"
-          test -z "$(git status --porcelain --untracked-files=no)"
- \
+            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test)$' \
             --output-on-failure --no-tests=error --timeout 180
       - name: Require opt-out production build surface
         shell: bash
