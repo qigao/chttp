@@ -583,8 +583,16 @@ int main(void) {
   REQUIRE(canceled.received > 0u);
   REQUIRE(canceled.received < FLOW_RESPONSE_BYTES);
   REQUIRE(canceled.completions == 0u);
+  /* The currently PUBLISHED generation cannot drain at all; only a
+   * superseded (DRAINING) generation is drainable. Independently confirm
+   * this already-admitted stream retains an address-stable live Scope. */
   REQUIRE(salts_service_host_generation_drain(
-          &runtime, &new_generation.generation) == SALTS_SERVICE_HOST_BUSY);
+          &runtime, &new_generation.generation) ==
+          SALTS_SERVICE_HOST_INVALID_STATE);
+  cmeta_mutex_lock(&runtime.lock);
+  const bool stream_scope_pinned = new_generation.generation.active_scopes > 0u;
+  cmeta_mutex_unlock(&runtime.lock);
+  REQUIRE(stream_scope_pinned);
 
   REQUIRE(flow_submit_target(
           &cancel_client, uri, &sibling, 'b',
