@@ -238,6 +238,31 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     COMMAND chttp_service_host_single_listener_test)
   set_tests_properties(chttp_service_host_single_listener_test
     PROPERTIES TIMEOUT 90)
+
+  # Exact CHttp Service MethodPlan/DataBind/Interceptor/deferred execution,
+  # rather than the standalone test-only manually encoded HTTP handler.
+  add_executable(chttp_service_host_methodplan_switch_test
+    chttp_service_host_methodplan_switch_test.c)
+  target_link_libraries(chttp_service_host_methodplan_switch_test PRIVATE
+    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    chttp_service_plugin_fixture_native)
+  target_include_directories(chttp_service_host_methodplan_switch_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/app/src"
+    "${chttp_service_plugin_fixture_GENERATED_DIR}")
+  target_compile_definitions(chttp_service_host_methodplan_switch_test PRIVATE
+    GENERATED_CHTTP_SERVICE_HOST_PROVIDER_PATH="$<TARGET_FILE:chttp_service_host_provider_fixture>"
+    GENERATED_CHTTP_SERVICE_HOST_SECOND_PATH="$<TARGET_FILE:chttp_service_host_provider_second>")
+  add_dependencies(chttp_service_host_methodplan_switch_test
+    chttp_service_plugin_fixture_idl_codegen
+    chttp_service_host_provider_fixture
+    chttp_service_host_provider_second)
+  set_target_properties(chttp_service_host_methodplan_switch_test PROPERTIES
+    FOLDER "app/tests/service" C_STANDARD 11
+    C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME chttp_service_host_methodplan_switch_test
+    COMMAND chttp_service_host_methodplan_switch_test)
+  set_tests_properties(chttp_service_host_methodplan_switch_test
+    PROPERTIES TIMEOUT 90)
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
