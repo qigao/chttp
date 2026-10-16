@@ -1,6 +1,7 @@
 #include <chttp_app/service.h>
 #if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
 #include "chttp_service_host_candidate.h"
+#include <salts/thread.h>
 #endif
 
 #include <salts/error_codes.h>
@@ -20,6 +21,9 @@
 #include <string.h>
 
 typedef struct chttp_service_impl chttp_service_impl;
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+typedef struct chttp_service_host_switch_state chttp_service_host_switch_state;
+#endif
 
 typedef struct chttp_service_method_record {
   chttp_service_impl *owner;
@@ -41,6 +45,9 @@ typedef struct chttp_service_method_record {
   /* Stable method slot owns the noncopyable Scope until deferred finalization. */
   salts_service_host_scope host_scope;
   chttp_service_component_operation host_operation;
+  /* Non-NULL only for the single stable MethodPlan route. Two generation
+   * records live separately in one bounded, nonmoving state. */
+  chttp_service_host_switch_state *host_switch;
 #endif
 
   size_t request_bytes;
@@ -49,6 +56,22 @@ typedef struct chttp_service_method_record {
   size_t param_count;
   _Atomic size_t deferred_in_flight;
 } chttp_service_method_record;
+
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+typedef struct chttp_service_host_switch_slot {
+  chttp_service_method_record method;
+  uint64_t generation_id;
+  bool reserved;
+  bool ready;
+} chttp_service_host_switch_slot;
+
+struct chttp_service_host_switch_state {
+  cmeta_mutex_t lock;
+  salts_service_host_runtime *runtime;  /* borrowed; caller owns publication */
+  char *component_id;                    /* copied, bounded mount configuration */
+  chttp_service_host_switch_slot slots[2]; /* Salts maximum attached generations */
+};
+#endif
 
 struct chttp_service_impl {
   chttp_service_method_record *methods;
@@ -80,6 +103,11 @@ typedef struct chttp_service_invocation {
   chttp_server_deferred deferred;
   int frame_live;
   int deferred_method_held;
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  /* Heap invocation address stays stable until executor finalization. A Scope
+   * pins exactly the chosen generation through native teardown/terminal. */
+  salts_service_host_scope host_request_scope;
+#endif
 } chttp_service_invocation;
 
 typedef struct chttp_service_scalar_reader {
@@ -1184,6 +1212,13 @@ static void chttp_service_method_release(
   cflow_plan_destroy(&record->cflow_plan);
   cmeta_cleanup_run(&record->plugin_cleanup);
 #if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  if (record->host_switch != NULL) {
+    chttp_service_host_switch_state *state = record->host_switch;
+    cmeta_mutex_destroy(&state->lock);
+    free(state->component_id);
+    free(state);
+    record->host_switch = NULL;
+  }
   /* Unrecoverable API misuse: a Scope must not be moved while live. */
   if (record->host_scope.live &&
       salts_service_host_scope_release(&record->host_scope) !=
@@ -1224,6 +1259,15 @@ static void chttp_service_invocation_release(
   free(invocation->error_storage);
   free(invocation->response_storage);
   free(invocation->request_storage);
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  /* Native request/error/response storage must be restored before this Scope
+   * can permit draining the Provider DSO. Failure is an ownership violation,
+   * not a silently ignored optional cleanup. */
+  if (invocation->host_request_scope.live &&
+      salts_service_host_scope_release(&invocation->host_request_scope) !=
+          SALTS_SERVICE_HOST_OK)
+    abort();
+#endif
   memset(invocation, 0, sizeof(*invocation));
 }
 
@@ -1253,7 +1297,12 @@ static int chttp_service_invocation_init(
     return SALTS_EINVAL;
 
   service = record->owner;
-  *invocation = (chttp_service_invocation){0};
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  /* The candidate may already hold a live Scope here. Never reset or memcpy
+   * that address-bound owner. All callers pass zero-initialized storage. */
+  if (!invocation->host_request_scope.live)
+#endif
+    *invocation = (chttp_service_invocation){0};
   invocation->record = record;
   invocation->request_storage =
       (unsigned char *)calloc(1u, record->request_bytes);
@@ -1550,7 +1599,44 @@ static int chttp_service_http_execute_deferred(
   int status;
 
   if (record == NULL || record->owner == NULL ||
-      record->method_plan == NULL || record->binding == NULL ||
+      request == NULL || response == NULL)
+    return SALTS_EINVAL;
+
+  invocation =
+      (chttp_service_invocation *)calloc(1u, sizeof(*invocation));
+  if (invocation == NULL) return SALTS_ENOMEM;
+
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  if (record->host_switch != NULL) {
+    chttp_service_host_switch_state *state = record->host_switch;
+    const uint64_t id;
+    chttp_service_method_record *admitted = NULL;
+    if (salts_service_host_scope_acquire(
+            state->runtime, &invocation->host_request_scope) !=
+        SALTS_SERVICE_HOST_OK) {
+      free(invocation);
+      return chttp_server_reply(
+          response, 503u, "text/plain", "Service Unavailable", 19u);
+    }
+    id = salts_service_host_scope_generation_id(&invocation->host_request_scope);
+    cmeta_mutex_lock(&state->lock);
+    for (size_t i = 0u; i < 2u; ++i) {
+      if (state->slots[i].ready && state->slots[i].generation_id == id) {
+        admitted = &state->slots[i].method;
+        break;
+      }
+    }
+    cmeta_mutex_unlock(&state->lock);
+    if (admitted == NULL) {
+      chttp_service_invocation_release(invocation);
+      free(invocation);
+      return chttp_server_reply(
+          response, 500u, "text/plain", "Internal Server Error", 21u);
+    }
+    record = admitted;
+  }
+#endif
+  if (record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->executor == NULL ||
       ((record->execution_mode ==
             CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
@@ -1559,15 +1645,14 @@ static int chttp_service_http_execute_deferred(
        record->execution == NULL) ||
       (record->execution_mode ==
            CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
-       record->cflow_plan.impl == NULL) ||
-      request == NULL || response == NULL)
+       record->cflow_plan.impl == NULL)) {
+    chttp_service_invocation_release(invocation);
+    free(invocation);
     return SALTS_EINVAL;
-
-  invocation =
-      (chttp_service_invocation *)calloc(1u, sizeof(*invocation));
-  if (invocation == NULL) return SALTS_ENOMEM;
+  }
   status = chttp_service_invocation_init(record, invocation);
   if (status != SALTS_OK) {
+    /* Allocation failure already released any live Scope. */
     free(invocation);
     return status;
   }
@@ -2022,6 +2107,198 @@ int chttp_service_mount_host_candidate(
 }
 #endif
 
+
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+/*
+ * Candidate-only shared-listener MethodPlan route.
+ * One chttp_server route is registered pre-start. Each accepted invocation
+ * takes an address-stable ServiceHost Scope before selecting an already
+ * admitted immutable exact native MethodPlan operation. The request body,
+ * typed errors, deferred response and finalizer remain the existing CHttp
+ * implementations above. Control-plane generation preparation never invokes
+ * a Provider while holding the routing mutex.
+ */
+int chttp_service_mount_host_switch_candidate(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount,
+    salts_service_host_runtime *runtime, const char *component_id) {
+  chttp_service_impl *impl;
+  chttp_service_method_record *record;
+  chttp_service_host_switch_state *state;
+  chttp_server_route_options route_options = {0};
+  chttp_method method;
+  const char *method_text, *route_text;
+  char *route = NULL;
+  size_t length;
+  int status;
+  if (service == NULL || service->impl == NULL ||
+      server == NULL || server->impl == NULL ||
+      mount == NULL || mount->size < sizeof(*mount) ||
+      !chttp_service_plan_supported(mount->method_plan) ||
+      mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+      mount->executor == NULL || !cflow_executor_valid(mount->executor) ||
+      mount->native_binding != NULL || mount->execution != NULL ||
+      mount->cflow_projection != NULL || mount->plugin_registry != NULL ||
+      cmeta_plugin_ref_valid(mount->plugin_ref) ||
+      mount->plugin_export_id != NULL || runtime == NULL ||
+      !runtime->initialized || component_id == NULL ||
+      component_id[0] == '\0')
+    return SALTS_EINVAL;
+  length = strlen(component_id);
+  if (length > 128u) return SALTS_EMSGSIZE;
+  impl = (chttp_service_impl *)service->impl;
+  /* Deliberately one candidate switching route per Service in this pilot.
+   * The private API cannot silently reserve another global registry. */
+  if (impl->method_count != 0u || impl->method_capacity == 0u)
+    return SALTS_EALREADY;
+  state = (chttp_service_host_switch_state *)calloc(1u, sizeof(*state));
+  if (state == NULL) return SALTS_ENOMEM;
+  state->component_id = (char *)malloc(length + 1u);
+  if (state->component_id == NULL) {
+    free(state);
+    return SALTS_ENOMEM;
+  }
+  memcpy(state->component_id, component_id, length + 1u);
+  cmeta_mutex_init(&state->lock);
+  if (state->lock == NULL) {
+    free(state->component_id);
+    free(state);
+    return SALTS_ENOMEM;
+  }
+  state->runtime = runtime;
+  method_text = data_bind_http_method_plan_method(mount->method_plan);
+  route_text = data_bind_http_method_plan_route(mount->method_plan);
+  status = chttp_service_method_from_text(method_text, &method);
+  if (status == SALTS_OK)
+    status = chttp_service_lower_route(route_text, &route);
+  if (status != SALTS_OK) {
+    cmeta_mutex_destroy(&state->lock);
+    free(state->component_id);
+    free(state);
+    return status;
+  }
+
+  record = &impl->methods[0];
+  memset(record, 0, sizeof(*record));
+  atomic_init(&record->deferred_in_flight, 0u);
+  record->owner = impl;
+  record->method_plan = mount->method_plan;
+  record->binding = data_bind_http_method_plan_binding(mount->method_plan);
+  record->executor = mount->executor;
+  record->execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+  record->host_switch = state;
+  route_options.method = method;
+  route_options.path = route;
+  route_options.middleware = mount->middleware;
+  route_options.middleware_count = mount->middleware_count;
+  route_options.handler = chttp_service_http_handler;
+  route_options.user = record;
+
+  status = chttp_server_route_with(server, &route_options);
+  free(route);
+  if (status != SALTS_OK) {
+    chttp_service_method_release(record);
+    return status;
+  }
+  impl->method_count = 1u;
+  return SALTS_OK;
+}
+
+int chttp_service_host_switch_prepare_candidate(
+    chttp_service *service, salts_service_host_generation *generation) {
+  chttp_service_impl *impl;
+  chttp_service_host_switch_state *state;
+  chttp_service_host_switch_slot *slot = NULL;
+  chttp_service_method_record *method;
+  salts_configurator_service target = {0};
+  chttp_service_operation_provider provider =
+      chttp_service_operation_provider_bind(NULL, NULL);
+  size_t request_bytes = 0u, response_bytes = 0u;
+  size_t error_bytes = 0u, param_count = 0u;
+  int result = SALTS_EINVAL;
+
+  if (service == NULL || service->impl == NULL ||
+      generation == NULL || generation->id == 0u ||
+      generation->state != SALTS_SERVICE_HOST_GENERATION_BUILT ||
+      generation->components.state != SALTS_CONFIGURATOR_CONTEXT_ACTIVE ||
+      generation->runtime_owner != NULL)
+    return SALTS_EINVAL;
+  impl = (chttp_service_impl *)service->impl;
+  if (impl->method_count != 1u || impl->methods[0].host_switch == NULL)
+    return SALTS_EINVAL;
+  state = impl->methods[0].host_switch;
+
+  cmeta_mutex_lock(&state->lock);
+  for (size_t i = 0u; i < 2u; ++i) {
+    if ((state->slots[i].ready || state->slots[i].reserved) &&
+        state->slots[i].generation_id == generation->id) {
+      cmeta_mutex_unlock(&state->lock);
+      return SALTS_EALREADY;
+    }
+    if (slot == NULL && !state->slots[i].ready && !state->slots[i].reserved)
+      slot = &state->slots[i];
+  }
+  if (slot == NULL) {
+    cmeta_mutex_unlock(&state->lock);
+    return SALTS_ENOBUFS;
+  }
+  /* One control-plane writer claims this immutable generation slot. */
+  slot->reserved = true;
+  slot->generation_id = generation->id;
+  cmeta_mutex_unlock(&state->lock);
+
+  method = &slot->method;
+  memset(method, 0, sizeof(*method));
+  method->owner = impl;
+  method->method_plan = impl->methods[0].method_plan;
+  method->binding = impl->methods[0].binding;
+  method->executor = impl->methods[0].executor;
+  method->execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+  atomic_init(&method->deferred_in_flight, 0u);
+  method->host_operation =
+      (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
+  if (salts_configurator_context_find_service_from(
+          &generation->components, state->component_id,
+          chttp_service_operation_provider_interface(),
+          &target) != SALTS_COMPONENT_OK ||
+      chttp_service_operation_provider_borrow_from_object(
+          target.object, target.interfaces, &provider) != CMETA_OK ||
+      !chttp_service_operation_provider_valid(&provider) ||
+      !chttp_service_operation_provider_get_operation(
+          &provider, &method->host_operation) ||
+      !chttp_service_component_operation_valid(&method->host_operation))
+    goto reject;
+
+  method->native_binding = &method->host_operation.native;
+  method->execution = &method->host_operation.execution;
+  result = chttp_service_direct_admit(
+      method->method_plan, method->native_binding, method->execution,
+      impl->max_call_frame_bytes,
+      &request_bytes, &response_bytes, &error_bytes, &param_count);
+  if (result != SALTS_OK) goto reject;
+  method->request_bytes = request_bytes;
+  method->response_bytes = response_bytes;
+  method->error_bytes = error_bytes;
+  method->param_count = param_count;
+
+  cmeta_mutex_lock(&state->lock);
+  slot->ready = true;
+  slot->reserved = false;
+  cmeta_mutex_unlock(&state->lock);
+  return SALTS_OK;
+
+reject:
+  /* Neither the Provider ObjectRef nor the Plugin lease is owned here.
+   * Rejected unpublished slots cannot appear on the request hot path. */
+  memset(method, 0, sizeof(*method));
+  cmeta_mutex_lock(&state->lock);
+  slot->generation_id = 0u;
+  slot->reserved = false;
+  cmeta_mutex_unlock(&state->lock);
+  return result;
+}
+#endif
+
 int chttp_service_destroy(chttp_service *service) {
   chttp_service_impl *impl;
   size_t i;
@@ -2040,6 +2317,18 @@ int chttp_service_destroy(chttp_service *service) {
             &impl->methods[i].deferred_in_flight,
             memory_order_acquire) != 0u)
       return SALTS_EBUSY;
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+    if (impl->methods[i].host_switch != NULL) {
+      const chttp_service_host_switch_state *state = impl->methods[i].host_switch;
+      for (size_t slot = 0u; slot < 2u; ++slot) {
+        if (state->slots[slot].reserved ||
+            atomic_load_explicit(
+                &state->slots[slot].method.deferred_in_flight,
+                memory_order_acquire) != 0u)
+          return SALTS_EBUSY;
+      }
+    }
+#endif
   }
 
   for (i = 0u; i < impl->method_count; ++i)
