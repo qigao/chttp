@@ -68,6 +68,7 @@ typedef struct chttp_service_host_switch_slot {
 struct chttp_service_host_switch_state {
   cmeta_mutex_t lock;
   salts_service_host_runtime *runtime;  /* borrowed; caller owns publication */
+  chttp_server *server;                 /* address-stable borrowed route owner */
   char *component_id;                    /* copied, bounded mount configuration */
   chttp_service_host_switch_slot slots[2]; /* Salts maximum attached generations */
 };
@@ -1602,6 +1603,26 @@ static int chttp_service_http_execute_deferred(
       request == NULL || response == NULL)
     return SALTS_EINVAL;
 
+  /* Normal, non-switch Service behavior is checked before allocation exactly
+   * as in the released CHttp path. The switch record has no selected native
+   * binding until its per-request ServiceHost Scope is acquired. */
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  if (record->host_switch == NULL &&
+#else
+  if (
+#endif
+      (record->method_plan == NULL || record->binding == NULL ||
+       record->native_binding == NULL || record->executor == NULL ||
+       ((record->execution_mode ==
+             CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+         record->execution_mode ==
+             CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN) &&
+        record->execution == NULL) ||
+       (record->execution_mode ==
+             CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+        record->cflow_plan.impl == NULL)))
+    return SALTS_EINVAL;
+
   invocation =
       (chttp_service_invocation *)calloc(1u, sizeof(*invocation));
   if (invocation == NULL) return SALTS_ENOMEM;
@@ -2166,6 +2187,7 @@ int chttp_service_mount_host_switch_candidate(
     return SALTS_ENOMEM;
   }
   state->runtime = runtime;
+  state->server = server;
   method_text = data_bind_http_method_plan_method(mount->method_plan);
   route_text = data_bind_http_method_plan_route(mount->method_plan);
   status = chttp_service_method_from_text(method_text, &method);
@@ -2320,6 +2342,11 @@ int chttp_service_destroy(chttp_service *service) {
 #if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     if (impl->methods[i].host_switch != NULL) {
       const chttp_service_host_switch_state *state = impl->methods[i].host_switch;
+      /* Unlike historical Plugin-only mounts, this candidate has an explicit
+       * address-stable borrowed Server relationship: prevent route->user UAF
+       * even when no deferred worker remains. */
+      if (state->server != NULL && state->server->impl != NULL)
+        return SALTS_EBUSY;
       for (size_t slot = 0u; slot < 2u; ++slot) {
         if (state->slots[slot].reserved ||
             atomic_load_explicit(
