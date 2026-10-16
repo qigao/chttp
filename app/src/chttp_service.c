@@ -2322,7 +2322,7 @@ reject:
 
 /* Caller-driven bounded slot reuse. Only a confirmed DRAINED generation may
  * retire its immutable adapter: all ServiceHost Scopes have settled, so no
- * request can still be executing its Provider code. The finalizer's count is
+ * request can still invoke its Provider code. The finalizer's count is
  * checked independently because it is decremented after Scope release. */
 int chttp_service_host_switch_retire_candidate(
     chttp_service *service, const salts_service_host_generation *generation) {
