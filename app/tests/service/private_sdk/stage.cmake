@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-foreach(required IN ITEMS EXT_STAGE_ROOT EXT_SOURCE_DIR EXT_SALTS_ROOT
+foreach(required IN ITEMS EXT_STAGE_ROOT EXT_SOURCE_DIR EXT_SALTS_ROOT EXT_UTILS_ROOT
     EXT_HEADERS EXT_CONFIG_ARCHIVE EXT_HOST_ARCHIVE EXT_PROVIDER1 EXT_PROVIDER2
     EXT_C_COMPILER EXT_CXX_COMPILER EXT_GENERATOR EXT_CTEST)
   if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
@@ -27,6 +27,24 @@ foreach(src IN ITEMS "${EXT_PROVIDER1}" "${EXT_PROVIDER2}")
   get_filename_component(filename "${src}" NAME)
   file(COPY_FILE "${src}" "${EXT_STAGE_ROOT}/plugin/${filename}" ONLY_IF_DIFFERENT)
 endforeach()
+if(WIN32)
+  # The Salts loader intentionally uses DLL_LOAD_DIR|DEFAULT_DIRS for
+  # absolute Provider paths. Reproduce correct *deployment* here by staging
+  # the exact published dependency DLLs beside each Provider, rather than
+  # expanding the loader's search scope to PATH/cwd or inventing a fallback.
+  file(GLOB published_dlls
+    "${EXT_SALTS_ROOT}/bin/*.dll"
+    "${EXT_UTILS_ROOT}/bin/*.dll")
+  if(NOT published_dlls)
+    message(FATAL_ERROR "No published SDK DLLs available for strict Provider deployment")
+  endif()
+  foreach(dll IN LISTS published_dlls)
+    get_filename_component(dll_name "${dll}" NAME)
+    file(COPY_FILE "${dll}" "${EXT_STAGE_ROOT}/plugin/${dll_name}" ONLY_IF_DIFFERENT)
+  endforeach()
+  list(LENGTH published_dlls dll_count)
+  message(STATUS "Staged ${dll_count} original published dependency DLLs beside the two Provider DSOs")
+endif()
 get_filename_component(conf_name "${EXT_CONFIG_ARCHIVE}" NAME)
 get_filename_component(host_name "${EXT_HOST_ARCHIVE}" NAME)
 get_filename_component(provider1_name "${EXT_PROVIDER1}" NAME)
