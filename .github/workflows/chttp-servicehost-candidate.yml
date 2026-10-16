@@ -28,13 +28,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { mode: release, asan: "OFF", ubsan: "OFF" }
-          - { mode: asan-ubsan, asan: "ON", ubsan: "ON" }
+          - { mode: release, asan: "OFF", ubsan: "OFF", tsan: "OFF" }
+          - { mode: asan-ubsan, asan: "ON", ubsan: "ON", tsan: "OFF" }
+          - { mode: tsan, asan: "OFF", ubsan: "OFF", tsan: "ON" }
     env:
       CHTTP_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SALTS_CANDIDATE_SHA: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      TSAN_OPTIONS: halt_on_error=1:exitcode=66
 
     steps:
       - name: Checkout exact CHttp migration head
@@ -75,7 +77,7 @@ jobs:
             -DCHTTP_SALTS_CANDIDATE_SOURCE_DIR="$GITHUB_WORKSPACE/_salts_candidate" \
             -DENABLE_SANITIZER_ADDRESS=${{ matrix.asan }} \
             -DENABLE_SANITIZER_UNDEFINED=${{ matrix.ubsan }} \
-            -DENABLE_SANITIZER_THREAD=OFF \
+            -DENABLE_SANITIZER_THREAD=${{ matrix.tsan }} \
             -DENABLE_SANITIZER_LEAK=OFF \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
       - name: Build actual Provider DSOs and HTTP consumer
@@ -92,7 +94,7 @@ jobs:
           set -euo pipefail
           ctest --test-dir "build/servicehost-${{ matrix.mode }}" \
             -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test)$' \
-            --output-on-failure --no-tests=error --timeout 180
+            --repeat until-fail:3 --output-on-failure --no-tests=error --timeout 180
       - name: Require opt-out production build surface
         shell: bash
         run: |
