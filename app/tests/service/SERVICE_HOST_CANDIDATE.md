@@ -59,9 +59,18 @@ cancellation until the native CFlow finalizer settles.
 the receiver's `SETTINGS_INITIAL_WINDOW_SIZE` to **1 byte** on its single
 H2 connection. The 2- and 3-byte MethodPlan outputs require per-Stream
 `WINDOW_UPDATE` progress in order to complete. This qualifies bounded
-request-slot backpressure and tiny-window Stream credit progression, but not
-full connection-level 65,535-byte window exhaustion or sustained large-body
-throughput.
+request-slot backpressure and tiny-window Stream credit progression.
+
+The independent `chttp_service_host_h2_connection_window_test` uses one
+actual H2 client session (physical connection capacity 1) and two simultaneous
+48 KiB Source/Sink response streams. Each response fits the default per-Stream
+65,535-byte window, but the 96 KiB aggregate exceeds the connection receive
+window. The two responses complete only with connection-level
+`WINDOW_UPDATE` progress. The Source terminal—not the request handler—
+releases one address-stable ServiceHost Scope, and the real typed Provider's
+N=11/N+1=111 output determines the streamed byte pattern. This does not
+establish sustained gigabyte-size streaming, cancellation during exhausted
+connection credit, or public candidate SDK support.
 
 Every admitted HTTP invocation pins exactly one nonmoving per-call
 ServiceHost Scope; the request's generation ID chooses its pre-admitted,
@@ -93,57 +102,64 @@ executor admission, deferred terminal and finalization.
   **outside** the admission mutex; only the fully constructed binding is
   published under the mutex.
 
-## CI evidence
+## CI evidence and sanitizer authority
 
-At exact CHttp source HEAD `5083756f552b716b2ee69abded13273d3a80d070`,
-[CHttp candidate run #38843075392](https://github.com/qigao/chttp/actions/runs/38843075392)
-completed **SUCCESS**. Linux Release, ASan+UBSan and TSan each ran all
-**9/9 focused CTests**, with `--repeat until-fail:3`: **81 CTest executions
-in total**, including H1, H2c, same-session multiplexer, stream-window=1
-and original hot-path/lifecycle contracts. The independent
-[post-cancel Scope BUSY check #38842749393](https://github.com/qigao/chttp/actions/runs/38842749393)
-also passed all three modes before the tiny-window case was added.
+**Last exact code HEAD with full end-to-end qualification:**
+`dff5944919b08fd3655a3c338b2ea6e5f307fa0a`. The following independent
+runs all completed SUCCESS:
 
-For the TSan mode, `verify_servicehost_tsan_compiles.py` inspects the real
-`compile_commands.json` and verifies `-fsanitize=thread` on the CHttp
-Service source, both dedicated HTTP tests, both Provider DSO translation units,
-and the **original** Salts Configurator/ServiceHost runtime source files.
-Each mode also verifies that the candidate has **no install target**.
+- [Linux ServiceHost consumer #38848994979](https://github.com/qigao/chttp/actions/runs/38848994979):
+  Release, ASan+UBSan, and a *historical mixed-SDK TSan diagnostic* each
+  completed 10/10 focused CTests repeated three times (90 executions).
+- [Native macOS ARM64 #38848994846](https://github.com/qigao/chttp/actions/runs/38848994846):
+  exact published Salts Native 2.3.0-rc.16 / SaltsUtils Native 4.3.0-rc.11
+  installed dependency SDKs; AppleClang and real Provider DSOs; 10/10 CTests
+  repeated twice (20 executions), including the 48 KiB H2 connection-window test.
+- [Complete first-party source TSan #38848994760](https://github.com/qigao/chttp/actions/runs/38848994760):
+  source-installed Salts, SaltsUtils, and CHttp, all first-party compilation
+  commands with `-fsanitize=thread`, no suppression or fallback; 10/10
+  focused CTests repeated three times **plus** four sensitive H2 conformance
+  tests repeated 20 times each (**110 CTest executions**). This is the
+  authoritative Linux TSan result for the covered paths, not a proof of every
+  possible scheduling/interleaving.
 
-Those consumer-mode TSan checks use published SDK dependencies. A separate
-**complete first-party source-instrumented** qualification at CHttp HEAD
-`b355a31b38181facca839a1d37e3181bdbb278c4` passed:
+### Why full-source TSan is required
 
-[CHttp full-source TSan CI #38844442450](https://github.com/qigao/chttp/actions/runs/38844442450)
-**COMPLETED / SUCCESS**. The original Salts source was fixed to
-`06ecf2179691e197b108d39ebd12dc994148eada`, SaltsUtils to
-`234c4a73bcefc455d48b3550ec2142d7ff1c3f5a`, and ServiceHostCandidate
-independently to `540e1da7c2448f15f04aeaaee1106f73a2fbcc7e`.
+An earlier mixed-SDK [consumer run #38847793898](https://github.com/qigao/chttp/actions/runs/38847793898)
+reported intermittent TSan conflicts between the Worker scalar encoder and
+the H2 Owner's response-copy path. This profile linked prebuilt
+**uninstrumented** Salts allocator/cache atomics; the missing happens-before
+visibility is a plausible explanation, not a conclusively demonstrated
+production race or a proven false positive. The fully source-instrumented
+closure includes those allocator atomics and its later extended 80-iteration
+H2 test found no races.
 
-The compilation database recorded **214 Salts, 240 SaltsUtils, and 225
-CHttp first-party compilation commands (679 total)** with
-`missing_tsan=0`. Exact ServiceHost/Configurator, Provider DSO and
-H2 one-byte window translation units were verified. The consumer linked
-`libtsan` and the *source-installed* Salts/SaltsUtils roots.
-All **9/9 focused HTTP conformance CTests** passed three times under
-unsuppressed TSan (27 executions). No public SDK or runtime was switched.
+Accordingly, the **current** lightweight installed-dependency consumer
+workflow checks Release and ASan+UBSan only. The independent
+`chttp-servicehost-fullsource-tsan.yml` workflow is the **required**
+unsuppressed TSan gate, validating real compile commands for original
+Configurator/ServiceHost, CHttp, Provider DSOs, and the source-installed
+Salts/SaltsUtils dependency graph. No `continue-on-error`, sanitizer
+suppression, silent fallback or weakening of the full-source gate is used.
+The historical mixed-SDK failure logs remain preserved for audit.
 
-This qualifies the Linux first-party source closure **exercised by these
-tests**, not every third-party dependency, platform or possible race.
+The candidate has no `install` target; no public CHttp/Salts SDK export or
+default production behavior is altered.
 
 ## Open before public or stable migration
 
-1. Qualify Linux/Windows/macOS native + installed SDK consumers and verify
-   the deliberate future ServiceHost/Configurator public ABI/export cutover.
-   Windows v145 vcpkg binary cache misses are independently tracked in
-   [CHttp #250](https://github.com/qigao/chttp/issues/250).
-2. Extend the H2 Stream cancellation/flow-control evidence to **connection
-   window exhaustion, sustained large response bodies and multiple
-   concurrent streams with real H2 RST_STREAM/WINDOW_UPDATE races**.
-   The present one-byte Stream receive-credit case covers short typed outputs,
-   not large-body throughput or network-level saturation.
-3. Continue multi-Owner extended sessions and resource pressure/load soak
-   beyond the deterministic two-stream capacity exercise.
+1. Windows-x64 native/installed SDK consumption: exact v145 ABI archives
+   remain missing in the shared NuGet binary cache. [CHttp #250](https://github.com/qigao/chttp/issues/250)
+   and upstream [vcpkg-cache #198](https://github.com/qigao/vcpkg-cache/issues/198)
+   track the mismatch between generic warmer package ABIs and the exact
+   CHttp consumer manifest. No changed triplet/version, source-build fallback
+   or SDK publication is authorized.
+2. Public ServiceHost/Configurator ABI/export naming and installed candidate
+   SDK conformance remain separate from using officially released
+   Salts/SaltsUtils dependencies in this test-only consumer.
+3. Extended H2 large-body, connection-window-exhaustion **cancellation**
+   races, peer RESET/WINDOW_UPDATE crossings, and longer multi-Owner capacity
+   / soak tests remain open, beyond two 48 KiB streamed responses.
 
-**Draft / DO NOT MERGE / DO NOT PUBLISH.** No default production parser,
-runtime, public SDK, or dependency pin is changed by the candidate mode.
+**Draft / DO NOT MERGE / DO NOT PUBLISH.** No default production runtime,
+published SDK, or dependencies were switched by these tests.

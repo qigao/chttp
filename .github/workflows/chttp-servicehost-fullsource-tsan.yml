@@ -4,6 +4,8 @@ name: CHttp ServiceHost complete first-party source TSan
   pull_request:
     paths:
       - ".github/workflows/chttp-servicehost-fullsource-tsan.yml"
+      - ".github/workflows/chttp-servicehost-candidate.yml"
+      - ".github/workflows/chttp-servicehost-macos-consumer.yml"
       - "app/**"
       - "http_client/**"
       - "http_server/**"

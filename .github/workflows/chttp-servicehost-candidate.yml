@@ -28,15 +28,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { mode: release, asan: "OFF", ubsan: "OFF", tsan: "OFF" }
-          - { mode: asan-ubsan, asan: "ON", ubsan: "ON", tsan: "OFF" }
-          - { mode: tsan, asan: "OFF", ubsan: "OFF", tsan: "ON" }
+          # Installed third-party/Salts SDKs here contain uninstrumented atomics.
+          # Only the fully source-instrumented workflow is authoritative for TSan.
+          - { mode: release, asan: "OFF", ubsan: "OFF" }
+          - { mode: asan-ubsan, asan: "ON", ubsan: "ON" }
     env:
       CHTTP_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SALTS_CANDIDATE_SHA: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
       ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
       UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-      TSAN_OPTIONS: halt_on_error=1:exitcode=66
 
     steps:
       - name: Checkout exact CHttp migration head
@@ -62,6 +62,8 @@ jobs:
           test -f _salts_candidate/component-runtime/src/service_host.c
           test -f _salts_candidate/component-runtime/src/configurator.c
           test ! -e app/include/chttp_app/service_host_candidate.h
+          # The source-only TSan gate is required by the candidate acceptance.
+          test -f .github/workflows/chttp-servicehost-fullsource-tsan.yml
       - name: Restore exact published SDK graph and toolchain
         uses: ./.github/actions/setup-salts-sdk
       - name: Configure exact-source HTTP consumer
@@ -78,15 +80,9 @@ jobs:
             -DCHTTP_SALTS_CANDIDATE_SOURCE_DIR="$GITHUB_WORKSPACE/_salts_candidate" \
             -DENABLE_SANITIZER_ADDRESS=${{ matrix.asan }} \
             -DENABLE_SANITIZER_UNDEFINED=${{ matrix.ubsan }} \
-            -DENABLE_SANITIZER_THREAD=${{ matrix.tsan }} \
+            -DENABLE_SANITIZER_THREAD=OFF \
             -DENABLE_SANITIZER_LEAK=OFF \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
-      - name: Verify actual TSan compiled source commands
-        if: matrix.tsan == 'ON'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 app/tests/service/verify_servicehost_tsan_compiles.py "build/servicehost-tsan/compile_commands.json"
       - name: Reject any candidate SDK install target
         shell: bash
         run: |
