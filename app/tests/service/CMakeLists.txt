@@ -179,6 +179,43 @@ add_dependencies(chttp_service_http_test
 target_compile_definitions(chttp_service_http_test PRIVATE
   GENERATED_CHTTP_SERVICE_PLUGIN_PATH="$<TARGET_FILE:chttp_service_plugin_fixture_plugin>")
 
+# The real original Provider ABI/Plugin loader is shared with the candidate,
+# but each generation owns an independent scope and DSO lease.
+if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  add_library(chttp_service_host_provider_fixture SHARED
+    chttp_service_host_provider.c)
+  add_library(chttp_service_host_provider_second SHARED
+    chttp_service_host_provider.c
+    chttp_service_host_second_business.c)
+  foreach(_chttp_host_provider IN ITEMS
+      chttp_service_host_provider_fixture
+      chttp_service_host_provider_second)
+    target_link_libraries(${_chttp_host_provider} PRIVATE
+      chttp_service_plugin_fixture_native Salts::ComponentPluginABI Salts::PluginABI)
+    target_include_directories(${_chttp_host_provider} PRIVATE
+      "${PROJECT_SOURCE_DIR}/app/src"
+      "${chttp_service_plugin_fixture_GENERATED_DIR}")
+    add_dependencies(${_chttp_host_provider}
+      chttp_service_plugin_fixture_idl_codegen)
+    set_target_properties(${_chttp_host_provider} PROPERTIES
+      FOLDER "app/tests/service" C_STANDARD 11
+      C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  endforeach()
+  target_compile_definitions(chttp_service_host_provider_second PRIVATE
+    CHTTP_COMPONENT_PLUGIN_ID="test.chttp.servicehost-provider.2")
+  target_link_libraries(chttp_service_http_test PRIVATE
+    Salts::ServiceHostCandidate)
+  target_include_directories(chttp_service_http_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/app/src")
+  target_compile_definitions(chttp_service_http_test PRIVATE
+    CHTTP_ENABLE_SERVICE_HOST_CANDIDATE=1
+    GENERATED_CHTTP_SERVICE_HOST_PROVIDER_PATH="$<TARGET_FILE:chttp_service_host_provider_fixture>"
+    GENERATED_CHTTP_SERVICE_HOST_SECOND_PATH="$<TARGET_FILE:chttp_service_host_provider_second>")
+  add_dependencies(chttp_service_http_test
+    chttp_service_host_provider_fixture chttp_service_host_provider_second)
+  set_tests_properties(chttp_service_http_test PROPERTIES TIMEOUT 180)
+endif()
+
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
 
 set_target_properties(chttp_service_http_test PROPERTIES

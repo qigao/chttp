@@ -1,4 +1,7 @@
 #include <chttp_app/service.h>
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#include "chttp_service_host_candidate.h"
+#endif
 
 #include <http_client/http.h>
 #include <cmeta_cmeta_fixed_width.h>
@@ -1800,6 +1803,356 @@ spec("CHttp::App generated HTTP MethodPlan") {
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }
+
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  it("pins real ServiceHostCandidate N and N+1 through HTTP deferred terminal and drain") {
+    DataBind *contract = NULL;
+    DataBindError bind_error = DATA_BIND_ERROR_INIT;
+    DataBindBindingPlanDiagnostic diagnostic =
+        DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindNativeTypeBinding request_native =
+        DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+    DataBindNativeTypeBinding response_native =
+        DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+    DataBindServiceNativeBinding native =
+        DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
+    const DataBindHttpProjectionConfig *projection = NULL;
+    DataBindHttpMethodPlan *method_plan = NULL;
+
+    cmeta_plugin_registry registry = {0};
+    const cmeta_plugin_registry_config registry_config = {.capacity = 2u};
+    cmeta_plugin_ref plugin_ref = {0};
+    cmeta_plugin_ref second_plugin = {0};
+    salts_service_host_generation second_generation = {0};
+    salts_configurator_deployment second_deployments[1];
+    salts_configurator_instance second_instances[1];
+    salts_component_dependency second_dependencies[1];
+    size_t second_order[1];
+    salts_service_host_module second_modules[1];
+    const salts_service_host_generation_storage second_storage = {
+        second_deployments, 1u, second_instances, 1u, second_dependencies, 1u,
+        second_order, 1u, second_modules, 1u};
+    cmeta_plugin_lifecycle_info lifecycle = {0};
+    bool quiescent = false;
+
+    salts_service_host_generation generation =
+        SALTS_SERVICE_HOST_GENERATION_INIT;
+    salts_configurator_deployment deployments[1];
+    salts_configurator_instance instances[1];
+    salts_component_dependency dependencies[1];
+    size_t activation_order[1];
+    salts_service_host_module modules[1];
+    const salts_service_host_generation_storage generation_storage = {
+        deployments, 1u,
+        instances, 1u,
+        dependencies, 1u,
+        activation_order, 1u,
+        modules, 1u};
+    salts_service_host_source source = {0};
+    salts_service_host_runtime host_runtime =
+        SALTS_SERVICE_HOST_RUNTIME_INIT;
+    salts_service_host_generation *previous = NULL;
+    salts_service_host_scope rejected_scope =
+        SALTS_SERVICE_HOST_SCOPE_INIT;
+
+    cflow_executor executor = {0};
+    chttp_service service = {0};
+    chttp_service second_service = {0};
+    chttp_server second_server = {0};
+    uint16_t second_port = 0u;
+    char second_uri[64];
+    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_server server = {0};
+    chttp_server_config server_config =
+        chttp_service_test_server_config();
+    chttp_client client = {0};
+    chttp_client_config client_config =
+        chttp_service_test_client_config();
+    chttp_response response = {0};
+
+    chttp_service_executor_gate component_gate;
+    cflow_executor_task component_gate_task;
+    chttp_service_request_thread_args component_request;
+    cflow_executor_stats executor_stats = {0};
+    size_t executor_pending_baseline = 0u;
+    cmeta_thread_t component_request_thread = {0};
+    uint64_t deadline;
+    uint16_t port = 0u;
+    char uri[64];
+
+    check_equal(
+        CHttpPlugin_codec_create(&contract, &bind_error),
+        DATA_BIND_OK);
+    check_not_null(contract);
+
+    check_equal(
+        databind_11_CHttpPlugin_4_Calc_3_Add__databind_native_binding(
+            &request_native, &response_native, &native, &bind_error),
+        DATA_BIND_OK);
+
+    projection = data_bind_http_projection_artifact_find(
+        &databind_chttp_service_plugin_http_projection, "Calc", "Add");
+    check_not_null(projection);
+    check_equal(
+        data_bind_http_method_plan_compile_service(
+            contract, "Calc", "Add", projection, &native,
+            &method_plan, &diagnostic),
+        DATA_BIND_OK);
+    check_not_null(method_plan);
+
+    check_equal(
+        cmeta_plugin_registry_init(&registry, &registry_config),
+        CMETA_PLUGIN_OK);
+    check_equal(
+        cmeta_plugin_registry_load(
+            &registry,
+            GENERATED_CHTTP_SERVICE_HOST_PROVIDER_PATH,
+            &plugin_ref),
+        CMETA_PLUGIN_OK);
+    check_equal(
+        cmeta_plugin_registry_start(&registry, plugin_ref),
+        CMETA_PLUGIN_OK);
+
+    source.plugin = plugin_ref;
+    source.export_id = "component-provider";
+
+    check_equal(
+        salts_service_host_generation_build(
+            &generation,
+            UINT64_C(1),
+            &registry,
+            &generation_storage,
+            NULL, 0u,
+            &source, 1u,
+            NULL, 0u),
+        SALTS_SERVICE_HOST_OK);
+
+    check_equal(
+        salts_service_host_runtime_init(&host_runtime),
+        SALTS_SERVICE_HOST_OK);
+    check_equal(
+        salts_service_host_runtime_publish(
+            &host_runtime, &generation, &previous),
+        SALTS_SERVICE_HOST_OK);
+    check_null(previous);
+
+    check_equal(
+        cmeta_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        CMETA_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)1u);
+
+    service_config.method_capacity = 1u;
+    service_config.max_binding_value_bytes = 64u;
+    service_config.max_response_body_bytes = 4u;
+    service_config.max_call_frame_bytes = 512u;
+    service_config.native_workspace_bytes = 4096u;
+    service_config.native_max_depth = 16u;
+    service_config.native_max_items = 64u;
+    service_config.native_max_owned_bytes = 1024u;
+
+    check_true(cflow_executor_worker_init_with_capacity(
+        &executor, 1u, 2u));
+    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+
+    invalid.method_plan = method_plan;
+    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    invalid.executor = &executor;
+    check_equal(
+        chttp_service_mount_host_candidate(
+            &service, &server, &invalid, NULL, "CHttpPlugin_Calc_Add"),
+        SALTS_EINVAL);
+
+    check_equal(
+        chttp_service_mount_host_candidate(
+            &service, &server, &invalid, &host_runtime, "missing.component"),
+        SALTS_EINVAL);
+    check_equal(host_runtime.active_scopes, (size_t)0u);
+
+    mount.method_plan = method_plan;
+    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.executor = &executor;
+    check_equal(
+        chttp_service_mount_host_candidate(
+            &service, &server, &mount, &host_runtime, "CHttpPlugin_Calc_Add"),
+        SALTS_OK);
+    check_equal(host_runtime.active_scopes, (size_t)1u);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(
+        snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)port),
+        0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    atomic_init(&component_gate.started, 0);
+    atomic_init(&component_gate.release, 0);
+    component_gate_task = (cflow_executor_task){
+        .run = chttp_service_executor_gate_run,
+        .user = &component_gate};
+    check_equal(
+        cflow_executor_try_post_task(&executor, &component_gate_task),
+        CFLOW_ADMISSION_ACCEPTED);
+
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(
+               &component_gate.started, memory_order_acquire) == 0 &&
+           cmeta_monotonic_ms() < deadline)
+      cmeta_thread_yield();
+    check_equal(
+        atomic_load_explicit(
+            &component_gate.started, memory_order_acquire),
+        1);
+    check_true(cflow_executor_get_stats(&executor, &executor_stats));
+    executor_pending_baseline = executor_stats.pending;
+
+    memset(&component_request, 0, sizeof(component_request));
+    component_request.config = chttp_service_test_client_config();
+    component_request.target = "/plugin/3?right=4&scale=2";
+    atomic_init(&component_request.completed, 0);
+    check_greater(
+        snprintf(component_request.uri, sizeof(component_request.uri),
+                 "tcp://127.0.0.1:%u", (unsigned int)port),
+        0);
+    check_equal(
+        cmeta_thread_create(
+            &component_request_thread,
+            chttp_service_request_thread,
+            &component_request),
+        SALTS_OK);
+
+    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    do {
+      check_true(cflow_executor_get_stats(&executor, &executor_stats));
+      if (executor_stats.pending > executor_pending_baseline) break;
+      cmeta_thread_yield();
+    } while (cmeta_monotonic_ms() < deadline);
+    check_true(executor_stats.pending > executor_pending_baseline);
+
+    /* Publish while the old request is held in the executor queue. */
+    check_equal(cmeta_plugin_registry_load(&registry,
+        GENERATED_CHTTP_SERVICE_HOST_SECOND_PATH, &second_plugin),
+        CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_start(&registry, second_plugin), CMETA_PLUGIN_OK);
+    source.plugin = second_plugin;
+    check_equal(salts_service_host_generation_build(&second_generation,
+        UINT64_C(2), &registry, &second_storage, NULL, 0u, &source, 1u,
+        NULL, 0u), SALTS_SERVICE_HOST_OK);
+    check_equal(salts_service_host_runtime_publish(&host_runtime,
+        &second_generation, &previous), SALTS_SERVICE_HOST_OK);
+    check_true(previous == &generation);
+    check_equal(chttp_service_init(&second_service, &service_config), SALTS_OK);
+    check_equal(chttp_server_init(&second_server, &server_config), SALTS_OK);
+    check_equal(chttp_service_mount_host_candidate(
+        &second_service, &second_server, &mount, &host_runtime,
+        "CHttpPlugin_Calc_Add"), SALTS_OK);
+    check_equal(host_runtime.active_scopes, (size_t)2u);
+    check_equal(chttp_server_start(&second_server), SALTS_OK);
+    check_equal(chttp_server_port(&second_server, &second_port), SALTS_OK);
+    check_greater(snprintf(second_uri, sizeof(second_uri), "tcp://127.0.0.1:%u",
+                          (unsigned int)second_port), 0);
+    check_equal(salts_service_host_runtime_close(&host_runtime, &previous),
+                SALTS_SERVICE_HOST_OK);
+    check_true(previous == &second_generation);
+    check_equal(salts_service_host_scope_acquire(&host_runtime, &rejected_scope),
+                SALTS_SERVICE_HOST_INVALID_STATE);
+    check_false(rejected_scope.live);
+
+    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_equal(host_runtime.active_scopes, (size_t)2u);
+    check_equal(
+        salts_service_host_generation_drain(
+            &host_runtime, &generation),
+        SALTS_SERVICE_HOST_BUSY);
+    check_equal(
+        cmeta_plugin_registry_unload(&registry, plugin_ref),
+        CMETA_PLUGIN_BUSY);
+
+    atomic_store_explicit(
+        &component_gate.release, 1, memory_order_release);
+    check_equal(
+        cmeta_thread_join(&component_request_thread), SALTS_OK);
+    cmeta_thread_destroy(&component_request_thread);
+    check_equal(component_request.status, SALTS_OK);
+    check_equal(component_request.http_status, 201u);
+    check_true(cflow_executor_wait_idle(&executor));
+
+    check_equal(component_request.body_size, (size_t)2u);
+    check_equal(component_request.body, "11", 2u);
+    check_equal(chttp_service_test_call(&client, second_uri,
+        "/plugin/3?right=4&scale=2", &response), SALTS_OK);
+    check_equal(response.status_code, 201u);
+    check_equal(response.body, "111", 3u);
+    chttp_response_destroy(&response);
+    /* Runtime admission is closed; both already mounted routes remain valid. */
+    check_equal(chttp_service_test_call(&client, uri,
+        "/plugin/3?right=4&scale=2", &response), SALTS_OK);
+    check_equal(response.body, "11", 2u);
+    chttp_response_destroy(&response);
+
+    check_equal(
+        chttp_client_destroy(&client, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_equal(
+        chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
+        SALTS_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+
+    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(host_runtime.active_scopes, (size_t)1u);
+
+    check_equal(
+        salts_service_host_generation_drain(
+            &host_runtime, &generation),
+        SALTS_SERVICE_HOST_OK);
+    check_equal(chttp_server_stop(&second_server, CHTTP_SERVICE_TEST_TIMEOUT_MS), SALTS_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(chttp_server_destroy(&second_server), SALTS_OK);
+    check_equal(chttp_service_destroy(&second_service), SALTS_OK);
+    check_equal(host_runtime.active_scopes, (size_t)0u);
+    check_equal(salts_service_host_generation_drain(&host_runtime,
+        &second_generation), SALTS_SERVICE_HOST_OK);
+    check_equal(cmeta_plugin_registry_request_stop(&registry, second_plugin), CMETA_PLUGIN_OK);
+    check_equal(cmeta_plugin_registry_poll_quiescent(&registry, second_plugin, &quiescent), CMETA_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(cmeta_plugin_registry_unload(&registry, second_plugin), CMETA_PLUGIN_OK);
+
+    check_equal(
+        salts_service_host_runtime_destroy(&host_runtime),
+        SALTS_SERVICE_HOST_OK);
+
+    check_equal(
+        cmeta_plugin_registry_get_lifecycle(
+            &registry, plugin_ref, &lifecycle),
+        CMETA_PLUGIN_OK);
+    check_equal(lifecycle.active_leases, (size_t)0u);
+
+    check_equal(
+        cmeta_plugin_registry_request_stop(&registry, plugin_ref),
+        CMETA_PLUGIN_OK);
+    check_equal(
+        cmeta_plugin_registry_poll_quiescent(
+            &registry, plugin_ref, &quiescent),
+        CMETA_PLUGIN_OK);
+    check_true(quiescent);
+    check_equal(
+        cmeta_plugin_registry_unload(&registry, plugin_ref),
+        CMETA_PLUGIN_OK);
+    check_equal(
+        cmeta_plugin_registry_destroy(&registry),
+        CMETA_PLUGIN_OK);
+
+    cflow_executor_destroy(&executor);
+    data_bind_http_method_plan_free(method_plan);
+    data_bind_free(contract);
+  }
+
+#endif
 
   it("executes a generated Plugin Service under one mount-owned lease") {
     DataBind *contract = NULL;
