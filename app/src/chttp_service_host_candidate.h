@@ -13,6 +13,26 @@ int chttp_service_mount_host_candidate(
     chttp_service *service, chttp_server *server,
     const chttp_service_http_mount *mount,
     salts_service_host_runtime *runtime, const char *component_id);
+
+/* Branch-only stable-route candidate.
+ * The caller must own the ServiceHost runtime, Provider generations and
+ * executor until CHttp Service and HTTP Server have stopped/drained. Register
+ * exactly one route before server start; prepare a BUILT generation's typed
+ * MethodPlan adapter BEFORE publishing it into ServiceHost.
+ *
+ * Every HTTP request acquires its own nonmoving Scope at admission, selects
+ * one of two immutable pre-admitted operation slots by exact generation ID,
+ * and holds the Scope through DataBind value cleanup/deferred finalization.
+ * This API neither publishes generations nor loads/unloads Provider modules.
+ */
+int chttp_service_mount_host_switch_candidate(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount,
+    salts_service_host_runtime *runtime, const char *component_id);
+
+int chttp_service_host_switch_prepare_candidate(
+    chttp_service *service, salts_service_host_generation *generation);
+
 #ifdef __cplusplus
 }
 #endif
