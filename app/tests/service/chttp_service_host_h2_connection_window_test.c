@@ -27,6 +27,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef CHTTP_SERVICE_HOST_FLOW_CANCEL
+#define CHTTP_SERVICE_HOST_FLOW_CANCEL 0
+#endif
+
 enum {
   FLOW_TEST_TIMEOUT_MS = 12000,
   FLOW_RESPONSE_BYTES = 48 * 1024,
@@ -60,6 +64,8 @@ typedef struct flow_source {
   struct flow_server *owner;
   salts_service_host_scope scope; /* never moved while live */
   size_t read_bytes;
+  size_t total_bytes;
+  bool expected_cancel;
   unsigned char marker;
   bool busy;                      /* protected by flow_server.lock */
 } flow_source;
@@ -72,11 +78,13 @@ typedef struct flow_server {
   _Atomic size_t admitted;
   _Atomic size_t source_terminals;
   _Atomic size_t released;
+  _Atomic size_t canceled_terminals;
   _Atomic int failure;
 } flow_server;
 
 typedef struct flow_result {
   size_t received;
+  size_t expected_bytes;
   size_t completions;
   int status;
   unsigned int response_code;
@@ -119,7 +127,7 @@ static chttp_server_config flow_server_config(void) {
     .port = 0u,
     .backlog = 8u,
     .network = flow_net(4u),
-    .route_capacity = 2u,
+    .route_capacity = CHTTP_SERVICE_HOST_FLOW_CANCEL ? 3u : 2u,
     .middleware_capacity = 2u,
     .max_route_middleware_count = 2u,
     .max_route_param_count = 4u,
@@ -209,9 +217,9 @@ static int flow_source_read(
   flow_source *source = (flow_source *)user;
   size_t length;
   if (source == NULL || buffer == NULL || out_size == NULL ||
-      capacity == 0u || source->read_bytes > FLOW_RESPONSE_BYTES)
+      capacity == 0u || source->read_bytes > source->total_bytes)
     return SALTS_EINVAL;
-  length = FLOW_RESPONSE_BYTES - source->read_bytes;
+  length = source->total_bytes - source->read_bytes;
   if (length > capacity) length = capacity;
   if (length > 1024u) length = 1024u; /* strict bounded C11 source callback */
   if (length != 0u) memset(buffer, source->marker, length);
@@ -225,8 +233,18 @@ static void flow_source_done(void *user, int terminal) {
   flow_server *state;
   if (source == NULL || source->owner == NULL) return;
   state = source->owner;
-  if (terminal != SALTS_OK || source->read_bytes != FLOW_RESPONSE_BYTES)
+  if (source->expected_cancel) {
+    if (terminal != SALTS_ECANCELED ||
+        source->read_bytes == 0u ||
+        source->read_bytes >= source->total_bytes)
+      atomic_fetch_add_explicit(&state->failure, 1, memory_order_relaxed);
+    else
+      atomic_fetch_add_explicit(
+          &state->canceled_terminals, 1u, memory_order_release);
+  } else if (terminal != SALTS_OK ||
+             source->read_bytes != source->total_bytes) {
     atomic_fetch_add_explicit(&state->failure, 1, memory_order_relaxed);
+  }
   if (salts_service_host_scope_release(&source->scope) !=
       SALTS_SERVICE_HOST_OK)
     atomic_fetch_add_explicit(&state->failure, 1, memory_order_relaxed);
@@ -253,9 +271,10 @@ static int flow_handler(
   uint64_t id;
   int status;
   chttp_body_source body;
-  (void)request;
+  bool short_body, cancel_body;
 
-  if (state == NULL || response == NULL) return SALTS_EINVAL;
+  if (state == NULL || request == NULL || request->path == NULL ||
+      response == NULL) return SALTS_EINVAL;
   cmeta_mutex_lock(&state->lock);
   for (size_t i = 0u; i < FLOW_SLOTS; ++i) {
     if (!state->sources[i].busy) {
@@ -301,12 +320,16 @@ static int flow_handler(
       (result.sum != 11u && result.sum != 111u))
     goto reject;
 
+  short_body = strcmp(request->path, "/flow-short") == 0;
+  cancel_body = strcmp(request->path, "/flow-cancel") == 0;
   source->marker = result.sum == 11u ? 'a' : 'b';
   source->read_bytes = 0u;
+  source->total_bytes = short_body ? 3u : FLOW_RESPONSE_BYTES;
+  source->expected_cancel = cancel_body;
   body = (chttp_body_source) {
     .read = flow_source_read,
     .user = source,
-    .content_length = FLOW_RESPONSE_BYTES,
+    .content_length = source->total_bytes,
     .content_length_known = 1
   };
   status = chttp_server_response_source_with_cleanup(
@@ -332,8 +355,8 @@ static int flow_sink_write(void *user, const void *data, size_t size) {
   flow_result *result = (flow_result *)user;
   const unsigned char *bytes = (const unsigned char *)data;
   if (result == NULL || (size != 0u && data == NULL) ||
-      result->received > FLOW_RESPONSE_BYTES ||
-      size > FLOW_RESPONSE_BYTES - result->received)
+      result->received > result->expected_bytes ||
+      size > result->expected_bytes - result->received)
     return SALTS_EMSGSIZE;
   for (size_t i = 0u; i < size; ++i)
     if (bytes[i] != result->expected)
@@ -357,21 +380,24 @@ static void flow_complete(
   }
 }
 
-static int flow_submit(
+static int flow_submit_target(
     chttp_async_client *client, const char *uri,
     flow_result *result, unsigned char expected,
+    const char *target, size_t expected_bytes,
     chttp_request *out_request) {
   chttp_request_options options;
   if (client == NULL || uri == NULL || result == NULL ||
-      out_request == NULL)
+      target == NULL || expected_bytes == 0u ||
+      expected_bytes > FLOW_RESPONSE_BYTES || out_request == NULL)
     return SALTS_EINVAL;
   *result = (flow_result){0};
   result->expected = expected;
+  result->expected_bytes = expected_bytes;
   result->sink = (chttp_body_sink){flow_sink_write, result};
   options = (chttp_request_options){
     .connection_uri = uri,
     .authority = "127.0.0.1",
-    .target = "/flow",
+    .target = target,
     .method = CHTTP_METHOD_GET,
     .body_sink = &result->sink,
     .on_complete = flow_complete,
@@ -379,6 +405,14 @@ static int flow_submit(
     .protocol = CHTTP_HTTP_2
   };
   return chttp_async_client_submit(client, &options, out_request);
+}
+
+static int flow_submit(
+    chttp_async_client *client, const char *uri,
+    flow_result *result, unsigned char expected,
+    chttp_request *out_request) {
+  return flow_submit_target(client, uri, result, expected,
+                            "/flow", FLOW_RESPONSE_BYTES, out_request);
 }
 
 static bool flow_wait(
@@ -411,7 +445,7 @@ static bool flow_result_valid(const flow_result *result) {
   return result != NULL && result->completions == 1u &&
       result->status == SALTS_OK && result->http_major == 2u &&
       result->response_code == 200u &&
-      result->received == FLOW_RESPONSE_BYTES && !result->invalid;
+      result->received == result->expected_bytes && !result->invalid;
 }
 
 int main(void) {
@@ -458,6 +492,10 @@ int main(void) {
   REQUIRE(chttp_server_init(&server, &server_config) == SALTS_OK);
   REQUIRE(chttp_server_set_execution_options(&server, &two_owners) == SALTS_OK);
   REQUIRE(chttp_server_get(&server, "/flow", flow_handler, &state) == SALTS_OK);
+#if CHTTP_SERVICE_HOST_FLOW_CANCEL
+  REQUIRE(chttp_server_get(&server, "/flow-cancel", flow_handler, &state) == SALTS_OK);
+  REQUIRE(chttp_server_get(&server, "/flow-short", flow_handler, &state) == SALTS_OK);
+#endif
   REQUIRE(chttp_server_start(&server) == SALTS_OK);
   REQUIRE(chttp_server_port(&server, &port) == SALTS_OK);
   REQUIRE(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
@@ -508,6 +546,64 @@ int main(void) {
   REQUIRE(flow_wait_source_terminals(&state, 5u));
   REQUIRE(atomic_load_explicit(&state.failure, memory_order_acquire) == 0);
 
+
+#if CHTTP_SERVICE_HOST_FLOW_CANCEL
+  /*
+   * Each Stream starts with only one byte of receive credit; body_sink is
+   * called on the caller-driven client poll thread. Do not block either HTTP
+   * Owner or the CFlow worker. Cancel a Source only after at least one byte
+   * has reached the sink and before its full 48-KiB terminal.
+   *
+   * Both calls belong to one advanced H2 client with physical connection
+   * capacity=1 and request capacity=2. The unaffected sibling has a 3-byte
+   * Source so that it can drain under the same tiny stream credit.
+   */
+  chttp_async_client cancel_client = {0};
+  const chttp_client_config cancel_config = flow_client_config();
+  const chttp_h2_receive_window_policy tiny_credit = {
+      sizeof(chttp_h2_receive_window_policy), UINT32_C(1), UINT32_C(65535)
+  };
+  flow_result canceled = {0}, sibling = {0};
+  chttp_request canceled_req = {0}, sibling_req = {0};
+  REQUIRE(chttp_async_client_init(&cancel_client, &cancel_config) == SALTS_OK);
+  REQUIRE(chttp_async_client_set_h2_receive_window_policy(
+          &cancel_client, &tiny_credit) == SALTS_OK);
+  REQUIRE(flow_submit_target(
+          &cancel_client, uri, &canceled, 'b',
+          "/flow-cancel", FLOW_RESPONSE_BYTES, &canceled_req) == SALTS_OK);
+
+  const uint64_t first_byte_deadline =
+      cmeta_monotonic_ms() + FLOW_TEST_TIMEOUT_MS;
+  while (canceled.received == 0u && canceled.completions == 0u &&
+         cmeta_monotonic_ms() < first_byte_deadline) {
+    size_t polled = 0u;
+    REQUIRE(chttp_async_client_poll(
+            &cancel_client, 5u, &polled) == SALTS_OK);
+  }
+  REQUIRE(canceled.received > 0u);
+  REQUIRE(canceled.received < FLOW_RESPONSE_BYTES);
+  REQUIRE(canceled.completions == 0u);
+  REQUIRE(salts_service_host_generation_drain(
+          &runtime, &new_generation.generation) == SALTS_SERVICE_HOST_BUSY);
+
+  REQUIRE(flow_submit_target(
+          &cancel_client, uri, &sibling, 'b',
+          "/flow-short", 3u, &sibling_req) == SALTS_OK);
+  REQUIRE(chttp_async_request_cancel(&cancel_client, canceled_req) == SALTS_OK);
+  REQUIRE(flow_wait(&cancel_client, &canceled, &sibling));
+  REQUIRE(canceled.completions == 1u && canceled.status == SALTS_ECANCELED);
+  REQUIRE(canceled.received > 0u && canceled.received < FLOW_RESPONSE_BYTES);
+  REQUIRE(flow_result_valid(&sibling));
+  REQUIRE(chttp_async_request_cancel(&cancel_client, canceled_req) == SALTS_ENOENT);
+  REQUIRE(flow_wait_source_terminals(&state, 7u));
+  REQUIRE(atomic_load_explicit(
+          &state.canceled_terminals, memory_order_acquire) == 1u);
+  REQUIRE(atomic_load_explicit(&state.failure, memory_order_acquire) == 0);
+  REQUIRE(chttp_async_client_stop(
+          &cancel_client, FLOW_TEST_TIMEOUT_MS) == SALTS_OK);
+  REQUIRE(chttp_async_client_destroy(&cancel_client) == SALTS_OK);
+#endif
+
   REQUIRE(chttp_async_client_stop(&client, FLOW_TEST_TIMEOUT_MS) == SALTS_OK);
   REQUIRE(chttp_async_client_destroy(&client) == SALTS_OK);
   REQUIRE(salts_service_host_runtime_close(&runtime, &previous) ==
@@ -519,9 +615,14 @@ int main(void) {
           &runtime, &new_generation.generation) == SALTS_SERVICE_HOST_OK);
   REQUIRE(salts_service_host_runtime_destroy(&runtime) == SALTS_SERVICE_HOST_OK);
 
-  REQUIRE(atomic_load_explicit(&state.admitted, memory_order_acquire) == 5u);
-  REQUIRE(atomic_load_explicit(&state.source_terminals, memory_order_acquire) == 5u);
-  REQUIRE(atomic_load_explicit(&state.released, memory_order_acquire) == 5u);
+  const size_t expected_terminal_count =
+      CHTTP_SERVICE_HOST_FLOW_CANCEL ? 7u : 5u;
+  REQUIRE(atomic_load_explicit(&state.admitted, memory_order_acquire)
+          == expected_terminal_count);
+  REQUIRE(atomic_load_explicit(&state.source_terminals, memory_order_acquire)
+          == expected_terminal_count);
+  REQUIRE(atomic_load_explicit(&state.released, memory_order_acquire)
+          == expected_terminal_count);
   cmeta_mutex_destroy(&state.lock);
 
   REQUIRE(cmeta_plugin_registry_request_stop(&registry, old_plugin) == CMETA_PLUGIN_OK);
@@ -537,6 +638,8 @@ int main(void) {
   REQUIRE(cmeta_plugin_registry_unload(&registry, new_plugin) == CMETA_PLUGIN_OK);
   REQUIRE(cmeta_plugin_registry_destroy(&registry) == CMETA_PLUGIN_OK);
 
-  puts("ServiceHost H2 connection WINDOW_UPDATE: 2 x 48KiB, two generations, 5 Scope terminals PASS");
+  puts(CHTTP_SERVICE_HOST_FLOW_CANCEL
+      ? "ServiceHost H2 stream cancel: 48KiB tiny-window RST, sibling survives, 7 Scope terminals PASS"
+      : "ServiceHost H2 connection WINDOW_UPDATE: 2 x 48KiB, two generations, 5 Scope terminals PASS");
   return 0;
 }
