@@ -104,13 +104,14 @@ jobs:
                      chttp_service_host_single_listener_test \
                      chttp_service_host_methodplan_switch_test \
                      chttp_service_host_methodplan_h2c_test \
+                     chttp_service_host_h2_multiplex_test \
                      chttp_service_generated_cflow_http_test
       - name: Execute real HTTP / generation / lifecycle regressions
         shell: bash
         run: |
           set -euo pipefail
           ctest --test-dir "build/servicehost-${{ matrix.mode }}" \
-            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test)$' \
+            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test)$' \
             --repeat until-fail:3 --output-on-failure --no-tests=error --timeout 180
       - name: Require opt-out production build surface
         shell: bash
