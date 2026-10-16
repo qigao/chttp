@@ -91,13 +91,25 @@ jobs:
           # The latest fully source-instrumented Salts CMeta and the isolated
           # candidate ServiceHost share byte-identical public ABI declarations.
           # The runtime source itself must be the already qualified #1234 blob.
-          test "$(git -C build/rpc-fullsource-tsan/sources/salts rev-parse HEAD:cmeta/include/cmeta/interface.h)" =             "abf327f987e218a9e0fcbde20533bc14bad47636"
-          test "$(git -C build/rpc-fullsource-tsan/sources/salts-candidate rev-parse HEAD:component-runtime/src/service_host.c)" =             "e9d31e8b4e65472a343172d0157f1a28cea05cbd"
-          for abi_header in             component/include/salts/component_abi.h             component-plugin/include/salts/component_plugin_abi.h             plugin/include/salts/plugin.h             cmeta/include/cmeta/object_interface.h             cmeta/include/cmeta/object.h             cmeta/include/cmeta/component.h             cmeta/include/cmeta/abi.h; do
-            cmp -s               "build/rpc-fullsource-tsan/sources/salts/$abi_header"               "build/rpc-fullsource-tsan/sources/salts-candidate/$abi_header" ||
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts rev-parse HEAD:cmeta/include/cmeta/interface.h)" = \
+            "abf327f987e218a9e0fcbde20533bc14bad47636"
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts-candidate rev-parse HEAD:component-runtime/src/service_host.c)" = \
+            "e9d31e8b4e65472a343172d0157f1a28cea05cbd"
+          for abi_header in \
+            component/include/salts/component_abi.h \
+            component-plugin/include/salts/component_plugin_abi.h \
+            plugin/include/salts/plugin.h \
+            cmeta/include/cmeta/object_interface.h \
+            cmeta/include/cmeta/object.h \
+            cmeta/include/cmeta/component.h \
+            cmeta/include/cmeta/abi.h; do
+            cmp -s \
+              "build/rpc-fullsource-tsan/sources/salts/$abi_header" \
+              "build/rpc-fullsource-tsan/sources/salts-candidate/$abi_header" ||
               { echo "Strict ABI composition mismatch: $abi_header" >&2; exit 1; }
           done
-          grep -qF 'cmeta_interface_borrowed_service_abi_valid('             build/rpc-fullsource-tsan/sources/salts-candidate/component-runtime/src/service_host.c
+          grep -qF 'cmeta_interface_borrowed_service_abi_valid(' \
+            build/rpc-fullsource-tsan/sources/salts-candidate/component-runtime/src/service_host.c
           {
             printf 'chttp_source=%s\n' "$EXPECTED_CHTTP"
             printf 'salts_source=%s\n' "$EXPECTED_SALTS"
