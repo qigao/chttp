@@ -1,4 +1,7 @@
 #include <chttp_app/service.h>
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#include "chttp_service_host_candidate.h"
+#endif
 
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
@@ -34,6 +37,11 @@ typedef struct chttp_service_method_record {
   DataBindPluginOperationBinding plugin_operation;
   DataBindServiceNativeBinding plugin_native;
   DataBindNativeExecution plugin_execution;
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  /* Stable method slot owns the noncopyable Scope until deferred finalization. */
+  salts_service_host_scope host_scope;
+  chttp_service_component_operation host_operation;
+#endif
 
   size_t request_bytes;
   size_t response_bytes;
@@ -1136,11 +1144,52 @@ static int chttp_service_plugin_resolve(
   return SALTS_OK;
 }
 
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+/* Bind the exact native adapter once at mount; no per-request service lookup.
+ * Scope/Provider lifetime is retained by the address-stable method record. */
+static int chttp_service_host_candidate_resolve(
+    chttp_service_method_record *record,
+    salts_service_host_runtime *runtime, const char *component_id) {
+  salts_configurator_service service = {0};
+  chttp_service_operation_provider provider =
+      chttp_service_operation_provider_bind(NULL, NULL);
+  if (record == NULL || runtime == NULL ||
+      component_id == NULL || component_id[0] == '\0')
+    return SALTS_EINVAL;
+  record->host_operation =
+      (chttp_service_component_operation)CHTTP_SERVICE_COMPONENT_OPERATION_INIT;
+  if (salts_service_host_scope_acquire(runtime, &record->host_scope) !=
+      SALTS_SERVICE_HOST_OK)
+    return SALTS_EBUSY;
+  if (salts_service_host_scope_find_service_from(
+          &record->host_scope, component_id,
+          chttp_service_operation_provider_interface(),
+          &service) != SALTS_SERVICE_HOST_OK ||
+      chttp_service_operation_provider_borrow_from_object(
+          service.object, service.interfaces, &provider) != CMETA_OK ||
+      !chttp_service_operation_provider_valid(&provider) ||
+      !chttp_service_operation_provider_get_operation(
+          &provider, &record->host_operation) ||
+      !chttp_service_component_operation_valid(&record->host_operation))
+    return SALTS_EINVAL;
+  record->native_binding = &record->host_operation.native;
+  record->execution = &record->host_operation.execution;
+  return SALTS_OK;
+}
+#endif
+
 static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
   cmeta_cleanup_run(&record->plugin_cleanup);
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  /* Unrecoverable API misuse: a Scope must not be moved while live. */
+  if (record->host_scope.live &&
+      salts_service_host_scope_release(&record->host_scope) !=
+          SALTS_SERVICE_HOST_OK)
+    abort();
+#endif
   memset(record, 0, sizeof(*record));
 }
 
@@ -1746,9 +1795,14 @@ int chttp_service_init(
   return SALTS_OK;
 }
 
-int chttp_service_mount_http(
+static int chttp_service_mount_http_internal(
     chttp_service *service, chttp_server *server,
-    const chttp_service_http_mount *mount) {
+    const chttp_service_http_mount *mount
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+    , salts_service_host_runtime *candidate_runtime,
+    const char *candidate_component_id
+#endif
+    ) {
   chttp_service_impl *impl;
   chttp_service_method_record *record;
   chttp_server_route_options route_options = {0};
@@ -1773,6 +1827,21 @@ int chttp_service_mount_http(
 
   plugin_mode =
       mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  if (candidate_runtime == NULL && candidate_component_id != NULL)
+    return SALTS_EINVAL;
+  if (candidate_runtime != NULL &&
+      (candidate_component_id == NULL || candidate_component_id[0] == '\0' ||
+       plugin_mode ||
+       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+       mount->native_binding != NULL || mount->execution != NULL ||
+       mount->cflow_projection != NULL || mount->executor == NULL ||
+       !cflow_executor_valid(mount->executor) ||
+       mount->plugin_registry != NULL ||
+       cmeta_plugin_ref_valid(mount->plugin_ref) ||
+       mount->plugin_export_id != NULL))
+    return SALTS_EINVAL;
+#endif
   if (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
       mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
@@ -1789,7 +1858,13 @@ int chttp_service_mount_http(
         mount->plugin_export_id == NULL ||
         mount->plugin_export_id[0] == '\0')
       return SALTS_EINVAL;
-  } else {
+  }
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  else if (candidate_runtime == NULL)
+#else
+  else
+#endif
+  {
     if (mount->plugin_registry != NULL ||
         cmeta_plugin_ref_valid(mount->plugin_ref) ||
         mount->plugin_export_id != NULL ||
@@ -1826,6 +1901,18 @@ int chttp_service_mount_http(
   record->execution_mode = mount->execution_mode;
   record->executor = mount->executor;
 
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  if (candidate_runtime != NULL) {
+    status = chttp_service_host_candidate_resolve(
+        record, candidate_runtime, candidate_component_id);
+    if (status != SALTS_OK) {
+      chttp_service_method_release(record);
+      return status;
+    }
+    native = record->native_binding;
+    execution = record->execution;
+  } else
+#endif
   if (plugin_mode) {
     status = chttp_service_plugin_resolve(
         record, mount->plugin_registry, mount->plugin_ref,
@@ -1913,6 +2000,27 @@ int chttp_service_mount_http(
   ++impl->method_count;
   return SALTS_OK;
 }
+
+int chttp_service_mount_http(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount) {
+  return chttp_service_mount_http_internal(service, server, mount
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+      , NULL, NULL
+#endif
+      );
+}
+#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+int chttp_service_mount_host_candidate(
+    chttp_service *service, chttp_server *server,
+    const chttp_service_http_mount *mount,
+    salts_service_host_runtime *runtime, const char *component_id) {
+  if (runtime == NULL || component_id == NULL || component_id[0] == '\0')
+    return SALTS_EINVAL;
+  return chttp_service_mount_http_internal(
+      service, server, mount, runtime, component_id);
+}
+#endif
 
 int chttp_service_destroy(chttp_service *service) {
   chttp_service_impl *impl;
