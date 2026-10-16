@@ -398,6 +398,31 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     COMMAND chttp_service_host_h2_connection_cancel_test)
   set_tests_properties(chttp_service_host_h2_connection_cancel_test
     PROPERTIES TIMEOUT 120)
+
+  # Private staging gate: compile original Salts candidate archives once, copy
+  # only their built files/headers to a throwaway root, then configure two
+  # entirely independent C11/C++17 consumers against the *installed* Salts
+  # release and two real Provider DSOs. Never install/export the candidate.
+  add_test(NAME chttp_service_host_staged_sdk_consumer
+    COMMAND "${CMAKE_COMMAND}"
+      "-DEXT_STAGE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/private-staged-sdk"
+      "-DEXT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/private_sdk"
+      "-DEXT_SALTS_ROOT=${SALTS_ROOT_PATH}"
+      "-DEXT_HEADERS=${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime/include"
+      "-DEXT_CONFIG_ARCHIVE=$<TARGET_FILE:salts_configurator_candidate>"
+      "-DEXT_HOST_ARCHIVE=$<TARGET_FILE:salts_service_host_candidate>"
+      "-DEXT_PROVIDER1=$<TARGET_FILE:chttp_service_host_provider_fixture>"
+      "-DEXT_PROVIDER2=$<TARGET_FILE:chttp_service_host_provider_second>"
+      "-DEXT_C_COMPILER=${CMAKE_C_COMPILER}"
+      "-DEXT_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-DEXT_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+      "-DEXT_GENERATOR=${CMAKE_GENERATOR}"
+      "-DEXT_ASAN=${ENABLE_SANITIZER_ADDRESS}"
+      "-DEXT_UBSAN=${ENABLE_SANITIZER_UNDEFINED}"
+      "-DEXT_CTEST=${CMAKE_CTEST_COMMAND}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/private_sdk/stage.cmake")
+  set_tests_properties(chttp_service_host_staged_sdk_consumer
+    PROPERTIES TIMEOUT 120)
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
