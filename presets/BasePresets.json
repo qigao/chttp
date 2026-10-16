@@ -8,6 +8,12 @@
     ],
     "configurePresets": [
         {
+            "name": "base-ninja",
+            "hidden": true,
+            "inherits": "pkg-vcpkg",
+            "generator": "Ninja"
+        },
+        {
             "name": "base-developer-windows",
             "hidden": true,
             "inherits": [

@@ -1,0 +1,86 @@
+name: CHttp build with restored Release SDKs
+dotEnv: [.env]
+input_policy: strict
+inputs:
+  HOST:
+    type: string
+    default: windows
+    enum: [windows, unix]
+  PRESET:
+    type: string
+    default: ci-sdk-release-user
+  TASK:
+    type: string
+    default: all
+    enum: [all, configure, refresh, build, test, install]
+  TEST:
+    type: string
+    default: '0'
+    enum: ['0', '1']
+  INSTALL:
+    type: string
+    default: '0'
+    enum: ['0', '1']
+  FRESH:
+    type: string
+    default: '0'
+    enum: ['0', '1']
+  RID:
+    type: string
+    default: windows-x64
+    enum: [windows-x64, linux-x64, macos-arm64, macos-x64, android-arm64-v8a, ios-arm64]
+  TARGET_TRIPLET:
+    type: string
+    default: x64-windows
+  HOST_TRIPLET:
+    type: string
+    default: x64-windows
+tasks:
+
+  - name: restore-windows
+    when: "$HOST == 'windows'"
+    program: '{{ env.BASH_EXECUTABLE }}'
+    args: [cmake/ci/restore-native-sdks.sh, '{{ RID }}', 'false', json]
+    working_dir: .
+    output_format: json
+    timeout: 30m
+
+  - name: restore-unix
+    when: "$HOST == 'unix'"
+    program: bash
+    args: [cmake/ci/restore-native-sdks.sh, '{{ RID }}', 'false', json]
+    working_dir: .
+    output_format: json
+    timeout: 30m
+
+  - name: cmake-windows
+    depends_on: [restore-windows]
+    when: "$HOST == 'windows'"
+    uses: cmake/workflows/cmake-windows.yml
+    vars:
+      PRESET: '{{ PRESET }}'
+      TASK: '{{ TASK }}'
+      TEST: '{{ TEST }}'
+      INSTALL: '{{ INSTALL }}'
+      FRESH: '{{ FRESH }}'
+      QIGAO_SDK_RID: '{{ RID }}'
+      QIGAO_TARGET_TRIPLET: '{{ TARGET_TRIPLET }}'
+      QIGAO_HOST_TRIPLET: '{{ HOST_TRIPLET }}'
+      SALTS_ROOT: '{{ tasks.restore-windows.outputs.data.SALTS_ROOT }}'
+      SALTS_UTILS_ROOT: '{{ tasks.restore-windows.outputs.data.SALTS_UTILS_ROOT }}'
+
+  - name: cmake-unix
+    depends_on: [restore-unix]
+    when: "$HOST == 'unix'"
+    uses: cmake/workflows/cmake.yml
+    vars:
+      PRESET: '{{ PRESET }}'
+      TASK: '{{ TASK }}'
+      TEST: '{{ TEST }}'
+      INSTALL: '{{ INSTALL }}'
+      FRESH: '{{ FRESH }}'
+      QIGAO_SDK_RID: '{{ RID }}'
+      QIGAO_TARGET_TRIPLET: '{{ TARGET_TRIPLET }}'
+      QIGAO_HOST_TRIPLET: '{{ HOST_TRIPLET }}'
+      SALTS_ROOT: '{{ tasks.restore-unix.outputs.data.SALTS_ROOT }}'
+      SALTS_UTILS_ROOT: '{{ tasks.restore-unix.outputs.data.SALTS_UTILS_ROOT }}'

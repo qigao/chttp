@@ -1,0 +1,64 @@
+name: CHttp local build
+dotEnv: [.env]
+input_policy: strict
+inputs:
+  HOST:
+    type: string
+    default: windows
+    enum: [windows, unix]
+  PRESET:
+    type: string
+    default: win-release-user
+  TASK:
+    type: string
+    default: all
+    enum: [all, configure, refresh, build, test, install]
+  TEST:
+    type: string
+    default: '1'
+    enum: ['0', '1']
+  INSTALL:
+    type: string
+    default: '0'
+    enum: ['0', '1']
+  FRESH:
+    type: string
+    default: '0'
+    enum: ['0', '1']
+  CACHE_ACTION:
+    type: string
+    default: none
+    enum: [none, clone, sync]
+tasks:
+  - name: clone-cache
+    when: "$CACHE_ACTION == 'clone'"
+    program: git
+    args: [clone, 'https://github.com/qigao/vcpkg-cache.git', '{{ env.VCPKG_CACHE_REPOSITORY_ROOT }}']
+    timeout: 10m
+  - name: sync-cache
+    when: "$CACHE_ACTION == 'sync'"
+    program: git
+    args: ['-C', '{{ env.VCPKG_CACHE_REPOSITORY_ROOT }}', pull, '--ff-only']
+    timeout: 10m
+
+  - name: cmake-windows
+    depends_on: [clone-cache, sync-cache]
+    when: "$HOST == 'windows'"
+    uses: cmake/workflows/cmake-windows.yml
+    vars:
+      PRESET: '{{ PRESET }}'
+      TASK: '{{ TASK }}'
+      TEST: '{{ TEST }}'
+      INSTALL: '{{ INSTALL }}'
+      FRESH: '{{ FRESH }}'
+
+  - name: cmake-unix
+    depends_on: [clone-cache, sync-cache]
+    when: "$HOST == 'unix'"
+    uses: cmake/workflows/cmake.yml
+    vars:
+      PRESET: '{{ PRESET }}'
+      TASK: '{{ TASK }}'
+      TEST: '{{ TEST }}'
+      INSTALL: '{{ INSTALL }}'
+      FRESH: '{{ FRESH }}'

@@ -6,3 +6,4 @@ build*/
 *.log
 /packaging/nuget/bin/
 /packaging/nuget/obj/
+/.env
