@@ -1,4 +1,4 @@
-name: CHttp ServiceHost complete first-party source TSan
+name: CHttp strict FR1 ServiceHost first-party source TSan (review-only)
 
 'on':
   pull_request:
@@ -27,13 +27,13 @@ concurrency:
 
 jobs:
   full-source:
-    name: Pinned Salts / SaltsUtils / CHttp ServiceHost H2 source TSan
+    name: Strict borrowed FR1 ServiceHost H2 source TSan
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      EXPECTED_SALTS: 06ecf2179691e197b108d39ebd12dc994148eada
+      EXPECTED_SALTS: 297daa4f69aa7bfcc7cc64f245d9be107fd8bfbe
       EXPECTED_UTILS: 234c4a73bcefc455d48b3550ec2142d7ff1c3f5a
-      EXPECTED_HOST_CANDIDATE: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+      EXPECTED_HOST_CANDIDATE: 23032bfe124df327317ce9b4d132054e99b2c0cb
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
       TSAN_OPTIONS: halt_on_error=1:exitcode=66
       CCACHE_DIR: ${{ github.workspace }}/build/rpc-fullsource-tsan/ccache
@@ -66,7 +66,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
-          ref: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+          ref: 23032bfe124df327317ce9b4d132054e99b2c0cb
           path: build/rpc-fullsource-tsan/sources/salts-candidate
           persist-credentials: false
       - name: Use pinned shared vcpkg dependency graph
@@ -88,12 +88,22 @@ jobs:
           test "$(git -C build/rpc-fullsource-tsan/sources/salts-utils rev-parse HEAD)" = "$EXPECTED_UTILS"
           test "$(git -C build/rpc-fullsource-tsan/sources/salts-candidate rev-parse HEAD)" = "$EXPECTED_HOST_CANDIDATE"
           test -f build/rpc-fullsource-tsan/sources/salts-candidate/component-runtime/src/service_host.c
+          # The latest fully source-instrumented Salts CMeta and the isolated
+          # candidate ServiceHost share byte-identical public ABI declarations.
+          # The runtime source itself must be the already qualified #1234 blob.
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts rev-parse HEAD:cmeta/include/cmeta/interface.h)" =             "abf327f987e218a9e0fcbde20533bc14bad47636"
+          test "$(git -C build/rpc-fullsource-tsan/sources/salts-candidate rev-parse HEAD:component-runtime/src/service_host.c)" =             "e9d31e8b4e65472a343172d0157f1a28cea05cbd"
+          for abi_header in             component/include/salts/component_abi.h             component-plugin/include/salts/component_plugin_abi.h             plugin/include/salts/plugin.h             cmeta/include/cmeta/object_interface.h             cmeta/include/cmeta/object.h             cmeta/include/cmeta/component.h             cmeta/include/cmeta/abi.h; do
+            cmp -s               "build/rpc-fullsource-tsan/sources/salts/$abi_header"               "build/rpc-fullsource-tsan/sources/salts-candidate/$abi_header" ||
+              { echo "Strict ABI composition mismatch: $abi_header" >&2; exit 1; }
+          done
+          grep -qF 'cmeta_interface_borrowed_service_abi_valid('             build/rpc-fullsource-tsan/sources/salts-candidate/component-runtime/src/service_host.c
           {
             printf 'chttp_source=%s\n' "$EXPECTED_CHTTP"
             printf 'salts_source=%s\n' "$EXPECTED_SALTS"
             printf 'saltsutils_source=%s\n' "$EXPECTED_UTILS"
             printf 'servicehost_candidate_source=%s\n' "$EXPECTED_HOST_CANDIDATE"
-            printf 'qualification=complete-original-source-tsan\n'
+            printf 'qualification=strict-borrowed-fr1-fullsource-tsan\n'
             printf 'sdk_published=false\n'
             printf 'prebuilt_firstparty_salts=false\n'
           } | tee build/rpc-fullsource-tsan/provenance.txt
@@ -252,7 +262,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chttp-249-servicehost-fullsource-tsan
+          name: chttp-strict-fr1-fullsource-tsan
           retention-days: 14
           if-no-files-found: warn
           path: |
