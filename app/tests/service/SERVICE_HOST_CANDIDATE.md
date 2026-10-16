@@ -20,7 +20,7 @@ Tracking: [CHttp #224](https://github.com/qigao/chttp/issues/224),
 - Existing public `CHttp::App` Service headers and normal SDK behavior remain
   unchanged; no fallback or additional registry/DSO authority is introduced.
 
-## Three real-HTTP conformance profiles
+## Real-HTTP and H2 multiplex conformance profiles
 
 The original `chttp_service_http_test` covers one mounted, typed Component
 operation under an address-stable ServiceHost Scope and the existing
@@ -41,6 +41,27 @@ before start. The control thread invokes
 `chttp_service_host_switch_prepare_candidate()` on a BUILT generation,
 validates the exact typed Interface/Function ABI/MethodPlan, then the
 application explicitly publishes that generation through Salts ServiceHost.
+
+The separate `chttp_service_host_methodplan_h2c_test` repeats the full
+MethodPlan / ServiceHost lifecycle on explicit HTTP/2 prior knowledge
+(no HTTP/1.1 fallback). `chttp_service_host_h2_multiplex_test` uses
+**one** caller-driven advanced HTTP/2 Client, with a hard physical connection
+capacity of **1** and concurrent request slot capacity of **2**. It
+warms the H2 session before admitting two real Streams, then crosses the
+N+2→N+3 generation boundary while an old Stream remains queued at its
+Provider. The third request returns `SALTS_ENOBUFS`; canceling only that
+old Stream produces exactly one client cancellation callback while a sibling
+Stream and a later request both complete with the N+3 result `111`.
+The original generation continues reporting BUSY **after** client Stream
+cancellation until the native CFlow finalizer settles.
+
+`chttp_service_host_h2_stream_window_test` reuses that scenario but sets
+the receiver's `SETTINGS_INITIAL_WINDOW_SIZE` to **1 byte** on its single
+H2 connection. The 2- and 3-byte MethodPlan outputs require per-Stream
+`WINDOW_UPDATE` progress in order to complete. This qualifies bounded
+request-slot backpressure and tiny-window Stream credit progression, but not
+full connection-level 65,535-byte window exhaustion or sustained large-body
+throughput.
 
 Every admitted HTTP invocation pins exactly one nonmoving per-call
 ServiceHost Scope; the request's generation ID chooses its pre-admitted,
@@ -74,11 +95,14 @@ executor admission, deferred terminal and finalization.
 
 ## CI evidence
 
-At exact CHttp source HEAD `dc96a3747ae550b0cdddfc3b7d8c97a37dcd5828`,
-[CHttp candidate run #38840617485](https://github.com/qigao/chttp/actions/runs/38840617485)
+At exact CHttp source HEAD `5083756f552b716b2ee69abded13273d3a80d070`,
+[CHttp candidate run #38843075392](https://github.com/qigao/chttp/actions/runs/38843075392)
 completed **SUCCESS**. Linux Release, ASan+UBSan and TSan each ran all
-**6/6 focused CTests**, with `--repeat until-fail:3`: **54 CTest executions
-in total**. The hot-path/lifecycle static contracts were included in each mode.
+**9/9 focused CTests**, with `--repeat until-fail:3`: **81 CTest executions
+in total**, including H1, H2c, same-session multiplexer, stream-window=1
+and original hot-path/lifecycle contracts. The independent
+[post-cancel Scope BUSY check #38842749393](https://github.com/qigao/chttp/actions/runs/38842749393)
+also passed all three modes before the tiny-window case was added.
 
 For the TSan mode, `verify_servicehost_tsan_compiles.py` inspects the real
 `compile_commands.json` and verifies `-fsanitize=thread` on the CHttp
@@ -98,8 +122,13 @@ upstream objects still come from the exact published SDK.
    the deliberate future ServiceHost/Configurator public ABI/export cutover.
    Windows v145 vcpkg binary cache misses are independently tracked in
    [CHttp #250](https://github.com/qigao/chttp/issues/250).
-3. Expand one-listener H1/H2 multiplex, cancellation, backpressure, and
-   multi-Owner concurrency/long-lived generation iteration evidence.
+3. Extend the H2 Stream cancellation/flow-control evidence to **connection
+   window exhaustion, sustained large response bodies and multiple
+   concurrent streams with real H2 RST_STREAM/WINDOW_UPDATE races**.
+   The present one-byte Stream receive-credit case covers short typed outputs,
+   not large-body throughput or network-level saturation.
+4. Continue multi-Owner extended sessions and resource pressure/load soak
+   beyond the deterministic two-stream capacity exercise.
 
 **Draft / DO NOT MERGE / DO NOT PUBLISH.** No default production parser,
 runtime, public SDK, or dependency pin is changed by the candidate mode.

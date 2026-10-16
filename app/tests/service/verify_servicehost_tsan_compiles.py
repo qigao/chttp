@@ -44,6 +44,22 @@ def main():
             require("-fsanitize=thread" in row,
                     "source was not TSan-instrumented: " + suffix)
         print(f"TSan instrumented: {suffix} ({len(rows)} compile row(s))")
+    # The tiny-window variant must be an independently compiled C11 target,
+    # not accidentally a second default H2c executable under another name.
+    window_commands = []
+    for entry in commands:
+        src = str(entry.get("file", "")).replace("\\", "/")
+        if src.endswith("/app/tests/service/chttp_service_host_methodplan_switch_test.c"):
+            cmd = entry.get("command")
+            if cmd is None:
+                cmd = " ".join(entry.get("arguments", []))
+            if "CHTTP_SERVICE_HOST_TEST_WINDOW=1" in str(cmd):
+                window_commands.append(str(cmd))
+    require(len(window_commands) == 1,
+            "expected one independently built one-byte H2 window target")
+    require("-fsanitize=thread" in window_commands[0],
+            "one-byte WINDOW_UPDATE target lacks TSan instrumentation")
+    print("TSan verified: exact H2 stream-window=1 candidate target")
     print("PASS: original candidate, CHttp and real Provider DSO source instrumentation")
     print("Not claimed: prebuilt Salts Plugin/CMeta/Platform/CNet SDK object instrumentation")
 
