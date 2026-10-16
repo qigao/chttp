@@ -1,0 +1,58 @@
+name: CMake Unix preset pipeline
+variables:
+  PRESET: win-release-user
+  TASK: all
+  TEST: '1'
+  INSTALL: '0'
+  FRESH: '0'
+  SALTS_ROOT: '{{ env.SALTS_ROOT }}'
+  SALTS_UTILS_ROOT: '{{ env.SALTS_UTILS_ROOT }}'
+  QIGAO_SDK_RID: '{{ env.QIGAO_SDK_RID }}'
+  QIGAO_TARGET_TRIPLET: '{{ env.QIGAO_TARGET_TRIPLET }}'
+  QIGAO_HOST_TRIPLET: '{{ env.QIGAO_HOST_TRIPLET }}'
+env:
+  QIGAO_SDK_RID: '{{ QIGAO_SDK_RID }}'
+  QIGAO_TARGET_TRIPLET: '{{ QIGAO_TARGET_TRIPLET }}'
+  QIGAO_HOST_TRIPLET: '{{ QIGAO_HOST_TRIPLET }}'
+  SALTS_ROOT: '{{ SALTS_ROOT }}'
+  SALTS_UTILS_ROOT: '{{ SALTS_UTILS_ROOT }}'
+
+tasks:
+
+  - name: configure
+    when: "$TASK != 'refresh' && $FRESH == '0'"
+    program: cmake
+    args: ['--preset', '{{ PRESET }}']
+    working_dir: ../..
+    timeout: 90m
+
+  - name: configure-fresh
+    when: "$TASK == 'refresh' || $FRESH == '1'"
+    program: cmake
+    args: ['--fresh', '--preset', '{{ PRESET }}']
+    working_dir: ../..
+    timeout: 90m
+
+  - name: build
+    depends_on: [configure, configure-fresh]
+    when: "$TASK == 'all' || $TASK == 'build' || $TASK == 'test' || $TASK == 'install'"
+    program: cmake
+    args: ['--build', '--preset', '{{ PRESET }}']
+    working_dir: ../..
+    timeout: 90m
+
+  - name: test
+    depends_on: [build]
+    when: "$TASK == 'test' || (($TASK == 'all' || $TASK == 'install') && $TEST == '1')"
+    program: ctest
+    args: ['--preset', '{{ PRESET }}', '--output-on-failure']
+    working_dir: ../..
+    timeout: 30m
+
+  - name: install
+    depends_on: [test]
+    when: "$TASK == 'install' || ($TASK == 'all' && $INSTALL == '1')"
+    program: cmake
+    args: ['--build', '--preset', 'install-{{ PRESET }}']
+    working_dir: ../..
+    timeout: 30m

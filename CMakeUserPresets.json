@@ -23,8 +23,7 @@
                 "VCPKG_HOST_TRIPLET": "x64-windows"
             },
             "environment": {
-                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache",
-                "RE2C_ROOT": "$env{PKG_ROOT}/re2c/windows-x64"
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}"
             }
         },
         {
@@ -35,7 +34,7 @@
                 "VCPKG_HOST_TRIPLET": "x64-linux"
             },
             "environment": {
-                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{HOME}/.cache/qigao/vcpkg-cache"
+                "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}"
             }
         },
         {
@@ -44,8 +43,7 @@
             "inherits": "vcpkg-cache",
             "environment": {
                 "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
-                "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
-                "VCPKG_OVERLAY_PORTS": "$penv{VCPKG_OVERLAY_PORTS}"
+                "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
             }
         },
         {
@@ -200,7 +198,6 @@
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/release",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
-                "ENABLE_TESTS": "OFF",
                 "BUILD_TESTS": "OFF",
                 "BUILD_EXAMPLES": "OFF"
             },
@@ -308,7 +305,6 @@
             "name": "win-clang-release-user",
             "cacheVariables": {
                 "ENABLE_SANITIZER_ADDRESS": "OFF",
-                "ENABLE_TESTS": "ON",
                 "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/chttp/release",
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
             },
@@ -326,23 +322,15 @@
             "name": "ci-sdk-release-user",
             "inherits": [
                 "vcpkg-cache-ci",
-                "pkg-vcpkg",
-                "release-mode"
+                "base-ci-sdk-release"
             ],
-            "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/native-sdk",
             "cacheVariables": {
                 "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}",
                 "CMAKE_INSTALL_PREFIX": "${sourceDir}/stage/sdk/$env{QIGAO_SDK_RID}",
                 "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}",
                 "VCPKG_TARGET_TRIPLET": "$env{QIGAO_TARGET_TRIPLET}",
-                "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
-                "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
-                "BUILD_TESTING": false,
-                "BUILD_TESTS": false,
-                "BUILD_EXAMPLES": false,
-                "BUILD_BENCHMARKS": false,
-                "ENABLE_SANITIZER_ADDRESS": false
+                "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}"
             },
             "environment": {
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
@@ -354,31 +342,50 @@
             }
         },
         {
-            "name": "ci-macos-sdk-release-user",
-            "inherits": ["AppleClang", "ci-sdk-release-user"]
-        },
-        {
-            "name": "ci-android-sdk-release-user",
-            "inherits": "ci-sdk-release-user",
-            "binaryDir": "${sourceDir}/build/android-native-sdk",
-            "cacheVariables": {
-                "CMAKE_SYSTEM_NAME": "Android",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
-                "ANDROID_ABI": "arm64-v8a",
-                "ANDROID_PLATFORM": "android-26",
-                "ANDROID_STL": "c++_shared"
+            "name": "ci-sdk-release-tests-user",
+            "inherits": [
+                "base-ci-sdk-release-tests",
+                "ci-sdk-release-user"
+            ],
+            "binaryDir": "${sourceDir}/build/native-sdk-tests",
+            "environment": {
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/native-sdk-tests/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
             }
         },
         {
+            "name": "ci-macos-sdk-release-tests-user",
+            "inherits": [
+                "AppleClang",
+                "ci-sdk-release-tests-user"
+            ]
+        },
+        {
+            "name": "ci-macos-sdk-release-user",
+            "inherits": [
+                "AppleClang",
+                "ci-sdk-release-user"
+            ]
+        },
+        {
+            "name": "ci-android-sdk-release-user",
+            "inherits": [
+                "base-ci-android-sdk-release",
+                "ci-sdk-release-user"
+            ],
+            "binaryDir": "${sourceDir}/build/android-native-sdk"
+        },
+        {
             "name": "ci-ios-sdk-release-user",
-            "inherits": "ci-sdk-release-user",
+            "inherits": [
+                "base-ci-ios-sdk-release",
+                "ci-sdk-release-user"
+            ],
             "binaryDir": "${sourceDir}/build/$env{QIGAO_SDK_RID}",
-            "cacheVariables": {
-                "CMAKE_SYSTEM_NAME": "iOS",
-                "CMAKE_OSX_SYSROOT": "$env{QIGAO_IOS_SYSROOT}"
-            },
             "environment": {
                 "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-$env{QIGAO_TARGET_TRIPLET}"
+            },
+            "cacheVariables": {
+                "CMAKE_OSX_SYSROOT": "$env{QIGAO_IOS_SYSROOT}"
             }
         },
         {
@@ -398,13 +405,37 @@
     ],
     "buildPresets": [
         {
+            "name": "ci-sdk-release-tests-user",
+            "configurePreset": "ci-sdk-release-tests-user"
+        },
+        {
+            "name": "install-ci-sdk-release-tests-user",
+            "inherits": [
+                "ci-sdk-release-tests-user",
+                "base-install"
+            ]
+        },
+        {
+            "name": "ci-macos-sdk-release-tests-user",
+            "configurePreset": "ci-macos-sdk-release-tests-user"
+        },
+        {
+            "name": "install-ci-macos-sdk-release-tests-user",
+            "inherits": [
+                "ci-macos-sdk-release-tests-user",
+                "base-install"
+            ]
+        },
+        {
             "name": "ci-macos-sdk-release-user",
             "configurePreset": "ci-macos-sdk-release-user"
         },
         {
             "name": "install-ci-macos-sdk-release-user",
-            "configurePreset": "ci-macos-sdk-release-user",
-            "targets": ["install"]
+            "inherits": [
+                "ci-macos-sdk-release-user",
+                "base-install"
+            ]
         },
         {
             "name": "win-dev-user",
@@ -428,37 +459,37 @@
         },
         {
             "name": "install-win-dev-user",
-            "configurePreset": "win-dev-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "win-dev-user",
+                "base-install"
             ]
         },
         {
             "name": "install-win-release-user",
-            "configurePreset": "win-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "win-release-user",
+                "base-install"
             ]
         },
         {
             "name": "install-linux-dev-user",
-            "configurePreset": "linux-dev-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "linux-dev-user",
+                "base-install"
             ]
         },
         {
             "name": "install-linux-release-user",
-            "configurePreset": "linux-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "linux-release-user",
+                "base-install"
             ]
         },
         {
             "name": "install-linux-sdk-package",
-            "configurePreset": "linux-sdk-package",
-            "targets": [
-                "install"
+            "inherits": [
+                "linux-sdk-package",
+                "base-install"
             ]
         },
         {
@@ -487,44 +518,44 @@
         },
         {
             "name": "install-android-arm64-v8a-debug-win",
-            "configurePreset": "android-arm64-v8a-debug-win",
-            "targets": [
-                "install"
+            "inherits": [
+                "android-arm64-v8a-debug-win",
+                "base-install"
             ]
         },
         {
             "name": "install-android-arm64-v8a-release-win",
-            "configurePreset": "android-arm64-v8a-release-win",
-            "targets": [
-                "install"
+            "inherits": [
+                "android-arm64-v8a-release-win",
+                "base-install"
             ]
         },
         {
             "name": "install-android-x86_64-debug-win",
-            "configurePreset": "android-x86_64-debug-win",
-            "targets": [
-                "install"
+            "inherits": [
+                "android-x86_64-debug-win",
+                "base-install"
             ]
         },
         {
             "name": "install-android-x86_64-release-win",
-            "configurePreset": "android-x86_64-release-win",
-            "targets": [
-                "install"
+            "inherits": [
+                "android-x86_64-release-win",
+                "base-install"
             ]
         },
         {
             "name": "install-android-x86-debug-win",
-            "configurePreset": "android-x86-debug-win",
-            "targets": [
-                "install"
+            "inherits": [
+                "android-x86-debug-win",
+                "base-install"
             ]
         },
         {
             "name": "install-android-x86-release-win",
-            "configurePreset": "android-x86-release-win",
-            "targets": [
-                "install"
+            "inherits": [
+                "android-x86-release-win",
+                "base-install"
             ]
         },
         {
@@ -537,16 +568,16 @@
         },
         {
             "name": "install-win-clang-user",
-            "configurePreset": "win-clang-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "win-clang-user",
+                "base-install"
             ]
         },
         {
             "name": "install-win-clang-release-user",
-            "configurePreset": "win-clang-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "win-clang-release-user",
+                "base-install"
             ]
         },
         {
@@ -555,9 +586,9 @@
         },
         {
             "name": "install-ci-sdk-release-user",
-            "configurePreset": "ci-sdk-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "ci-sdk-release-user",
+                "base-install"
             ]
         },
         {
@@ -566,9 +597,9 @@
         },
         {
             "name": "install-ci-android-sdk-release-user",
-            "configurePreset": "ci-android-sdk-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "ci-android-sdk-release-user",
+                "base-install"
             ]
         },
         {
@@ -577,9 +608,9 @@
         },
         {
             "name": "install-ci-ios-sdk-release-user",
-            "configurePreset": "ci-ios-sdk-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "ci-ios-sdk-release-user",
+                "base-install"
             ]
         },
         {
@@ -588,9 +619,9 @@
         },
         {
             "name": "install-ci-linux-dev-user",
-            "configurePreset": "ci-linux-dev-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "ci-linux-dev-user",
+                "base-install"
             ]
         },
         {
@@ -599,13 +630,23 @@
         },
         {
             "name": "install-ci-linux-release-user",
-            "configurePreset": "ci-linux-release-user",
-            "targets": [
-                "install"
+            "inherits": [
+                "ci-linux-release-user",
+                "base-install"
             ]
         }
     ],
     "testPresets": [
+        {
+            "name": "ci-sdk-release-tests-user",
+            "configurePreset": "ci-sdk-release-tests-user",
+            "inherits": "base-test"
+        },
+        {
+            "name": "ci-macos-sdk-release-tests-user",
+            "configurePreset": "ci-macos-sdk-release-tests-user",
+            "inherits": "base-test"
+        },
         {
             "name": "ci-macos-sdk-release-user",
             "configurePreset": "ci-macos-sdk-release-user",

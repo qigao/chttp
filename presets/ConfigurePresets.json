@@ -7,21 +7,19 @@
         {
             "name": "dev-win-msvc-ninja",
             "hidden": true,
-            "displayName": "Developer (Windows, MSVC, Ninja Multi-Config)",
+            "displayName": "Developer (Windows, MSVC, Ninja)",
             "inherits": [
                 "base-developer-windows",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
+                "base-ninja"
+            ]
         },
         {
             "name": "release-win-msvc-ninja",
-            "displayName": "Release (Windows, MSVC, Ninja Multi-Config)",
+            "displayName": "Release (Windows, MSVC, Ninja)",
             "inherits": [
                 "base-release-windows",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
+                "base-ninja"
+            ]
         },
         {
             "name": "dev-linux-ninja",
@@ -29,27 +27,24 @@
             "displayName": "Developer (Linux, Ninja)",
             "inherits": [
                 "base-developer-linux",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
+                "base-ninja"
+            ]
         },
         {
             "name": "release-linux-ninja",
             "displayName": "Release (Linux, Ninja)",
             "inherits": [
                 "base-release-linux",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
+                "base-ninja"
+            ]
         },
         {
             "name": "release-mac-ninja",
             "displayName": "Release (Mac, Ninja)",
             "inherits": [
                 "base-release-mac",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja"
+                "base-ninja"
+            ]
         }
     ]
 }

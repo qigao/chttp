@@ -7,6 +7,13 @@
   ],
   "buildPresets": [
     {
+      "name": "base-install",
+      "hidden": true,
+      "targets": [
+        "install"
+      ]
+    },
+    {
       "name": "build-default-windows",
       "displayName": "Build (Default, Windows)",
       "inherits": "ISWindows",

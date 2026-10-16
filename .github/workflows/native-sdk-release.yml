@@ -98,9 +98,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: Linux x64 SDK, family: linux, runner: ubuntu-24.04, preset: ci-sdk-release-user, artifact: chttp-sdk-linux-x64}
-          - {name: macOS SDK, family: macos, runner: macos-15, preset: ci-macos-sdk-release-user, artifact: chttp-sdk-macos}
-          - {name: Windows x64 SDK, family: windows, runner: windows-latest, preset: ci-sdk-release-user, artifact: chttp-sdk-windows-x64}
+          - {name: Linux x64 SDK, family: linux, runner: ubuntu-24.04, preset: ci-sdk-release-tests-user, artifact: chttp-sdk-linux-x64}
+          - {name: macOS SDK, family: macos, runner: macos-15, preset: ci-macos-sdk-release-tests-user, artifact: chttp-sdk-macos}
+          - {name: Windows x64 SDK, family: windows, runner: windows-latest, preset: ci-sdk-release-tests-user, artifact: chttp-sdk-windows-x64}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -116,9 +116,8 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
+      - name: Restore re2c host tools
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
 
       - name: Prepare Linux toolchain
         if: matrix.family == 'linux'
@@ -145,6 +144,7 @@ jobs:
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsInstall)) { throw 'missing MSVC x64 toolchain' }
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+          "RE2C_ROOT=$($env:RE2C_ROOT.Replace('\', '/'))" >> $env:GITHUB_ENV
       - name: Verify shared vcpkg cache contract
         shell: pwsh
         run: |
@@ -204,18 +204,11 @@ jobs:
           commit: ${{ needs.metadata.outputs.candidate_sha }}
           rid: ${{ steps.target.outputs.rid }}
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Restore Unix native SDK graph
-        if: matrix.family != 'windows'
+      - name: Restore native SDK graph
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash cmake/ci/restore-native-sdks.sh "${{ steps.target.outputs.rid }}"
-      - name: Restore Windows native SDK graph
-        if: matrix.family == 'windows'
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64
 
       - name: Configure Unix SDK
         if: matrix.family != 'windows'
@@ -224,7 +217,7 @@ jobs:
           set -euo pipefail
           # Reset counters for this run, never delete restored cache objects.
           ccache --zero-stats
-          cmake --preset "${{ matrix.preset }}" -DBUILD_TESTING=ON -DBUILD_TESTS=ON
+          cmake --preset "${{ matrix.preset }}"
       - name: Build Unix SDK
         if: matrix.family != 'windows'
         shell: bash
@@ -292,7 +285,7 @@ jobs:
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
-          cmake --preset "${{ matrix.preset }}" -DBUILD_TESTING=ON -DBUILD_TESTS=ON
+          cmake --preset "${{ matrix.preset }}"
           if errorlevel 1 exit /b 1
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1
@@ -391,9 +384,8 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
+      - name: Restore re2c host tools
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
       - name: Prepare Android toolchain
         if: matrix.family == 'android'
         shell: bash

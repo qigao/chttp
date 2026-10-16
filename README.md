@@ -202,13 +202,17 @@ Requirements:
 - matching SDK profiles from the latest published Salts and SaltsUtils packages
 - .NET SDK 8 for the native SDK restore scripts
 
-Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, and `VCPKG_ROOT` before configuration.
+Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, `VCPKG_ROOT`, and
+`VCPKG_CACHE_REPOSITORY_ROOT` before configuration. The optional
+[Praktor build entry points](cmake/BUILD.md) load these settings from the ignored
+`.env` and invoke the same versioned presets.
 DataBind/TBE are components of the SaltsUtils installation. CHTTP consumes the
 concrete `Salts::DataBind` target from `find_package(SaltsUtils CONFIG REQUIRED)`.
 
 Local and CI builds use the [shared vcpkg cache](https://github.com/qigao/vcpkg-cache).
-On Windows its checkout belongs at `%LOCALAPPDATA%/qigao/vcpkg-cache`; on Linux,
-`$HOME/.cache/qigao/vcpkg-cache` (NuGet binary restore also requires Mono).
+Set `VCPKG_CACHE_REPOSITORY_ROOT` to that checkout; typical locations are
+`%LOCALAPPDATA%/qigao/vcpkg-cache` on Windows and `$HOME/.cache/qigao/vcpkg-cache`
+on Linux (NuGet binary restore also requires Mono).
 The hidden `vcpkg-cache` preset owns the outer toolchain, overlay ports, read-only
 GitHub Packages feed and writable local binary cache. Provide `GITHUB_TOKEN`
 with `read:packages` in the parent environment; credentials are never stored in
@@ -217,10 +221,16 @@ presets. Existing vcpkg baseline and manifest dependencies remain authoritative.
 CI restores the latest published Salts and SaltsUtils packages with floating
 NuGet versions and `--no-cache --force-evaluate`. SDK roots come from that
 restore's `project.assets.json`, so older cached payloads cannot select an SDK.
-CI presets inherit the cache environment supplied by the setup action; native
-packaging uses `ci-sdk-release-user` and its Android/iOS variants.
+CI presets inherit the cache environment supplied by the setup action and derive
+overlay ports from `VCPKG_CACHE_REPOSITORY_ROOT`. Native CI uses
+`ci-sdk-release-tests-user` (Windows/Linux) or `ci-macos-sdk-release-tests-user`,
+which enable tests in the preset and build under `build/native-sdk-tests`.
+Package-only builds retain `ci-sdk-release-user` and its platform variants.
 
-For a local Windows restore, use PowerShell 7, put .NET SDK 8 on `PATH`, set `GITHUB_TOKEN`, then
+SDK restoration uses one Bash script on all hosts, including Git Bash on Windows.
+It supports the existing GitHub environment output and JSON output for Praktor.
+For a local Windows restore, use PowerShell 7, put .NET SDK 8 and Python 3 on `PATH`,
+set `GITHUB_TOKEN` and `BASH_EXECUTABLE` to Git for Windows' `bin/bash.exe`, then
 run `./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64 -Local` in the same
 PowerShell session used for the build. It sets `SALTS_ROOT` and
 `SALTS_UTILS_ROOT` to the resolved SDKs without overwriting installed packages.
