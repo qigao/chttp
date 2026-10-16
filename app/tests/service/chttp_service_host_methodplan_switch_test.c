@@ -14,6 +14,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef CHTTP_SERVICE_HOST_TEST_H2
+#define CHTTP_SERVICE_HOST_TEST_H2 0
+#endif
+
 enum { HOST_TEST_TIMEOUT_MS = 10000 };
 #define REQUIRE(x) do { if (!(x)) { \
   fprintf(stderr, "MethodPlan ServiceHost switch: %s:%d: %s\n", \
@@ -67,8 +71,8 @@ static cnet_client_config host_network(size_t capacity) {
     .request_capacity = 8u,
     .completion_batch_capacity = 8u,
     .event_capacity = 16u,
-    .max_send_bytes = 4096u,
-    .receive_buffer_bytes = 256u,
+    .max_send_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 64u * 1024u : 4096u,
+    .receive_buffer_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 4096u : 256u,
     .connect_timeout_ms = HOST_TEST_TIMEOUT_MS,
     .read_timeout_ms = HOST_TEST_TIMEOUT_MS,
     .write_timeout_ms = HOST_TEST_TIMEOUT_MS
@@ -94,7 +98,13 @@ static chttp_server_config host_server_config(void) {
     .max_response_header_count = 16u,
     .max_response_header_bytes = 1024u,
     .max_response_body_bytes = 512u,
-    .poll_slice_ms = 2u
+    .poll_slice_ms = 2u,
+    .enable_http2 = CHTTP_SERVICE_HOST_TEST_H2,
+    .h2_stream_capacity = CHTTP_SERVICE_HOST_TEST_H2 ? 8u : 0u,
+    .h2_input_buffer_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 64u * 1024u : 0u,
+    .h2_output_buffer_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 64u * 1024u : 0u,
+    .h2_hpack_dynamic_table_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 4096u : 0u,
+    .h2_max_settings_count = CHTTP_SERVICE_HOST_TEST_H2 ? 16u : 0u
   };
   return config;
 }
@@ -108,7 +118,10 @@ static chttp_client_config host_client_config(void) {
     .max_header_bytes = 1024u,
     .max_request_body_bytes = 512u,
     .max_response_body_bytes = 512u,
-    .max_informational_responses = 2u
+    .max_informational_responses = 2u,
+    .h2_input_buffer_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 64u * 1024u : 0u,
+    .h2_hpack_dynamic_table_bytes = CHTTP_SERVICE_HOST_TEST_H2 ? 4096u : 0u,
+    .h2_max_settings_count = CHTTP_SERVICE_HOST_TEST_H2 ? 16u : 0u
   };
   return config;
 }
@@ -160,12 +173,19 @@ static int host_http_get(
     unsigned int *out_code, char *body, size_t *body_size) {
   const chttp_options options = {
     .connection_uri = uri, .authority = "127.0.0.1",
-    .target = "/plugin/3?right=4&scale=2", .timeout_ms = HOST_TEST_TIMEOUT_MS
+    .target = "/plugin/3?right=4&scale=2", .timeout_ms = HOST_TEST_TIMEOUT_MS,
+    .protocol = CHTTP_SERVICE_HOST_TEST_H2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1
   };
   chttp_response response = {0};
   chttp_error error = {0};
   const int status = chttp_get(client, &options, &response, &error);
   if (status == SALTS_OK) {
+    /* Explicit H2c must never silently retry as H1; H1 fixture also guards
+     * unintended wire-protocol switching. */
+    if (response.http_major != (CHTTP_SERVICE_HOST_TEST_H2 ? 2u : 1u)) {
+      chttp_response_destroy(&response);
+      return SALTS_EPROTO;
+    }
     *out_code = response.status_code;
     if (response.body_size >= 32u) {
       chttp_response_destroy(&response);
@@ -411,11 +431,13 @@ int main(void) {
   const chttp_options malformed = {
       .connection_uri = uri, .authority = "127.0.0.1",
       .target = "/plugin/3?right=not-an-integer&scale=2",
-      .timeout_ms = HOST_TEST_TIMEOUT_MS};
+      .timeout_ms = HOST_TEST_TIMEOUT_MS,
+      .protocol = CHTTP_SERVICE_HOST_TEST_H2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1};
   chttp_response bad_response = {0};
   chttp_error bad_error = {0};
   REQUIRE(chttp_get(&client, &malformed, &bad_response, &bad_error) == SALTS_OK);
   REQUIRE(bad_response.status_code == 400u);
+  REQUIRE(bad_response.http_major == (CHTTP_SERVICE_HOST_TEST_H2 ? 2u : 1u));
   chttp_response_destroy(&bad_response);
 
   REQUIRE(salts_service_host_runtime_close(&runtime, &previous) ==
@@ -456,6 +478,8 @@ int main(void) {
   REQUIRE(cmeta_plugin_registry_destroy(&registry) == CMETA_PLUGIN_OK);
   data_bind_http_method_plan_free(method_plan);
   data_bind_free(contract);
-  puts("Same CHttp MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS");
+  puts(CHTTP_SERVICE_HOST_TEST_H2
+      ? "Same H2c MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS"
+      : "Same H1 MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS");
   return 0;
 }
