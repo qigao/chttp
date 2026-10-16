@@ -33,6 +33,12 @@ int chttp_service_mount_host_switch_candidate(
 int chttp_service_host_switch_prepare_candidate(
     chttp_service *service, salts_service_host_generation *generation);
 
+/* Explicit, control-thread-only recycling after ServiceHost reports DRAINED.
+ * Rejects BUSY while old Scopes or deferred finalizers remain. No automatic
+ * N+2 fallback or third attached generation is ever admitted. */
+int chttp_service_host_switch_retire_candidate(
+    chttp_service *service, const salts_service_host_generation *generation);
+
 #ifdef __cplusplus
 }
 #endif
