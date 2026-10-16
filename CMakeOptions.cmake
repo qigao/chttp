@@ -7,3 +7,4 @@ option(ENABLE_SANITIZER_LEAK "Enable LeakSanitizer" OFF)
 option(ENABLE_SANITIZER_THREAD "Enable ThreadSanitizer" OFF)
 option(ENABLE_SANITIZER_MEMORY "Enable MemorySanitizer" OFF)
 
+option(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE "Build isolated ServiceHost HTTP conformance candidate (no SDK publication)" OFF)

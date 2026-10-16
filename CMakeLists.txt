@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
 include(CMakeOptions.cmake)
 
+# Opt-in ServiceHostCandidate contains private unshipped ABI. The original CHttp
+# release/install/export pipeline must never package an opted-in test graph.
+if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  set(CMAKE_SKIP_INSTALL_RULES TRUE)
+endif()
+
 project(
   Chttp
   VERSION 2.1.0
@@ -60,6 +66,24 @@ add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
 add_subdirectory(http_client)
 add_subdirectory(http_server)
+# Exact-source Salts #1155 test-only runtime: never selected in normal builds.
+if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  if(NOT BUILD_TESTS OR NOT BUILD_TESTING)
+    message(FATAL_ERROR "ServiceHostCandidate requires active CTest")
+  endif()
+  if(NOT DEFINED CHTTP_SALTS_CANDIDATE_SOURCE_DIR OR
+     NOT EXISTS "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime/CMakeLists.txt")
+    message(FATAL_ERROR "CHTTP_SALTS_CANDIDATE_SOURCE_DIR must point to pinned Salts #1155 sources")
+  endif()
+  # Reuse the original Salts candidate build graph and source, but its standalone
+  # test helper exists only in Salts; CHttp provides real HTTP consumer CTests.
+  set(_chttp_saved_build_tests "${BUILD_TESTS}")
+  set(BUILD_TESTS OFF)
+  add_subdirectory(
+    "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime"
+    "${CMAKE_CURRENT_BINARY_DIR}/salts-service-host-candidate")
+  set(BUILD_TESTS "${_chttp_saved_build_tests}")
+endif()
 add_subdirectory(app)
 add_subdirectory(s3)
 add_subdirectory(openapi)

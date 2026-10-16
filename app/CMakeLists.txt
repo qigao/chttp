@@ -28,6 +28,10 @@ target_link_libraries(chttp_app
   INTERFACE
     $<LINK_ONLY:Salts::JinjaCMeta>
     $<LINK_ONLY:Salts::DataBind>)
+if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  target_compile_definitions(chttp_app PRIVATE CHTTP_ENABLE_SERVICE_HOST_CANDIDATE=1)
+  target_link_libraries(chttp_app PRIVATE Salts::ServiceHostCandidate)
+endif()
 install(TARGETS chttp_app EXPORT ChttpTargets)
 install(DIRECTORY include/chttp_app DESTINATION include)
 
