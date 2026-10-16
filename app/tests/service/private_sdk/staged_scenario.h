@@ -50,7 +50,7 @@ static int staged_probe_run(int argc, char **argv) {
   salts_service_host_generation *previous = NULL;
   salts_service_host_scope original = SALTS_SERVICE_HOST_SCOPE_INIT;
   salts_service_host_scope successor = SALTS_SERVICE_HOST_SCOPE_INIT;
-  cmeta_plugin_lifecycle_info info = {0};
+  cmeta_plugin_lifecycle_info info; /* Assigned by get_lifecycle() before inspection. */
   bool quiescent = false;
 
   STAGED_CHECK(argc == 3 && argv[1] != NULL && argv[2] != NULL);
