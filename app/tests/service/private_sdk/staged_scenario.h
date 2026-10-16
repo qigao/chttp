@@ -56,10 +56,20 @@ static int staged_probe_run(int argc, char **argv) {
   STAGED_CHECK(argc == 3 && argv[1] != NULL && argv[2] != NULL);
   STAGED_CHECK(cmeta_plugin_registry_init(&registry, &config) ==
                CMETA_PLUGIN_OK);
-  STAGED_CHECK(cmeta_plugin_registry_load(&registry, argv[1], &first) ==
-               CMETA_PLUGIN_OK);
-  STAGED_CHECK(cmeta_plugin_registry_load(&registry, argv[2], &second) ==
-               CMETA_PLUGIN_OK);
+  /* A DSO loader failure must identify the exact staged module and
+   * contract status. No wider Windows DLL search or legacy ABI retry. */
+  const cmeta_plugin_status first_load =
+      cmeta_plugin_registry_load(&registry, argv[1], &first);
+  if (first_load != CMETA_PLUGIN_OK)
+    fprintf(stderr, "private staged Provider N %s: %s\n",
+            argv[1], cmeta_plugin_status_string(first_load));
+  STAGED_CHECK(first_load == CMETA_PLUGIN_OK);
+  const cmeta_plugin_status second_load =
+      cmeta_plugin_registry_load(&registry, argv[2], &second);
+  if (second_load != CMETA_PLUGIN_OK)
+    fprintf(stderr, "private staged Provider N+1 %s: %s\n",
+            argv[2], cmeta_plugin_status_string(second_load));
+  STAGED_CHECK(second_load == CMETA_PLUGIN_OK);
   STAGED_CHECK(cmeta_plugin_registry_start(&registry, first) ==
                CMETA_PLUGIN_OK);
   STAGED_CHECK(cmeta_plugin_registry_start(&registry, second) ==
