@@ -372,6 +372,32 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     COMMAND chttp_service_host_h2_connection_window_test)
   set_tests_properties(chttp_service_host_h2_connection_window_test
     PROPERTIES TIMEOUT 120)
+
+  # Keep normal 2x48KiB positive intact; isolate RST_STREAM cancellation
+  # with 1-byte Stream receive credit and same-session sibling validation.
+  add_executable(chttp_service_host_h2_connection_cancel_test
+    chttp_service_host_h2_connection_window_test.c)
+  target_link_libraries(chttp_service_host_h2_connection_cancel_test PRIVATE
+    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    chttp_service_plugin_fixture_native)
+  target_include_directories(chttp_service_host_h2_connection_cancel_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/app/src"
+    "${chttp_service_plugin_fixture_GENERATED_DIR}")
+  target_compile_definitions(chttp_service_host_h2_connection_cancel_test PRIVATE
+    CHTTP_SERVICE_HOST_FLOW_CANCEL=1
+    GENERATED_CHTTP_SERVICE_HOST_PROVIDER_PATH="$<TARGET_FILE:chttp_service_host_provider_fixture>"
+    GENERATED_CHTTP_SERVICE_HOST_SECOND_PATH="$<TARGET_FILE:chttp_service_host_provider_second>")
+  add_dependencies(chttp_service_host_h2_connection_cancel_test
+    chttp_service_plugin_fixture_idl_codegen
+    chttp_service_host_provider_fixture
+    chttp_service_host_provider_second)
+  set_target_properties(chttp_service_host_h2_connection_cancel_test PROPERTIES
+    FOLDER "app/tests/service" C_STANDARD 11
+    C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  add_test(NAME chttp_service_host_h2_connection_cancel_test
+    COMMAND chttp_service_host_h2_connection_cancel_test)
+  set_tests_properties(chttp_service_host_h2_connection_cancel_test
+    PROPERTIES TIMEOUT 120)
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
