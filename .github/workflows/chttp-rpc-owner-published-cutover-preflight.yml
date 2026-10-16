@@ -102,11 +102,29 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Use immutable vcpkg/cache tooling
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
         with:
           mode: read
       - name: Restore independent host re2c
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
+      - name: Verify exact GmSSL TLS Provider port revision
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $port = Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'ports/gmssl/vcpkg.json'
+          if (-not (Test-Path -LiteralPath $port -PathType Leaf)) {
+            throw 'canonical GmSSL port unavailable'
+          }
+          $manifest = Get-Content -LiteralPath $port -Raw | ConvertFrom-Json
+          if ($manifest.version -ne '3.2.0' -or $manifest.'port-version' -ne 12) {
+            throw 'CHttp published-SDK preflight requires GmSSL 3.2.0#12'
+          }
+          foreach ($file in @('strict-versions.cmake','handshake-framing.cmake','tls13-fatal-alert.cmake')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT "ports/gmssl/$file") -PathType Leaf)) {
+              throw "missing required GmSSL TLS patch $file"
+            }
+          }
+          Write-Output 'GmSSL 3.2.0#12 strict TLS, framing and fatal-alert patches verified'
       - name: Cache exact-identity compiler objects
         uses: ./.github/actions/setup-compiler-cache
         with:
@@ -260,11 +278,29 @@ jobs:
           set -euo pipefail
           python3 -m pip install -r openapi/tests/requirements-conformance.txt
       - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
         with:
           mode: read
       - name: Restore independent re2c host tool
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
+      - name: Verify exact GmSSL TLS Provider port revision
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $port = Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'ports/gmssl/vcpkg.json'
+          if (-not (Test-Path -LiteralPath $port -PathType Leaf)) {
+            throw 'canonical GmSSL port unavailable'
+          }
+          $manifest = Get-Content -LiteralPath $port -Raw | ConvertFrom-Json
+          if ($manifest.version -ne '3.2.0' -or $manifest.'port-version' -ne 12) {
+            throw 'CHttp published-SDK preflight requires GmSSL 3.2.0#12'
+          }
+          foreach ($file in @('strict-versions.cmake','handshake-framing.cmake','tls13-fatal-alert.cmake')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT "ports/gmssl/$file") -PathType Leaf)) {
+              throw "missing required GmSSL TLS patch $file"
+            }
+          }
+          Write-Output 'GmSSL 3.2.0#12 strict TLS, framing and fatal-alert patches verified'
       - name: Require matching vcpkg target and host architecture
         shell: pwsh
         run: |
