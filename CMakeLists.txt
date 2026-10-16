@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
 include(CMakeOptions.cmake)
 
+# Opt-in ServiceHostCandidate contains private unshipped ABI. The original CHttp
+# release/install/export pipeline must never package an opted-in test graph.
+if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  set(CMAKE_SKIP_INSTALL_RULES TRUE)
+endif()
+
 project(
   Chttp
   VERSION 2.1.0
