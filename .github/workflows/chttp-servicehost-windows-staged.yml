@@ -6,10 +6,12 @@ on:
     paths:
       - ".github/workflows/chttp-servicehost-windows-staged.yml"
       - "app/tests/service/private_sdk/**"
+      - "app/tests/service/CMakeLists.txt"
   pull_request:
     paths:
       - ".github/workflows/chttp-servicehost-windows-staged.yml"
       - "app/tests/service/private_sdk/**"
+      - "app/tests/service/CMakeLists.txt"
   workflow_dispatch:
 
 permissions:
