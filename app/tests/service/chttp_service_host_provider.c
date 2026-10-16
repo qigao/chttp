@@ -43,6 +43,13 @@ static bool chttp_component_get_operation(
   return chttp_service_component_operation_valid(out);
 }
 
+/* Compiler proves the precise native entry signature independently of its
+ * immutable FR1 metadata; no erased FFI bridge or aliasing cast is allowed. */
+CMETA_STATIC_ASSERT(CMETA_TYPE_MATCHES(
+    &chttp_component_get_operation,
+    bool (*)(void *, chttp_service_component_operation *)),
+    "CHttp ServiceHost provider native get_operation ABI mismatch");
+
 CMETA_IMPLEMENTS(
     chttp_service_operation_provider,
     chttp_component_operation_impl,
