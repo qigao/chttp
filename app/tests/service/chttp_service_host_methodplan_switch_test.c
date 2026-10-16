@@ -367,6 +367,54 @@ int main(void) {
   unsigned int code = 0u;
   bool quiet = false;
 
+  /* The original installed-SDK provider path and host must independently
+   * admit the same fully reflected native FunctionAbi. These checks run on
+   * every H1/H2/stream-window variant before starting the real HTTP server. */
+  {
+    const cmeta_interface_desc *iface =
+        chttp_service_operation_provider_interface();
+    const cmeta_interface_method_desc *method;
+    cmeta_function_desc different_result;
+    cmeta_function_abi_desc mismatched_abi;
+    cmeta_param_desc param_without_ownership;
+    cmeta_function_desc wrong_param;
+    cmeta_function_abi_desc wrong_param_abi;
+
+    REQUIRE(cmeta_type_desc_valid(
+        &chttp_service_component_operation_pointer_type));
+    REQUIRE(cmeta_interface_desc_valid(iface));
+    REQUIRE(iface->method_count == (size_t)1u);
+    method = &iface->methods[0];
+    REQUIRE(cmeta_interface_method_reflection_valid(method));
+    REQUIRE(!cmeta_interface_method_owns_self(method));
+    REQUIRE(method->function->param_count == (size_t)1u);
+    REQUIRE(method->function->effects == CMETA_EFFECT_STATEFUL);
+    REQUIRE(method->function->result_flags == CMETA_RESULT_VALUE);
+    REQUIRE(method->abi->return_carrier == CMETA_ABI_SCALAR);
+    REQUIRE(method->abi->param_carriers[0] == CMETA_ABI_OBJECT_POINTER);
+    REQUIRE(method->function->params[0].flags ==
+        (CMETA_PARAM_OUT | CMETA_PARAM_BORROWED));
+    REQUIRE(cmeta_type_equal(method->function->params[0].type,
+        &chttp_service_component_operation_pointer_type));
+    REQUIRE(cmeta_function_abi_contract_compatible(method->abi, method->abi));
+
+    different_result = *method->function;
+    different_result.result_flags = CMETA_RESULT_UNKNOWN;
+    mismatched_abi = *method->abi;
+    mismatched_abi.function = &different_result;
+    REQUIRE(!cmeta_function_abi_contract_compatible(
+        method->abi, &mismatched_abi));
+
+    param_without_ownership = method->function->params[0];
+    param_without_ownership.flags = CMETA_PARAM_OUT;
+    wrong_param = *method->function;
+    wrong_param.params = &param_without_ownership;
+    wrong_param_abi = *method->abi;
+    wrong_param_abi.function = &wrong_param;
+    REQUIRE(!cmeta_function_abi_contract_compatible(
+        method->abi, &wrong_param_abi));
+  }
+
   REQUIRE(CHttpPlugin_codec_create(&contract, &bind_error) == DATA_BIND_OK);
   REQUIRE(databind_11_CHttpPlugin_4_Calc_3_Add__databind_native_binding(
           &request_native, &response_native, &native, &bind_error)
