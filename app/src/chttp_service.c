@@ -1609,7 +1609,7 @@ static int chttp_service_http_execute_deferred(
 #if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   if (record->host_switch != NULL) {
     chttp_service_host_switch_state *state = record->host_switch;
-    const uint64_t id;
+    uint64_t id;
     chttp_service_method_record *admitted = NULL;
     if (salts_service_host_scope_acquire(
             state->runtime, &invocation->host_request_scope) !=
