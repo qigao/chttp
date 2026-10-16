@@ -38,12 +38,35 @@ if(WIN32)
   if(NOT published_dlls)
     message(FATAL_ERROR "No published SDK DLLs available for strict Provider deployment")
   endif()
+  # Windows module names are case insensitive. Fail closed on different
+  # published SDK payloads with the same name rather than letting copy order
+  # silently choose one provider dependency. Identical hashes may coalesce.
+  set(staged_dll_keys)
+  set(staged_dll_origins)
   foreach(dll IN LISTS published_dlls)
     get_filename_component(dll_name "${dll}" NAME)
-    file(COPY_FILE "${dll}" "${EXT_STAGE_ROOT}/plugin/${dll_name}" ONLY_IF_DIFFERENT)
+    string(TOLOWER "${dll_name}" dll_key)
+    list(FIND staged_dll_keys "${dll_key}" existing_index)
+    if(NOT existing_index EQUAL -1)
+      list(GET staged_dll_origins ${existing_index} original)
+      file(SHA256 "${original}" original_sha256)
+      file(SHA256 "${dll}" candidate_sha256)
+      if(NOT original_sha256 STREQUAL candidate_sha256)
+        message(FATAL_ERROR
+          "Conflicting published SDK DLL identity: ${dll_name}; "
+          "${original} != ${dll}. The exact ABI closure must be fixed "
+          "at its producer, not selected by staging order.")
+      endif()
+    else()
+      list(APPEND staged_dll_keys "${dll_key}")
+      list(APPEND staged_dll_origins "${dll}")
+      file(COPY_FILE "${dll}" "${EXT_STAGE_ROOT}/plugin/${dll_name}"
+           ONLY_IF_DIFFERENT)
+    endif()
   endforeach()
-  list(LENGTH published_dlls dll_count)
-  message(STATUS "Staged ${dll_count} original published dependency DLLs beside the two Provider DSOs")
+  list(LENGTH staged_dll_keys dll_count)
+  message(STATUS
+    "Staged ${dll_count} distinct canonical dependency DLL names beside both Provider DSOs")
 endif()
 get_filename_component(conf_name "${EXT_CONFIG_ARCHIVE}" NAME)
 get_filename_component(host_name "${EXT_HOST_ARCHIVE}" NAME)
