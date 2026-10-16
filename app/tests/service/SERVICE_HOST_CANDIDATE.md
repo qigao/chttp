@@ -102,64 +102,88 @@ executor admission, deferred terminal and finalization.
   **outside** the admission mutex; only the fully constructed binding is
   published under the mutex.
 
+
+### Partial-response cancellation
+
+The separate `chttp_service_host_h2_connection_cancel_test` uses one
+caller-driven H2 connection and a 1-byte initial Stream receive window.
+After a 48 KiB Source has delivered at least one byte, it cancels that
+Stream without cancelling an independent short-response sibling. The Source
+terminal runs exactly once; its original Scope is released there, not at
+route-handler return. No third Owner, widened capacity, or fallback is added.
+
+### Private staged SDK, independent C11/C++ consumers
+
+`chttp_service_host_staged_sdk_consumer` uses the **original** Salts candidate
+headers and two compiled static libraries, staged outside the CHttp build
+tree. Two independent C11 and C++17 projects use the *published*
+`find_package(Salts)` dependencies and import the candidate static archives
+explicitly. Two actual generated Provider DSOs exercise generation
+publication, address-bound Scope rejection of illicit copies, BUSY drain,
+Plugin leases, and ordered unload. The test rejects a staged package that
+pretends an unshipped `Salts::ServiceHostCandidate` SDK target is public.
+
+On Windows, exactly published Salts/SaltsUtils dependency DLLs are staged
+beside the Provider DLLs, in compliance with the original Plugin loader's
+`DLL_LOAD_DIR | DEFAULT_DIRS` search. The staging script normalizes DLL
+names case-insensitively and requires identical SHA-256 for any duplicate
+name; conflicting SDK DLL identities are a hard error, not copy-order
+selection. No PATH/cwd DLL loader fallback is allowed.
+
 ## CI evidence and sanitizer authority
 
-**Last exact code HEAD with full end-to-end qualification:**
-`dff5944919b08fd3655a3c338b2ea6e5f307fa0a`. The following independent
-runs all completed SUCCESS:
+The following independent latest successful workflows qualify the
+**unchanged candidate runtime** and its private out-of-tree consumer:
 
-- [Linux ServiceHost consumer #38848994979](https://github.com/qigao/chttp/actions/runs/38848994979):
-  Release, ASan+UBSan, and a *historical mixed-SDK TSan diagnostic* each
-  completed 10/10 focused CTests repeated three times (90 executions).
-- [Native macOS ARM64 #38848994846](https://github.com/qigao/chttp/actions/runs/38848994846):
-  exact published Salts Native 2.3.0-rc.16 / SaltsUtils Native 4.3.0-rc.11
-  installed dependency SDKs; AppleClang and real Provider DSOs; 10/10 CTests
-  repeated twice (20 executions), including the 48 KiB H2 connection-window test.
-- [Complete first-party source TSan #38848994760](https://github.com/qigao/chttp/actions/runs/38848994760):
-  source-installed Salts, SaltsUtils, and CHttp, all first-party compilation
-  commands with `-fsanitize=thread`, no suppression or fallback; 10/10
-  focused CTests repeated three times **plus** four sensitive H2 conformance
-  tests repeated 20 times each (**110 CTest executions**). This is the
-  authoritative Linux TSan result for the covered paths, not a proof of every
-  possible scheduling/interleaving.
+| Profile | Exact evidence | Result |
+| --- | --- | --- |
+| Linux x64 Release | [#38860394155](https://github.com/qigao/chttp/actions/runs/38860394155), `d9f1090` | 12/12 CTests ×3 |
+| Linux x64 ASan+UBSan | Same run | 12/12 CTests ×3 |
+| Windows x64 / MSVC v145 / IOCP | [#38860394261](https://github.com/qigao/chttp/actions/runs/38860394261), `d9f1090` | 12/12 CTests ×2; 5 critical IOCP/H2 tests ×20; external C11/C++ DSO test ×3 |
+| macOS ARM64 / AppleClang | [#38859979155](https://github.com/qigao/chttp/actions/runs/38859979155), `eb501a8` | 12/12 CTests ×2 |
+| Whole first-party source TSan, Linux | [#38851580599](https://github.com/qigao/chttp/actions/runs/38851580599), earlier runtime head | 11/11 CTests ×3; 5 H2 cases ×20; no sanitizer reports |
 
-### Why full-source TSan is required
+The full-source Linux TSan profile checked **214 Salts + 240 SaltsUtils +
+227 CHttp first-party compiler entries**, all with `-fsanitize=thread`, no
+suppression or silent library fallback. The later changes concerned
+private staged consumer packaging/workflow and Windows DLL deployment,
+not the ServiceHost/CHttp execution-path implementation. The mixed-SDK
+[diagnostic #38847793898](https://github.com/qigao/chttp/actions/runs/38847793898)
+previously reported intermittent Worker/Owner buffer conflicts while
+linking **uninstrumented** Salts allocator objects. Its evidence remains
+preserved; full-source green does not categorically prove every possible
+interleaving or that every mixed-SDK report was false.
 
-An earlier mixed-SDK [consumer run #38847793898](https://github.com/qigao/chttp/actions/runs/38847793898)
-reported intermittent TSan conflicts between the Worker scalar encoder and
-the H2 Owner's response-copy path. This profile linked prebuilt
-**uninstrumented** Salts allocator/cache atomics; the missing happens-before
-visibility is a plausible explanation, not a conclusively demonstrated
-production race or a proven false positive. The fully source-instrumented
-closure includes those allocator atomics and its later extended 80-iteration
-H2 test found no races.
+The exact published Salts/SaltsUtils dependency six-RID compatibility
+and GmSSL 3.2.0#12 toolchain were separately verified in
+[CHttp preflight #38854251707](https://github.com/qigao/chttp/actions/runs/38854251707).
+The official published `CHttp.Native` native build/pack also passed in
+[#38854251731](https://github.com/qigao/chttp/actions/runs/38854251731),
+with publication skipped. Windows v145 exact NuGet L2 package restoration
+is proven by [vcpkg-cache #38852320111](https://github.com/qigao/vcpkg-cache/actions/runs/38852320111).
+These independently qualified **published dependency** gates are not
+evidence that a new public ServiceHost ABI has shipped.
 
-Accordingly, the **current** lightweight installed-dependency consumer
-workflow checks Release and ASan+UBSan only. The independent
-`chttp-servicehost-fullsource-tsan.yml` workflow is the **required**
-unsuppressed TSan gate, validating real compile commands for original
-Configurator/ServiceHost, CHttp, Provider DSOs, and the source-installed
-Salts/SaltsUtils dependency graph. No `continue-on-error`, sanitizer
-suppression, silent fallback or weakening of the full-source gate is used.
-The historical mixed-SDK failure logs remain preserved for audit.
-
-The candidate has no `install` target; no public CHttp/Salts SDK export or
-default production behavior is altered.
+Candidate mode must still have **no installation/export target** and cannot
+modify the default public SDK, default runtime, or Provider ABI.
 
 ## Open before public or stable migration
 
-1. Windows-x64 native/installed SDK consumption: exact v145 ABI archives
-   remain missing in the shared NuGet binary cache. [CHttp #250](https://github.com/qigao/chttp/issues/250)
-   and upstream [vcpkg-cache #198](https://github.com/qigao/vcpkg-cache/issues/198)
-   track the mismatch between generic warmer package ABIs and the exact
-   CHttp consumer manifest. No changed triplet/version, source-build fallback
-   or SDK publication is authorized.
-2. Public ServiceHost/Configurator ABI/export naming and installed candidate
-   SDK conformance remain separate from using officially released
-   Salts/SaltsUtils dependencies in this test-only consumer.
-3. Extended H2 large-body, connection-window-exhaustion **cancellation**
-   races, peer RESET/WINDOW_UPDATE crossings, and longer multi-Owner capacity
-   / soak tests remain open, beyond two 48 KiB streamed responses.
+1. Salts [#1153](https://github.com/qigao/salts/issues/1153): the
+   **intentional breaking naming and ABI epoch** for
+   `Salts::Configurator` / `Salts::ServiceHost`, including the
+   `salts_service_host_scope.owner_address` layout, provider contract
+   ownership, transitive static link dependencies and exact C11/C++17
+   installed `find_package(Salts)` consumers across all six official
+   native RIDs. This *private* candidate does not yet install/export.
+2. Coordinate the final CHttp public Service MethodPlan consumer switch with
+   an actual, deliberately exported Salts ServiceHost ABI. The currently
+   accepted private code remains default **OFF**; do not ship two loaders,
+   compatibility aliases or an implicit legacy runtime fallback.
+3. Continue extended H2 connection-window/peer RESET/large-body and
+   multi-Owner soak coverage beyond the currently tested 48 KiB responses
+   and bounded per-request cancellation. Sanitizer GREEN is a tested
+   schedule set, not a universal concurrency proof.
 
-**Draft / DO NOT MERGE / DO NOT PUBLISH.** No default production runtime,
-published SDK, or dependencies were switched by these tests.
+**Draft / DO NOT MERGE / DO NOT PUBLISH.** No public native SDK,
+published package, master branch or production Service runtime is changed.
