@@ -179,6 +179,7 @@ jobs:
                      chttp_service_host_h2_multiplex_test \
                      chttp_service_host_h2_stream_window_test \
                      chttp_service_host_h2_connection_window_test \
+                     chttp_service_host_h2_connection_cancel_test \
                      chttp_service_generated_cflow_http_test
           grep -F "Salts_DIR:PATH=$SALTS_ROOT" build/rpc-fullsource-tsan/build-chttp/CMakeCache.txt
           grep -F "SaltsUtils_DIR:PATH=$SALTS_UTILS_ROOT" build/rpc-fullsource-tsan/build-chttp/CMakeCache.txt
@@ -234,7 +235,7 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           timeout --signal=TERM --kill-after=10s 600s \
             ctest --test-dir build/rpc-fullsource-tsan/build-chttp \
-            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_generated_cflow_http_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract)$' \
+            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_generated_cflow_http_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract)$' \
             --repeat until-fail:3 --timeout 120 --no-tests=error --output-on-failure
       - name: Stress H2 full-source native handoff and flow-control without suppression
         shell: bash
@@ -245,7 +246,28 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           timeout --signal=TERM --kill-after=10s 600s \
             ctest --test-dir build/rpc-fullsource-tsan/build-chttp \
-            -R '^(chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test)$' \
+            -R '^(chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test)
+            --repeat until-fail:20 --timeout 120 --no-tests=error --output-on-failure
+      - name: Preserve exact source-graph qualifications
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-249-servicehost-fullsource-tsan
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rpc-fullsource-tsan/provenance.txt
+            build/rpc-fullsource-tsan/instrumentation.txt
+            build/rpc-fullsource-tsan/consumer-ldd.txt
+            build/rpc-fullsource-tsan/build-chttp/Testing/Temporary/LastTest.log
+      - name: Verify exact CHttp HEAD remains unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
+ \
             --repeat until-fail:20 --timeout 120 --no-tests=error --output-on-failure
       - name: Preserve exact source-graph qualifications
         if: always()
