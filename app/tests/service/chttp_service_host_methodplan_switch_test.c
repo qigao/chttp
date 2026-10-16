@@ -398,6 +398,13 @@ int main(void) {
         &chttp_service_component_operation_pointer_type));
     REQUIRE(cmeta_function_abi_contract_compatible(method->abi, method->abi));
 
+#if defined(CHTTP_TEST_STRICT_BORROWED_ABI)
+    /* Only the explicit combined-source TSan job includes the clean strict
+     * Salts CMeta header. Require the actual guard to admit this native FR1,
+     * in addition to the ServiceHost DSO generation-build path below. */
+    REQUIRE(cmeta_interface_borrowed_service_abi_valid(iface));
+#endif
+
     different_result = *method->function;
     different_result.result_flags = CMETA_RESULT_UNKNOWN;
     mismatched_abi = *method->abi;

@@ -189,7 +189,7 @@ jobs:
             -DCHTTP_SALTS_CANDIDATE_SOURCE_DIR="$GITHUB_WORKSPACE/build/rpc-fullsource-tsan/sources/salts-candidate" \
             -DENABLE_SANITIZER_THREAD=ON \
             -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF \
-            -DCMAKE_C_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_C_FLAGS="-DCHTTP_TEST_STRICT_BORROWED_ABI=1 -fsanitize=thread -g -fno-omit-frame-pointer" \
             -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
             -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
