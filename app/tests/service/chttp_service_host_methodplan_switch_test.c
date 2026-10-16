@@ -216,6 +216,7 @@ int main(void) {
   cmeta_plugin_ref plugin_n = {0}, plugin_next = {0};
   host_generation_fixture old_generation = {0};
   host_generation_fixture new_generation = {0};
+  host_generation_fixture overflow_generation = {0};
   salts_service_host_runtime runtime = SALTS_SERVICE_HOST_RUNTIME_INIT;
   salts_service_host_generation *previous = NULL;
   cflow_executor executor = {0};
@@ -342,6 +343,14 @@ int main(void) {
           &runtime, &new_generation.generation, &previous)
           == SALTS_SERVICE_HOST_OK);
   REQUIRE(previous == &old_generation.generation);
+  /* The candidate route holds two immutable pre-admitted generation slots.
+   * A third BUILT graph cannot be silently ranked or spilled to another
+   * runtime/method; test rollback returns its extra Provider lease. */
+  REQUIRE(host_build(&overflow_generation, UINT64_C(3), &registry, plugin_n) == 0);
+  REQUIRE(chttp_service_host_switch_prepare_candidate(
+          &service, &overflow_generation.generation) == SALTS_ENOBUFS);
+  REQUIRE(salts_service_host_generation_discard(
+          &overflow_generation.generation) == SALTS_SERVICE_HOST_OK);
 
   next_request.config = host_client_config();
   REQUIRE(snprintf(next_request.uri, sizeof(next_request.uri), "%s", uri) > 0);
@@ -374,16 +383,31 @@ int main(void) {
   REQUIRE(code == 201u);
   REQUIRE(body_size == 3u && strcmp(body, "111") == 0);
 
+  /* A malformed request does not invoke the Provider or escape its Scope.
+   * Preserve the existing DataBind ingress -> HTTP 400 contract. */
+  const chttp_options malformed = {
+      .connection_uri = uri, .authority = "127.0.0.1",
+      .target = "/plugin/3?right=not-an-integer&scale=2",
+      .timeout_ms = HOST_TEST_TIMEOUT_MS};
+  chttp_response bad_response = {0};
+  chttp_error bad_error = {0};
+  REQUIRE(chttp_get(&client, &malformed, &bad_response, &bad_error) == SALTS_OK);
+  REQUIRE(bad_response.status_code == 400u);
+  chttp_response_destroy(&bad_response);
+
   REQUIRE(salts_service_host_runtime_close(&runtime, &previous) ==
           SALTS_SERVICE_HOST_OK);
   REQUIRE(previous == &new_generation.generation);
   REQUIRE(host_http_get(&client, uri, &code, body, &body_size) == SALTS_OK);
   REQUIRE(code == 503u);
-  REQUIRE(atomic_load_explicit(&counts.entered, memory_order_acquire) == 4u);
-  REQUIRE(atomic_load_explicit(&counts.returned, memory_order_acquire) == 4u);
+  REQUIRE(atomic_load_explicit(&counts.entered, memory_order_acquire) == 5u);
+  REQUIRE(atomic_load_explicit(&counts.returned, memory_order_acquire) == 5u);
 
   REQUIRE(chttp_client_destroy(&client, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
   REQUIRE(chttp_server_stop(&server, HOST_TEST_TIMEOUT_MS) == SALTS_OK);
+  /* No accepted workers remain, yet route->user still borrows this Service
+   * until the Server has destroyed its route storage. */
+  REQUIRE(chttp_service_destroy(&service) == SALTS_EBUSY);
   REQUIRE(chttp_server_destroy(&server) == SALTS_OK);
   REQUIRE(chttp_service_destroy(&service) == SALTS_OK);
   REQUIRE(cflow_executor_wait_idle(&executor));
