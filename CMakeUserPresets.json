@@ -5,6 +5,27 @@
     ],
     "configurePresets": [
         {
+            "name": "ci-sdk-release-tests-user",
+            "inherits": [
+                "ci-sdk-release-user"
+            ],
+            "binaryDir": "${sourceDir}/build/native-sdk-tests",
+            "environment": {
+                "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/native-sdk-tests/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_HOST_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+            },
+            "cacheVariables": {
+                "BUILD_TESTING": true,
+                "BUILD_TESTS": true
+            }
+        },
+        {
+            "name": "ci-macos-sdk-release-tests-user",
+            "inherits": [
+                "AppleClang",
+                "ci-sdk-release-tests-user"
+            ]
+        },
+        {
             "name": "vcpkg-cache",
             "hidden": true,
             "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
@@ -398,6 +419,36 @@
     ],
     "buildPresets": [
         {
+            "name": "ci-sdk-release-tests-user",
+            "configurePreset": "ci-sdk-release-tests-user"
+        },
+        {
+            "name": "install-ci-sdk-release-tests-user",
+            "inherits": [
+                "ci-sdk-release-tests-user",
+                "base-install"
+            ],
+            "configurePreset": "ci-sdk-release-tests-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
+            "name": "ci-macos-sdk-release-tests-user",
+            "configurePreset": "ci-macos-sdk-release-tests-user"
+        },
+        {
+            "name": "install-ci-macos-sdk-release-tests-user",
+            "inherits": [
+                "ci-macos-sdk-release-tests-user",
+                "base-install"
+            ],
+            "configurePreset": "ci-macos-sdk-release-tests-user",
+            "targets": [
+                "install"
+            ]
+        },
+        {
             "name": "ci-macos-sdk-release-user",
             "configurePreset": "ci-macos-sdk-release-user"
         },
@@ -606,6 +657,16 @@
         }
     ],
     "testPresets": [
+        {
+            "name": "ci-sdk-release-tests-user",
+            "configurePreset": "ci-sdk-release-tests-user",
+            "inherits": "base-test"
+        },
+        {
+            "name": "ci-macos-sdk-release-tests-user",
+            "configurePreset": "ci-macos-sdk-release-tests-user",
+            "inherits": "base-test"
+        },
         {
             "name": "ci-macos-sdk-release-user",
             "configurePreset": "ci-macos-sdk-release-user",
