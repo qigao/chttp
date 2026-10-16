@@ -26,15 +26,11 @@ concurrency:
 
 jobs:
   macos-consumer:
-    name: installed ServiceHostCandidate HTTP (${{ matrix.rid }})
-    runs-on: ${{ matrix.runner }}
+    name: installed ServiceHostCandidate HTTP (macos-arm64)
+    # Salts 2.3.0's exact official six-RID SDK includes macos-arm64 only.
+    # macos-x64 is not a published RID; do not try another SDK's architecture.
+    runs-on: macos-15
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { runner: macos-15, rid: macos-arm64, triplet: arm64-osx, arch: ARM64 }
-          - { runner: macos-15-intel, rid: macos-x64, triplet: x64-osx, arch: X64 }
     env:
       CHTTP_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SALTS_CANDIDATE_SHA: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
@@ -75,15 +71,11 @@ jobs:
           test "$(git -C _salts_candidate rev-parse HEAD)" = "$SALTS_CANDIDATE_SHA"
           test -f _salts_candidate/component-runtime/include/salts/service_host.h
           test -f _salts_candidate/component-runtime/src/service_host.c
-          case "${RUNNER_ARCH}" in
-            ARM64) rid=macos-arm64; triplet=arm64-osx ;;
-            X64) rid=macos-x64; triplet=x64-osx ;;
-            *) echo "unexpected macOS architecture: $RUNNER_ARCH" >&2; exit 1 ;;
-          esac
-          # Fixed RID matrix: never consume an architecture's other SDK/cache.
-          test "$RUNNER_ARCH" = "${{ matrix.arch }}"
-          test "$rid" = "${{ matrix.rid }}"
-          test "$triplet" = "${{ matrix.triplet }}"
+          # Official Salts Native 2.3.0 six-RID package ships macos-arm64.
+          # Enforce Apple Silicon rather than invent an Intel SDK fallback.
+          test "$RUNNER_ARCH" = ARM64
+          rid=macos-arm64
+          triplet=arm64-osx
           test -n "${VCPKG_ROOT:-}"
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
           case "${VCPKG_BINARY_SOURCES:-}" in *nugetconfig*) ;;
