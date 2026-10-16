@@ -1,0 +1,100 @@
+name: CHttp ServiceHostCandidate scoped HTTP
+
+on:
+  push:
+    branches: [feature/chttp-servicehost-candidate-224]
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-servicehost-candidate.yml"
+      - "app/**"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-servicehost-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scoped-http:
+    name: HTTP + ServiceHost candidate (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { mode: release, asan: "OFF", ubsan: "OFF" }
+          - { mode: asan-ubsan, asan: "ON", ubsan: "ON" }
+    env:
+      CHTTP_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SALTS_CANDIDATE_SHA: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+    steps:
+      - name: Checkout exact CHttp migration head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHTTP_SOURCE_SHA }}
+          persist-credentials: false
+      - name: Checkout original Salts-owned candidate runtime
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: 540e1da7c2448f15f04aeaaee1106f73a2fbcc7e
+          path: _salts_candidate
+          persist-credentials: false
+      - name: Verify pinned upstream code and candidate-only surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_SOURCE_SHA"
+          test "$(git -C _salts_candidate rev-parse HEAD)" = "$SALTS_CANDIDATE_SHA"
+          test -f _salts_candidate/component-runtime/include/salts/service_host.h
+          test -f _salts_candidate/component-runtime/include/salts/configurator.h
+          test -f _salts_candidate/component-runtime/src/service_host.c
+          test -f _salts_candidate/component-runtime/src/configurator.c
+          test ! -e app/include/chttp_app/service_host_candidate.h
+      - name: Restore exact published SDK graph and toolchain
+        uses: ./.github/actions/setup-salts-sdk
+      - name: Configure exact-source HTTP consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset ci-linux-release-user \
+            -B "build/servicehost-${{ matrix.mode }}" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCHTTP_ENABLE_SERVICE_HOST_CANDIDATE=ON \
+            -DCHTTP_SALTS_CANDIDATE_SOURCE_DIR="$GITHUB_WORKSPACE/_salts_candidate" \
+            -DENABLE_SANITIZER_ADDRESS=${{ matrix.asan }} \
+            -DENABLE_SANITIZER_UNDEFINED=${{ matrix.ubsan }} \
+            -DENABLE_SANITIZER_THREAD=OFF \
+            -DENABLE_SANITIZER_LEAK=OFF \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+      - name: Build actual Provider DSOs and HTTP consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build "build/servicehost-${{ matrix.mode }}" --parallel 2 \
+            --target chttp_service_http_test \
+                     chttp_service_generated_cflow_http_test
+      - name: Execute real HTTP / generation / lifecycle regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "build/servicehost-${{ matrix.mode }}" \
+            -R '^(chttp_service_http_test|chttp_service_hot_path_boundary_contract|chttp_service_lifecycle_contract|chttp_service_generated_cflow_http_test)$' \
+            --output-on-failure --no-tests=error --timeout 180
+      - name: Require opt-out production build surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
