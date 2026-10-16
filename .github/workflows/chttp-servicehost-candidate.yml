@@ -71,6 +71,7 @@ jobs:
           cmake --preset ci-linux-release-user \
             -B "build/servicehost-${{ matrix.mode }}" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
             -DCHTTP_ENABLE_SERVICE_HOST_CANDIDATE=ON \
@@ -80,6 +81,20 @@ jobs:
             -DENABLE_SANITIZER_THREAD=${{ matrix.tsan }} \
             -DENABLE_SANITIZER_LEAK=OFF \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+      - name: Verify actual TSan compiled source commands
+        if: matrix.tsan == 'ON'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 app/tests/service/verify_servicehost_tsan_compiles.py "build/servicehost-tsan/compile_commands.json"
+      - name: Reject any candidate SDK install target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cmake --build "build/servicehost-${{ matrix.mode }}" --target install >/dev/null 2>&1; then
+            echo "Candidate build unexpectedly exposes an install/export target" >&2
+            exit 1
+          fi
       - name: Build actual Provider DSOs and HTTP consumer
         shell: bash
         run: |
