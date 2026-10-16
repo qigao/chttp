@@ -2319,6 +2319,48 @@ reject:
   cmeta_mutex_unlock(&state->lock);
   return result;
 }
+
+/* Caller-driven bounded slot reuse. Only a confirmed DRAINED generation may
+ * retire its immutable adapter: all ServiceHost Scopes have settled, so no
+ * request can still be executing its Provider code. The finalizer's count is
+ * checked independently because it is decremented after Scope release. */
+int chttp_service_host_switch_retire_candidate(
+    chttp_service *service, const salts_service_host_generation *generation) {
+  chttp_service_impl *impl;
+  chttp_service_host_switch_state *state;
+  if (service == NULL || service->impl == NULL || generation == NULL ||
+      generation->id == 0u)
+    return SALTS_EINVAL;
+  impl = (chttp_service_impl *)service->impl;
+  if (impl->method_count != 1u || impl->methods[0].host_switch == NULL)
+    return SALTS_EINVAL;
+  if (generation->state != SALTS_SERVICE_HOST_GENERATION_DRAINED ||
+      generation->runtime_owner != NULL || generation->active_scopes != 0u)
+    return SALTS_EBUSY;
+
+  state = impl->methods[0].host_switch;
+  cmeta_mutex_lock(&state->lock);
+  for (size_t i = 0u; i < 2u; ++i) {
+    chttp_service_host_switch_slot *slot = &state->slots[i];
+    if (slot->generation_id != generation->id)
+      continue;
+    if (!slot->ready || slot->reserved ||
+        atomic_load_explicit(
+            &slot->method.deferred_in_flight, memory_order_acquire) != 0u) {
+      cmeta_mutex_unlock(&state->lock);
+      return SALTS_EBUSY;
+    }
+    /* The old Plugin DSO is no longer pinned. Never invoke native cleanup
+     * through its stale borrowed descriptors: no value remains owned here. */
+    memset(&slot->method, 0, sizeof(slot->method));
+    slot->generation_id = 0u;
+    slot->ready = false;
+    cmeta_mutex_unlock(&state->lock);
+    return SALTS_OK;
+  }
+  cmeta_mutex_unlock(&state->lock);
+  return SALTS_EINVAL;
+}
 #endif
 
 int chttp_service_destroy(chttp_service *service) {
