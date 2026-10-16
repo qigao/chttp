@@ -20,6 +20,12 @@
 #ifndef CHTTP_SERVICE_HOST_TEST_MULTIPLEX
 #define CHTTP_SERVICE_HOST_TEST_MULTIPLEX 0
 #endif
+#ifndef CHTTP_SERVICE_HOST_TEST_WINDOW
+#define CHTTP_SERVICE_HOST_TEST_WINDOW 0
+#endif
+#if CHTTP_SERVICE_HOST_TEST_WINDOW && !CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+#error "Stream-window conformance needs the multiplex test"
+#endif
 #if CHTTP_SERVICE_HOST_TEST_MULTIPLEX && !CHTTP_SERVICE_HOST_TEST_H2
 #error "The multiplex conformance requires explicit h2c"
 #endif
@@ -533,6 +539,18 @@ int main(void) {
   };
   size_t polled = 0u;
   REQUIRE(chttp_async_client_init(&async, &async_config) == SALTS_OK);
+#if CHTTP_SERVICE_HOST_TEST_WINDOW
+  /* A stream window of exactly one byte makes every 2/3-byte generated
+   * MethodPlan response require peer WINDOW_UPDATE progression. Keep the
+   * connection window at the RFC default, isolating stream credit and
+   * ensuring a blocked/canceled stream cannot steal sibling credit. */
+  chttp_h2_receive_window_policy flow =
+      (chttp_h2_receive_window_policy)CHTTP_H2_RECEIVE_WINDOW_POLICY_INIT;
+  flow.stream_window = 1u;
+  flow.connection_window = 65535u;
+  REQUIRE(chttp_async_client_set_h2_receive_window_policy(
+          &async, &flow) == SALTS_OK);
+#endif
   /* Successful warmup proves the single physical H2 connection is READY
    * and has exchanged SETTINGS before the concurrent stream test begins. */
   REQUIRE(chttp_async_client_submit(&async, &opts, &warm_req) == SALTS_OK);
@@ -664,9 +682,11 @@ int main(void) {
   REQUIRE(cmeta_plugin_registry_destroy(&registry) == CMETA_PLUGIN_OK);
   data_bind_http_method_plan_free(method_plan);
   data_bind_free(contract);
-  puts(CHTTP_SERVICE_HOST_TEST_MULTIPLEX
-      ? "Same H2 connection: N+2 canceled stream, N+3 siblings unaffected, FULL/retire PASS"
-      : CHTTP_SERVICE_HOST_TEST_H2
+  puts(CHTTP_SERVICE_HOST_TEST_WINDOW
+      ? "H2 stream receive window=1: DATA/WINDOW_UPDATE, CANCEL sibling and bounded FULL PASS"
+      : CHTTP_SERVICE_HOST_TEST_MULTIPLEX
+        ? "Same H2 connection: N+2 canceled stream, N+3 siblings unaffected, FULL/retire PASS"
+        : CHTTP_SERVICE_HOST_TEST_H2
         ? "Same H2c MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS"
         : "Same H1 MethodPlan+Listener: N(11), N+1(111), N+2(11), close 503 PASS");
   return 0;
