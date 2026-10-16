@@ -110,24 +110,39 @@ Service source, both dedicated HTTP tests, both Provider DSO translation units,
 and the **original** Salts Configurator/ServiceHost runtime source files.
 Each mode also verifies that the candidate has **no install target**.
 
-These are Linux candidate-consumer checks. They **do not** establish a fully
-source-instrumented Salts Plugin/CMeta/Platform/CNet binary closure: some
-upstream objects still come from the exact published SDK.
+Those consumer-mode TSan checks use published SDK dependencies. A separate
+**complete first-party source-instrumented** qualification at CHttp HEAD
+`b355a31b38181facca839a1d37e3181bdbb278c4` passed:
+
+[CHttp full-source TSan CI #38844442450](https://github.com/qigao/chttp/actions/runs/38844442450)
+**COMPLETED / SUCCESS**. The original Salts source was fixed to
+`06ecf2179691e197b108d39ebd12dc994148eada`, SaltsUtils to
+`234c4a73bcefc455d48b3550ec2142d7ff1c3f5a`, and ServiceHostCandidate
+independently to `540e1da7c2448f15f04aeaaee1106f73a2fbcc7e`.
+
+The compilation database recorded **214 Salts, 240 SaltsUtils, and 225
+CHttp first-party compilation commands (679 total)** with
+`missing_tsan=0`. Exact ServiceHost/Configurator, Provider DSO and
+H2 one-byte window translation units were verified. The consumer linked
+`libtsan` and the *source-installed* Salts/SaltsUtils roots.
+All **9/9 focused HTTP conformance CTests** passed three times under
+unsuppressed TSan (27 executions). No public SDK or runtime was switched.
+
+This qualifies the Linux first-party source closure **exercised by these
+tests**, not every third-party dependency, platform or possible race.
 
 ## Open before public or stable migration
 
-1. Qualify the **full** first-party instrumented source/DSO closure under
-   TSan, with deterministic N→N+1 cancel/drain races.
-2. Qualify Linux/Windows/macOS native + installed SDK consumers and verify
+1. Qualify Linux/Windows/macOS native + installed SDK consumers and verify
    the deliberate future ServiceHost/Configurator public ABI/export cutover.
    Windows v145 vcpkg binary cache misses are independently tracked in
    [CHttp #250](https://github.com/qigao/chttp/issues/250).
-3. Extend the H2 Stream cancellation/flow-control evidence to **connection
+2. Extend the H2 Stream cancellation/flow-control evidence to **connection
    window exhaustion, sustained large response bodies and multiple
    concurrent streams with real H2 RST_STREAM/WINDOW_UPDATE races**.
    The present one-byte Stream receive-credit case covers short typed outputs,
    not large-body throughput or network-level saturation.
-4. Continue multi-Owner extended sessions and resource pressure/load soak
+3. Continue multi-Owner extended sessions and resource pressure/load soak
    beyond the deterministic two-stream capacity exercise.
 
 **Draft / DO NOT MERGE / DO NOT PUBLISH.** No default production parser,
