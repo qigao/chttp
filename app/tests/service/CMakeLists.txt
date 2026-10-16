@@ -213,10 +213,12 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     GENERATED_CHTTP_SERVICE_HOST_SECOND_PATH="$<TARGET_FILE:chttp_service_host_provider_second>")
   add_dependencies(chttp_service_http_test
     chttp_service_host_provider_fixture chttp_service_host_provider_second)
-  set_tests_properties(chttp_service_http_test PROPERTIES TIMEOUT 180)
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
+if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+  set_tests_properties(chttp_service_http_test PROPERTIES TIMEOUT 180)
+endif()
 
 set_target_properties(chttp_service_http_test PROPERTIES
   FOLDER "app/tests/service"
