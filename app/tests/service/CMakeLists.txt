@@ -424,6 +424,10 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/private_sdk/stage.cmake")
   set_tests_properties(chttp_service_host_staged_sdk_consumer
     PROPERTIES TIMEOUT 120)
+  # The installed strict CMeta SDK introduced this validator after the
+  # published Salts 2.3 CMeta ABI. Do not compile/link strict helper calls
+  # against the old published interface in the private-stage comparison.
+  if(CHTTP_USE_INSTALLED_SERVICE_HOST_ABI_PROBE)
   # Admission must use the exact reflected cross-DSO FR1 method ABI:
   # no legacy R1 inference for MethodPlan operations in the strict Host.
   foreach(_chttp_fr_lang IN ITEMS c cpp)
@@ -451,6 +455,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     set_target_properties(${_chttp_fr_target} PROPERTIES
       FOLDER "app/tests/service")
   endforeach()
+  endif()
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
