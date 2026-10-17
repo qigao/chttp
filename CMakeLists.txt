@@ -66,23 +66,48 @@ add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
 add_subdirectory(http_client)
 add_subdirectory(http_server)
-# Exact-source Salts #1155 test-only runtime: never selected in normal builds.
+# Strictly private CHttp HTTP MethodPlan qualification. The installed path
+# never imports the unpublished Candidate archives or manufactures an alias.
 if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   if(NOT BUILD_TESTS OR NOT BUILD_TESTING)
-    message(FATAL_ERROR "ServiceHostCandidate requires active CTest")
+    message(FATAL_ERROR "ServiceHost probe requires active CTest")
   endif()
-  if(NOT DEFINED CHTTP_SALTS_CANDIDATE_SOURCE_DIR OR
-     NOT EXISTS "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime/CMakeLists.txt")
-    message(FATAL_ERROR "CHTTP_SALTS_CANDIDATE_SOURCE_DIR must point to pinned Salts #1155 sources")
+  if(CHTTP_USE_INSTALLED_SERVICE_HOST_ABI_PROBE)
+    if(DEFINED CHTTP_SALTS_CANDIDATE_SOURCE_DIR AND
+       NOT "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}" STREQUAL "")
+      message(FATAL_ERROR
+        "Installed ServiceHost probe must not accept a private candidate source tree")
+    endif()
+    if(NOT TARGET Salts::ServiceHost OR NOT TARGET Salts::Configurator OR
+       TARGET Salts::ServiceHostCandidate OR TARGET Salts::ConfiguratorCandidate)
+      message(FATAL_ERROR
+        "Installed probe requires only the exact Salts::ServiceHost and Salts::Configurator SDK exports")
+    endif()
+    set(_chttp_host_abi_header
+        "${SALTS_ROOT_PATH}/include/salts/component_runtime_abi.h")
+    if(NOT EXISTS "${_chttp_host_abi_header}")
+      message(FATAL_ERROR "Installed Salts SDK lacks exact ServiceHost ABI header")
+    endif()
+    file(READ "${_chttp_host_abi_header}" _chttp_host_abi_text)
+    if(NOT _chttp_host_abi_text MATCHES
+       "SALTS_COMPONENT_RUNTIME_ABI_VERSION 0x00010000u")
+      message(FATAL_ERROR "Installed ServiceHost experimental epoch is not v1.0")
+    endif()
+    set(CHTTP_SERVICE_HOST_LINK_TARGET Salts::ServiceHost)
+  else()
+    if(NOT DEFINED CHTTP_SALTS_CANDIDATE_SOURCE_DIR OR
+       NOT EXISTS "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime/CMakeLists.txt")
+      message(FATAL_ERROR
+        "Private candidate requires pinned CHTTP_SALTS_CANDIDATE_SOURCE_DIR")
+    endif()
+    set(_chttp_saved_build_tests "${BUILD_TESTS}")
+    set(BUILD_TESTS OFF)
+    add_subdirectory(
+      "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime"
+      "${CMAKE_CURRENT_BINARY_DIR}/salts-service-host-candidate")
+    set(BUILD_TESTS "${_chttp_saved_build_tests}")
+    set(CHTTP_SERVICE_HOST_LINK_TARGET Salts::ServiceHostCandidate)
   endif()
-  # Reuse the original Salts candidate build graph and source, but its standalone
-  # test helper exists only in Salts; CHttp provides real HTTP consumer CTests.
-  set(_chttp_saved_build_tests "${BUILD_TESTS}")
-  set(BUILD_TESTS OFF)
-  add_subdirectory(
-    "${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime"
-    "${CMAKE_CURRENT_BINARY_DIR}/salts-service-host-candidate")
-  set(BUILD_TESTS "${_chttp_saved_build_tests}")
 endif()
 add_subdirectory(app)
 add_subdirectory(s3)
