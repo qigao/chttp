@@ -47,14 +47,6 @@ jobs:
           ref: a6d1f7c6b81c72dfcdcab9a5ea8f72244ab3079a
           path: build/servicehost-installed/sources/salts
           persist-credentials: false
-      - name: Checkout exact downstream SaltsUtils source
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          # The released Crypto/Unicode/IDL ABI is selected by immutable tag.
-          ref: v4.3.0-rc.11
-          path: build/servicehost-installed/sources/salts-utils
-          persist-credentials: false
       - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@fafb1efe5ac2440bfd7a08e493988d0459d89e51
         with:
           mode: read
@@ -79,10 +71,9 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           test "$(git -C build/servicehost-installed/sources/salts rev-parse HEAD)" = "$EXPECTED_SALTS"
-          test "$(git -C build/servicehost-installed/sources/salts-utils rev-parse HEAD)" = "$EXPECTED_SU"
-          test "$(git -C build/servicehost-installed/sources/salts-utils rev-parse "refs/tags/$EXPECTED_SU_TAG^{commit}")" = "$EXPECTED_SU"
-          grep -Fq 'typedef enum salts_crypto_hash' build/servicehost-installed/sources/salts-utils/crypto/include/salts/crypto.h
-          grep -Fq 'typedef struct salts_crypto_key' build/servicehost-installed/sources/salts-utils/crypto/include/salts/crypto.h
+          test "$EXPECTED_SU_TAG" = "v4.3.0-rc.11"
+          # The NuGet graph below must select exactly this released tag,
+          # without restoring an alternate Salts.Native runtime.
           test -f build/servicehost-installed/sources/salts/component-runtime/src/service_host.c
           grep -Fq 'X(I, FR1, bool, get_operation' app/src/chttp_service_host_component.h
           test ! -e app/include/chttp_app/service_host_candidate.h
@@ -112,32 +103,33 @@ jobs:
           grep -Fq 'Salts::Configurator' "$prefix/lib/cmake/Salts/SaltsTargets.cmake"
           ! grep -Eq 'Salts::(ServiceHostCandidate|ConfiguratorCandidate)' \
             "$prefix/lib/cmake/Salts/SaltsTargets.cmake"
-      - name: Install exact SaltsUtils IDL/MethodPlan source
+      - name: Restore released SaltsUtils.Native v4.3.0-rc.11 for JWT + IDL
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
-          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
-          root="$RUNNER_TEMP/chttp-installed-servicehost/salts-utils"
-          echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
-          cmake --preset ci-linux-release-user \
-            -S "$GITHUB_WORKSPACE/build/servicehost-installed/sources/salts-utils" \
-            -B build/servicehost-installed/build-utils \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$root" \
-            -DCMAKE_PREFIX_PATH="$SALTS_ROOT" \
-            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF
-          cmake --build build/servicehost-installed/build-utils --parallel 2
-          cmake --install build/servicehost-installed/build-utils
-          test -f "$root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
-          grep -F "Salts_DIR:PATH=$SALTS_ROOT" \
-            build/servicehost-installed/build-utils/CMakeCache.txt
+          # The native restore contract explicitly omits Salts.Native when
+          # SALTS_CANDIDATE_ROOT is set. No second Core/Unicode/Plugin Owner.
+          strict_root="$RUNNER_TEMP/chttp-installed-servicehost/salts"
+          SALTS_CANDIDATE_ROOT="$strict_root" \
+            bash cmake/ci/restore-native-sdks.sh linux-x64 false
+          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/linux-x64"
+          test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$utils_root/include/salts/crypto.h"
+          grep -Fq 'typedef enum salts_crypto_hash' "$utils_root/include/salts/crypto.h"
+          grep -Fq 'typedef struct salts_crypto_key' "$utils_root/include/salts/crypto.h"
+          test -f "$strict_root/include/salts/component_runtime_abi.h"
+          grep -Fq 'Salts::ServiceHost' "$strict_root/lib/cmake/Salts/SaltsTargets.cmake"
           if grep -E 'add_library\(Salts::Unicode|add_executable\(Salts::Unicode' \
-               "$root/lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"; then
-            echo "A second SaltsUtils-owned Unicode target was unexpectedly exported" >&2
+               "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"; then
+            echo "Published SaltsUtils must not shadow strict Salts::Unicode" >&2
             exit 1
           fi
-          # The one canonical owner is supplied by the exact installed Salts.
-          grep -Fq 'Salts::Unicode' "$SALTS_ROOT/lib/cmake/Salts/SaltsTargets.cmake"
+          grep -Fq 'Salts::Unicode' "$strict_root/lib/cmake/Salts/SaltsTargets.cmake"
+          printf 'saltsutils_package=%s\nsaltsutils_tag=%s\n' \
+            "SaltsUtils.Native/4.3.0-rc.11" "$EXPECTED_SU_TAG" \
+            | tee -a build/servicehost-installed/provenance.txt
       - name: Configure CHttp against genuine imported ServiceHost ABI
         shell: bash
         run: |
