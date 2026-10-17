@@ -54,7 +54,36 @@ static inline bool chttp_service_component_operation_valid(
              operation->native.function, operation->execution.function);
 }
 
-#define CHTTP_SERVICE_OPERATION_PROVIDER_METHODS(X, I)   X(I, R1, bool, get_operation,     chttp_service_component_operation *, out)
+/* This is a genuinely borrowed cross-DSO Interface, not an opaque R1
+ * reflection shortcut. The object and pointer have a stable native identity
+ * independent of the provider's address or module generation. */
+static const cmeta_type_identity chttp_service_component_operation_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.service.component.operation.v1");
+static const cmeta_type_identity chttp_service_component_operation_pointer_identity =
+    CMETA_TYPE_ID_POINTER_INIT(&chttp_service_component_operation_identity);
+static const cmeta_type_desc chttp_service_component_operation_type = {
+    "chttp_service_component_operation",
+    sizeof(chttp_service_component_operation),
+    CMETA_ALIGNOF(chttp_service_component_operation),
+    CMETA_T_OBJECT, NULL, NULL,
+    &chttp_service_component_operation_identity
+};
+static const cmeta_type_desc chttp_service_component_operation_pointer_type = {
+    "chttp_service_component_operation *",
+    sizeof(chttp_service_component_operation *),
+    CMETA_ALIGNOF(chttp_service_component_operation *),
+    CMETA_T_POINTER, &chttp_service_component_operation_type, NULL,
+    &chttp_service_component_operation_pointer_identity
+};
+/* The caller owns the output record. The Provider borrows the output pointer
+ * for the duration of the synchronous call; it never retains or frees it.
+ * CMeta must reject this interface if return or pointer metadata is erased. */
+#define CHTTP_SERVICE_OPERATION_PROVIDER_METHODS(X, I) \
+  X(I, FR1, bool, get_operation, value, &cmeta_type_bool, CMETA_ABI_SCALAR, \
+    CMETA_RESULT_VALUE, \
+    (chttp_service_component_operation *, out, \
+     CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, \
+     &chttp_service_component_operation_pointer_type, CMETA_ABI_OBJECT_POINTER))
 
 CMETA_INTERFACE(
     chttp_service_operation_provider,
