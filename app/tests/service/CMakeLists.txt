@@ -204,7 +204,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   target_compile_definitions(chttp_service_host_provider_second PRIVATE
     CHTTP_COMPONENT_PLUGIN_ID="test.chttp.servicehost-provider.2")
   target_link_libraries(chttp_service_http_test PRIVATE
-    Salts::ServiceHostCandidate)
+    ${CHTTP_SERVICE_HOST_LINK_TARGET})
   target_include_directories(chttp_service_http_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src")
   target_compile_definitions(chttp_service_http_test PRIVATE
@@ -220,7 +220,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_single_listener_test
     chttp_service_host_single_listener_test.c)
   target_link_libraries(chttp_service_host_single_listener_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     Salts::CFlow Salts::Platform)
   target_include_directories(chttp_service_host_single_listener_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -244,7 +244,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_methodplan_switch_test
     chttp_service_host_methodplan_switch_test.c)
   target_link_libraries(chttp_service_host_methodplan_switch_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     chttp_service_plugin_fixture_native)
   target_include_directories(chttp_service_host_methodplan_switch_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -269,7 +269,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_methodplan_h2c_test
     chttp_service_host_methodplan_switch_test.c)
   target_link_libraries(chttp_service_host_methodplan_h2c_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     chttp_service_plugin_fixture_native)
   target_include_directories(chttp_service_host_methodplan_h2c_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -296,7 +296,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_h2_multiplex_test
     chttp_service_host_methodplan_switch_test.c)
   target_link_libraries(chttp_service_host_h2_multiplex_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     chttp_service_plugin_fixture_native)
   target_include_directories(chttp_service_host_h2_multiplex_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -324,7 +324,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_h2_stream_window_test
     chttp_service_host_methodplan_switch_test.c)
   target_link_libraries(chttp_service_host_h2_stream_window_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     chttp_service_plugin_fixture_native)
   target_include_directories(chttp_service_host_h2_stream_window_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -353,7 +353,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_h2_connection_window_test
     chttp_service_host_h2_connection_window_test.c)
   target_link_libraries(chttp_service_host_h2_connection_window_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     chttp_service_plugin_fixture_native)
   target_include_directories(chttp_service_host_h2_connection_window_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -378,7 +378,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   add_executable(chttp_service_host_h2_connection_cancel_test
     chttp_service_host_h2_connection_window_test.c)
   target_link_libraries(chttp_service_host_h2_connection_cancel_test PRIVATE
-    CHttp::App CHttp::Client Salts::ServiceHostCandidate
+    CHttp::App CHttp::Client ${CHTTP_SERVICE_HOST_LINK_TARGET}
     chttp_service_plugin_fixture_native)
   target_include_directories(chttp_service_host_h2_connection_cancel_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src"
@@ -399,6 +399,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   set_tests_properties(chttp_service_host_h2_connection_cancel_test
     PROPERTIES TIMEOUT 120)
 
+  if(NOT CHTTP_USE_INSTALLED_SERVICE_HOST_ABI_PROBE)
   # Private staging gate: compile original Salts candidate archives once, copy
   # only their built files/headers to a throwaway root, then configure two
   # entirely independent C11/C++17 consumers against the *installed* Salts
@@ -424,6 +425,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/private_sdk/stage.cmake")
   set_tests_properties(chttp_service_host_staged_sdk_consumer
     PROPERTIES TIMEOUT 120)
+  endif()
   # The installed strict CMeta SDK introduced this validator after the
   # published Salts 2.3 CMeta ABI. Do not compile/link strict helper calls
   # against the old published interface in the private-stage comparison.
