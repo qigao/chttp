@@ -135,7 +135,9 @@ jobs:
         run: |
           set -euo pipefail
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
-          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts-utils"
+          : "${SALTS_UTILS_ROOT:?NuGet-restored SaltsUtils.Native must be set}"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
           export DATABIND_ROOT="$SALTS_UTILS_ROOT"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           cmake --preset ci-linux-release-user \
@@ -171,7 +173,9 @@ jobs:
         run: |
           set -euo pipefail
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
-          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts-utils"
+          : "${SALTS_UTILS_ROOT:?NuGet-restored SaltsUtils.Native must be set}"
+          test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           ctest --test-dir build/servicehost-installed/build-chttp \
             -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_host_strict_fr_abi_(c|cpp))$' \
