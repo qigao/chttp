@@ -424,6 +424,33 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
       -P "${CMAKE_CURRENT_SOURCE_DIR}/private_sdk/stage.cmake")
   set_tests_properties(chttp_service_host_staged_sdk_consumer
     PROPERTIES TIMEOUT 120)
+  # Admission must use the exact reflected cross-DSO FR1 method ABI:
+  # no legacy R1 inference for MethodPlan operations in the strict Host.
+  foreach(_chttp_fr_lang IN ITEMS c cpp)
+    if(_chttp_fr_lang STREQUAL "c")
+      set(_chttp_fr_target chttp_service_host_strict_fr_abi_c)
+      add_executable(${_chttp_fr_target}
+        chttp_service_host_strict_fr_abi_test.c)
+      set_target_properties(${_chttp_fr_target} PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    else()
+      set(_chttp_fr_target chttp_service_host_strict_fr_abi_cpp)
+      add_executable(${_chttp_fr_target}
+        chttp_service_host_strict_fr_abi_test.cpp)
+      set_target_properties(${_chttp_fr_target} PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+      if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+        target_compile_options(${_chttp_fr_target} PRIVATE -pedantic-errors)
+      endif()
+    endif()
+    target_include_directories(${_chttp_fr_target} PRIVATE
+      "${PROJECT_SOURCE_DIR}/app/src")
+    target_link_libraries(${_chttp_fr_target} PRIVATE
+      Salts::CMeta Salts::DataBind)
+    add_test(NAME ${_chttp_fr_target} COMMAND ${_chttp_fr_target})
+    set_target_properties(${_chttp_fr_target} PROPERTIES
+      FOLDER "app/tests/service")
+  endforeach()
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
