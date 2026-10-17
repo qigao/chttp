@@ -1,6 +1,9 @@
 name: CHttp tagged canonical ServiceHost FR1 HTTP conformance
 
 'on':
+  push:
+    branches:
+      - review/chttp-tagged-canonical-servicehost
   pull_request:
     paths:
       - "CMakeLists.txt"
