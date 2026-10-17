@@ -2,7 +2,10 @@ name: CHttp ServiceHostCandidate scoped HTTP
 
 on:
   push:
-    branches: [feature/chttp-servicehost-candidate-224]
+    branches:
+      - feature/chttp-servicehost-candidate-224
+      - review/chttp-strict-servicehost-fr1
+      - review/chttp-installed-servicehost-methodplan
   pull_request:
     paths:
       - ".github/workflows/chttp-servicehost-candidate.yml"
