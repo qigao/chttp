@@ -26,7 +26,8 @@ jobs:
     env:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha }}
       EXPECTED_SALTS: a6d1f7c6b81c72dfcdcab9a5ea8f72244ab3079a
-      EXPECTED_SU: 5073b15fbb63a87bcc9fc4272b07766382a359e3
+      EXPECTED_SU: fbb5f3ee19589836ced0f3b98414e71e6dcc1388
+      EXPECTED_SU_TAG: v4.3.0-rc.11
       QIGAO_SDK_RID: linux-x64
       QIGAO_TARGET_TRIPLET: x64-linux
       QIGAO_HOST_TRIPLET: x64-linux
@@ -50,7 +51,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: 5073b15fbb63a87bcc9fc4272b07766382a359e3
+          # The released Crypto/Unicode/IDL ABI is selected by immutable tag.
+          ref: v4.3.0-rc.11
           path: build/servicehost-installed/sources/salts-utils
           persist-credentials: false
       - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@fafb1efe5ac2440bfd7a08e493988d0459d89e51
@@ -78,12 +80,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
           test "$(git -C build/servicehost-installed/sources/salts rev-parse HEAD)" = "$EXPECTED_SALTS"
           test "$(git -C build/servicehost-installed/sources/salts-utils rev-parse HEAD)" = "$EXPECTED_SU"
+          test "$(git -C build/servicehost-installed/sources/salts-utils rev-parse "refs/tags/$EXPECTED_SU_TAG^{commit}")" = "$EXPECTED_SU"
+          grep -Fq 'typedef enum salts_crypto_hash' build/servicehost-installed/sources/salts-utils/crypto/include/salts/crypto.h
+          grep -Fq 'typedef struct salts_crypto_key' build/servicehost-installed/sources/salts-utils/crypto/include/salts/crypto.h
           test -f build/servicehost-installed/sources/salts/component-runtime/src/service_host.c
           grep -Fq 'X(I, FR1, bool, get_operation' app/src/chttp_service_host_component.h
           test ! -e app/include/chttp_app/service_host_candidate.h
           mkdir -p build/servicehost-installed
-          printf 'salts=%s\nsaltsutils=%s\nchttp=%s\npublic_sdk=false\ninstalled_probe_only=true\n' \
-            "$EXPECTED_SALTS" "$EXPECTED_SU" "$EXPECTED_CHTTP" \
+          printf 'salts=%s\nsaltsutils=%s\nsaltsutils_tag=%s\nchttp=%s\npublic_sdk=false\ninstalled_probe_only=true\n' \
+            "$EXPECTED_SALTS" "$EXPECTED_SU" "$EXPECTED_SU_TAG" "$EXPECTED_CHTTP" \
             | tee build/servicehost-installed/provenance.txt
       - name: Install immutable Salts with strict Configurator/ServiceHost
         shell: bash
@@ -120,7 +125,6 @@ jobs:
             -B build/servicehost-installed/build-utils \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$root" \
             -DCMAKE_PREFIX_PATH="$SALTS_ROOT" \
-            -DDATABIND_ENABLE_COMPONENT_PROVIDER_CANDIDATE_DSO=ON \
             -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF
           cmake --build build/servicehost-installed/build-utils --parallel 2
           cmake --install build/servicehost-installed/build-utils
