@@ -1,6 +1,6 @@
 #include <chttp_app/service.h>
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
-#include "chttp_service_host_candidate.h"
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
+#include "chttp_service_host_integration.h"
 #include <salts/thread.h>
 #endif
 
@@ -21,7 +21,7 @@
 #include <string.h>
 
 typedef struct chttp_service_impl chttp_service_impl;
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
 typedef struct chttp_service_host_switch_state chttp_service_host_switch_state;
 #endif
 
@@ -41,7 +41,7 @@ typedef struct chttp_service_method_record {
   DataBindPluginOperationBinding plugin_operation;
   DataBindServiceNativeBinding plugin_native;
   DataBindNativeExecution plugin_execution;
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   /* Stable method slot owns the noncopyable Scope until deferred finalization. */
   salts_service_host_scope host_scope;
   chttp_service_component_operation host_operation;
@@ -57,7 +57,7 @@ typedef struct chttp_service_method_record {
   _Atomic size_t deferred_in_flight;
 } chttp_service_method_record;
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
 typedef struct chttp_service_host_switch_slot {
   chttp_service_method_record method;
   uint64_t generation_id;
@@ -104,7 +104,7 @@ typedef struct chttp_service_invocation {
   chttp_server_deferred deferred;
   int frame_live;
   int deferred_method_held;
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   /* Heap invocation address stays stable until executor finalization. A Scope
    * pins exactly the chosen generation through native teardown/terminal. */
   salts_service_host_scope host_request_scope;
@@ -1173,7 +1173,7 @@ static int chttp_service_plugin_resolve(
   return SALTS_OK;
 }
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
 /* Bind the exact native adapter once at mount; no per-request service lookup.
  * Scope/Provider lifetime is retained by the address-stable method record. */
 static int chttp_service_host_candidate_resolve(
@@ -1212,7 +1212,7 @@ static void chttp_service_method_release(
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
   cmeta_cleanup_run(&record->plugin_cleanup);
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   if (record->host_switch != NULL) {
     chttp_service_host_switch_state *state = record->host_switch;
     cmeta_mutex_destroy(&state->lock);
@@ -1260,7 +1260,7 @@ static void chttp_service_invocation_release(
   free(invocation->error_storage);
   free(invocation->response_storage);
   free(invocation->request_storage);
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   /* Native request/error/response storage must be restored before this Scope
    * can permit draining the Provider DSO. Failure is an ownership violation,
    * not a silently ignored optional cleanup. */
@@ -1298,7 +1298,7 @@ static int chttp_service_invocation_init(
     return SALTS_EINVAL;
 
   service = record->owner;
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   /* The candidate may already hold a live Scope here. Never reset or memcpy
    * that address-bound owner. All callers pass zero-initialized storage. */
   if (!invocation->host_request_scope.live)
@@ -1606,7 +1606,7 @@ static int chttp_service_http_execute_deferred(
   /* Normal, non-switch Service behavior is checked before allocation exactly
    * as in the released CHttp path. The switch record has no selected native
    * binding until its per-request ServiceHost Scope is acquired. */
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   if (record->host_switch == NULL &&
 #else
   if (
@@ -1627,7 +1627,7 @@ static int chttp_service_http_execute_deferred(
       (chttp_service_invocation *)calloc(1u, sizeof(*invocation));
   if (invocation == NULL) return SALTS_ENOMEM;
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   if (record->host_switch != NULL) {
     chttp_service_host_switch_state *state = record->host_switch;
     uint64_t id;
@@ -1904,7 +1904,7 @@ int chttp_service_init(
 static int chttp_service_mount_http_internal(
     chttp_service *service, chttp_server *server,
     const chttp_service_http_mount *mount
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
     , salts_service_host_runtime *candidate_runtime,
     const char *candidate_component_id
 #endif
@@ -1933,7 +1933,7 @@ static int chttp_service_mount_http_internal(
 
   plugin_mode =
       mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   if (candidate_runtime == NULL && candidate_component_id != NULL)
     return SALTS_EINVAL;
   if (candidate_runtime != NULL &&
@@ -1965,7 +1965,7 @@ static int chttp_service_mount_http_internal(
         mount->plugin_export_id[0] == '\0')
       return SALTS_EINVAL;
   }
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   else if (candidate_runtime == NULL)
 #else
   else
@@ -2007,7 +2007,7 @@ static int chttp_service_mount_http_internal(
   record->execution_mode = mount->execution_mode;
   record->executor = mount->executor;
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
   if (candidate_runtime != NULL) {
     status = chttp_service_host_candidate_resolve(
         record, candidate_runtime, candidate_component_id);
@@ -2111,13 +2111,13 @@ int chttp_service_mount_http(
     chttp_service *service, chttp_server *server,
     const chttp_service_http_mount *mount) {
   return chttp_service_mount_http_internal(service, server, mount
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
       , NULL, NULL
 #endif
       );
 }
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
-int chttp_service_mount_host_candidate(
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
+int chttp_service_mount_host(
     chttp_service *service, chttp_server *server,
     const chttp_service_http_mount *mount,
     salts_service_host_runtime *runtime, const char *component_id) {
@@ -2129,7 +2129,7 @@ int chttp_service_mount_host_candidate(
 #endif
 
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
 /*
  * Candidate-only shared-listener MethodPlan route.
  * One chttp_server route is registered pre-start. Each accepted invocation
@@ -2139,7 +2139,7 @@ int chttp_service_mount_host_candidate(
  * implementations above. Control-plane generation preparation never invokes
  * a Provider while holding the routing mutex.
  */
-int chttp_service_mount_host_switch_candidate(
+int chttp_service_mount_host_switch(
     chttp_service *service, chttp_server *server,
     const chttp_service_http_mount *mount,
     salts_service_host_runtime *runtime, const char *component_id) {
@@ -2226,7 +2226,7 @@ int chttp_service_mount_host_switch_candidate(
   return SALTS_OK;
 }
 
-int chttp_service_host_switch_prepare_candidate(
+int chttp_service_host_switch_prepare(
     chttp_service *service, salts_service_host_generation *generation) {
   chttp_service_impl *impl;
   chttp_service_host_switch_state *state;
@@ -2324,7 +2324,7 @@ reject:
  * retire its immutable adapter: all ServiceHost Scopes have settled, so no
  * request can still invoke its Provider code. The finalizer's count is
  * checked independently because it is decremented after Scope release. */
-int chttp_service_host_switch_retire_candidate(
+int chttp_service_host_switch_retire(
     chttp_service *service, const salts_service_host_generation *generation) {
   chttp_service_impl *impl;
   chttp_service_host_switch_state *state;
@@ -2381,7 +2381,7 @@ int chttp_service_destroy(chttp_service *service) {
             &impl->methods[i].deferred_in_flight,
             memory_order_acquire) != 0u)
       return SALTS_EBUSY;
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
     if (impl->methods[i].host_switch != NULL) {
       const chttp_service_host_switch_state *state = impl->methods[i].host_switch;
       /* Unlike historical Plugin-only mounts, this candidate has an explicit

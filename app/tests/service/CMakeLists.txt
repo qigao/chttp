@@ -181,7 +181,7 @@ target_compile_definitions(chttp_service_http_test PRIVATE
 
 # The real original Provider ABI/Plugin loader is shared with the candidate,
 # but each generation owns an independent scope and DSO lease.
-if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+if(CHTTP_ENABLE_SERVICE_HOST)
   add_library(chttp_service_host_provider_fixture SHARED
     chttp_service_host_provider.c)
   add_library(chttp_service_host_provider_second SHARED
@@ -191,7 +191,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
       chttp_service_host_provider_fixture
       chttp_service_host_provider_second)
     target_link_libraries(${_chttp_host_provider} PRIVATE
-      chttp_service_plugin_fixture_native Salts::ComponentPluginABI Salts::PluginABI)
+      chttp_service_plugin_fixture_native Salts::ComponentProviderABI Salts::PluginABI)
     target_include_directories(${_chttp_host_provider} PRIVATE
       "${PROJECT_SOURCE_DIR}/app/src"
       "${chttp_service_plugin_fixture_GENERATED_DIR}")
@@ -208,7 +208,7 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   target_include_directories(chttp_service_http_test PRIVATE
     "${PROJECT_SOURCE_DIR}/app/src")
   target_compile_definitions(chttp_service_http_test PRIVATE
-    CHTTP_ENABLE_SERVICE_HOST_CANDIDATE=1
+    CHTTP_ENABLE_SERVICE_HOST=1
     GENERATED_CHTTP_SERVICE_HOST_PROVIDER_PATH="$<TARGET_FILE:chttp_service_host_provider_fixture>"
     GENERATED_CHTTP_SERVICE_HOST_SECOND_PATH="$<TARGET_FILE:chttp_service_host_provider_second>")
   add_dependencies(chttp_service_http_test
@@ -399,37 +399,9 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
   set_tests_properties(chttp_service_host_h2_connection_cancel_test
     PROPERTIES TIMEOUT 120)
 
-  if(NOT CHTTP_USE_INSTALLED_SERVICE_HOST_ABI_PROBE)
-  # Private staging gate: compile original Salts candidate archives once, copy
-  # only their built files/headers to a throwaway root, then configure two
-  # entirely independent C11/C++17 consumers against the *installed* Salts
-  # release and two real Provider DSOs. Never install/export the candidate.
-  add_test(NAME chttp_service_host_staged_sdk_consumer
-    COMMAND "${CMAKE_COMMAND}"
-      "-DEXT_STAGE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/private-staged-sdk"
-      "-DEXT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/private_sdk"
-      "-DEXT_SALTS_ROOT=${SALTS_ROOT_PATH}"
-      "-DEXT_UTILS_ROOT=${SALTS_UTILS_ROOT_PATH}"
-      "-DEXT_HEADERS=${CHTTP_SALTS_CANDIDATE_SOURCE_DIR}/component-runtime/include"
-      "-DEXT_CONFIG_ARCHIVE=$<TARGET_FILE:salts_configurator_candidate>"
-      "-DEXT_HOST_ARCHIVE=$<TARGET_FILE:salts_service_host_candidate>"
-      "-DEXT_PROVIDER1=$<TARGET_FILE:chttp_service_host_provider_fixture>"
-      "-DEXT_PROVIDER2=$<TARGET_FILE:chttp_service_host_provider_second>"
-      "-DEXT_C_COMPILER=${CMAKE_C_COMPILER}"
-      "-DEXT_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-DEXT_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
-      "-DEXT_GENERATOR=${CMAKE_GENERATOR}"
-      "-DEXT_ASAN=${ENABLE_SANITIZER_ADDRESS}"
-      "-DEXT_UBSAN=${ENABLE_SANITIZER_UNDEFINED}"
-      "-DEXT_CTEST=${CMAKE_CTEST_COMMAND}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/private_sdk/stage.cmake")
-  set_tests_properties(chttp_service_host_staged_sdk_consumer
-    PROPERTIES TIMEOUT 120)
-  endif()
   # The installed strict CMeta SDK introduced this validator after the
   # published Salts 2.3 CMeta ABI. Do not compile/link strict helper calls
   # against the old published interface in the private-stage comparison.
-  if(CHTTP_USE_INSTALLED_SERVICE_HOST_ABI_PROBE)
   # Admission must use the exact reflected cross-DSO FR1 method ABI:
   # no legacy R1 inference for MethodPlan operations in the strict Host.
   foreach(_chttp_fr_lang IN ITEMS c cpp)
@@ -457,11 +429,10 @@ if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
     set_target_properties(${_chttp_fr_target} PROPERTIES
       FOLDER "app/tests/service")
   endforeach()
-  endif()
 endif()
 
 add_test(NAME chttp_service_http_test COMMAND chttp_service_http_test)
-if(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+if(CHTTP_ENABLE_SERVICE_HOST)
   set_tests_properties(chttp_service_http_test PROPERTIES TIMEOUT 180)
 endif()
 

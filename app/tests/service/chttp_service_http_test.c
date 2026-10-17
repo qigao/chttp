@@ -1,6 +1,6 @@
 #include <chttp_app/service.h>
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
-#include "chttp_service_host_candidate.h"
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
+#include "chttp_service_host_integration.h"
 #endif
 
 #include <http_client/http.h>
@@ -917,7 +917,7 @@ static int chttp_service_test_call(
   return chttp_get(client, &options, response, &error);
 }
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
 /* HTTP Interceptor remains a synchronous continuation, not a deferred terminal
  * owner. The mounted ServiceHost Scope protects the async provider separately. */
 typedef struct chttp_service_host_interceptor_counts {
@@ -1829,8 +1829,8 @@ spec("CHttp::App generated HTTP MethodPlan") {
     data_bind_free(contract);
   }
 
-#if defined(CHTTP_ENABLE_SERVICE_HOST_CANDIDATE)
-  it("pins real ServiceHostCandidate N and N+1 through HTTP deferred terminal and drain") {
+#if defined(CHTTP_ENABLE_SERVICE_HOST)
+  it("pins tagged canonical ServiceHost N and N+1 through HTTP deferred terminal and drain") {
     DataBind *contract = NULL;
     DataBindError bind_error = DATA_BIND_ERROR_INIT;
     DataBindBindingPlanDiagnostic diagnostic =
@@ -1991,12 +1991,12 @@ spec("CHttp::App generated HTTP MethodPlan") {
     invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
     invalid.executor = &executor;
     check_equal(
-        chttp_service_mount_host_candidate(
+        chttp_service_mount_host(
             &service, &server, &invalid, NULL, "CHttpPlugin_Calc_Add"),
         SALTS_EINVAL);
 
     check_equal(
-        chttp_service_mount_host_candidate(
+        chttp_service_mount_host(
             &service, &server, &invalid, &host_runtime, "missing.component"),
         SALTS_EINVAL);
     check_equal(host_runtime.active_scopes, (size_t)0u);
@@ -2007,7 +2007,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     mount.middleware = &host_interceptor;
     mount.middleware_count = 1u;
     check_equal(
-        chttp_service_mount_host_candidate(
+        chttp_service_mount_host(
             &service, &server, &mount, &host_runtime, "CHttpPlugin_Calc_Add"),
         SALTS_OK);
     check_equal(host_runtime.active_scopes, (size_t)1u);
@@ -2078,7 +2078,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     check_true(previous == &generation);
     check_equal(chttp_service_init(&second_service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&second_server, &server_config), SALTS_OK);
-    check_equal(chttp_service_mount_host_candidate(
+    check_equal(chttp_service_mount_host(
         &second_service, &second_server, &mount, &host_runtime,
         "CHttpPlugin_Calc_Add"), SALTS_OK);
     check_equal(host_runtime.active_scopes, (size_t)2u);

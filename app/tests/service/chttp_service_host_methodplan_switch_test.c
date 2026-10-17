@@ -1,7 +1,7 @@
 /* Candidate-only real MethodPlan/ServiceHost N->N+1 on one HTTP Listener.
  * No custom HTTP execution path: CHttp::App retains DataBind ingress/egress,
  * deferred native execution, Interceptor and per-call finalizer authority. */
-#include "chttp_service_host_candidate.h"
+#include "chttp_service_host_integration.h"
 #include "chttp_service_plugin.http.h"
 #include "chttp_service_plugin_native.h"
 #include "chttp_service_plugin.service_native.h"
@@ -407,15 +407,15 @@ int main(void) {
   mount.executor = &executor;
   mount.middleware = &route_middleware;
   mount.middleware_count = 1u;
-  REQUIRE(chttp_service_mount_host_switch_candidate(
+  REQUIRE(chttp_service_mount_host_switch(
           &service, &server, &mount, &runtime, "CHttpPlugin_Calc_Add")
           == SALTS_OK);
   /* Fail-closed controls: only real BUILT generations are admitted. */
-  REQUIRE(chttp_service_host_switch_prepare_candidate(&service, NULL) ==
+  REQUIRE(chttp_service_host_switch_prepare(&service, NULL) ==
           SALTS_EINVAL);
-  REQUIRE(chttp_service_host_switch_prepare_candidate(
+  REQUIRE(chttp_service_host_switch_prepare(
           &service, &old_generation.generation) == SALTS_OK);
-  REQUIRE(chttp_service_host_switch_prepare_candidate(
+  REQUIRE(chttp_service_host_switch_prepare(
           &service, &old_generation.generation) == SALTS_EALREADY);
   REQUIRE(salts_service_host_runtime_publish(
           &runtime, &old_generation.generation, &previous)
@@ -447,7 +447,7 @@ int main(void) {
           == CMETA_PLUGIN_OK);
   REQUIRE(cmeta_plugin_registry_start(&registry, plugin_next) == CMETA_PLUGIN_OK);
   REQUIRE(host_build(&new_generation, UINT64_C(2), &registry, plugin_next) == 0);
-  REQUIRE(chttp_service_host_switch_prepare_candidate(
+  REQUIRE(chttp_service_host_switch_prepare(
           &service, &new_generation.generation) == SALTS_OK);
   REQUIRE(salts_service_host_runtime_publish(
           &runtime, &new_generation.generation, &previous)
@@ -457,7 +457,7 @@ int main(void) {
    * A third BUILT graph cannot be silently ranked or spilled to another
    * runtime/method; test rollback returns its extra Provider lease. */
   REQUIRE(host_build(&overflow_generation, UINT64_C(3), &registry, plugin_n) == 0);
-  REQUIRE(chttp_service_host_switch_prepare_candidate(
+  REQUIRE(chttp_service_host_switch_prepare(
           &service, &overflow_generation.generation) == SALTS_ENOBUFS);
   REQUIRE(salts_service_host_generation_discard(
           &overflow_generation.generation) == SALTS_SERVICE_HOST_OK);
@@ -469,7 +469,7 @@ int main(void) {
   REQUIRE(host_pending_at_least(&executor, 3u));
 
   REQUIRE(chttp_service_destroy(&service) == SALTS_EBUSY);
-  REQUIRE(chttp_service_host_switch_retire_candidate(
+  REQUIRE(chttp_service_host_switch_retire(
           &service, &old_generation.generation) == SALTS_EBUSY);
   REQUIRE(salts_service_host_generation_drain(
           &runtime, &old_generation.generation) == SALTS_SERVICE_HOST_BUSY);
@@ -498,12 +498,12 @@ int main(void) {
 
   /* Two candidate slots remained full until the original N truly drained.
    * Explicit retire now reclaims that slot without touching the live N+1. */
-  REQUIRE(chttp_service_host_switch_retire_candidate(
+  REQUIRE(chttp_service_host_switch_retire(
           &service, &old_generation.generation) == SALTS_OK);
-  REQUIRE(chttp_service_host_switch_retire_candidate(
+  REQUIRE(chttp_service_host_switch_retire(
           &service, &old_generation.generation) == SALTS_EINVAL);
   REQUIRE(host_build(&overflow_generation, UINT64_C(3), &registry, plugin_n) == 0);
-  REQUIRE(chttp_service_host_switch_prepare_candidate(
+  REQUIRE(chttp_service_host_switch_prepare(
           &service, &overflow_generation.generation) == SALTS_OK);
   REQUIRE(salts_service_host_runtime_publish(
           &runtime, &overflow_generation.generation, &previous)
@@ -519,7 +519,7 @@ int main(void) {
 #if CHTTP_SERVICE_HOST_TEST_MULTIPLEX
   /* Release the old N+1 slot before preparing N+3. Salts and CHttp both
    * enforce the same two-generation upper bound: no silent third owner. */
-  REQUIRE(chttp_service_host_switch_retire_candidate(
+  REQUIRE(chttp_service_host_switch_retire(
           &service, &new_generation.generation) == SALTS_OK);
   REQUIRE(host_build(&multiplex_generation, UINT64_C(4),
                      &registry, plugin_next) == 0);
@@ -575,7 +575,7 @@ int main(void) {
   REQUIRE(chttp_async_client_submit(&async, &opts, &old_req) == SALTS_OK);
   REQUIRE(host_h2_poll_until_pending(&async, &executor, 2u));
 
-  REQUIRE(chttp_service_host_switch_prepare_candidate(
+  REQUIRE(chttp_service_host_switch_prepare(
           &service, &multiplex_generation.generation) == SALTS_OK);
   REQUIRE(salts_service_host_runtime_publish(
           &runtime, &multiplex_generation.generation, &previous)

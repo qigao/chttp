@@ -1,0 +1,155 @@
+name: CHttp tagged canonical ServiceHost FR1 HTTP conformance
+
+'on':
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "app/**"
+      - "cmake/ci/restore-tagged-servicehost-native-sdks.py"
+      - "cmake/ci/test_restore_tagged_servicehost_native_sdks.py"
+      - ".github/workflows/chttp-servicehost-tagged-sdk-methodplan.yml"
+  workflow_dispatch:
+    inputs:
+      salts_tag:
+        description: Exact already-published canonical Salts release tag
+        type: string
+        required: true
+      salts_utils_tag:
+        description: Exact already-published SaltsUtils tag built against that Salts tag
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  static-policy:
+    name: Tag-only and no legacy Component runtime policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify tag admission without requiring an unpublished SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 cmake/ci/test_restore_tagged_servicehost_native_sdks.py
+          python3 - <<'PY'
+          from pathlib import Path
+          sources = [Path(p).read_text() for p in [
+              "CMakeLists.txt", "CMakeOptions.cmake", "app/CMakeLists.txt",
+              "app/src/chttp_service.c", "app/tests/service/CMakeLists.txt"
+          ]]
+          for value in ("CHTTP_ENABLE_SERVICE_HOST_CANDIDATE",
+                        "CHTTP_USE_INSTALLED_SERVICE_HOST_ABI_PROBE",
+                        "add_subdirectory(\"" + chr(36) + "{CHTTP_SALTS_CANDIDATE_SOURCE_DIR}"):
+              if any(value in source for source in sources):
+                  raise SystemExit(f"Old runtime path still active: {value}")
+          if Path("app/src/chttp_service_host_candidate.h").exists():
+              raise SystemExit("Old candidate header is forbidden")
+          if not Path("app/src/chttp_service_host_integration.h").exists():
+              raise SystemExit("Tagged CHttp integration header missing")
+          if "Salts::ServiceHost" not in sources[0]:
+              raise SystemExit("Canonical imported ServiceHost target not required")
+          PY
+
+  tagged-native:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    name: Real released Salts/SaltsUtils H1 H2 MethodPlan and FR1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SALTS_CANONICAL_TAG: ${{ inputs.salts_tag }}
+      SALTS_UTILS_CANONICAL_TAG: ${{ inputs.salts_utils_tag }}
+      QIGAO_SDK_RID: linux-x64
+      QIGAO_TARGET_TRIPLET: x64-linux
+      QIGAO_HOST_TRIPLET: x64-linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@d4afc8cd2f5ed3585c1e26469e379a087ce9ecf3
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@d4afc8cd2f5ed3585c1e26469e379a087ce9ecf3
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Prepare Linux C11/C++17 host
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ccache ninja-build pkg-config nasm libudev-dev \
+            libpipewire-0.3-dev libx11-dev libxext-dev
+      - name: Download and verify two exact already-published native SDK tags
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 cmake/ci/restore-tagged-servicehost-native-sdks.py \
+            --salts-tag "$SALTS_CANONICAL_TAG" \
+            --utils-tag "$SALTS_UTILS_CANONICAL_TAG" \
+            --rid linux-x64 --host-rid linux-x64
+          test -f build/published-cutover/provenance.json
+      - name: Configure CHttp with the sole imported canonical ServiceHost
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset ci-linux-release-user -B build/tagged-servicehost \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$SALTS_ROOT;$SALTS_UTILS_ROOT" \
+            -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
+            -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+            -DCHTTP_ENABLE_SERVICE_HOST=ON
+          test ! -d build/tagged-servicehost/salts-service-host-candidate
+      - name: Compile real HTTP H1 H2 and strict FR1 Provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/tagged-servicehost --parallel 2 \
+            --target chttp_service_http_test \
+              chttp_service_host_single_listener_test \
+              chttp_service_host_methodplan_switch_test \
+              chttp_service_host_methodplan_h2c_test \
+              chttp_service_host_h2_multiplex_test \
+              chttp_service_host_h2_stream_window_test \
+              chttp_service_host_h2_connection_window_test \
+              chttp_service_host_h2_connection_cancel_test \
+              chttp_service_host_strict_fr_abi_c \
+              chttp_service_host_strict_fr_abi_cpp
+      - name: Exercise tagged HTTP, MethodPlan, Scope, deferred completion and DSO drain
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 600s \
+            ctest --test-dir build/tagged-servicehost \
+            -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_host_strict_fr_abi_(c|cpp))$' \
+            --repeat until-fail:2 --no-tests=error --output-on-failure --timeout 180
+      - name: Reject accidental CHttp install or publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cmake --build build/tagged-servicehost --target install > /dev/null 2>&1; then
+            echo "Tagged conformance must not publish CHttp" >&2
+            exit 1
+          fi
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chttp-tagged-servicehost-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/published-cutover/provenance.json
+            build/tagged-servicehost/Testing/Temporary/LastTest.log

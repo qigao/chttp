@@ -1,10 +1,10 @@
-/* Real generated Provider DSO; retains the original provider ABI only. */
+/* Real native Provider DSO; uses the canonical ComponentProviderABI from the tagged Salts SDK. */
 #include "chttp_service_host_component.h"
 
 #include "chttp_service_plugin_native.h"
 #include "chttp_service_plugin.service_native.h"
 
-#include <salts/component_plugin_abi.h>
+#include <salts/component_provider_abi.h>
 #include <salts/plugin_decl.h>
 
 #ifndef CHTTP_COMPONENT_PLUGIN_ID
