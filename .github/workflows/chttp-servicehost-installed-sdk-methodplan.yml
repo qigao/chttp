@@ -1,4 +1,4 @@
-name: CHttp strict installed ServiceHost HTTP MethodPlan proof
+name: CHttp strict installed ServiceHost HTTP MethodPlan proof (macOS ARM64)
 
 'on':
   pull_request:
@@ -19,18 +19,18 @@ concurrency:
 
 jobs:
   native_http:
-    name: True installed Salts::ServiceHost / generated HTTP MethodPlan (Linux)
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'review/chttp-installed-servicehost-methodplan' }}
-    runs-on: ubuntu-24.04
+    name: True installed Salts::ServiceHost / generated HTTP MethodPlan (macOS ARM64)
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'review/chttp-installed-servicehost-macos' }}
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha }}
       EXPECTED_SALTS: a6d1f7c6b81c72dfcdcab9a5ea8f72244ab3079a
       EXPECTED_SU: fbb5f3ee19589836ced0f3b98414e71e6dcc1388
       EXPECTED_SU_TAG: v4.3.0-rc.11
-      QIGAO_SDK_RID: linux-x64
-      QIGAO_TARGET_TRIPLET: x64-linux
-      QIGAO_HOST_TRIPLET: x64-linux
+      QIGAO_SDK_RID: macos-arm64
+      QIGAO_TARGET_TRIPLET: arm64-osx
+      QIGAO_HOST_TRIPLET: arm64-osx
       CCACHE_DIR: ${{ github.workspace }}/build/servicehost-installed/ccache
       CCACHE_COMPILERCHECK: content
       CHTTP_COMPILER_CACHE_NAMESPACE: chttp-installed-servicehost-fr1-v1
@@ -52,12 +52,11 @@ jobs:
           mode: read
       - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
       - uses: ./build/servicehost-installed/sources/salts/.github/actions/setup-build-host
-      - name: Require source-build compiler cache on Linux
+      - name: Require source-build compiler cache on macOS
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ccache
+          brew install ccache
           command -v ccache
           ccache --version
           # Strict released SaltsUtils Crypto requires the reviewed GmSSL RSA
@@ -105,7 +104,7 @@ jobs:
           prefix="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           mkdir -p "$prefix"
           echo "SALTS_ROOT=$prefix" >> "$GITHUB_ENV"
-          cmake --preset linux-release-ci \
+          cmake --preset mac-arm64-release-ci \
             -S "$GITHUB_WORKSPACE/build/servicehost-installed/sources/salts" \
             -B build/servicehost-installed/build-salts \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
@@ -130,8 +129,8 @@ jobs:
           # SALTS_CANDIDATE_ROOT is set. No second Core/Unicode/Plugin Owner.
           strict_root="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           SALTS_CANDIDATE_ROOT="$strict_root" \
-            bash cmake/ci/restore-native-sdks.sh linux-x64 false
-          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/linux-x64"
+            bash cmake/ci/restore-native-sdks.sh macos-arm64 false
+          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/macos-arm64"
           test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$utils_root/include/salts/crypto.h"
           grep -Fq 'typedef enum salts_crypto_hash' "$utils_root/include/salts/crypto.h"
@@ -156,8 +155,8 @@ jobs:
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
           export DATABIND_ROOT="$SALTS_UTILS_ROOT"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
-          cmake --preset ci-linux-release-user \
+          export DYLD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${DYLD_LIBRARY_PATH:-}"
+          cmake --preset ci-macos-sdk-release-user \
             -S "$GITHUB_WORKSPACE" \
             -B build/servicehost-installed/build-chttp \
             -DCMAKE_BUILD_TYPE=Release \
@@ -185,21 +184,21 @@ jobs:
                      chttp_service_host_h2_connection_cancel_test \
                      chttp_service_host_strict_fr_abi_c \
                      chttp_service_host_strict_fr_abi_cpp
-      - name: Require exact linked GmSSL RSA Provider and no missing shared symbols
+      - name: Require exact linked GmSSL RSA Provider and runtime dependency audit
         shell: bash
         run: |
           set -euo pipefail
-          archive="$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib/libgmssl.a"
+          archive="$GITHUB_WORKSPACE/vcpkg_installed/arm64-osx/lib/libgmssl.a"
           test -f "$archive"
-          nm -g --defined-only "$archive" | awk '
-            $NF == "rsa_components_sign_pss_digest" { found = 1 }
+          nm -gU "$archive" | awk '
+            ($NF == "rsa_components_sign_pss_digest" || $NF == "_rsa_components_sign_pss_digest") { found = 1 }
             END { exit !found }'
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           : "${SALTS_UTILS_ROOT:?missing exact restored SaltsUtils SDK}"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
-          ldd -r build/servicehost-installed/build-chttp/bin/libchttp_server.so.2 \
+          export DYLD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${DYLD_LIBRARY_PATH:-}"
+          otool -L build/servicehost-installed/build-chttp/bin/libchttp_server.dylib \
             | tee build/servicehost-installed/linked-runtime-audit.txt
-          if grep -q 'undefined symbol:' build/servicehost-installed/linked-runtime-audit.txt; then
+          if grep -q 'not found\|undefined symbol:' build/servicehost-installed/linked-runtime-audit.txt; then
             echo "Installed Provider runtime has unresolved dependencies" >&2
             exit 1
           fi
@@ -212,7 +211,7 @@ jobs:
           : "${SALTS_UTILS_ROOT:?NuGet-restored SaltsUtils.Native must be set}"
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          export DYLD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${DYLD_LIBRARY_PATH:-}"
           ctest --test-dir build/servicehost-installed/build-chttp \
             -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_host_strict_fr_abi_(c|cpp))$' \
             --repeat until-fail:2 --output-on-failure --no-tests=error --timeout 180
