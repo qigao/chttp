@@ -52,6 +52,14 @@ jobs:
           mode: read
       - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
       - uses: ./build/servicehost-installed/sources/salts/.github/actions/setup-build-host
+      # clcache 4.2.0 depends on pyuv 1.4.0, whose Windows extension does not
+      # compile against Python 3.12 (Py_REFCNT is no longer an assignable lvalue).
+      # Use Python 3.10 for the cache launcher only; the C/C++ toolchain remains
+      # the runner-provided MSVC x64 compiler.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: x64
       - name: Require MSVC and clcache on Windows
         shell: bash
         run: |
