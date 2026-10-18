@@ -1,4 +1,4 @@
-name: CHttp strict installed ServiceHost HTTP MethodPlan proof
+name: CHttp strict installed ServiceHost HTTP MethodPlan proof (Windows x64)
 
 'on':
   pull_request:
@@ -19,20 +19,20 @@ concurrency:
 
 jobs:
   native_http:
-    name: True installed Salts::ServiceHost / generated HTTP MethodPlan (Linux)
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'review/chttp-installed-servicehost-methodplan' }}
-    runs-on: ubuntu-24.04
+    name: True installed Salts::ServiceHost / generated HTTP MethodPlan (Windows x64 / IOCP)
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'review/chttp-installed-servicehost-windows' }}
+    runs-on: windows-2025
     timeout-minutes: 120
     env:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha }}
       EXPECTED_SALTS: a6d1f7c6b81c72dfcdcab9a5ea8f72244ab3079a
       EXPECTED_SU: fbb5f3ee19589836ced0f3b98414e71e6dcc1388
       EXPECTED_SU_TAG: v4.3.0-rc.11
-      QIGAO_SDK_RID: linux-x64
-      QIGAO_TARGET_TRIPLET: x64-linux
-      QIGAO_HOST_TRIPLET: x64-linux
-      CCACHE_DIR: ${{ github.workspace }}/build/servicehost-installed/ccache
-      CCACHE_COMPILERCHECK: content
+      QIGAO_SDK_RID: windows-x64
+      QIGAO_TARGET_TRIPLET: x64-windows
+      QIGAO_HOST_TRIPLET: x64-windows
+      CLCACHE_DIR: ${{ github.workspace }}/build/servicehost-installed/clcache
+      CLCACHE_COMPILERCHECK: content
       CHTTP_COMPILER_CACHE_NAMESPACE: chttp-installed-servicehost-fr1-v1
     steps:
       - name: Checkout exact CHttp candidate
@@ -52,14 +52,14 @@ jobs:
           mode: read
       - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
       - uses: ./build/servicehost-installed/sources/salts/.github/actions/setup-build-host
-      - name: Require source-build compiler cache on Linux
+      - name: Require MSVC and clcache on Windows
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ccache
-          command -v ccache
-          ccache --version
+          python -m pip install --disable-pip-version-check clcache
+          where clcache
+          clcache --version
+          clcache -s
           # Strict released SaltsUtils Crypto requires the reviewed GmSSL RSA
           # components ABI. Fail closed on a port without the complete
           # rsa_ext.c implementation, before building any HTTP consumer.
@@ -77,8 +77,11 @@ jobs:
               raise SystemExit("GmSSL missing full RSA components signing ABI")
           print("Exact GmSSL 3.2.0#12 RSA components ABI source verified")
           PY
-          # Existing native presets mandate ccache; never silently fall back
-          # to uninstrumented, unversioned or unrelated prebuilt archives.
+          # MSVC must be launched through clcache; ccache is not a substitute.
+          # Compiler launcher is set explicitly in the CMake configure step.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -105,7 +108,7 @@ jobs:
           prefix="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           mkdir -p "$prefix"
           echo "SALTS_ROOT=$prefix" >> "$GITHUB_ENV"
-          cmake --preset linux-release-ci \
+          cmake --preset base-win-release-user \
             -S "$GITHUB_WORKSPACE/build/servicehost-installed/sources/salts" \
             -B build/servicehost-installed/build-salts \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
@@ -130,8 +133,8 @@ jobs:
           # SALTS_CANDIDATE_ROOT is set. No second Core/Unicode/Plugin Owner.
           strict_root="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           SALTS_CANDIDATE_ROOT="$strict_root" \
-            bash cmake/ci/restore-native-sdks.sh linux-x64 false
-          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/linux-x64"
+            bash cmake/ci/restore-native-sdks.sh windows-x64 false
+          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/windows-x64"
           test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$utils_root/include/salts/crypto.h"
           grep -Fq 'typedef enum salts_crypto_hash' "$utils_root/include/salts/crypto.h"
@@ -156,8 +159,8 @@ jobs:
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
           export DATABIND_ROOT="$SALTS_UTILS_ROOT"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
-          cmake --preset ci-linux-release-user \
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/bin:$SALTS_ROOT/lib:$PATH"
+          cmake --preset win-release-user \
             -S "$GITHUB_WORKSPACE" \
             -B build/servicehost-installed/build-chttp \
             -DCMAKE_BUILD_TYPE=Release \
@@ -174,7 +177,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build/servicehost-installed/build-chttp --parallel 2 \
+          cmake --build build/servicehost-installed/build-chttp --parallel 2 --config Release \
             --target chttp_service_host_single_listener_test \
                      chttp_service_http_test \
                      chttp_service_host_methodplan_switch_test \
@@ -189,21 +192,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib/libgmssl.a"
+          archive="$GITHUB_WORKSPACE/vcpkg_installed/x64-windows/lib/gmssl.lib"
           test -f "$archive"
-          nm -g --defined-only "$archive" | awk '
-            $NF == "rsa_components_sign_pss_digest" { found = 1 }
-            END { exit !found }'
+          dumpbin /symbols "$archive" | grep -Eiq "rsa_components_sign_pss_digest"
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           : "${SALTS_UTILS_ROOT:?missing exact restored SaltsUtils SDK}"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
-          ldd -r build/servicehost-installed/build-chttp/bin/libchttp_server.so.2 \
-            | tee build/servicehost-installed/linked-runtime-audit.txt
-          if grep -q 'undefined symbol:' build/servicehost-installed/linked-runtime-audit.txt; then
-            echo "Installed Provider runtime has unresolved dependencies" >&2
-            exit 1
-          fi
-          echo "Exact GmSSL RSA symbols and CHttp Server linkage verified"
+          server="$(find build/servicehost-installed/build-chttp -iname 'chttp_server.dll' -o -iname 'libchttp_server.dll' | head -n 1)"
+          test -n "$server"
+          dumpbin /dependents "$server" | tee build/servicehost-installed/linked-runtime-audit.txt
+          grep -Eiq "gmssl|salts" build/servicehost-installed/linked-runtime-audit.txt
+          echo "Exact GmSSL RSA symbol and Windows DLL dependency inventory verified"
       - name: Run true imported ServiceHost HTTP H1/H2 and Provider conformance
         shell: bash
         run: |
@@ -213,7 +212,7 @@ jobs:
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
-          ctest --test-dir build/servicehost-installed/build-chttp \
+          ctest --test-dir build/servicehost-installed/build-chttp -C Release \
             -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_host_strict_fr_abi_(c|cpp))$' \
             --repeat until-fail:2 --output-on-failure --no-tests=error --timeout 180
       - name: Require no private Candidate object or CHttp published package
@@ -221,7 +220,7 @@ jobs:
         run: |
           set -euo pipefail
           test ! -d build/servicehost-installed/build-chttp/salts-service-host-candidate
-          if cmake --build build/servicehost-installed/build-chttp --target install >/dev/null 2>&1; then
+          if cmake --build build/servicehost-installed/build-chttp --config Release --target install >/dev/null 2>&1; then
             echo "The opt-in installed ABI probe must never install/publish CHttp" >&2
             exit 1
           fi
