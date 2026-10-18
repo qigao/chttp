@@ -60,6 +60,7 @@ jobs:
           where clcache
           clcache --version
           clcache -s
+          clcache --help >/dev/null
           # Strict released SaltsUtils Crypto requires the reviewed GmSSL RSA
           # components ABI. Fail closed on a port without the complete
           # rsa_ext.c implementation, before building any HTTP consumer.
@@ -112,6 +113,7 @@ jobs:
             -S "$GITHUB_WORKSPACE/build/servicehost-installed/sources/salts" \
             -B build/servicehost-installed/build-salts \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DCMAKE_C_COMPILER_LAUNCHER=clcache -DCMAKE_CXX_COMPILER_LAUNCHER=clcache \
             -DSALTS_ENABLE_COMPONENT_RUNTIME_CANDIDATE=ON \
             -DSALTS_ENABLE_COMPONENT_RUNTIME_INSTALLED_ABI_PROBE=ON \
             -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF
@@ -164,6 +166,7 @@ jobs:
             -S "$GITHUB_WORKSPACE" \
             -B build/servicehost-installed/build-chttp \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=clcache -DCMAKE_CXX_COMPILER_LAUNCHER=clcache \
             -DCMAKE_PREFIX_PATH="$SALTS_ROOT;$SALTS_UTILS_ROOT" \
             -DBUILD_TESTING=ON -DBUILD_TESTS=ON \
             -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
@@ -197,7 +200,7 @@ jobs:
           dumpbin /symbols "$archive" | grep -Eiq "rsa_components_sign_pss_digest"
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           : "${SALTS_UTILS_ROOT:?missing exact restored SaltsUtils SDK}"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/bin:$SALTS_ROOT/lib:$PATH"
           server="$(find build/servicehost-installed/build-chttp -iname 'chttp_server.dll' -o -iname 'libchttp_server.dll' | head -n 1)"
           test -n "$server"
           dumpbin /dependents "$server" | tee build/servicehost-installed/linked-runtime-audit.txt
@@ -211,7 +214,7 @@ jobs:
           : "${SALTS_UTILS_ROOT:?NuGet-restored SaltsUtils.Native must be set}"
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          export PATH="$SALTS_UTILS_ROOT/bin:$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/bin:$SALTS_ROOT/lib:$PATH"
           ctest --test-dir build/servicehost-installed/build-chttp -C Release \
             -R '^(chttp_service_http_test|chttp_service_host_single_listener_test|chttp_service_host_methodplan_switch_test|chttp_service_host_methodplan_h2c_test|chttp_service_host_h2_multiplex_test|chttp_service_host_h2_stream_window_test|chttp_service_host_h2_connection_window_test|chttp_service_host_h2_connection_cancel_test|chttp_service_host_strict_fr_abi_(c|cpp))$' \
             --repeat until-fail:2 --output-on-failure --no-tests=error --timeout 180
