@@ -191,7 +191,7 @@ jobs:
           archive="$GITHUB_WORKSPACE/vcpkg_installed/arm64-osx/lib/libgmssl.a"
           test -f "$archive"
           nm -gU "$archive" | awk '
-            $NF == "rsa_components_sign_pss_digest" { found = 1 }
+            ($NF == "rsa_components_sign_pss_digest" || $NF == "_rsa_components_sign_pss_digest") { found = 1 }
             END { exit !found }'
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           : "${SALTS_UTILS_ROOT:?missing exact restored SaltsUtils SDK}"
