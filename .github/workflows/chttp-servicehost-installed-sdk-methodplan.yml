@@ -52,7 +52,7 @@ jobs:
           mode: read
       - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@e678e8c1d0510e89b79e53b1828bfd2cab18ab0e
       - uses: ./build/servicehost-installed/sources/salts/.github/actions/setup-build-host
-      - name: Require source-build compiler cache on Linux
+      - name: Require source-build compiler cache on macOS
         shell: bash
         run: |
           set -euo pipefail
@@ -129,8 +129,8 @@ jobs:
           # SALTS_CANDIDATE_ROOT is set. No second Core/Unicode/Plugin Owner.
           strict_root="$RUNNER_TEMP/chttp-installed-servicehost/salts"
           SALTS_CANDIDATE_ROOT="$strict_root" \
-            bash cmake/ci/restore-native-sdks.sh linux-x64 false
-          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/linux-x64"
+            bash cmake/ci/restore-native-sdks.sh macos-arm64 false
+          utils_root="$RUNNER_TEMP/qigao-nuget/saltsutils.native/4.3.0-rc.11/sdk/macos-arm64"
           test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$utils_root/include/salts/crypto.h"
           grep -Fq 'typedef enum salts_crypto_hash' "$utils_root/include/salts/crypto.h"
@@ -155,7 +155,7 @@ jobs:
           test -f "$SALTS_UTILS_ROOT/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           test -f "$SALTS_UTILS_ROOT/include/salts/crypto.h"
           export DATABIND_ROOT="$SALTS_UTILS_ROOT"
-          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
+          export DYDYLD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${DYLD_LIBRARY_PATH:-}"
           cmake --preset ci-macos-sdk-release-user \
             -S "$GITHUB_WORKSPACE" \
             -B build/servicehost-installed/build-chttp \
@@ -190,7 +190,7 @@ jobs:
           set -euo pipefail
           archive="$GITHUB_WORKSPACE/vcpkg_installed/arm64-osx/lib/libgmssl.a"
           test -f "$archive"
-          nm -g --defined-only "$archive" | awk '
+          nm -gU "$archive" | awk '
             $NF == "rsa_components_sign_pss_digest" { found = 1 }
             END { exit !found }'
           export SALTS_ROOT="$RUNNER_TEMP/chttp-installed-servicehost/salts"
