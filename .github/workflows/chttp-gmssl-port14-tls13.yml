@@ -3,7 +3,7 @@ name: CHttp GmSSL port14 TLS1.3 HRR + CCS mTLS (source)
 'on':
   pull_request:
     paths:
-      - ".github/workflows/chttp-gmssl-port14.yml"
+      - ".github/workflows/chttp-gmssl-port14-tls13.yml"
       - "CMakeOptions.cmake"
       - "http_client/**"
       - "http_common/tests/support/**"
