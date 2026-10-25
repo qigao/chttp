@@ -376,7 +376,10 @@ jobs:
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
-          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "-DSaltsUtils_IDLC_EXECUTABLE=%EXACT_SALTS_IDLC%"
+          rem The canonical v145 namespace is new and may not have every
+          rem immutable dependency ABI published yet. Build cache misses from
+          rem the pinned graph while leaving the shared NuGet source read-only.
+          cmake --preset ci-sdk-release-user -DBUILD_TESTING=ON -DBUILD_TESTS=ON -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "-DSaltsUtils_IDLC_EXECUTABLE=%EXACT_SALTS_IDLC%" "-DVCPKG_INSTALL_OPTIONS="
           if errorlevel 1 exit /b 1
           cmake --build --preset ci-sdk-release-user --parallel 2
           if errorlevel 1 exit /b 1
@@ -412,7 +415,7 @@ jobs:
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_TARGET_TRIPLET%\bin;%PATH%"
-          cmake --preset installed-release-user -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+          cmake --preset installed-release-user -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE "-DVCPKG_INSTALL_OPTIONS="
           if errorlevel 1 exit /b 1
           cmake --build --preset installed-release-user --parallel 2
           if errorlevel 1 exit /b 1

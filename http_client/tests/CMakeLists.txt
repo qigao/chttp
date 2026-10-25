@@ -100,6 +100,66 @@ if(CHTTP_P384_SHA384_ACCEPTANCE_TESTS)
   target_compile_definitions(chttp_tls_test PRIVATE
     CHTTP_P384_SHA384_ACCEPTANCE_TESTS=1)
 endif()
+if(CHTTP_X509_MATRIX_FIXTURE_DIR)
+  set(_chttp_x509_required
+    p384-chain-root-cert.pem
+    p384-chain-intermediate-cert.pem
+    p384-chain-server-cert.pem
+    p384-chain-server-key.pem
+    invalid-ca-root-cert.pem
+    invalid-ca-issuer-cert.pem
+    invalid-ca-server-cert.pem
+    invalid-ca-server-key.pem
+    p256-test-root-cert.pem
+    p256-test-server-cert.pem
+    p256-test-server-key.pem
+    rsa3072-test-root-cert.pem
+    rsa3072-test-server-cert.pem
+    rsa3072-test-server-key.pem
+    rsa3072-test-server-pss-cert.pem
+    sha512-mixed-root-cert.pem
+    sha512-mixed-server-cert.pem
+    sha512-mixed-server-key.pem
+    unsupported-p521-root-cert.pem
+    unsupported-p521-server-cert.pem
+    unsupported-ed25519-server-cert.pem
+    unsupported-ed25519-server-key.pem)
+  foreach(_fixture IN LISTS _chttp_x509_required)
+    if(NOT EXISTS "${CHTTP_X509_MATRIX_FIXTURE_DIR}/${_fixture}")
+      message(FATAL_ERROR "Missing CHttp X.509 matrix fixture: ${_fixture}")
+    endif()
+  endforeach()
+  file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/p384-chain-server-cert.pem"
+    _chttp_p384_chain_leaf)
+  file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/p384-chain-intermediate-cert.pem"
+    _chttp_p384_chain_issuer)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/chttp-p384-server-fullchain.pem"
+    "${_chttp_p384_chain_leaf}${_chttp_p384_chain_issuer}")
+  file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/invalid-ca-server-cert.pem"
+    _chttp_invalid_ca_leaf)
+  file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/invalid-ca-issuer-cert.pem"
+    _chttp_invalid_ca_issuer)
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/chttp-invalid-ca-fullchain.pem"
+    "${_chttp_invalid_ca_leaf}${_chttp_invalid_ca_issuer}")
+  file(TO_CMAKE_PATH "${CHTTP_X509_MATRIX_FIXTURE_DIR}" _chttp_x509_fixture_dir)
+  file(TO_CMAKE_PATH "${CMAKE_CURRENT_BINARY_DIR}/chttp-p384-server-fullchain.pem"
+    _chttp_p384_fullchain)
+  file(TO_CMAKE_PATH "${CMAKE_CURRENT_BINARY_DIR}/chttp-invalid-ca-fullchain.pem"
+    _chttp_invalid_ca_fullchain)
+  target_compile_definitions(chttp_tls_test PRIVATE
+    CHTTP_X509_MATRIX_ACCEPTANCE_TESTS=1
+    "CHTTP_X509_FIXTURE_DIR=\"${_chttp_x509_fixture_dir}\""
+    "CHTTP_X509_P384_FULLCHAIN=\"${_chttp_p384_fullchain}\""
+    "CHTTP_X509_INVALID_CA_FULLCHAIN=\"${_chttp_invalid_ca_fullchain}\"")
+  unset(_chttp_x509_required)
+  unset(_chttp_p384_chain_leaf)
+  unset(_chttp_p384_chain_issuer)
+  unset(_chttp_invalid_ca_leaf)
+  unset(_chttp_invalid_ca_issuer)
+  unset(_chttp_x509_fixture_dir)
+  unset(_chttp_p384_fullchain)
+  unset(_chttp_invalid_ca_fullchain)
+endif()
 add_test(NAME chttp_tls_test COMMAND chttp_tls_test)
 set_target_properties(chttp_tls_test PROPERTIES FOLDER "http_client/tests")
 set_target_properties(chttp_tls_test PROPERTIES

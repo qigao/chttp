@@ -285,7 +285,12 @@ jobs:
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
           set "PATH=%SALTS_UTILS_ROOT%\bin;%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\%QIGAO_VCPKG_WINDOWS_TRIPLET%\bin;%PATH%"
-          cmake --preset "${{ matrix.preset }}"
+          rem The canonical v145 namespace is new and may not have every
+          rem immutable dependency ABI published yet. Keep the shared NuGet
+          rem source read-only, but allow this SDK producer to build a missing
+          rem package from the pinned vcpkg graph instead of requiring a cache
+          rem hit.
+          cmake --preset "${{ matrix.preset }}" "-DVCPKG_INSTALL_OPTIONS="
           if errorlevel 1 exit /b 1
           cmake --build --preset "${{ matrix.preset }}" --parallel 2
           if errorlevel 1 exit /b 1
@@ -313,7 +318,7 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
           if errorlevel 1 exit /b 1
           set "VCPKG_ROOT=%QIGAO_CANONICAL_VCPKG_ROOT%"
-          cmake --preset installed-release-user
+          cmake --preset installed-release-user "-DVCPKG_INSTALL_OPTIONS="
           if errorlevel 1 exit /b 1
           cmake --build --preset installed-release-user --parallel 2
           if errorlevel 1 exit /b 1
