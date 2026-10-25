@@ -7,6 +7,7 @@ name: CHttp P-384 SHA-384 HTTPS
       - "CMakeOptions.cmake"
       - "http_client/**"
       - "http_common/tests/support/**"
+      - "docs/X509_COMPATIBILITY_MATRIX.md"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +25,7 @@ jobs:
     timeout-minutes: 120
     env:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
-      EXPECTED_SALTS: ebc480afa4c1232f320ddcb0f12de661d9fed732
+      EXPECTED_SALTS: 2a943b532c56b959a8f395288c23a77c003009db
       EXPECTED_UTILS: fbb5f3ee19589836ced0f3b98414e71e6dcc1388
       EXPECTED_GMSSL_REGISTRY: 2e214ae44a3e3244eded5db6361194576356fc9e
       CCACHE_DIR: ${{ github.workspace }}/build/p384-sha384/ccache
@@ -158,6 +159,7 @@ jobs:
           cmake --preset ci-linux-release-user \
             -B build/p384-sha384/build-chttp \
             -DCHTTP_P384_SHA384_ACCEPTANCE_TESTS=ON \
+            -DCHTTP_X509_MATRIX_FIXTURE_DIR="$GITHUB_WORKSPACE/build/p384-sha384/sources/salts/cnet/tests/fixtures" \
             -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
             -DENABLE_SANITIZER_ADDRESS=ON -DENABLE_SANITIZER_UNDEFINED=ON \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -g -fno-omit-frame-pointer" \
