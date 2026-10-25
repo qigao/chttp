@@ -317,6 +317,15 @@ spec("CHTTP HTTPS adapter") {
     cnet_tls_client_config wrong_ca_tls;
     cnet_tls_client_config wrong_name_tls;
     chttp_response response = {0};
+    const struct {
+      const char *name;
+      const char *certificate;
+      size_t certificate_size;
+    } rejected_server_certificates[] = {
+        {"expired", CHTTP_TLS_TEST_P384_EXPIRED_SERVER_CERTIFICATE,
+         sizeof(CHTTP_TLS_TEST_P384_EXPIRED_SERVER_CERTIFICATE) - 1u},
+        {"tampered", CHTTP_TLS_TEST_P384_TAMPERED_SERVER_CERTIFICATE,
+         sizeof(CHTTP_TLS_TEST_P384_TAMPERED_SERVER_CERTIFICATE) - 1u}};
     char uri[64];
     char *server_cert_path = tt_make_temp_file("chttp-p384-server-cert", ".pem");
     char *server_key_path = tt_make_temp_file("chttp-p384-server-key", ".pem");
@@ -396,12 +405,56 @@ spec("CHTTP HTTPS adapter") {
     check_equal(probe.middleware_calls, (size_t)1u);
     chttp_response_destroy(&response);
 
-    check_equal(chttp_tls_profile_destroy(&valid_profile), SALTS_OK);
-    check_equal(chttp_tls_profile_destroy(&wrong_ca_profile), SALTS_OK);
-    check_equal(chttp_tls_profile_destroy(&wrong_name_profile), SALTS_OK);
     check_equal(chttp_client_destroy(&client, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_stop(&server, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+
+    for (size_t case_index = 0u;
+         case_index < sizeof(rejected_server_certificates) /
+                          sizeof(rejected_server_certificates[0]);
+         ++case_index) {
+      char *rejected_cert_path = tt_make_temp_file(
+          rejected_server_certificates[case_index].name, ".pem");
+      char *rejected_key_path = tt_make_temp_file("chttp-p384-rejected-key", ".pem");
+      check_not_null(rejected_cert_path);
+      check_not_null(rejected_key_path);
+      check_equal(tt_write_file(rejected_cert_path,
+                                rejected_server_certificates[case_index].certificate,
+                                rejected_server_certificates[case_index].certificate_size),
+                  0);
+      check_equal(tt_write_file(rejected_key_path, CHTTP_TLS_TEST_P384_SERVER_KEY,
+                                sizeof(CHTTP_TLS_TEST_P384_SERVER_KEY) - 1u),
+                  0);
+
+      server = (chttp_server){0};
+      client = (chttp_client){0};
+      server_tls.cert_file = rejected_cert_path;
+      server_tls.key_file = rejected_key_path;
+      server_config.tls = &server_tls;
+      check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+      check_equal(chttp_server_use(&server, chttp_tls_test_middleware, &probe), SALTS_OK);
+      check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
+      check_equal(tt_remove_file(rejected_cert_path), 0);
+      check_equal(tt_remove_file(rejected_key_path), 0);
+      free(rejected_cert_path);
+      free(rejected_key_path);
+
+      check_equal(chttp_server_start(&server), SALTS_OK);
+      check_equal(chttp_server_port(&server, &port), SALTS_OK);
+      check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);
+      check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+      status = chttp_tls_test_get(&client, uri, &valid_profile, NULL, 0u, &response);
+      check_not_equal(status, SALTS_OK);
+      check_equal(probe.middleware_calls, (size_t)1u);
+      chttp_response_destroy(&response);
+      check_equal(chttp_client_destroy(&client, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_server_stop(&server, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_server_destroy(&server), SALTS_OK);
+    }
+
+    check_equal(chttp_tls_profile_destroy(&valid_profile), SALTS_OK);
+    check_equal(chttp_tls_profile_destroy(&wrong_ca_profile), SALTS_OK);
+    check_equal(chttp_tls_profile_destroy(&wrong_name_profile), SALTS_OK);
   }
 #endif
 
