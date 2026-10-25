@@ -93,6 +93,19 @@ set_target_properties(chttp_requests_test PROPERTIES
   C_EXTENSIONS OFF)
 
 
+# One-off versioned dependency-closure qualification. Never enable this
+# test listener in normal release or application targets.
+option(CHTTP_GMSSL_PORT14_QUALIFICATION
+  "Test source-built CHttp/CNet against independent OpenSSL TLS1.3 HRR/CCS" OFF)
+if(CHTTP_GMSSL_PORT14_QUALIFICATION)
+  add_executable(chttp_tls14_server_probe chttp_tls14_server_probe.c)
+  target_link_libraries(chttp_tls14_server_probe PRIVATE
+    CHttp::Server Salts::CNet Salts::Core)
+  set_target_properties(chttp_tls14_server_probe PROPERTIES
+    FOLDER "http_client/tests" C_STANDARD 11
+    C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+endif()
+
 add_executable(chttp_tls_test chttp_tls_test.c)
 target_link_libraries(chttp_tls_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
 target_include_directories(chttp_tls_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_client/src ${PROJECT_SOURCE_DIR}/http_client/rpc)
