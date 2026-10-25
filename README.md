@@ -81,6 +81,8 @@ SaltsUtils Crypto with GmSSL/libecc. Install SaltsUtils Native 4.3.0-rc.4 or a
 compatible newer SDK and restore GmSSL port revision 9 through the shared
 vcpkg-cache manifest; its CMake target resolves the static Crypto dependency.
 See [provider requirements and qualification](docs/HTTP.md#密码库迁移边界).
+Certificate-profile claims and their exact test limits are tracked in the
+[X.509 compatibility matrix](docs/X509_COMPATIBILITY_MATRIX.md).
 
 CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
 

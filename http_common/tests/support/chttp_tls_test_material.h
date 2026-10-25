@@ -176,6 +176,38 @@ static const char CHTTP_TLS_TEST_P384_WRONG_CA_CERTIFICATE[] =
     "7n8JGXTqvVQZxaFiYYJep40nAmxN/nRVSeFMxD7Bm4A5AjBdhH0Lur9CzPtqKsgI\n"
     "T7u2sR4UCvQJcCE40r3dd4V/4exOkI75UwrLbzFh2gt9L/U=\n"
     "-----END CERTIFICATE-----\n";
+
+/* Same P-256 subject/key and P-384 issuer as the valid leaf, but outside its
+ * 2022-2023 validity window. */
+static const char CHTTP_TLS_TEST_P384_EXPIRED_SERVER_CERTIFICATE[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIB0jCCAVmgAwIBAgIQZIFkUVyqWRQ3jRusjSO2vDAKBggqhkjOPQQDAzAvMS0w\n"
+    "KwYDVQQDDCRTYWx0cyBDTmV0IFAzODQgRUNEU0EgU0hBMzg0IFRlc3QgQ0EwHhcN\n"
+    "MjIwMTAxMDAwMDAwWhcNMjMwMTAxMDAwMDAwWjAUMRIwEAYDVQQDDAlsb2NhbGhv\n"
+    "c3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS6Fg6Vf6jNuNAzJZwxeYnoN6RW\n"
+    "vVHlGdImjw0RAS8wDAVScggTC4lK5S3O21qvMD4Kd9Rgg1RMd7zw3jFzaqqLo3Iw\n"
+    "cDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEF\n"
+    "BQcDATAaBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwHwYDVR0jBBgwFoAUpZbb\n"
+    "52+1Nt9Kd3mLBf/OzTilZBgwCgYIKoZIzj0EAwMDZwAwZAIwdjPfXon9JnGHDpOZ\n"
+    "3QzWp2q8/rsNd/niMl2/Zrz9sqnV3tjU5rBRM2b6ru27LOyGAjBwW2cbKhRgrVL+\n"
+    "P8D9P81OPdb9Zgkt7ZdIZMgxBVKhlUXBhTxPhtvmEV9qnM7H7kU=\n"
+    "-----END CERTIFICATE-----\n";
+
+/* One base64-valid signature byte is changed from the valid leaf. The parsed
+ * certificate still matches the private key, but chain verification must fail. */
+static const char CHTTP_TLS_TEST_P384_TAMPERED_SERVER_CERTIFICATE[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIB0zCCAVmgAwIBAgIQZIFkUVyqWRQ3jRusjSO2vTAKBggqhkjOPQQDAzAvMS0w\n"
+    "KwYDVQQDDCRTYWx0cyBDTmV0IFAzODQgRUNEU0EgU0hBMzg0IFRlc3QgQ0EwHhcN\n"
+    "MjYwMTAxMDAwMDAwWhcNMzQwMTAxMDAwMDAwWjAUMRIwEAYDVQQDDAlsb2NhbGhv\n"
+    "c3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS6Fg6Vf6jNuNAzJZwxeYnoN6RW\n"
+    "vVHlGdImjw0RAS8wDAVScggTC4lK5S3O21qvMD4Kd9Rgg1RMd7zw3jFzaqqLo3Iw\n"
+    "cDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEF\n"
+    "BQcDATAaBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwHwYDVR0jBBgwFoAUpZbb\n"
+    "52+1Nt9Kd3mLBf/OzTilZBgwCgYIKoZIzj0EAwMDaAAwZQIwbWEGXSIY0SAZ9N/p\n"
+    "RLKKkC8TZBvizRFAkVOqVqv/eyz8m4bdL0AkTw+yGM2514OsAjEAng/HSifx1mMb\n"
+    "jajmAWrdr/s6oN6LQc7UtxXZsXw4C2oH+uuA3rjRz5XEA7c+bWeK\n"
+    "-----END CERTIFICATE-----\n";
 #endif
 
 #endif /* CHTTP_TLS_TEST_MATERIAL_H */
