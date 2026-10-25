@@ -139,7 +139,7 @@ jobs:
             -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
             -DCMAKE_INSTALL_PREFIX="$root" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build --preset ci-linux-release-user --parallel 2
+          cmake --build "$src/build/ci-linux-release" --parallel 2
           cmake --install "$src/build/ci-linux-release" --prefix "$root"
           test -f "$root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
 
