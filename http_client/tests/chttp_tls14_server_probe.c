@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
   c.max_target_bytes = 128u;
   c.max_header_count = 16u;
   c.max_header_bytes = 2048u;
-  c.max_request_body_bytes = 0u;
+  c.max_request_body_bytes = 128u;
   c.max_response_header_count = 8u;
   c.max_response_header_bytes = 512u;
   c.max_response_body_bytes = 512u;
