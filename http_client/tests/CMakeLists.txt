@@ -96,6 +96,10 @@ set_target_properties(chttp_requests_test PROPERTIES
 add_executable(chttp_tls_test chttp_tls_test.c)
 target_link_libraries(chttp_tls_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
 target_include_directories(chttp_tls_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_client/src ${PROJECT_SOURCE_DIR}/http_client/rpc)
+if(CHTTP_P384_SHA384_ACCEPTANCE_TESTS)
+  target_compile_definitions(chttp_tls_test PRIVATE
+    CHTTP_P384_SHA384_ACCEPTANCE_TESTS=1)
+endif()
 add_test(NAME chttp_tls_test COMMAND chttp_tls_test)
 set_target_properties(chttp_tls_test PROPERTIES FOLDER "http_client/tests")
 set_target_properties(chttp_tls_test PROPERTIES

@@ -1,0 +1,192 @@
+name: CHttp P-384 SHA-384 HTTPS
+
+'on':
+  pull_request:
+    paths:
+      - ".github/workflows/chttp-p384-sha384.yml"
+      - "CMakeOptions.cmake"
+      - "http_client/**"
+      - "http_common/tests/support/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: chttp-p384-sha384-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-source:
+    name: Exact-source HTTPS chain (ASan/UBSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_SALTS: ebc480afa4c1232f320ddcb0f12de661d9fed732
+      EXPECTED_UTILS: fbb5f3ee19589836ced0f3b98414e71e6dcc1388
+      EXPECTED_GMSSL_REGISTRY: 2e214ae44a3e3244eded5db6361194576356fc9e
+      CCACHE_DIR: ${{ github.workspace }}/build/p384-sha384/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - name: Checkout exact CHttp head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_CHTTP }}
+          persist-credentials: false
+      - name: Checkout exact Salts source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.EXPECTED_SALTS }}
+          path: build/p384-sha384/sources/salts
+          persist-credentials: false
+      - name: Checkout exact SaltsUtils source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.EXPECTED_UTILS }}
+          path: build/p384-sha384/sources/salts-utils
+          persist-credentials: false
+      - name: Use pinned shared vcpkg dependency graph
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - name: Restore re2c host generator
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - name: Prepare native host tools
+        uses: ./build/p384-sha384/sources/salts/.github/actions/setup-build-host
+      - name: Prepare exact candidate graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache ninja-build pkg-config
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test "$(git -C build/p384-sha384/sources/salts rev-parse HEAD)" = "$EXPECTED_SALTS"
+          test "$(git -C build/p384-sha384/sources/salts-utils rev-parse HEAD)" = "$EXPECTED_UTILS"
+          python3 - "$EXPECTED_GMSSL_REGISTRY" \
+            build/p384-sha384/sources/salts-utils/vcpkg-configuration.json \
+            vcpkg-configuration.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          sha, *names = sys.argv[1:]
+          for name in names:
+              path = Path(name)
+              data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+              registries = list(data.get("registries", []))
+              matches = [r for r in registries if "gmssl" in r.get("packages", [])]
+              if len(matches) > 1:
+                  raise SystemExit(f"multiple gmssl registries in {path}")
+              if matches:
+                  matches[0].update(reference=sha, baseline=sha)
+              else:
+                  registries.append({
+                      "kind": "git",
+                      "repository": "https://github.com/qigao/vcpkg-cache",
+                      "reference": sha,
+                      "baseline": sha,
+                      "packages": ["gmssl"],
+                  })
+              data["registries"] = registries
+              path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          PY
+          {
+            printf 'chttp_source=%s\n' "$EXPECTED_CHTTP"
+            printf 'salts_source=%s\n' "$EXPECTED_SALTS"
+            printf 'saltsutils_source=%s\n' "$EXPECTED_UTILS"
+            printf 'gmssl_registry=%s\n' "$EXPECTED_GMSSL_REGISTRY"
+          } | tee build/p384-sha384/provenance.txt
+
+      - name: Build and install exact Salts
+        shell: bash
+        working-directory: build/p384-sha384/sources/salts
+        run: |
+          set -euo pipefail
+          unset VCPKG_OVERLAY_PORTS
+          export PROJECT_ROOT="$GITHUB_WORKSPACE"
+          cmake --preset linux-release-ci \
+            -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build --preset linux-release-ci --parallel 2
+          ctest --preset linux-release-ci -R '^cnet_.*test$' \
+            --no-tests=error --timeout 180 --output-on-failure
+          cmake --build --preset install-linux-release-ci --parallel 2
+          mkdir -p "$RUNNER_TEMP/chttp-p384-sdk/salts"
+          cp -a stage/sdk/linux-x64 "$RUNNER_TEMP/chttp-p384-sdk/salts/release"
+
+      - name: Build and install exact SaltsUtils
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-p384-sdk/salts/release"
+          export QIGAO_SDK_RID=linux-x64
+          export QIGAO_TARGET_TRIPLET=x64-linux
+          export PROJECT_ROOT="$GITHUB_WORKSPACE"
+          export QIGAO_VCPKG_TOOLCHAIN_FILE="$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
+          quickjs_overlay="$RUNNER_TEMP/chttp-quickjs-ng-only"
+          mkdir -p "$quickjs_overlay"
+          cp -a "$VCPKG_CACHE_REPOSITORY_ROOT/ports/quickjs-ng" "$quickjs_overlay/quickjs-ng"
+          export VCPKG_OVERLAY_PORTS="$quickjs_overlay"
+          src="$GITHUB_WORKSPACE/build/p384-sha384/sources/salts-utils"
+          root="$RUNNER_TEMP/chttp-p384-sdk/salts-utils/release"
+          cmake --preset ci-linux-release-user -S "$src" \
+            -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$root" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build "$src/build/ci-linux-release" --parallel 2
+          cmake --install "$src/build/ci-linux-release" --prefix "$root"
+          test -f "$root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+
+      - name: Build and run real HTTPS acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/chttp-p384-sdk/salts/release"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/chttp-p384-sdk/salts-utils/release"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_ROOT/lib:${LD_LIBRARY_PATH:-}"
+          export QIGAO_SDK_RID=linux-x64
+          export QIGAO_TARGET_TRIPLET=x64-linux
+          export PROJECT_ROOT="$GITHUB_WORKSPACE"
+          export QIGAO_VCPKG_TOOLCHAIN_FILE="$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
+          unset VCPKG_OVERLAY_PORTS
+          cmake --preset ci-linux-release-user \
+            -B build/p384-sha384/build-chttp \
+            -DCHTTP_P384_SHA384_ACCEPTANCE_TESTS=ON \
+            -DBUILD_TESTS=ON -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_ADDRESS=ON -DENABLE_SANITIZER_UNDEFINED=ON \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -g -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -g -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build/p384-sha384/build-chttp --target chttp_tls_test --parallel 2
+          ctest --test-dir build/p384-sha384/build-chttp -R '^chttp_tls_test$' \
+            --no-tests=error --timeout 180 --output-on-failure
+          ldd build/p384-sha384/build-chttp/bin/chttp_tls_test \
+            | tee build/p384-sha384/consumer-ldd.txt
+          grep -F "$SALTS_ROOT/lib" build/p384-sha384/consumer-ldd.txt
+          grep -F "$SALTS_UTILS_ROOT/lib" build/p384-sha384/consumer-ldd.txt
+          grep -q libasan build/p384-sha384/consumer-ldd.txt
+
+      - name: Preserve qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chttp-p384-sha384-exact-source
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/p384-sha384/provenance.txt
+            build/p384-sha384/consumer-ldd.txt
+            build/p384-sha384/build-chttp/Testing/Temporary/LastTest.log
+      - name: Verify exact CHttp head is unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CHTTP"
+          test -z "$(git status --porcelain --untracked-files=no)"
