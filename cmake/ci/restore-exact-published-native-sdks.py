@@ -2,8 +2,8 @@
 """Fail-closed restoration of two EXACT, formally published native SDKs.
 
 Used by Draft PR #245's gated official-binary qualification and the
-manual cutover preflight. No wildcard NuGet versions, candidate-source
-fallback, package publishing, or automatic release selection.
+manual cutover preflight. No wildcard versions, candidate-source fallback, Mono/NuGet executable,
+package publishing, or automatic release selection.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from xml.sax.saxutils import escape
 import zipfile
 
 SALTS_VERSION_RE = re.compile(r"2\.3\.0(?:-rc\.[1-9][0-9]*)?\Z")
@@ -100,15 +99,33 @@ def verify_release_metadata(
     }
 
 
-def select_package(assets: dict, package_id: str, version: str, packages: Path) -> Path:
-    actual = [(key, data["path"]) for key, data in assets["libraries"].items()
-              if key.lower().startswith(package_id.lower() + "/")]
-    if len(actual) != 1 or actual[0][0].lower() != (
-        package_id + "/" + version).lower():
-        raise ValueError(f"{package_id}: resolved NuGet graph is not exactly {version}: {actual}")
-    package = packages / actual[0][1]
-    if not package.is_dir() or package.resolve() != package.absolute():
-        raise ValueError(f"{package_id}: invalid restored package path {package}")
+def restore_exact_package(
+    client: Path, packages: Path, package_id: str, version: str,
+) -> Path:
+    """Request exactly this NuGet V3 version through the shared curl client.
+
+    The archive is retained in its package folder for independent SHA256
+    and manifest attestation by verify_package(). Missing HTTP 404, stale
+    credentials, corrupt archives or wrong versions fail closed; no NuGet
+    executable, Mono or alternate package version is ever attempted.
+    """
+    if not client.is_file():
+        raise ValueError(f"Missing immutable shared curl GitHub Packages client: {client}")
+    if not re.fullmatch(r"[A-Za-z0-9.]+", package_id) or not re.fullmatch(
+        r"\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?", version
+    ):
+        raise ValueError("Published SDK must use an explicit valid NuGet package ID/version")
+    package = packages / package_id.lower() / version
+    if package.exists():
+        raise ValueError(f"Refusing existing exact native SDK restore: {package}")
+    package.mkdir(parents=True)
+    archive = package / f"{package_id}.{version}.nupkg"
+    # Client validates NuGet V3 metadata, package ID, exact version, HTTPS
+    # origin, path normalization and member integrity before materializing.
+    run(sys.executable, str(client), "package", package_id, version, str(archive))
+    if not archive.is_file():
+        raise ValueError(f"curl did not provide exact requested archive: {package_id}/{version}")
+    run(sys.executable, str(client), "extract", str(archive), str(package))
     return package
 
 
@@ -176,23 +193,6 @@ def append_env(path: Path, name: str, value: str) -> None:
         stream.write(f"{name}={value}\n")
 
 
-def exact_nuget_project(salts_version: str, utils_version: str) -> str:
-    """NuGet requires bracketed [version] to pin a single exact version.
-
-    Unbracketed PackageReference versions are minimum-range selectors;
-    post-restore asset auditing alone is too late to prevent resolution drift.
-    """
-    return (
-        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
-        '<TargetFramework>net8.0</TargetFramework>'
-        '<RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>'
-        '</PropertyGroup><ItemGroup>'
-        f'<PackageReference Include="Salts.Native" Version="[{escape(salts_version)}]"/>'
-        f'<PackageReference Include="SaltsUtils.Native" Version="[{escape(utils_version)}]"/>'
-        '</ItemGroup></Project>\n'
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--salts-version", required=True)
@@ -221,18 +221,13 @@ def main() -> int:
     if work.exists():
         raise ValueError("Refusing a preexisting package restore directory")
     work.mkdir()
-    project = work / "exact-native-graph.csproj"
-    project.write_text(exact_nuget_project(args.salts_version, args.utils_version))
     root = Path(__file__).resolve().parents[2]
+    client = root / "build/vcpkg-cache-contract/scripts/github-packages.py"
     packages = work / "packages"
-    run("dotnet", "restore", str(project), "--packages", str(packages),
-        "--configfile", str(root / "cmake/vcpkg-cache.nuget.config"),
-        "--no-cache", "--force-evaluate")
-    assets = json.loads((work / "obj/project.assets.json").read_text())
-    salts_package = select_package(
-        assets, "Salts.Native", args.salts_version, packages)
-    utils_package = select_package(
-        assets, "SaltsUtils.Native", args.utils_version, packages)
+    salts_package = restore_exact_package(
+        client, packages, "Salts.Native", args.salts_version)
+    utils_package = restore_exact_package(
+        client, packages, "SaltsUtils.Native", args.utils_version)
     salts_root, salts_digest = verify_package(
         salts_package, "Salts.Native", args.salts_version, args.salts_sha,
         args.salts_digest, args.salts_version, args.rid)
