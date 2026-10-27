@@ -112,12 +112,21 @@ jobs:
       - name: Install OpenAPI conformance test requirements
         shell: bash
         run: python -m pip install -r openapi/tests/requirements-conformance.txt
-      - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Checkout immutable curl-only GitHub Packages client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
+      - name: Configure canonical vcpkg files cache through curl
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
-      - name: Restore re2c host tools
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.family == 'macos' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
+          host-triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.family == 'macos' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
+      - name: Restore re2c with verified curl package
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
 
       - name: Prepare Linux toolchain
         if: matrix.family == 'linux'
@@ -155,9 +164,11 @@ jobs:
               -not (Test-Path -LiteralPath (Join-Path $root 'cmake/QigaoVcpkgToolchain.cmake') -PathType Leaf)) {
             throw 'missing canonical shared vcpkg toolchain'
           }
-          if ($env:VCPKG_BINARY_SOURCES -notmatch 'nugetconfig' -or
-              $env:VCPKG_NUGET_REPOSITORY -ne 'https://github.com/qigao/vcpkg-cache') {
-            throw 'shared vcpkg NuGet binary cache is unavailable'
+          if ($env:VCPKG_BINARY_SOURCES -ne "clear;files,$env:VCPKG_BINARY_CACHE,readwrite") {
+            throw 'vcpkg must use authenticated curl-restored local files cache only'
+          }
+          if (-not (Test-Path -LiteralPath 'build/vcpkg-cache-contract/scripts/github-packages.py')) {
+            throw 'pinned shared curl package verifier is missing'
           }
       - name: Select native SDK platform
         id: target
@@ -385,12 +396,21 @@ jobs:
         if: matrix.family == 'ios'
         shell: bash
         run: echo "X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache" >> "$GITHUB_ENV"
-      - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Checkout immutable curl-only GitHub Packages client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
+      - name: Configure canonical vcpkg files cache through curl
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
-      - name: Restore re2c host tools
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: ${{ matrix.triplet }}
+          host-triplet: ${{ matrix.host_triplet }}
+      - name: Restore re2c with verified curl package
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
       - name: Prepare Android toolchain
         if: matrix.family == 'android'
         shell: bash
@@ -413,11 +433,8 @@ jobs:
           test -n "${VCPKG_ROOT:-}"
           test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
-          case "${VCPKG_BINARY_SOURCES:-}" in
-            *nugetconfig*) ;;
-            *) echo 'shared vcpkg NuGet cache unavailable' >&2; exit 1 ;;
-          esac
-          test "${VCPKG_NUGET_REPOSITORY:-}" = 'https://github.com/qigao/vcpkg-cache'
+          test "$VCPKG_BINARY_SOURCES" = "clear;files,$VCPKG_BINARY_CACHE,readwrite"
+          test -f build/vcpkg-cache-contract/scripts/github-packages.py
       - name: Restore cross compiler object cache
         uses: ./.github/actions/setup-compiler-cache
         with:
