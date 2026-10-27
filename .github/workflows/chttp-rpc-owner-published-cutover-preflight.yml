@@ -309,9 +309,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python build/vcpkg-cache-contract/scripts/setup-vcpkg-curl-cache.py build/vcpkg-cache-contract
           if ($LASTEXITCODE -ne 0) { throw 'Pinned ARM64 vcpkg bootstrap failed' }
-          if ($env:VCPKG_BINARY_SOURCES -ne "clear;files,$env:VCPKG_BINARY_CACHE,readwrite") {
-            throw 'Linux ARM64 source build must not use Mono/NuGet binary provider'
-          }
+      # GITHUB_ENV is applied to subsequent steps, not to the pwsh process
+      # which wrote it. Keep this strict read-only verification after bootstrap.
+      - name: Verify ARM64 local-only cache identity after environment import
+        if: matrix.rid == 'linux-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${VCPKG_BINARY_CACHE:-}"
+          test "${VCPKG_BINARY_SOURCES:-}" = "clear;files,$VCPKG_BINARY_CACHE,readwrite"
+          test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
       - name: Resolve published exact package ABIs through curl on cached RIDs
         if: matrix.rid != 'linux-arm64'
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
