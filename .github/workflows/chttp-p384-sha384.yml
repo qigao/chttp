@@ -53,12 +53,21 @@ jobs:
           ref: ${{ env.EXPECTED_UTILS }}
           path: build/p384-sha384/sources/salts-utils
           persist-credentials: false
-      - name: Use pinned shared vcpkg dependency graph
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Check out immutable curl native dependency transport
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/ci-vcpkg-infrastructure
+          persist-credentials: false
+      - name: Restore CHttp native vcpkg cache via GitHub Packages curl
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
-      - name: Restore re2c host generator
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: x64-linux
+          host-triplet: x64-linux
+      - name: Restore published re2c through curl GitHub Packages
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
       - name: Prepare native host tools
         uses: ./build/p384-sha384/sources/salts/.github/actions/setup-build-host
       - name: Prepare exact candidate graph
@@ -103,6 +112,31 @@ jobs:
             printf 'saltsutils_source=%s\n' "$EXPECTED_UTILS"
             printf 'gmssl_registry=%s\n' "$EXPECTED_GMSSL_REGISTRY"
           } | tee build/p384-sha384/provenance.txt
+
+      - name: Resolve exact Salts and SaltsUtils vcpkg ABIs using curl
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          client="$GITHUB_WORKSPACE/build/ci-vcpkg-infrastructure/scripts/restore-manifest-cache.py"
+          test -f "$client"
+          # SaltsUtils previously builds using only the one quickjs-ng overlay.
+          # Derive its exact ABI against the SAME overlay before build.
+          quickjs_overlay="$RUNNER_TEMP/chttp-quickjs-ng-only"
+          mkdir -p "$quickjs_overlay"
+          cp -a "$VCPKG_CACHE_REPOSITORY_ROOT/ports/quickjs-ng" "$quickjs_overlay/quickjs-ng"
+          python3 "$client" --manifest-root build/p384-sha384/sources/salts \
+            --triplet x64-linux --host-triplet x64-linux
+          VCPKG_OVERLAY_PORTS="$quickjs_overlay" python3 "$client" \
+            --manifest-root build/p384-sha384/sources/salts-utils \
+            --triplet x64-linux --host-triplet x64-linux
+          # Fail closed: all requested exact ABIs must be available from the
+          # HTTP feed; the actual installers continue to use files only.
+          case "$VCPKG_BINARY_SOURCES" in
+            "clear;files,$VCPKG_BINARY_CACHE,readwrite") ;;
+            *) echo "unexpected NuGet/remote binary provider" >&2; exit 1 ;;
+          esac
 
       - name: Build and install exact Salts
         shell: bash
