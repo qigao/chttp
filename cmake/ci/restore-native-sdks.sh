@@ -41,51 +41,67 @@ if [[ "$windows_host" == true ]]; then packages="$(cygpath -u -- "$packages")"; 
 mkdir -p -- "$packages"
 packages="$(native_path "$(cd -- "$packages" && pwd -P)")"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-config="$(native_path "$repository_root/cmake/vcpkg-cache.nuget.config")"
-project="$restore_root/qigao-chttp-sdk-restore.csproj"
+curl_client="$repository_root/build/vcpkg-cache-contract/scripts/github-packages.py"
+if [[ ! -f "$curl_client" ]]; then
+  echo "Missing immutable shared curl NuGet V3 client: $curl_client" >&2
+  exit 1
+fi
+export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
+salts_version='2.3.0-rc.16'
+utils_version='4.3.0-rc.11'
+wasm_version=''
 
-cat > "$project" <<'EOF'
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="[2.3.0-rc.16]" Condition="'$(UseSaltsCandidate)' != 'true'" />
-    <PackageReference Include="SaltsUtils.Native" Version="[4.3.0-rc.11]" />
-    <PackageReference Include="TurboWasm.Native" Version="*" Condition="'$(WithTurboWasm)' == 'true'" />
-  </ItemGroup>
-</Project>
-EOF
-use_candidate=false
-if [ -n "${SALTS_CANDIDATE_ROOT:-}" ]; then use_candidate=true; fi
-dotnet restore "$(native_path "$project")" --packages "$packages" --configfile "$config" \
-  --no-cache --force-evaluate -p:WithTurboWasm="$with_turbowasm" -p:UseSaltsCandidate="$use_candidate" >&2
-
+restore_exact_package() {
+  local id="$1" version="$2"
+  local identity="${id,,}"
+  local archive="$restore_root/$identity.$version.nupkg"
+  local folder="$packages/$identity/$version"
+  "$python_command" "$(native_path "$curl_client")" package "$id" "$version" \
+    "$(native_path "$archive")" >&2
+  "$python_command" "$(native_path "$curl_client")" extract \
+    "$(native_path "$archive")" "$(native_path "$folder")" >&2
+}
+if [[ -z "${SALTS_CANDIDATE_ROOT:-}" ]]; then
+  restore_exact_package 'Salts.Native' "$salts_version"
+fi
+restore_exact_package 'SaltsUtils.Native' "$utils_version"
+if [[ "$with_turbowasm" == true ]]; then
+  version_file="$restore_root/turbowasm.version"
+  wasm_archive="$restore_root/turbowasm.latest.nupkg"
+  "$python_command" "$(native_path "$curl_client")" latest \
+    'TurboWasm.Native' "$(native_path "$wasm_archive")" \
+    "$(native_path "$version_file")" >&2
+  wasm_version="$(tr -d '\r\n' < "$version_file")"
+  if [[ ! "$wasm_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Unexpected non-stable TurboWasm.Native selection: $wasm_version" >&2
+    exit 1
+  fi
+  "$python_command" "$(native_path "$curl_client")" extract \
+    "$(native_path "$wasm_archive")" \
+    "$(native_path "$packages/turbowasm.native/$wasm_version")" >&2
+fi
 candidate_root="${SALTS_CANDIDATE_ROOT:-}"
 if [[ -n "$candidate_root" ]]; then candidate_root="$(native_path "$candidate_root")"; fi
 github_env=""
 if [[ "$output_format" == github ]]; then github_env="$(native_path "$GITHUB_ENV")"; fi
 # Commit roots only after the complete requested SDK graph has been checked.
-"$python_command" - "$(native_path "$restore_root/obj/project.assets.json")" "$packages" \
-  "$rid" "$candidate_root" "$with_turbowasm" "$output_format" "$github_env" <<'PY'
+"$python_command" - "$packages" \
+  "$rid" "$candidate_root" "$with_turbowasm" "$output_format" "$github_env" \
+  "$salts_version" "$utils_version" "$wasm_version" <<'PY'
 import json, os, pathlib, sys
-assets = json.loads(pathlib.Path(sys.argv[1]).read_text())
-packages, rid, candidate, with_wasm, output_format, github_env = sys.argv[2:]
+packages, rid, candidate, with_wasm, output_format, github_env, salts_version, utils_version, wasm_version = sys.argv[1:]
+requested = {"salts.native": salts_version, "saltsutils.native": utils_version,
+             "turbowasm.native": wasm_version}
+if salts_version != "2.3.0-rc.16" or utils_version != "4.3.0-rc.11":
+    raise SystemExit("Published Salts/SaltsUtils native SDK version contract changed")
 
 def sdk_root(package):
-    matches = [(k, v['path']) for k, v in assets['libraries'].items()
-               if k.lower().startswith(package.lower() + '/')]
-    if len(matches) != 1:
-        raise SystemExit('expected one resolved ' + package + ' package')
-    # Preserve the published SDK pair selected by the native release workflow.
-    required_versions = {'salts.native': '2.3.0-rc.16',
-                         'saltsutils.native': '4.3.0-rc.11'}
-    want = required_versions.get(package.lower())
-    if want and matches[0][0].lower() != package.lower() + '/' + want:
-        raise SystemExit('unexpected native SDK release version: ' + matches[0][0])
-    print(f'Resolved {package}: {matches[0][0]} (RID={rid})', file=sys.stderr)
-    return (pathlib.Path(packages) / matches[0][1] / 'sdk' / rid).resolve()
+    identity = package.lower()
+    version = requested.get(identity)
+    if not version:
+        raise SystemExit(f"No exact published GitHub Packages version for {package}")
+    print(f"curl verified {package}/{version} (RID={rid})", file=sys.stderr)
+    return (pathlib.Path(packages) / identity / version / 'sdk' / rid).resolve()
 
 salts = pathlib.Path(candidate).resolve() if candidate else sdk_root('Salts.Native')
 utils = sdk_root('SaltsUtils.Native')
