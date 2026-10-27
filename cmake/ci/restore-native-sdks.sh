@@ -53,7 +53,9 @@ wasm_version=''
 
 restore_exact_package() {
   local id="$1" version="$2"
-  local identity="${id,,}"
+  # macOS ships Bash 3.2: ${id,,} is Bash 4+ and fails before downloading.
+  local identity
+  identity="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
   local archive="$restore_root/$identity.$version.nupkg"
   local folder="$packages/$identity/$version"
   "$python_command" "$(native_path "$curl_client")" package "$id" "$version" \
