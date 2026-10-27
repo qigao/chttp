@@ -1,49 +1,46 @@
-name: Set up Salts SDKs
-description: Restore the current Salts and SaltsUtils native SDKs from GitHub Packages and prepare the CHttp toolchain.
+name: Set up Salts SDKs with curl-only GitHub Packages
+description: Restore exact Salts/SaltsUtils native SDK artifacts and vcpkg ABIs via authenticated curl, never NuGet/Mono.
 inputs:
   with-turbowasm:
-    description: Restore the latest released TurboWasm Component SDK for WASM qualification.
+    description: Restore the latest stable TurboWasm Component SDK from verified GitHub Packages.
     required: false
     default: "false"
 runs:
   using: composite
   steps:
-    - name: Set up .NET for GitHub Packages
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
-
-    - name: Configure shared vcpkg binary cache
-      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
-      with:
-        mode: read
-
-
-    - name: Verify canonical vcpkg binary cache
+    - name: Prepare native host tools before vcpkg compiler ABI detection
       shell: bash
       run: |
         set -euo pipefail
-        test -n "${VCPKG_ROOT:-}"
-        test -n "${VCPKG_CACHE_REPOSITORY_ROOT:-}"
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache curl
+        command -v ninja
+        command -v ccache
+    - name: Checkout immutable GitHub Packages curl client
+      uses: actions/checkout@v4
+      with:
+        repository: qigao/vcpkg-cache
+        ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        path: build/vcpkg-cache-contract
+        persist-credentials: false
+    - name: Configure local files-only vcpkg ABI cache
+      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+      with:
+        mode: read
+        triplet: x64-linux
+        host-triplet: x64-linux
+    - name: Verify canonical curl-only vcpkg files cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -x "$VCPKG_ROOT/vcpkg"
         test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
-        case "${VCPKG_BINARY_SOURCES:-}" in
-          *nugetconfig*) ;;
-          *) echo "shared vcpkg NuGet cache is not configured" >&2; exit 1 ;;
-        esac
-        test "${VCPKG_NUGET_REPOSITORY:-}" = "https://github.com/qigao/vcpkg-cache"
-
-    - name: Restore Salts SDK graph
+        test -f build/vcpkg-cache-contract/scripts/github-packages.py
+        test "$VCPKG_BINARY_SOURCES" = "clear;files,$VCPKG_BINARY_CACHE,readwrite"
+    - name: Restore exact published native Salts SDKs via curl
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         bash cmake/ci/restore-native-sdks.sh linux-x64 "${{ inputs.with-turbowasm }}"
-
-    - name: Prepare CHttp toolchain
-      shell: bash
-      run: |
-        set -euxo pipefail
-        sudo apt-get update
-        sudo apt-get install -y ninja-build pkg-config nasm
-        test -x "$VCPKG_ROOT/vcpkg"

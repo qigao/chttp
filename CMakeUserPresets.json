@@ -9,7 +9,7 @@
             "hidden": true,
             "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
             "environment": {
-                "VCPKG_BINARY_SOURCES": "clear;default,readwrite;nugettimeout,1800;nugetconfig,${sourceDir}/cmake/vcpkg-cache.nuget.config,read",
+                "VCPKG_BINARY_SOURCES": "clear;files,${sourceDir}/build/vcpkg-binary-cache,readwrite",
                 "VCPKG_OVERLAY_PORTS": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/ports",
                 "RE2C_ROOT": "$penv{RE2C_ROOT}",
                 "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
