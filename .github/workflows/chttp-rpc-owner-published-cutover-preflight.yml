@@ -98,15 +98,27 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - name: Prepare native Linux toolchain before vcpkg compiler ABI detection
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache curl
+      - name: Check out immutable GitHub Packages curl transport
+        uses: actions/checkout@v4
         with:
-          dotnet-version: 8.0.x
-      - name: Use immutable vcpkg/cache tooling
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
+      - name: Prepare source-derived vcpkg ABI cache via curl NuGet V3
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
-      - name: Restore independent host re2c
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
+          triplet: x64-linux
+          host-triplet: x64-linux
+      - name: Restore re2c host binary via curl
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
       - name: Cache exact-identity compiler objects
         uses: ./.github/actions/setup-compiler-cache
         with:
@@ -246,9 +258,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
       - name: Select canonical iOS binary cache namespace
         if: matrix.family == 'ios'
         shell: bash
@@ -259,30 +268,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install -r openapi/tests/requirements-conformance.txt
-      - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@0dc254695917bc180504d916240292e9096e9da5
-        with:
-          mode: read
-      - name: Restore independent re2c host tool
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@0dc254695917bc180504d916240292e9096e9da5
-      - name: Require matching vcpkg target and host architecture
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not $env:VCPKG_CACHE_REPOSITORY_ROOT -or
-              -not (Test-Path (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'cmake/QigaoVcpkgToolchain.cmake') -PathType Leaf)) {
-            throw 'Missing canonical vcpkg toolchain'
-          }
-          if ($env:RUNNER_OS -eq 'Windows') {
-            if (-not $env:QIGAO_VCPKG_WINDOWS_TRIPLET -or -not $env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET) {
-              throw 'Missing Windows vcpkg triplets'
-            }
-            "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
-            "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" >> $env:GITHUB_ENV
-          }
-          if ($env:RUNNER_OS -eq 'macOS' -and $env:RUNNER_ARCH -ne 'ARM64') {
-            throw 'macOS runner must match arm64 SDK host'
-          }
       - name: Prepare native Linux and Android toolchain
         if: matrix.family == 'linux' || matrix.family == 'android'
         shell: bash
@@ -310,6 +295,39 @@ jobs:
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vs)) { throw 'MSVC x64 unavailable' }
           "VSINSTALL=$vs" >> $env:GITHUB_ENV
+      - name: Check out immutable GitHub Packages curl transport
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
+      - name: Prepare source-derived vcpkg ABI cache via curl NuGet V3
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        with:
+          mode: read
+          triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.triplet }}
+          host-triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
+      - name: Restore re2c host binary via curl
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+      - name: Require matching vcpkg target and host architecture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:VCPKG_CACHE_REPOSITORY_ROOT -or
+              -not (Test-Path (Join-Path $env:VCPKG_CACHE_REPOSITORY_ROOT 'cmake/QigaoVcpkgToolchain.cmake') -PathType Leaf)) {
+            throw 'Missing canonical vcpkg toolchain'
+          }
+          if ($env:RUNNER_OS -eq 'Windows') {
+            if (-not $env:QIGAO_VCPKG_WINDOWS_TRIPLET -or -not $env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET) {
+              throw 'Missing Windows vcpkg triplets'
+            }
+            "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+            "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_HOST_TRIPLET" >> $env:GITHUB_ENV
+          }
+          if ($env:RUNNER_OS -eq 'macOS' -and $env:RUNNER_ARCH -ne 'ARM64') {
+            throw 'macOS runner must match arm64 SDK host'
+          }
       - name: Restore exact six-RID officially published Salts and SaltsUtils NuGet pair
         shell: bash
         env:
