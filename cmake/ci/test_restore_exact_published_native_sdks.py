@@ -27,18 +27,24 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
         fields.update(changes)
         return argparse.Namespace(**fields)
 
-    def test_nuget_package_reference_uses_exact_bracket_range(self):
-        from xml.etree import ElementTree
-        project = ElementTree.fromstring(module["exact_nuget_project"](
-            "2.3.0-rc.16", "4.3.0-rc.11"))
-        refs = {item.attrib["Include"]: item.attrib["Version"]
-                for item in project.iter("PackageReference")}
-        self.assertEqual(refs, {
-            "Salts.Native": "[2.3.0-rc.16]",
-            "SaltsUtils.Native": "[4.3.0-rc.11]",
-        })
-        self.assertEqual(len(refs), 2)
-        self.assertNotIn("2.3.0-*", ElementTree.tostring(project).decode())
+    def test_curl_exact_package_requires_immutable_version(self):
+        restore = module["restore_exact_package"]
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            client = parent / "github-packages.py"
+            client.write_text("pinned transport fixture")
+            for package_id, version in (
+                ("../Salts.Native", "2.3.0-rc.16"),
+                ("Salts.Native", "2.3.0-*"),
+                ("Salts.Native", "2.3.0-rc.shaabc"),
+                ("SaltsUtils.Native", "4.3.0-rc.00"),
+            ):
+                with self.subTest(package_id=package_id, version=version):
+                    with self.assertRaisesRegex(ValueError, "explicit valid"):
+                        restore(client, parent / "packages", package_id, version)
+            with self.assertRaisesRegex(ValueError, "Missing immutable"):
+                restore(parent / "missing.py", parent / "packages",
+                        "Salts.Native", "2.3.0-rc.16")
 
     def test_exact_versions_source_shas_and_digests_required(self):
         with mock.patch.dict(os.environ, {
@@ -114,24 +120,35 @@ class ExactPublishedNativeRestoreTest(unittest.TestCase):
                     pkg, "Salts.Native", version, sha, digest, version,
                     "windows-x64")
 
-    def test_nuget_graph_selection_is_exact_and_unique(self):
-        with tempfile.TemporaryDirectory() as temp:
-            packages = Path(temp)
-            (packages / "salts.native/2.3.0-rc.16").mkdir(parents=True)
-            assets = {"libraries": {
-                "Salts.Native/2.3.0-rc.16": {"path": "salts.native/2.3.0-rc.16"}}}
-            selected = module["select_package"](
-                assets, "Salts.Native", "2.3.0-rc.16", packages)
-            self.assertEqual(selected, packages / "salts.native/2.3.0-rc.16")
-            with self.assertRaisesRegex(ValueError, "not exactly"):
-                module["select_package"](
-                    assets, "Salts.Native", "2.3.0-rc.15", packages)
-            extra = {"libraries": dict(assets["libraries"],
-                                      **{"Salts.Native/2.3.0-rc.14": {
-                                          "path": "salts.native/2.3.0-rc.14"}})}
-            with self.assertRaisesRegex(ValueError, "not exactly"):
-                module["select_package"](
-                    extra, "Salts.Native", "2.3.0-rc.16", packages)
+    def test_curl_requests_only_exact_id_and_version_without_fallback(self):
+        restore = module["restore_exact_package"]
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            client = parent / "pinned-github-packages.py"
+            client.write_text("approved client fixture")
+            def execute(*args):
+                calls.append(args)
+                if args[2] == "package":
+                    Path(args[-1]).write_bytes(b"test nupkg payload")
+                elif args[2] == "extract":
+                    Path(args[-1]).mkdir(parents=True, exist_ok=True)
+                else:
+                    raise AssertionError(f"unexpected package transport command {args}")
+                return ""
+            with mock.patch.dict(restore.__globals__, {"run": execute}):
+                package = restore(client, parent / "packages",
+                                  "Salts.Native", "2.3.0-rc.16")
+                self.assertEqual(package,
+                    parent / "packages/salts.native/2.3.0-rc.16")
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[0][2:5],
+                    ("package", "Salts.Native", "2.3.0-rc.16"))
+                self.assertEqual(calls[1][2], "extract")
+                with self.assertRaisesRegex(ValueError, "existing"):
+                    restore(client, parent / "packages",
+                            "Salts.Native", "2.3.0-rc.16")
+            self.assertFalse((parent / "packages/salts.native/2.3.0-rc.15").exists())
 
     @staticmethod
     def synthetic_archive(
