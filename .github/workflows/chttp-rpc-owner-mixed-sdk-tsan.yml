@@ -58,12 +58,21 @@ jobs:
           ref: ${{ env.EXPECTED_UTILS }}
           path: build/rpc-mixed-sdk-tsan/sources/salts-utils
           persist-credentials: false
-      - name: Use pinned shared vcpkg dependency graph
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+      - name: Checkout immutable curl-only GitHub Packages transport
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/curl-native-infrastructure
+          persist-credentials: false
+      - name: Resolve CHttp exact native ABI packages with curl
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
-      - name: Restore re2c host generator
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+          triplet: x64-linux
+          host-triplet: x64-linux
+      - name: Restore published re2c using curl, not NuGet/Mono
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
       - name: Prepare native host tools
         uses: ./build/rpc-mixed-sdk-tsan/sources/salts/.github/actions/setup-build-host
       - name: Check exact first-party source identities
@@ -91,6 +100,26 @@ jobs:
             build/rpc-mixed-sdk-tsan/sources/salts/platform/src/thread_posix.c
           grep -qF 'pthread_once_t native;' \
             build/rpc-mixed-sdk-tsan/sources/salts/platform/include/salts/thread.h
+
+      - name: Restore exact pinned Salts and SaltsUtils ABI packages with curl
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          client="$GITHUB_WORKSPACE/build/curl-native-infrastructure/scripts/restore-manifest-cache.py"
+          test -f "$client"
+          test "$(git -C build/rpc-mixed-sdk-tsan/sources/salts rev-parse HEAD)" = "$EXPECTED_SALTS"
+          test "$(git -C build/rpc-mixed-sdk-tsan/sources/salts-utils rev-parse HEAD)" = "$EXPECTED_UTILS"
+          # Use the SAME shared overlay / target and host triplets as the
+          # source installs. No mutable NuGet provider or fallback.
+          python3 "$client" \
+            --manifest-root "build/rpc-mixed-sdk-tsan/sources/salts" \
+            --triplet x64-linux --host-triplet x64-linux
+          python3 "$client" \
+            --manifest-root "build/rpc-mixed-sdk-tsan/sources/salts-utils" \
+            --triplet x64-linux --host-triplet x64-linux
+          test "$VCPKG_BINARY_SOURCES" = "clear;files,$VCPKG_BINARY_CACHE,readwrite"
 
       - name: Build and install uninstrumented candidate Salts
         shell: bash
