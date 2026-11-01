@@ -20,11 +20,11 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: qigao/vcpkg-cache
-        ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        ref: v0.1.0
         path: build/vcpkg-cache-contract
         persist-credentials: false
     - name: Configure local files-only vcpkg ABI cache
-      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+      uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
       with:
         mode: read
         triplet: x64-linux

@@ -63,11 +63,11 @@ jobs:
           path: build/rpc-nupkg-tsan/salts-build-host
           persist-credentials: false
       - name: Use pinned shared vcpkg dependency graph
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@v0.1.0
         with:
           mode: read
       - name: Restore re2c host generator
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Prepare Linux build host
         uses: ./build/rpc-nupkg-tsan/salts-build-host/.github/actions/setup-build-host
 
@@ -378,11 +378,11 @@ jobs:
           set -euo pipefail
           python3 -m pip install -r openapi/tests/requirements-conformance.txt
       - name: Configure canonical vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@v0.1.0
         with:
           mode: read
       - name: Restore independent re2c host tool
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Require matching vcpkg target and host architecture
         shell: pwsh
         run: |

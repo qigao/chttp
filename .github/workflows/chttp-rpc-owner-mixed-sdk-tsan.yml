@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      CC: clang
+      CXX: clang++
       EXPECTED_SALTS: 06ecf2179691e197b108d39ebd12dc994148eada
       EXPECTED_UTILS: 234c4a73bcefc455d48b3550ec2142d7ff1c3f5a
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -62,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/curl-native-infrastructure
           persist-credentials: false
       - name: Prepare native host tools before vcpkg ABI detection
@@ -75,13 +77,13 @@ jobs:
           command -v ccache
           command -v ninja
       - name: Resolve CHttp exact native ABI packages with curl
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: x64-linux
           host-triplet: x64-linux
       - name: Restore published re2c using curl, not NuGet/Mono
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Check exact first-party source identities
         shell: bash
         run: |
