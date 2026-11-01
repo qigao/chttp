@@ -116,17 +116,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/vcpkg-cache-contract
           persist-credentials: false
       - name: Configure canonical vcpkg files cache through curl
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.family == 'macos' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
           host-triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.family == 'macos' && (runner.arch == 'ARM64' && 'arm64-osx' || 'x64-osx') || 'x64-linux' }}
       - name: Restore re2c with verified curl package
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
 
       - name: Prepare Linux toolchain
         if: matrix.family == 'linux'
@@ -400,17 +400,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/vcpkg-cache-contract
           persist-credentials: false
       - name: Configure canonical vcpkg files cache through curl
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: ${{ matrix.triplet }}
           host-triplet: ${{ matrix.host_triplet }}
       - name: Restore re2c with verified curl package
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Prepare Android toolchain
         if: matrix.family == 'android'
         shell: bash

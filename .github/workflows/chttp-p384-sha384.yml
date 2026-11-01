@@ -27,7 +27,7 @@ jobs:
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
       EXPECTED_SALTS: 2a943b532c56b959a8f395288c23a77c003009db
       EXPECTED_UTILS: fbb5f3ee19589836ced0f3b98414e71e6dcc1388
-      EXPECTED_GMSSL_REGISTRY: 2e214ae44a3e3244eded5db6361194576356fc9e
+      EXPECTED_GMSSL_REGISTRY: 05a10d73a5b1d01598e59d8cf34074513bd49df4
       CCACHE_DIR: ${{ github.workspace }}/build/p384-sha384/ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
@@ -57,17 +57,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/ci-vcpkg-infrastructure
           persist-credentials: false
       - name: Restore CHttp native vcpkg cache via GitHub Packages curl
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: x64-linux
           host-triplet: x64-linux
       - name: Restore published re2c through curl GitHub Packages
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Prepare native host tools
         uses: ./build/p384-sha384/sources/salts/.github/actions/setup-build-host
       - name: Prepare exact candidate graph
@@ -94,12 +94,12 @@ jobs:
               if len(matches) > 1:
                   raise SystemExit(f"multiple gmssl registries in {path}")
               if matches:
-                  matches[0].update(reference=sha, baseline=sha)
+                  matches[0].update(reference="v0.1.0", baseline=sha)
               else:
                   registries.append({
                       "kind": "git",
                       "repository": "https://github.com/qigao/vcpkg-cache",
-                      "reference": sha,
+                      "reference": "v0.1.0",
                       "baseline": sha,
                       "packages": ["gmssl"],
                   })
@@ -111,6 +111,7 @@ jobs:
             printf 'salts_source=%s\n' "$EXPECTED_SALTS"
             printf 'saltsutils_source=%s\n' "$EXPECTED_UTILS"
             printf 'gmssl_registry=%s\n' "$EXPECTED_GMSSL_REGISTRY"
+            printf 'cache_release=v0.1.0\n'
           } | tee build/p384-sha384/provenance.txt
 
       - name: Resolve exact Salts and SaltsUtils vcpkg ABIs using curl

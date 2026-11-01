@@ -108,17 +108,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/vcpkg-cache-contract
           persist-credentials: false
       - name: Prepare source-derived vcpkg ABI cache via curl NuGet V3
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: x64-linux
           host-triplet: x64-linux
       - name: Restore re2c host binary via curl
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Cache exact-identity compiler objects
         uses: ./.github/actions/setup-compiler-cache
         with:
@@ -299,7 +299,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.0
           path: build/vcpkg-cache-contract
           persist-credentials: false
       - name: Bootstrap pinned vcpkg for explicitly source-built Linux ARM64 ports
@@ -321,13 +321,13 @@ jobs:
           test -f "$VCPKG_CACHE_REPOSITORY_ROOT/cmake/QigaoVcpkgToolchain.cmake"
       - name: Resolve published exact package ABIs through curl on cached RIDs
         if: matrix.rid != 'linux-arm64'
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.0
         with:
           mode: read
           triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.triplet }}
           host-triplet: ${{ matrix.family == 'windows' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
       - name: Restore re2c host binary via curl
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0
       - name: Require matching vcpkg target and host architecture
         shell: pwsh
         run: |

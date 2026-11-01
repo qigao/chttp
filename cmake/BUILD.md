@@ -23,7 +23,7 @@ Praktor 的 dotenv 值是字面量，不展开 `$VAR`、`${VAR}`、`~` 或 CMake
   toolchain 与本地/CI overlay ports 即来自同一 checkout（包括其未提交修改），
   无需另外设置 `VCPKG_OVERLAY_PORTS`。
   切换目录后先执行 `TASK=refresh`；各工程仍保留自己的 `vcpkg_installed`。
-  这不会固定 GitHub Actions 的 `@master`，也不保证不同编译器/triplet 共用同一二进制包。
+  这不会自动设置 GitHub Actions 的缓存版本（统一使用 `v0.1.0`），也不保证不同编译器/triplet 共用同一二进制包。
 - `VSDEVCMD_BAT`：Windows Visual Studio 开发环境入口。每个 CMake/CTest 命令
   在同一 `cmd.exe` 中先调用它，并保留配置的 `VCPKG_ROOT`。
   从其 `VSINSTALLDIR` 设置
@@ -72,7 +72,7 @@ dotnet restore /absolute/re2c-restore/re2c.csproj --packages /absolute/shared/nu
 普通构建复用已恢复的包，更新版本是显式环境准备操作。
 
 Native 和 cross CI 均使用
-`qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master`，由共享 action 安装 .NET、
+`qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.0`，由共享 action 安装 .NET、
 恢复最新稳定包并设置 `RE2C_ROOT`/`PATH`。
 
 ## 使用已安装 SDK
