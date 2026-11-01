@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      CC: clang
+      CXX: clang++
       EXPECTED_SALTS: 06ecf2179691e197b108d39ebd12dc994148eada
       EXPECTED_UTILS: 234c4a73bcefc455d48b3550ec2142d7ff1c3f5a
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}

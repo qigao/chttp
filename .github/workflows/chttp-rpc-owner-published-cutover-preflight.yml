@@ -87,6 +87,8 @@ jobs:
           - {mode: asan-ubsan, asan: "ON", ubsan: "ON", tsan: "OFF", repeats: 1}
           - {mode: tsan, asan: "OFF", ubsan: "OFF", tsan: "ON", repeats: 5}
     env:
+      CC: clang
+      CXX: clang++
       EXPECTED_CHTTP: ${{ github.event.pull_request.head.sha || github.sha }}
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
