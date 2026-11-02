@@ -409,6 +409,167 @@ static int crpc_server_test_health(void *user,
   return chttp_server_reply(response, 200u, "text/plain", "healthy", 7u);
 }
 
+/* Transport-only reference payload: use the REAL native CHttp HTTP/2
+ * JSON-RPC and CSerde reader/writer, with the public ORIGINAL DouZero
+ * role-state/history/legal-action *dimensions*. The "scores" below are
+ * intentionally trivial count-of-ones test values, NOT pretrained Q.
+ * They never supply/commit a game action and never leave this CTest. */
+enum {
+  CRPC_H2_DOUZERO_X_BYTES = 430,
+  CRPC_H2_DOUZERO_HISTORY_BYTES = 810,
+  CRPC_H2_DOUZERO_ACTION_ROWS = 64,
+  CRPC_H2_DOUZERO_ACTION_BYTES = 54,
+  CRPC_H2_DOUZERO_BODY_LIMIT = 32768
+};
+
+typedef struct crpc_h2_douzero_fixture {
+  uint64_t rows_seen;
+  uint64_t bits_seen;
+  size_t call_count;
+} crpc_h2_douzero_fixture;
+
+static cserde_status crpc_h2_douzero_write(cserde_writer *writer,
+                                           cserde_kind kind,
+                                           uint64_t value) {
+  const cserde_token token = {.kind = kind, .value.uint = value};
+  return cserde_writer_write(writer, &token);
+}
+
+static cserde_status crpc_h2_douzero_key(cserde_writer *writer, const char *name) {
+  const cserde_token token = {
+      .kind = CSERDE_STRING,
+      .value.slice = {(const unsigned char *)name, strlen(name), CSERDE_VIEW_STABLE}};
+  return cserde_writer_write(writer, &token);
+}
+
+static cserde_status crpc_h2_douzero_binary_array(
+    cserde_writer *writer, unsigned count, unsigned modulo) {
+  cserde_status status = crpc_h2_douzero_write(writer, CSERDE_ARRAY_BEGIN, 0u);
+  for (unsigned i = 0u; i < count && status == CSERDE_OK; ++i)
+    status = crpc_h2_douzero_write(writer, CSERDE_UINT,
+                                   (uint64_t)(i % modulo == 0u));
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_write(writer, CSERDE_ARRAY_END, 0u);
+  return status;
+}
+
+static cserde_status crpc_h2_douzero_encode_params(void *unused, cserde_writer *writer) {
+  cserde_status status;
+  (void)unused;
+  status = crpc_h2_douzero_write(writer, CSERDE_MAP_BEGIN, 0u);
+  if (status == CSERDE_OK) status = crpc_h2_douzero_key(writer, "x");
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_binary_array(writer, CRPC_H2_DOUZERO_X_BYTES, 17u);
+  if (status == CSERDE_OK) status = crpc_h2_douzero_key(writer, "z");
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_binary_array(writer, CRPC_H2_DOUZERO_HISTORY_BYTES, 7u);
+  if (status == CSERDE_OK) status = crpc_h2_douzero_key(writer, "actions");
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_write(writer, CSERDE_ARRAY_BEGIN, 0u);
+  for (unsigned row = 0u; row < CRPC_H2_DOUZERO_ACTION_ROWS && status == CSERDE_OK;
+       ++row) {
+    status = crpc_h2_douzero_binary_array(writer,
+                                          CRPC_H2_DOUZERO_ACTION_BYTES,
+                                          13u + (row % 3u));
+  }
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_write(writer, CSERDE_ARRAY_END, 0u);
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_write(writer, CSERDE_MAP_END, 0u);
+  return status;
+}
+
+static int crpc_h2_douzero_read_binary(
+    const crpc_server_request_view *request, const char *field,
+    size_t expected_count, int nested, uint64_t *out_bits) {
+  crpc_server_param_reader lease = CRPC_SERVER_PARAM_READER_INIT;
+  cserde_token token = {0};
+  int present = 0;
+  uint64_t count_ones = 0u;
+  const int status = crpc_server_request_param_open(
+      request, field, SIZE_MAX, &lease, &present);
+  if (status != SALTS_OK || !present || lease.reader == NULL) {
+    crpc_server_request_param_close(&lease);
+    return SALTS_EPROTO;
+  }
+  if (cserde_reader_next(lease.reader, &token) != CSERDE_OK ||
+      token.kind != CSERDE_ARRAY_BEGIN) {
+    crpc_server_request_param_close(&lease);
+    return SALTS_EPROTO;
+  }
+  for (size_t outer = 0u; outer < (nested ? CRPC_H2_DOUZERO_ACTION_ROWS : 1u);
+       ++outer) {
+    if (nested && (cserde_reader_next(lease.reader, &token) != CSERDE_OK ||
+                   token.kind != CSERDE_ARRAY_BEGIN)) {
+      crpc_server_request_param_close(&lease);
+      return SALTS_EPROTO;
+    }
+    for (size_t i = 0u; i < expected_count; ++i) {
+      if (cserde_reader_next(lease.reader, &token) != CSERDE_OK ||
+          token.kind != CSERDE_UINT || token.value.uint > UINT64_C(1)) {
+        crpc_server_request_param_close(&lease);
+        return SALTS_EPROTO;
+      }
+      count_ones += token.value.uint;
+    }
+    if (nested && (cserde_reader_next(lease.reader, &token) != CSERDE_OK ||
+                   token.kind != CSERDE_ARRAY_END)) {
+      crpc_server_request_param_close(&lease);
+      return SALTS_EPROTO;
+    }
+  }
+  if (cserde_reader_next(lease.reader, &token) != CSERDE_OK ||
+      token.kind != CSERDE_ARRAY_END ||
+      cserde_reader_next(lease.reader, &token) != CSERDE_DONE) {
+    crpc_server_request_param_close(&lease);
+    return SALTS_EPROTO;
+  }
+  crpc_server_request_param_close(&lease);
+  *out_bits = count_ones;
+  return SALTS_OK;
+}
+
+static cserde_status crpc_h2_douzero_encode_scores(
+    void *unused, cserde_writer *writer) {
+  cserde_status status;
+  (void)unused;
+  status = crpc_h2_douzero_write(writer, CSERDE_ARRAY_BEGIN, 0u);
+  for (unsigned row = 0u; row < CRPC_H2_DOUZERO_ACTION_ROWS && status == CSERDE_OK;
+       ++row) {
+    const unsigned modulo = 13u + row % 3u;
+    const uint64_t ones = (CRPC_H2_DOUZERO_ACTION_BYTES - 1u) / modulo + 1u;
+    status = crpc_h2_douzero_write(writer, CSERDE_UINT, ones);
+  }
+  if (status == CSERDE_OK)
+    status = crpc_h2_douzero_write(writer, CSERDE_ARRAY_END, 0u);
+  return status;
+}
+
+static int crpc_h2_douzero_rpc_handler(
+    void *user, const crpc_server_request_view *request,
+    crpc_server_response *response) {
+  crpc_h2_douzero_fixture *fixture = (crpc_h2_douzero_fixture *)user;
+  uint64_t x_ones = 0u, z_ones = 0u, action_ones = 0u;
+  if (!fixture || !request || !response || !request->params ||
+      strcmp(request->method, "douzero.q.evaluate") != 0 ||
+      strcmp(request->target, "/rpc/douzero") != 0 ||
+      request->notification)
+    return SALTS_EPROTO;
+  if (crpc_h2_douzero_read_binary(
+          request, "x", CRPC_H2_DOUZERO_X_BYTES, 0, &x_ones) != SALTS_OK ||
+      crpc_h2_douzero_read_binary(
+          request, "z", CRPC_H2_DOUZERO_HISTORY_BYTES, 0, &z_ones) != SALTS_OK ||
+      crpc_h2_douzero_read_binary(
+          request, "actions", CRPC_H2_DOUZERO_ACTION_BYTES, 1,
+          &action_ones) != SALTS_OK)
+    return SALTS_EPROTO;
+  fixture->bits_seen = x_ones + z_ones + action_ones;
+  fixture->rows_seen = CRPC_H2_DOUZERO_ACTION_ROWS;
+  ++fixture->call_count;
+  return crpc_server_response_result(response,
+                                     crpc_h2_douzero_encode_scores, NULL);
+}
+
 spec("CRPC server") {
   it("attaches a low-level RPC registry to the existing HTTP Server owner") {
     static const char call[] = "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}";
