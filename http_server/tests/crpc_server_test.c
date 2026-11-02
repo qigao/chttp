@@ -1134,6 +1134,94 @@ spec("CRPC server") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
+  it("transports 64x54 DouZero-sized actor arrays through REAL HTTP/2 JSON-RPC") {
+    chttp_server server = {0};
+    chttp_client client = {0};
+    crpc_server_test_config server_config = crpc_server_test_config_for(1);
+    chttp_client_config client_config = crpc_server_test_http_client_config();
+    chttp_client_rpc_limits limits = CHTTP_CLIENT_RPC_LIMITS_INIT;
+    crpc_h2_douzero_fixture probe = {0};
+    const crpc_method method = {.name = "douzero.q.evaluate"};
+    crpc_options options = {0};
+    crpc_response response = {0};
+    crpc_error error = {0};
+    cserde_token token = {0};
+    char uri[64];
+    uint16_t port = 0u;
+
+    /* A 430-state +810-history +64x54 binary action array is OVER the
+     * default 8192-byte RPC body budget. Explicitly qualify 32KiB on
+     * BOTH native server and client without changing global defaults.
+     * These public bit vectors are not private actor cards or Q weights.
+     */
+    server_config.http.max_request_body_bytes = CRPC_H2_DOUZERO_BODY_LIMIT;
+    client_config.max_request_body_bytes = CRPC_H2_DOUZERO_BODY_LIMIT;
+    server_config.http.buffer_capacity_bytes = 512u * 1024u;
+    client_config.buffer_capacity_bytes = 256u * 1024u;
+    check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_rpc_register(
+        &server, "/rpc/douzero", &method,
+        crpc_h2_douzero_rpc_handler, &probe), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri),
+                           "tcp://127.0.0.1:%u", (unsigned)port), 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    limits.max_method_bytes = 64u;
+    limits.max_json_depth = 8u;
+    limits.max_request_body_bytes = CRPC_H2_DOUZERO_BODY_LIMIT;
+    limits.max_http_header_count = client_config.max_header_count;
+    options = (crpc_options) {
+        .connection_uri = uri,
+        .authority = "localhost",
+        .target = "/rpc/douzero",
+        .method = method,
+        .request_id = UINT64_C(2711),
+        .deadline_ms = CRPC_SERVER_TEST_TIMEOUT_MS,
+        .encode_params = crpc_h2_douzero_encode_params,
+        .protocol = CHTTP_HTTP_2 /* no HTTP/1 downgrade */
+    };
+
+    check_equal(chttp_client_rpc_request_reply(
+        &client, &limits, &options, &response, &error), SALTS_OK);
+    check_equal(response.http_status, 200u);
+    check_equal(response.kind, CRPC_RESPONSE_RESULT);
+    check_equal(response.request_id, UINT64_C(2711));
+    check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
+    check_equal(token.kind, CSERDE_ARRAY_BEGIN);
+    for (unsigned row = 0u; row < CRPC_H2_DOUZERO_ACTION_ROWS; ++row) {
+      const unsigned modulo = 13u + (row % 3u);
+      const uint64_t expected = (CRPC_H2_DOUZERO_ACTION_BYTES - 1u) / modulo + 1u;
+      check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
+      check_equal(token.kind, CSERDE_UINT);
+      check_equal(token.value.uint, expected);
+    }
+    check_equal(cserde_reader_next(response.value.result, &token), CSERDE_OK);
+    check_equal(token.kind, CSERDE_ARRAY_END);
+    check_equal(cserde_reader_next(response.value.result, &token), CSERDE_DONE);
+    crpc_response_destroy(&response);
+
+    /* The original CHttp max_request_body_bytes=8192 constraint must
+     * fail closed rather than truncate the ordered action matrix. */
+    limits.max_request_body_bytes = 8192u;
+    options.request_id = UINT64_C(2712);
+    check_true(chttp_client_rpc_request_reply(
+        &client, &limits, &options, &response, &error) != SALTS_OK);
+    /* Neither an incomplete request nor a partial JSON-RPC response is
+     * accepted by this test as successful inference. */
+    check_equal(chttp_client_destroy(
+        &client, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(
+        &server, CRPC_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(probe.call_count, (size_t)1u);
+    check_equal(probe.rows_seen, UINT64_C(64));
+    check_true(probe.bits_seen > UINT64_C(0));
+    /* This is a real H2/CSerde transport test, NOT a DouZero model,
+     * ONNX inference or GameOwner action/commit test. */
+  }
+
   it("serves the same RPC endpoint over TLS HTTP/1.1 and HTTP/2") {
     static const char *server_alpn[] = {"h2", "http/1.1"};
     static const char *h2[] = {"h2"};
