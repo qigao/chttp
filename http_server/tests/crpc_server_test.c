@@ -429,8 +429,7 @@ typedef struct crpc_h2_douzero_fixture {
 } crpc_h2_douzero_fixture;
 
 static cserde_status crpc_h2_douzero_write(cserde_writer *writer,
-                                           cserde_kind kind,
-                                           uint64_t value) {
+                                           int kind, uint64_t value) {
   const cserde_token token = {.kind = kind, .value.uint = value};
   return cserde_writer_write(writer, &token);
 }
