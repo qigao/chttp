@@ -1157,7 +1157,6 @@ spec("CRPC server") {
     server_config.http.max_request_body_bytes = CRPC_H2_DOUZERO_BODY_LIMIT;
     client_config.max_request_body_bytes = CRPC_H2_DOUZERO_BODY_LIMIT;
     server_config.http.buffer_capacity_bytes = 512u * 1024u;
-    client_config.buffer_capacity_bytes = 256u * 1024u;
     check_equal(crpc_server_test_init(&server, &server_config), SALTS_OK);
     check_equal(chttp_server_rpc_register(
         &server, "/rpc/douzero", &method,
