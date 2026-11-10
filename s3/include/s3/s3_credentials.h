@@ -1,7 +1,7 @@
 #ifndef S3_CREDENTIALS_H
 #define S3_CREDENTIALS_H
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,7 +1,7 @@
 #include <chttp_app/web.h>
 
 #include <http_server/rate_limit.h>
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #include <stdint.h>
 #include <stdio.h>

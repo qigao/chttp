@@ -2,8 +2,8 @@
 #include "http_example.http.h"
 #include "http_example.service_native.h"
 #include "http_example_templates.h"
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <string.h>
 
@@ -95,8 +95,8 @@ static int example_plugin_close(http_example_app *app, uint64_t started) {
             &app->plugins, app->plugin_ref, &quiet));
         if (status != SALTS_OK) return status;
         if (quiet) break;
-        if (cmeta_monotonic_ms() - started >= app->shutdown_timeout_ms) return SALTS_ETIMEDOUT;
-        cmeta_sleep_ms(1u);
+        if (monotonic_ms() - started >= app->shutdown_timeout_ms) return SALTS_ETIMEDOUT;
+        sleep_ms(1u);
       } while (!quiet);
     }
     status = example_plugin_status(cmeta_plugin_registry_unload(&app->plugins, app->plugin_ref));
@@ -109,7 +109,7 @@ static int example_plugin_close(http_example_app *app, uint64_t started) {
 
 int http_example_close(http_example_app *app) {
   if (app == NULL) return SALTS_EINVAL;
-  const uint64_t started = cmeta_monotonic_ms();
+  const uint64_t started = monotonic_ms();
   /* Control-thread only: stop admission before observing executor quiescence. */
   if (app->server.impl != NULL) {
     const int status = chttp_server_stop(&app->server, app->shutdown_timeout_ms);
@@ -126,8 +126,8 @@ int http_example_close(http_example_app *app) {
   if (cflow_executor_valid(&app->executor)) {
     if (!cflow_executor_shutdown(&app->executor)) return SALTS_EBUSY;
     while (cflow_executor_pending(&app->executor) != 0u) {
-      if (cmeta_monotonic_ms() - started >= app->shutdown_timeout_ms) return SALTS_ETIMEDOUT;
-      cmeta_sleep_ms(1u);
+      if (monotonic_ms() - started >= app->shutdown_timeout_ms) return SALTS_ETIMEDOUT;
+      sleep_ms(1u);
     }
     if (!cflow_executor_wait_idle(&app->executor)) return SALTS_EBUSY;
   }

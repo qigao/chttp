@@ -3,10 +3,10 @@
 #include "http_example_app.h"
 #include "chttp_server_runtime.h"
 #include <http_client/http.h>
-#include <fmt.h>
+#include <core/fmt.h>
 #include <tinytest.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,7 +63,7 @@ static void example_gate(void *user) {
   example_fixture *fixture = user;
   atomic_store_explicit(&fixture->gate_started, 1, memory_order_release);
   while (!atomic_load_explicit(&fixture->gate_release, memory_order_acquire))
-    cmeta_sleep_ms(1u);
+    sleep_ms(1u);
 }
 
 static void example_completed(void *user, chttp_request request,
@@ -142,9 +142,9 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
     /* Model the documented stopped-with-error state, without a platform I/O
      * failure hook. The real RPC/server, executor and DSO still own resources. */
     chttp_server_impl *server = fixture.app.server.impl;
-    cmeta_mutex_lock(&server->mutex);
+    sync_mutex_lock(&server->mutex);
     server->stats.terminal_status = SALTS_EIO;
-    cmeta_mutex_unlock(&server->mutex);
+    sync_mutex_unlock(&server->mutex);
     check_equal(http_example_close(&fixture.app), SALTS_EIO);
     check_null(fixture.app.server.impl);
     check_null(fixture.app.service.impl);
@@ -279,9 +279,9 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
         .target = "/api/add?left=3&right=4", .method = CHTTP_METHOD_GET,
         .on_complete = example_completed, .user = &fixture};
     check_equal(chttp_async_client_submit(&fixture.async_client, &options, &request), SALTS_OK);
-    const uint64_t started = cmeta_monotonic_ms();
+    const uint64_t started = monotonic_ms();
     while (cflow_executor_pending(&fixture.app.executor) < 2u &&
-           cmeta_monotonic_ms() - started < HTTP_EXAMPLE_TIMEOUT_MS) {
+           monotonic_ms() - started < HTTP_EXAMPLE_TIMEOUT_MS) {
       size_t completed = 0u;
       check_equal(chttp_async_client_poll(&fixture.async_client, 1u, &completed), SALTS_OK);
     }
@@ -309,10 +309,10 @@ spec("HTTP example IDL, configurator, interceptors and Jinja") {
     example_start(&fixture, &config);
     const cflow_executor_task gate = {.run = example_gate, .user = &fixture};
     check_equal(cflow_executor_try_post_task(&fixture.app.executor, &gate), CFLOW_ADMISSION_ACCEPTED);
-    const uint64_t started = cmeta_monotonic_ms();
+    const uint64_t started = monotonic_ms();
     while (!atomic_load_explicit(&fixture.gate_started, memory_order_acquire) &&
-           cmeta_monotonic_ms() - started < HTTP_EXAMPLE_TIMEOUT_MS)
-      cmeta_sleep_ms(1u);
+           monotonic_ms() - started < HTTP_EXAMPLE_TIMEOUT_MS)
+      sleep_ms(1u);
     check_equal(atomic_load_explicit(&fixture.gate_started, memory_order_acquire), 1);
     for (size_t index = 0u; index < HTTP_EXAMPLE_PLUGIN_QUEUE_CAPACITY; ++index)
       check_equal(cflow_executor_try_post_task(&fixture.app.executor, &gate), CFLOW_ADMISSION_ACCEPTED);

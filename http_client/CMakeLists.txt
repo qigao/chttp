@@ -32,9 +32,13 @@ target_include_directories(chttp_client
           ${PROJECT_SOURCE_DIR}/http_common/rpc
           ${PROJECT_SOURCE_DIR}/vendor/cjwt/include)
 target_link_libraries(chttp_client
-  PUBLIC Salts::CNet Salts::CMeta Salts::CSerde Salts::DataBind
-  PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
+  PUBLIC Salts::CNet CMeta::CMeta Salts::CSerde Salts::DataBind
+  PRIVATE llhttp::llhttp_static Salts::Core Salts::Core CMeta::CFlow
           Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
           chttp_cjwt)
 install(TARGETS chttp_client EXPORT ChttpTargets)
 install(DIRECTORY include/http_client DESTINATION include)
+
+if(BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

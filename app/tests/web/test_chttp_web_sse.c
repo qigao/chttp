@@ -2,9 +2,9 @@
 #include "tinytest.h"
 
 #include <http_client/http.h>
-#include <salts/clock.h>
-#include <salts/error_codes.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <core/error_codes.h>
+#include <threads/threads.h>
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -173,10 +173,10 @@ static int web_sse_handler(
 }
 
 static int web_sse_wait_closed(web_sse_app *app, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   while (atomic_load_explicit(&app->close_count, memory_order_acquire) == 0) {
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
   return SALTS_OK;
 }

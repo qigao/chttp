@@ -1,115 +1,64 @@
 {
-    "version": 6,
-    "include": [
-        "presets/BuildPresets.json",
-        "presets/TestPresets.json"
-    ],
-    "configurePresets": [
-        {
-            "name": "base-win-dev-user",
-            "hidden": true,
-            "displayName": "Developer Build (Windows, Base)",
-            "inherits": [
-                "dev-win-msvc-ninja",
-                "pkg-vcpkg"
-            ]
-        },
-        {
-            "name": "base-win-release-user",
-            "hidden": true,
-            "displayName": "Release Build (Windows, Base)",
-            "inherits": [
-                "release-win-msvc-ninja",
-                "pkg-vcpkg"
-            ]
-        },
-        {
-            "name": "base-linux-dev-user",
-            "hidden": true,
-            "displayName": "Developer Build (Linux, Base)",
-            "inherits": [
-                "dev-linux-ninja",
-                "pkg-vcpkg"
-            ]
-        },
-        {
-            "name": "base-win-dev-clang-user",
-            "hidden": true,
-            "displayName": "Developer Build (Windows, Clang, Base)",
-            "inherits": [
-                "ISWindows",
-                "developer-mode",
-                "Clang",
-                "flags-clang-windows",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/Clang"
-        },
-        {
-            "name": "base-win-release-clang-user",
-            "hidden": true,
-            "displayName": "Release Build (Windows, Clang, Base)",
-            "inherits": [
-                "ISWindows",
-                "release-mode",
-                "Clang",
-                "flags-clang-windows",
-                "pkg-vcpkg"
-            ],
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/Clang-Release"
-        },
-        {
-            "name": "flags-clang-windows",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_C_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wformat=2 -Wundef -Wshadow -Wcast-align -Wunused -Wnull-dereference",
-                "CMAKE_CXX_FLAGS": "-fstack-protector-strong -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wcast-qual -Wformat=2 -Wundef -Werror=float-equal -Wshadow -Wcast-align -Wunused -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wextra-semi -Woverloaded-virtual -Wnon-virtual-dtor -Wold-style-cast -fexceptions"
-            }
-        },
-        {
-            "name": "base-ci-sdk-release",
-            "hidden": true,
-            "inherits": [
-                "base-ninja",
-                "release-mode"
-            ],
-            "cacheVariables": {
-                "VCPKG_INSTALL_OPTIONS": "--only-binarycaching",
-                "BUILD_TESTING": false,
-                "BUILD_TESTS": false,
-                "BUILD_EXAMPLES": false,
-                "BUILD_BENCHMARKS": false,
-                "ENABLE_SANITIZER_ADDRESS": false
-            }
-        },
-        {
-            "name": "base-ci-sdk-release-tests",
-            "hidden": true,
-            "inherits": "base-ci-sdk-release",
-            "cacheVariables": {
-                "BUILD_TESTING": true,
-                "BUILD_TESTS": true
-            }
-        },
-        {
-            "name": "base-ci-android-sdk-release",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_SYSTEM_NAME": "Android",
-                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
-                "ANDROID_ABI": "arm64-v8a",
-                "ANDROID_PLATFORM": "android-26",
-                "ANDROID_STL": "c++_shared"
-            }
-        },
-        {
-            "name": "base-ci-ios-sdk-release",
-            "hidden": true,
-            "cacheVariables": {
-                "CMAKE_SYSTEM_NAME": "iOS"
-            }
-        }
-    ]
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 27,
+    "patch": 0
+  },
+  "include": [
+    "presets/ConfigurePresets.json",
+    "presets/BuildPresets.json",
+    "presets/TestPresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "native-runtime",
+      "hidden": true,
+      "environment": {
+        "PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_CORE_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{CMETA_ROOT}/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_CORE_ROOT}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{CMETA_ROOT}/lib${pathListSep}$env{SALTS_BASE_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+      }
+    },
+    {
+      "name": "full-native",
+      "hidden": true,
+      "inherits": [
+        "ISNative",
+        "base",
+        "release-mode"
+      ],
+      "cacheVariables": {
+        "BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "full-native-asan-ubsan",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "asan-ubsan-mode",
+        "full-native"
+      ]
+    },
+    {
+      "name": "full-native-tsan",
+      "hidden": true,
+      "inherits": [
+        "ISLinux",
+        "tsan-mode",
+        "full-native"
+      ]
+    },
+    {
+      "name": "android-release",
+      "hidden": true,
+      "inherits": [
+        "android-base",
+        "release-mode"
+      ],
+      "cacheVariables": {
+        "CMAKE_ANDROID_ARCH_ABI": "$env{ANDROID_ABI}"
+      }
+    }
+  ]
 }

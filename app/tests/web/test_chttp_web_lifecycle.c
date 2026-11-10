@@ -2,8 +2,8 @@
 #include "tinytest.h"
 
 #include <http_client/http.h>
-#include <salts/thread.h>
-#include <vstr.h>
+#include <threads/threads.h>
+#include <core/vstr.h>
 
 #include <stddef.h>
 #include <stdio.h>

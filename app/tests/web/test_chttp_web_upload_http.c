@@ -3,9 +3,9 @@
 
 #include "tinytest.h"
 
-#include <salts/clock.h>
-#include <salts/error_codes.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <core/error_codes.h>
+#include <threads/threads.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -19,7 +19,7 @@ enum {
 };
 
 typedef struct upload_http_app {
-  cmeta_mutex_t signals;
+  sync_mutex_t signals;
   chttp_web_upload_request upload;
   unsigned char staged[UPLOAD_HTTP_STAGE_BYTES];
   size_t staged_size;
@@ -128,10 +128,10 @@ static int upload_http_stage_begin(
       request->body_sink_user != NULL ||
       strcmp(request->path, "/upload") != 0)
     return SALTS_EPROTO;
-  cmeta_mutex_lock(&app->signals);
+  sync_mutex_lock(&app->signals);
   app->staged_size = 0u;
   ++app->begin_calls;
-  cmeta_mutex_unlock(&app->signals);
+  sync_mutex_unlock(&app->signals);
   return SALTS_OK;
 }
 
@@ -164,11 +164,11 @@ static int upload_http_commit(void *user) {
   upload_http_app *app = (upload_http_app *)user;
   if (app == NULL || app->staged_size > sizeof(app->committed))
     return SALTS_EINVAL;
-  cmeta_mutex_lock(&app->signals);
+  sync_mutex_lock(&app->signals);
   memcpy(app->committed, app->staged, app->staged_size);
   app->committed_size = app->staged_size;
   ++app->commit_calls;
-  cmeta_mutex_unlock(&app->signals);
+  sync_mutex_unlock(&app->signals);
   return SALTS_OK;
 }
 
@@ -176,12 +176,12 @@ static void upload_http_abort(
     void *user, chttp_web_status status, int native_status) {
   upload_http_app *app = (upload_http_app *)user;
   if (app == NULL) return;
-  cmeta_mutex_lock(&app->signals);
+  sync_mutex_lock(&app->signals);
   app->abort_status = status;
   app->abort_native_status = native_status;
   app->staged_size = 0u;
   ++app->abort_calls;
-  cmeta_mutex_unlock(&app->signals);
+  sync_mutex_unlock(&app->signals);
 }
 
 static chttp_web_upload_callbacks upload_http_callbacks(void) {
@@ -256,9 +256,9 @@ static void upload_http_close(
   chttp_web_upload_close(&app->upload, status);
   /* Publish after close returns: the test must not reset the upload while
    * its Owner is still running the close callback. */
-  cmeta_mutex_lock(&app->signals);
+  sync_mutex_lock(&app->signals);
   ++app->close_calls;
-  cmeta_mutex_unlock(&app->signals);
+  sync_mutex_unlock(&app->signals);
 }
 
 static int upload_http_handler(
@@ -396,7 +396,7 @@ static int upload_http_peer_connect(upload_http_peer *peer, uint16_t port) {
       .on_state = upload_http_peer_state,
       .on_send = upload_http_peer_sent,
       .user = peer};
-  const uint64_t deadline = cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
   int status;
   size_t events;
   if (peer == NULL || peer->network.impl != NULL || port == 0u)
@@ -415,7 +415,7 @@ static int upload_http_peer_connect(upload_http_peer *peer, uint16_t port) {
       &peer->network, &endpoint, NULL, &observer, &peer->connection);
   if (status != SALTS_OK) return status;
   while (!peer->connected && peer->status == SALTS_OK &&
-         cmeta_monotonic_ms() < deadline) {
+         monotonic_ms() < deadline) {
     status = cnet_client_poll(&peer->network, 1u, &events);
     if (status != SALTS_OK) return status;
   }
@@ -441,7 +441,7 @@ static int upload_http_peer_close(upload_http_peer *peer) {
 static int upload_http_peer_send(
     upload_http_peer *peer, const void *data, size_t size) {
   mem_buffer_t *buffer = mem_get_buffer(mem_global(), size);
-  const uint64_t deadline = cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
   int status;
   size_t events;
   if (buffer == NULL) return SALTS_ENOMEM;
@@ -453,7 +453,7 @@ static int upload_http_peer_send(
   mem_buffer_release(buffer);
   if (status != SALTS_OK) return status;
   while (peer->sent < size && peer->status == SALTS_OK &&
-         cmeta_monotonic_ms() < deadline) {
+         monotonic_ms() < deadline) {
     status = cnet_client_poll(&peer->network, 1u, &events);
     if (status != SALTS_OK) return status;
   }
@@ -464,17 +464,17 @@ static int upload_http_peer_send(
 static int upload_http_wait_count(
     upload_http_app *app, const size_t *value, size_t expected) {
   const uint64_t deadline =
-      cmeta_monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
+      monotonic_ms() + UPLOAD_HTTP_TIMEOUT_MS;
   size_t observed;
   if (app == NULL || value == NULL) return SALTS_EINVAL;
   do {
-    cmeta_mutex_lock(&app->signals);
+    sync_mutex_lock(&app->signals);
     observed = *value;
-    cmeta_mutex_unlock(&app->signals);
+    sync_mutex_unlock(&app->signals);
     if (observed >= expected)
       return observed == expected ? SALTS_OK : SALTS_EPROTO;
-    cmeta_thread_yield();
-  } while (cmeta_monotonic_ms() < deadline);
+    sync_thread_yield();
+  } while (monotonic_ms() < deadline);
   return SALTS_ETIMEDOUT;
 }
 
@@ -562,7 +562,7 @@ spec("CHttp::App upload route integration") {
     check_null(client.impl);
     check_null(peer.network.impl);
     memset(&app, 0, sizeof(app));
-    cmeta_mutex_init(&app.signals);
+    sync_mutex_init(&app.signals);
   }
 
   after_each() {
@@ -577,7 +577,7 @@ spec("CHttp::App upload route integration") {
       destroy_status = chttp_server_destroy(&server);
     }
     if (server.impl == NULL && client.impl == NULL && peer.network.impl == NULL)
-      cmeta_mutex_destroy(&app.signals);
+      sync_mutex_destroy(&app.signals);
     check_equal(client_status, SALTS_OK);
     check_equal(peer_status, SALTS_OK);
     check_equal(stop_status, SALTS_OK);

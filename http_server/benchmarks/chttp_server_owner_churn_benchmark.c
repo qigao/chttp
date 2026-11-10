@@ -1,8 +1,8 @@
 #include "chttp_server_runtime.h"
 
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -227,12 +227,12 @@ static int owner_churn_wait_total(chttp_server_impl *impl, size_t owner_count,
                                   size_t expected,
                                   size_t leases[OWNER_CHURN_MAX_OWNERS],
                                   size_t rings[OWNER_CHURN_MAX_OWNERS]) {
-  const uint64_t deadline = cmeta_monotonic_ms() + OWNER_CHURN_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + OWNER_CHURN_TIMEOUT_MS;
   do {
     owner_churn_snapshot(impl, owner_count, leases, rings);
     if (owner_churn_sum(leases, owner_count) == expected) return 0;
-    cmeta_thread_yield();
-  } while (cmeta_monotonic_ms() < deadline);
+    sync_thread_yield();
+  } while (monotonic_ms() < deadline);
   return -1;
 }
 
@@ -323,7 +323,7 @@ static int owner_churn_run(size_t owner_count) {
     owner_churn_socket socket_value = OWNER_CHURN_INVALID_SOCKET;
     size_t assigned;
     size_t owner_index;
-    const uint64_t started = cmeta_hrtime();
+    const uint64_t started = hrtime();
 
     owner_churn_snapshot(impl, owner_count, before, before_rings);
     if (owner_churn_connect(port, &socket_value) != 0 ||
@@ -331,7 +331,7 @@ static int owner_churn_run(size_t owner_count) {
       if (socket_value != OWNER_CHURN_INVALID_SOCKET) owner_churn_close(socket_value);
       goto cleanup;
     }
-    latencies[index] = cmeta_hrtime() - started;
+    latencies[index] = hrtime() - started;
     if (owner_churn_wait_total(impl, owner_count, kept + 1u, after, after_rings) != 0) {
       owner_churn_close(socket_value);
       goto cleanup;

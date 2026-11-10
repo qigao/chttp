@@ -4,7 +4,7 @@
 #include "chttp_server_rpc_service_internal.h"
 
 #include <json_cserde_reader.h>
-#include <vstr.h>
+#include <core/vstr.h>
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -1,8 +1,8 @@
 #include "chttp_server_runtime.h"
 
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -77,9 +77,9 @@ static size_t owner_listener_calibrate(uint64_t target_ns,
   if (target_ns == 0u) return 0u;
 
   while (iterations <= SIZE_MAX / 2u) {
-    started = cmeta_hrtime();
+    started = hrtime();
     (void)owner_listener_cpu_burn(iterations);
-    elapsed = cmeta_hrtime() - started;
+    elapsed = hrtime() - started;
     if (elapsed >= UINT64_C(2000000)) break;
     iterations *= 2u;
   }
@@ -96,9 +96,9 @@ static size_t owner_listener_calibrate(uint64_t target_ns,
       iterations = (size_t)scaled;
   }
 
-  started = cmeta_hrtime();
+  started = hrtime();
   (void)owner_listener_cpu_burn(iterations);
-  elapsed = cmeta_hrtime() - started;
+  elapsed = hrtime() - started;
   if (out_measured_ns != NULL) *out_measured_ns = elapsed;
   return iterations;
 }
@@ -205,7 +205,7 @@ static int owner_listener_stall_handler(
     if (atomic_load_explicit(
             &route->abort_requested, memory_order_acquire) != 0)
       return SALTS_ECANCELED;
-    cmeta_thread_yield();
+    sync_thread_yield();
   }
 
   if (route->burn_iterations != 0u)
@@ -271,11 +271,11 @@ static int owner_listener_connect(uint16_t port,
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   address.sin_port = htons(port);
-  started = cmeta_hrtime();
+  started = hrtime();
   if (connect(socket_value, (const struct sockaddr *)&address,
               (int)sizeof(address)) != 0)
     goto fail;
-  if (out_connect_ns != NULL) *out_connect_ns = cmeta_hrtime() - started;
+  if (out_connect_ns != NULL) *out_connect_ns = hrtime() - started;
   *out_socket = socket_value;
   return 0;
 
@@ -369,7 +369,7 @@ static int owner_listener_wait_total(
     size_t leases[OWNER_LISTENER_MAX_OWNERS],
     size_t rings[OWNER_LISTENER_MAX_OWNERS],
     size_t peak_rings[OWNER_LISTENER_MAX_OWNERS]) {
-  const uint64_t deadline = cmeta_monotonic_ms() + OWNER_LISTENER_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + OWNER_LISTENER_TIMEOUT_MS;
   do {
     size_t index;
     owner_listener_snapshot(impl, owner_count, leases, rings);
@@ -379,8 +379,8 @@ static int owner_listener_wait_total(
           peak_rings[index] = rings[index];
     }
     if (owner_listener_sum(leases, owner_count) == expected) return 0;
-    cmeta_thread_yield();
-  } while (cmeta_monotonic_ms() < deadline);
+    sync_thread_yield();
+  } while (monotonic_ms() < deadline);
   return -1;
 }
 
@@ -403,12 +403,12 @@ static int owner_listener_delta_owner(
 
 static int owner_listener_wait_atomic_at_least(
     const atomic_uint *value, unsigned int expected) {
-  const uint64_t deadline = cmeta_monotonic_ms() + OWNER_LISTENER_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + OWNER_LISTENER_TIMEOUT_MS;
   do {
     if (atomic_load_explicit(value, memory_order_acquire) >= expected)
       return 0;
-    cmeta_thread_yield();
-  } while (cmeta_monotonic_ms() < deadline);
+    sync_thread_yield();
+  } while (monotonic_ms() < deadline);
   return -1;
 }
 
@@ -425,7 +425,7 @@ static void owner_listener_stall_worker_main(void *user) {
       if (atomic_load_explicit(
               &worker->abort_requested, memory_order_acquire) != 0)
         return;
-      cmeta_thread_yield();
+      sync_thread_yield();
     }
     if (owner_listener_request(worker->socket_value, "/stall") != 0) {
       atomic_store_explicit(
@@ -446,7 +446,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
   chttp_server_stats stats = {0};
   owner_listener_stall_route stall_route;
   owner_listener_stall_worker stall_worker;
-  cmeta_thread_t stall_thread = {0};
+  sync_thread_t stall_thread = {0};
   bool stall_thread_started = false;
   chttp_server_impl *impl = NULL;
   owner_listener_socket stall_socket = OWNER_LISTENER_INVALID_SOCKET;
@@ -516,7 +516,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
   }
 
   stall_worker.socket_value = stall_socket;
-  if (cmeta_thread_create(
+  if (sync_thread_create(
           &stall_thread, owner_listener_stall_worker_main,
           &stall_worker) != SALTS_OK)
     goto cleanup;
@@ -544,7 +544,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       goto cleanup;
     }
 
-    admission_started = cmeta_hrtime();
+    admission_started = hrtime();
     if (owner_listener_connect(
             port, &probe_socket, &connect_latencies[index]) != 0)
       goto cleanup;
@@ -567,7 +567,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       owner_listener_close(probe_socket);
       goto cleanup;
     }
-    admission_latencies[index] = cmeta_hrtime() - admission_started;
+    admission_latencies[index] = hrtime() - admission_started;
 
     if (owner_listener_delta_owner(
             before, after, owner_count, &assigned) != 0) {
@@ -576,7 +576,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
     }
     ++admissions[assigned];
 
-    response_started = cmeta_hrtime();
+    response_started = hrtime();
     atomic_store_explicit(
         &stall_route.armed, sequence, memory_order_release);
 
@@ -584,7 +584,7 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       owner_listener_close(probe_socket);
       goto cleanup;
     }
-    response_latencies[index] = cmeta_hrtime() - response_started;
+    response_latencies[index] = hrtime() - response_started;
 
     owner_listener_close(probe_socket);
     if (owner_listener_wait_total(
@@ -598,8 +598,8 @@ static int owner_listener_run(size_t owner_count, uint64_t target_work_ns,
       goto cleanup;
   }
 
-  if (cmeta_thread_join(&stall_thread) != SALTS_OK) goto cleanup;
-  cmeta_thread_destroy(&stall_thread);
+  if (sync_thread_join(&stall_thread) != SALTS_OK) goto cleanup;
+  sync_thread_destroy(&stall_thread);
   stall_thread_started = false;
 
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK ||
@@ -681,8 +681,8 @@ cleanup:
     owner_listener_shutdown_socket(stall_socket);
 
   if (stall_thread_started) {
-    (void)cmeta_thread_join(&stall_thread);
-    cmeta_thread_destroy(&stall_thread);
+    (void)sync_thread_join(&stall_thread);
+    sync_thread_destroy(&stall_thread);
     stall_thread_started = false;
   }
 

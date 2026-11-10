@@ -1,6 +1,6 @@
 #include <chttp_app/web.h>
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #include <string.h>
 

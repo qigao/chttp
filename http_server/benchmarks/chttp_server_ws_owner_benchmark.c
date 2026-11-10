@@ -6,8 +6,8 @@
 
 #include <http_client/http.h>
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdatomic.h>
 #include <errno.h>
@@ -71,8 +71,8 @@ typedef struct owner_ws_server_state {
 typedef struct owner_ws_barrier {
   atomic_int ready;
   atomic_int done;
-  cmeta_mutex_t mutex;
-  cmeta_cond_t changed;
+  sync_mutex_t mutex;
+  sync_cond_t changed;
   bool start;
   bool release;
 } owner_ws_barrier;
@@ -86,18 +86,18 @@ typedef struct owner_ws_tuning {
 } owner_ws_tuning;
 
 static void owner_ws_barrier_wait(owner_ws_barrier *barrier, bool closing) {
-  cmeta_mutex_lock(&barrier->mutex);
+  sync_mutex_lock(&barrier->mutex);
   while (!(closing ? barrier->release : barrier->start))
-    cmeta_cond_wait(&barrier->changed, &barrier->mutex);
-  cmeta_mutex_unlock(&barrier->mutex);
+    sync_cond_wait(&barrier->changed, &barrier->mutex);
+  sync_mutex_unlock(&barrier->mutex);
 }
 
 static void owner_ws_barrier_open(owner_ws_barrier *barrier, bool closing) {
-  cmeta_mutex_lock(&barrier->mutex);
+  sync_mutex_lock(&barrier->mutex);
   barrier->start = true;
   if (closing) barrier->release = true;
-  cmeta_cond_broadcast(&barrier->changed);
-  cmeta_mutex_unlock(&barrier->mutex);
+  sync_cond_broadcast(&barrier->changed);
+  sync_mutex_unlock(&barrier->mutex);
 }
 
 typedef struct owner_ws_worker {
@@ -307,7 +307,7 @@ static void owner_ws_event(void *user, chttp_websocket *websocket,
     chttp_server_websocket_profile *profile =
         atomic_load_explicit(&state->callback_echo_profile,
                              memory_order_acquire);
-    const uint64_t started_ns = cmeta_hrtime();
+    const uint64_t started_ns = hrtime();
     int status;
     if (profile != NULL) {
       status = chttp_server_websocket_profile_callback_send_begin(
@@ -318,7 +318,7 @@ static void owner_ws_event(void *user, chttp_websocket *websocket,
     }
     status = chttp_websocket_send_binary(websocket, event->data, event->size);
     {
-      const uint64_t elapsed_ns = cmeta_hrtime() - started_ns;
+      const uint64_t elapsed_ns = hrtime() - started_ns;
       atomic_fetch_add_explicit(&state->callback_echo_send_ns, elapsed_ns,
                                 memory_order_relaxed);
       atomic_fetch_add_explicit(&state->callback_echo_send_calls, 1u,
@@ -358,7 +358,7 @@ static int owner_ws_one_message(owner_ws_worker *worker,
   if (worker == NULL || client == NULL || payload == NULL ||
       latency_out == NULL)
     return SALTS_EINVAL;
-  started = cmeta_hrtime();
+  started = hrtime();
   stage_started = started;
   if (worker->test_case->mode == OWNER_WS_CALLBACK_ECHO)
     status = chttp_websocket_client_send_binary(
@@ -367,14 +367,14 @@ static int owner_ws_one_message(owner_ws_worker *worker,
     status = chttp_server_websocket_send_binary(
         &worker->probe->session, payload, payload_bytes);
   if (send_latency_out != NULL)
-    *send_latency_out = cmeta_hrtime() - stage_started;
+    *send_latency_out = hrtime() - stage_started;
   if (status != SALTS_OK) return status;
-  stage_started = cmeta_hrtime();
+  stage_started = hrtime();
   status = owner_ws_receive_expected(client, payload, payload_bytes);
   if (receive_latency_out != NULL)
-    *receive_latency_out = cmeta_hrtime() - stage_started;
+    *receive_latency_out = hrtime() - stage_started;
   if (status != SALTS_OK) return status;
-  *latency_out = cmeta_hrtime() - started;
+  *latency_out = hrtime() - started;
   return SALTS_OK;
 }
 
@@ -431,7 +431,7 @@ static void owner_ws_worker_main(void *user) {
 
   while (atomic_load_explicit(&worker->probe->captured,
                               memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
 
   for (index = 0u; index < worker->warmup; ++index) {
     status = owner_ws_one_message(
@@ -499,10 +499,10 @@ static void owner_ws_sample_pressure(chttp_server_impl *impl,
     if (capture_leases)
       pressure->owner_leases[index] = chttp_server_owner_lease_count(owner);
     ring = chttp_server_owner_admission_count(owner);
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     commands = owner->websocket_command_count + owner->websocket_pending_count +
                owner->websocket_command_claims;
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     if (ring > pressure->peak_admission_ring[index])
       pressure->peak_admission_ring[index] = ring;
     if (commands > pressure->peak_command_queue[index])
@@ -515,7 +515,7 @@ static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
                                              size_t owner_count) {
   size_t index;
   if (impl == NULL || pressure == NULL) return;
-  cmeta_mutex_lock(&impl->mutex);
+  sync_mutex_lock(&impl->mutex);
   for (index = 0u; index < owner_count && index < 4u; ++index) {
     chttp_server_owner_lane *owner = chttp_server_owner_at(impl, index);
     size_t commands;
@@ -525,7 +525,7 @@ static void owner_ws_sample_command_pressure(chttp_server_impl *impl,
     if (commands > pressure->peak_command_queue[index])
       pressure->peak_command_queue[index] = commands;
   }
-  cmeta_mutex_unlock(&impl->mutex);
+  sync_mutex_unlock(&impl->mutex);
 }
 
 static int owner_ws_cpu_snapshot(const owner_ws_server_state *state,
@@ -576,7 +576,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   owner_ws_server_state state = {0};
   owner_ws_barrier barrier = {0};
   owner_ws_worker workers[OWNER_WS_CONNECTIONS];
-  cmeta_thread_t threads[OWNER_WS_CONNECTIONS] = {0};
+  sync_thread_t threads[OWNER_WS_CONNECTIONS] = {0};
   bool started[OWNER_WS_CONNECTIONS] = {false};
   owner_ws_pressure pressure = {0};
   chttp_server_websocket_profile command_profile;
@@ -611,8 +611,8 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   config.poll_slice_ms = (uint32_t)tuning->poll_ms;
   atomic_init(&barrier.ready, 0);
   atomic_init(&barrier.done, 0);
-  cmeta_mutex_init(&barrier.mutex);
-  cmeta_cond_init(&barrier.changed);
+  sync_mutex_init(&barrier.mutex);
+  sync_cond_init(&barrier.changed);
   total_messages = messages * connection_count;
   latencies = (uint64_t *)calloc(total_messages, sizeof(*latencies));
   send_latencies =
@@ -706,7 +706,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
         .plaintext_bytes = plaintext_bytes + index * messages,
         .message_plaintext_bytes = message_plaintext_bytes + index * messages};
     atomic_init(&workers[index].status, SALTS_EIO);
-    if (cmeta_thread_create(&threads[index], owner_ws_worker_main,
+    if (sync_thread_create(&threads[index], owner_ws_worker_main,
                             &workers[index]) != SALTS_OK)
       goto cleanup_threads;
     started[index] = true;
@@ -715,7 +715,7 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   while ((size_t)atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
          connection_count) {
     owner_ws_sample_pressure(impl, &pressure, owner_count, true);
-    cmeta_thread_yield();
+    sync_thread_yield();
   }
   owner_ws_sample_pressure(impl, &pressure, owner_count, true);
   for (index = 0u; index < connection_count; ++index)
@@ -730,12 +730,12 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   if (tuning->idle_ms != 0u) {
     /* All clients are parked on the condition variable, without polling or
      * yielding. Let warmup completions settle before measuring idle owners. */
-    cmeta_sleep_ms(OWNER_WS_IDLE_SETTLE_MS);
+    sleep_ms(OWNER_WS_IDLE_SETTLE_MS);
     if (owner_ws_cpu_snapshot(&state, owner_count, &cpu_started) != SALTS_OK)
       goto cleanup_threads;
-    started_ns = cmeta_hrtime();
-    cmeta_sleep_ms((uint32_t)tuning->idle_ms);
-    idle_wall_ns = cmeta_hrtime() - started_ns;
+    started_ns = hrtime();
+    sleep_ms((uint32_t)tuning->idle_ms);
+    idle_wall_ns = hrtime() - started_ns;
     if (owner_ws_cpu_snapshot(&state, owner_count, &cpu_finished) != SALTS_OK ||
         cpu_finished < cpu_started)
       goto cleanup_threads;
@@ -761,14 +761,14 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
 
   if (owner_ws_cpu_snapshot(&state, owner_count, &cpu_started) != SALTS_OK)
     goto cleanup_threads;
-  started_ns = cmeta_hrtime();
+  started_ns = hrtime();
   owner_ws_barrier_open(&barrier, false);
   while ((size_t)atomic_load_explicit(&barrier.done, memory_order_acquire) !=
          connection_count) {
     owner_ws_sample_command_pressure(impl, &pressure, owner_count);
-    cmeta_sleep_ms(1u);
+    sleep_ms(1u);
   }
-  wall_ns = cmeta_hrtime() - started_ns;
+  wall_ns = hrtime() - started_ns;
   if (owner_ws_cpu_snapshot(&state, owner_count, &cpu_finished) != SALTS_OK ||
       cpu_finished < cpu_started)
     goto cleanup_threads;
@@ -776,9 +776,9 @@ static int owner_ws_run(const owner_ws_case *test_case, size_t owner_count,
   owner_ws_barrier_open(&barrier, true);
 
   for (index = 0u; index < connection_count; ++index) {
-    if (cmeta_thread_join(&threads[index]) != SALTS_OK)
+    if (sync_thread_join(&threads[index]) != SALTS_OK)
       goto cleanup_threads;
-    cmeta_thread_destroy(&threads[index]);
+    sync_thread_destroy(&threads[index]);
     started[index] = false;
     if (atomic_load_explicit(&workers[index].status,
                              memory_order_acquire) != SALTS_OK)
@@ -982,8 +982,8 @@ cleanup_threads:
   owner_ws_barrier_open(&barrier, true);
   for (index = 0u; index < connection_count; ++index) {
     if (started[index]) {
-      (void)cmeta_thread_join(&threads[index]);
-      cmeta_thread_destroy(&threads[index]);
+      (void)sync_thread_join(&threads[index]);
+      sync_thread_destroy(&threads[index]);
       started[index] = false;
     }
   }
@@ -1005,8 +1005,8 @@ cleanup:
   free(receive_latencies);
   free(send_latencies);
   free(latencies);
-  cmeta_cond_destroy(&barrier.changed);
-  cmeta_mutex_destroy(&barrier.mutex);
+  sync_cond_destroy(&barrier.changed);
+  sync_mutex_destroy(&barrier.mutex);
   return result;
 }
 

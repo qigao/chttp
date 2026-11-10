@@ -4,7 +4,7 @@
 
 #include <cmeta_crypto.h>
 
-#include <cmeta_fs.h>
+#include <file/fs.h>
 
 #include <limits.h>
 #include <stdlib.h>
@@ -23,8 +23,8 @@ static int s3_file_source_unexpected(void *user, void *buffer, size_t capacity, 
 static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SIZE + 1u],
                           size_t *out_size, s3_error *out_error) {
   static const char digits[] = "0123456789abcdef";
-  cmeta_fs_stat_t file_stat = {0};
-  cmeta_fs_stat_t after_stat = {0};
+  fs_stat_t file_stat = {0};
+  fs_stat_t after_stat = {0};
   cmeta_file_t file = SALTS_INVALID_FILE;
   cmeta_sha256_stream *context = NULL;
   unsigned char digest[S3_FILE_SHA256_BYTES];
@@ -35,7 +35,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
   int status;
   if (path == NULL || path[0] == '\0' || out_hex == NULL || out_size == NULL || out_error == NULL)
     return SALTS_EINVAL;
-  status = cmeta_fs_stat(path, &file_stat);
+  status = fs_stat(path, &file_stat);
   if (status != SALTS_OK) {
     *out_error = (s3_error){.status = SALTS_EIO, .native_status = status, .stage = "file-stat"};
     return SALTS_EIO;
@@ -48,7 +48,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
     *out_error = (s3_error){.status = SALTS_EFBIG, .stage = "file-stat"};
     return SALTS_EFBIG;
   }
-  file = cmeta_fs_open(path, SALTS_FS_O_RDONLY, 0);
+  file = fs_open(path, SALTS_FS_O_RDONLY, 0);
   if (file == SALTS_INVALID_FILE) {
     *out_error = (s3_error){.status = SALTS_EIO, .stage = "file-hash-open"};
     return SALTS_EIO;
@@ -56,7 +56,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
   status = cmeta_sha256_stream_create(&context);
   if (status != SALTS_OK) goto done;
   status = SALTS_OK;
-  while ((read_size = cmeta_fs_read(file, (char *)buffer, sizeof(buffer))) > 0) {
+  while ((read_size = fs_read(file, (char *)buffer, sizeof(buffer))) > 0) {
     status = cmeta_sha256_stream_update(context, buffer, (size_t)read_size);
     if (status != SALTS_OK) break;
   }
@@ -79,14 +79,14 @@ done:
   cmeta_sha256_stream_destroy(context);
   cmeta_crypto_clear(buffer, sizeof(buffer));
   cmeta_crypto_clear(digest, sizeof(digest));
-  close_status = cmeta_fs_close(file);
+  close_status = fs_close(file);
   if (status == SALTS_OK && close_status != SALTS_OK) {
     status = SALTS_EIO;
     *out_error =
         (s3_error){.status = status, .native_status = close_status, .stage = "file-hash-close"};
   }
   if (status == SALTS_OK) {
-    const int stat_status = cmeta_fs_stat(path, &after_stat);
+    const int stat_status = fs_stat(path, &after_stat);
     if (stat_status != SALTS_OK) {
       status = SALTS_EIO;
       *out_error =

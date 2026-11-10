@@ -2,8 +2,8 @@
 #define CHTTP_CNET_RETAINED_H
 
 #include <cnet/cnet.h>
-#include <salts/error_codes.h>
-#include <cmeta_buffer.h>
+#include <core/error_codes.h>
+#include <memory/buffer.h>
 
 #include <stddef.h>
 #include <stdlib.h>

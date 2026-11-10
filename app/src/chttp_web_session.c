@@ -1,8 +1,8 @@
 #include <chttp_app/web.h>
 
 #include <cmeta_crypto.h>
-#include <platform.h>
-#include <salts/error_codes.h>
+#include <core/platform.h>
+#include <core/error_codes.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -78,7 +78,7 @@ static chttp_web_status chttp_web_csrf_write(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0, 0u,
         "CSRF session and output are required");
 
-  status = cmeta_secure_random(random, sizeof(random));
+  status = secure_random(random, sizeof(random));
   if (status != SALTS_OK) {
     cmeta_crypto_clear(random, sizeof(random));
     return chttp_web_session_status(

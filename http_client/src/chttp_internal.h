@@ -3,7 +3,7 @@
 
 #include <http_client/http.h>
 #include <llhttp.h>
-#include <vstr.h>
+#include <core/vstr.h>
 
 #include <stdbool.h>
 #include <stddef.h>

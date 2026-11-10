@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <salts/crypto.h>
-#include <fmt.h>
+#include <core/fmt.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>

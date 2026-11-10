@@ -5,7 +5,7 @@
 #include <data_bind_method_plan.h>
 #include <data_bind_native.h>
 #include <data_bind_native_binding.h>
-#include <salts/plugin.h>
+#include <cmeta/plugin.h>
 
 #ifdef __cplusplus
 extern "C" {

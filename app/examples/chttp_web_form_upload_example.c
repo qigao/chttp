@@ -1,8 +1,8 @@
 #include <chttp_app/web.h>
 
 #include <cmeta/struct.h>
-#include <salts/error_codes.h>
-#include <vstr.h>
+#include <core/error_codes.h>
+#include <core/vstr.h>
 
 #include <stddef.h>
 #include <stdint.h>

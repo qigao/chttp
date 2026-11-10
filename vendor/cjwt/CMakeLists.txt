@@ -10,7 +10,7 @@ target_include_directories(
   chttp_cjwt
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include"
           "${CMAKE_CURRENT_SOURCE_DIR}/include/cjwt"
-          "${CHTTP_CJWT_ROOT}/src")
+          "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(
   chttp_cjwt
   PRIVATE Salts::JsonParser Salts::Crypto Salts::Core)

@@ -1,6 +1,6 @@
 #include "crpc_client_internal.h"
 
-#include <salts/clock.h>
+#include <core/clock.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -8,7 +8,7 @@
 
 static int crpc_deadline_remaining(uint64_t started_ms, uint32_t deadline_ms,
                                    uint32_t *out_remaining_ms) {
-  const uint64_t now_ms = cmeta_monotonic_ms();
+  const uint64_t now_ms = monotonic_ms();
   const uint64_t elapsed_ms = now_ms >= started_ms ? now_ms - started_ms : 0u;
   if (out_remaining_ms == NULL) return SALTS_EINVAL;
   if (deadline_ms == 0u) {
@@ -71,7 +71,7 @@ static int crpc_request_reply_on_http(
       limits->max_http_header_count < 5u)
     return SALTS_EINVAL;
 
-  started_ms = cmeta_monotonic_ms();
+  started_ms = monotonic_ms();
   status = crpc_prepare_call(options, limits->max_method_bytes, limits->max_json_depth,
                              limits->max_request_body_bytes,
                              limits->max_http_header_count, &prepared);

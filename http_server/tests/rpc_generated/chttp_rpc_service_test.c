@@ -3,7 +3,7 @@
 #include "chttp_rpc_generation_dso.h"
 
 #include <http_client/rpc.h>
-#include <cmeta_cmeta_fixed_width.h>
+#include <cmeta/core_fixed_width.h>
 #include "chttp_rpc_service.rpc.h"
 #include "tinytest.h"
 
@@ -11,8 +11,8 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdio.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <string.h>
 
 enum { CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS = 5000 };
@@ -173,11 +173,11 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_service_test_concurrent_invoke(
       (chttp_rpc_service_test_race_probe *)context;
   if (probe != NULL &&
       atomic_load_explicit(&probe->enabled, memory_order_acquire)) {
-    const uint64_t deadline = cmeta_monotonic_ms() + 3000u;
+    const uint64_t deadline = monotonic_ms() + 3000u;
     atomic_fetch_add_explicit(&probe->entered, 1, memory_order_acq_rel);
     while (!atomic_load_explicit(&probe->release, memory_order_acquire)) {
-      if (cmeta_monotonic_ms() >= deadline) return false;
-      cmeta_thread_yield();
+      if (monotonic_ms() >= deadline) return false;
+      sync_thread_yield();
     }
   }
   return chttp_rpc_service_test_invoke(
@@ -862,9 +862,9 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
           check_equal(rejected_storage.sum, UINT32_C(0xdecafbad));
           check_equal(completed.terminal_calls, 0);
         }
-        deadline = cmeta_monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+        deadline = monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
         while (completed.terminal_calls == 0 &&
-               cmeta_monotonic_ms() < deadline) {
+               monotonic_ms() < deadline) {
           size_t events = 0u;
           poll_status = chttp_async_client_poll(&async_client, 5u, &events);
           if (poll_status != SALTS_OK) break;
@@ -883,9 +883,9 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
             &async_client, &async_options,
             chttp_rpc_service_test_async_typed_complete,
             &completed, &handle), SALTS_OK);
-        deadline = cmeta_monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
+        deadline = monotonic_ms() + CHTTP_RPC_SERVICE_TEST_TIMEOUT_MS;
         while (completed.terminal_calls == 0 &&
-               cmeta_monotonic_ms() < deadline) {
+               monotonic_ms() < deadline) {
           size_t events = 0u;
           poll_status = chttp_async_client_poll(&async_client, 5u, &events);
           if (poll_status != SALTS_OK) break;
@@ -903,9 +903,9 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
       /* Force overlapping same-method execution on two real HTTP Owners.
        * Immutable method descriptors must not share native call frames. */
       {
-        cmeta_thread_t t1 = {0};
-        cmeta_thread_t t2 = {0};
-        cmeta_thread_t t3 = {0};
+        sync_thread_t t1 = {0};
+        sync_thread_t t2 = {0};
+        sync_thread_t t3 = {0};
         chttp_rpc_service_test_call_thread a = {0};
         chttp_rpc_service_test_call_thread b = {0};
         chttp_rpc_service_test_call_thread c = {0};
@@ -942,34 +942,34 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
         atomic_store_explicit(&race.entered, 0, memory_order_release);
         atomic_store_explicit(&race.release, 0, memory_order_release);
         atomic_store_explicit(&race.enabled, 1, memory_order_release);
-        check_equal(cmeta_thread_create(
+        check_equal(sync_thread_create(
             &t1, chttp_rpc_service_test_call_worker, &a), SALTS_OK);
-        check_equal(cmeta_thread_create(
+        check_equal(sync_thread_create(
             &t2, chttp_rpc_service_test_call_worker, &b), SALTS_OK);
-        deadline = cmeta_monotonic_ms() + 3000u;
+        deadline = monotonic_ms() + 3000u;
         while (atomic_load_explicit(&race.entered,
                                     memory_order_acquire) < 2 &&
-               cmeta_monotonic_ms() < deadline)
-          cmeta_thread_yield();
+               monotonic_ms() < deadline)
+          sync_thread_yield();
         ready = atomic_load_explicit(&race.entered,
                                      memory_order_acquire);
         /* With two slots already leased, a third actual Owner must return
          * bounded FULL without executing the business adapter. */
-        check_equal(cmeta_thread_create(
+        check_equal(sync_thread_create(
             &t3, chttp_rpc_service_test_call_worker, &c), SALTS_OK);
-        deadline = cmeta_monotonic_ms() + 2500u;
+        deadline = monotonic_ms() + 2500u;
         while (!atomic_load_explicit(&c.completed, memory_order_acquire) &&
-               cmeta_monotonic_ms() < deadline)
-          cmeta_thread_yield();
+               monotonic_ms() < deadline)
+          sync_thread_yield();
         rejected_before_release =
             atomic_load_explicit(&c.completed, memory_order_acquire);
         atomic_store_explicit(&race.release, 1, memory_order_release);
-        check_equal(cmeta_thread_join(&t1), SALTS_OK);
-        check_equal(cmeta_thread_join(&t2), SALTS_OK);
-        check_equal(cmeta_thread_join(&t3), SALTS_OK);
-        cmeta_thread_destroy(&t1);
-        cmeta_thread_destroy(&t2);
-        cmeta_thread_destroy(&t3);
+        check_equal(sync_thread_join(&t1), SALTS_OK);
+        check_equal(sync_thread_join(&t2), SALTS_OK);
+        check_equal(sync_thread_join(&t3), SALTS_OK);
+        sync_thread_destroy(&t1);
+        sync_thread_destroy(&t2);
+        sync_thread_destroy(&t3);
         check_equal(ready, 2);
         check_equal(rejected_before_release, 1);
         check_equal(c.status, SALTS_OK);
@@ -989,7 +989,7 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
        * native workspace cannot be released while an Owner callback blocks.
        * The successful second stop is the sole lifetime release boundary. */
       {
-        cmeta_thread_t blocked = {0};
+        sync_thread_t blocked = {0};
         chttp_rpc_service_test_call_thread pending = {0};
         uint64_t deadline;
         int admitted;
@@ -1005,12 +1005,12 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
         atomic_store_explicit(&race.entered, 0, memory_order_release);
         atomic_store_explicit(&race.release, 0, memory_order_release);
         atomic_store_explicit(&race.enabled, 1, memory_order_release);
-        check_equal(cmeta_thread_create(
+        check_equal(sync_thread_create(
             &blocked, chttp_rpc_service_test_call_worker, &pending), SALTS_OK);
-        deadline = cmeta_monotonic_ms() + 2500u;
+        deadline = monotonic_ms() + 2500u;
         while (atomic_load_explicit(&race.entered, memory_order_acquire) == 0 &&
-               cmeta_monotonic_ms() < deadline)
-          cmeta_thread_yield();
+               monotonic_ms() < deadline)
+          sync_thread_yield();
         admitted = atomic_load_explicit(&race.entered, memory_order_acquire);
         if (admitted != 0) {
           check_equal(cmeta_plugin_registry_request_stop(
@@ -1024,8 +1024,8 @@ spec("CHttp Server/Client generated RPC MethodPlan") {
           check_equal(plugin_lifecycle.active_leases, (size_t)1u);
         }
         atomic_store_explicit(&race.release, 1, memory_order_release);
-        check_equal(cmeta_thread_join(&blocked), SALTS_OK);
-        cmeta_thread_destroy(&blocked);
+        check_equal(sync_thread_join(&blocked), SALTS_OK);
+        sync_thread_destroy(&blocked);
         check_equal(admitted, 1);
         check_equal(atomic_load_explicit(&pending.completed,
                                         memory_order_acquire), 1);

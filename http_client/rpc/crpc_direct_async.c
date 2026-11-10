@@ -1,7 +1,7 @@
 #include "crpc_client_internal.h"
 #include "../src/chttp_client_internal.h"
 
-#include <salts/clock.h>
+#include <core/clock.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -74,7 +74,7 @@ int chttp_async_client_rpc_submit(
       limits->max_request_body_bytes == 0u ||
       limits->max_http_header_count < 5u)
     return SALTS_EINVAL;
-  start_ms = cmeta_monotonic_ms();
+  start_ms = monotonic_ms();
   if (options->deadline_ms != 0u) {
     if (UINT64_MAX - start_ms < options->deadline_ms) return SALTS_ERANGE;
     deadline_at_ms = start_ms + options->deadline_ms;
@@ -84,7 +84,7 @@ int chttp_async_client_rpc_submit(
       limits->max_request_body_bytes, limits->max_http_header_count,
       &prepared);
   if (status != SALTS_OK) return status;
-  if (deadline_at_ms != 0u && cmeta_monotonic_ms() >= deadline_at_ms) {
+  if (deadline_at_ms != 0u && monotonic_ms() >= deadline_at_ms) {
     crpc_prepared_call_destroy(&prepared);
     return SALTS_ETIMEDOUT;
   }

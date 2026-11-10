@@ -1,12 +1,12 @@
 #include <http_server/http.h>
 #include "chttp_websocket_handshake.h"
 
-#include <base64_utils.h>
+#include <core/base64.h>
 
 #include <llhttp.h>
 #include <cmeta_crypto.h>
-#include <salts/random.h>
-#include <vstr.h>
+#include <core/platform.h>
+#include <core/vstr.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -65,7 +65,7 @@ int chttp_websocket_client_key_generate(char *output, size_t output_capacity) {
   unsigned char nonce[CHTTP_WEBSOCKET_NONCE_BYTES];
   int status;
   if (output == NULL || output_capacity < CHTTP_WEBSOCKET_KEY_CAPACITY) return SALTS_EINVAL;
-  status = cmeta_platform_secure_random(nonce, sizeof(nonce));
+  status = secure_random(nonce, sizeof(nonce));
   if (status != SALTS_OK) return status;
   return tn_base64_encode_buf_ex(nonce, sizeof(nonce), output, output_capacity) == TN_BASE64_OK
              ? SALTS_OK

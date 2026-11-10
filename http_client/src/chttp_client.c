@@ -4,10 +4,10 @@
 #include "chttp_internal.h"
 #include "chttp_tls.h"
 #include <cnet/client_pool.h>
-#include <tstr.h>
+#include <core/tstr.h>
 
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <limits.h>
 #include <stdbool.h>
@@ -278,7 +278,7 @@ int chttp_destination_select(const chttp_destination_options *options,
       (request->protocol != CHTTP_HTTP_1_1 && request->protocol != CHTTP_HTTP_2))
     return SALTS_EINVAL;
   selection = options->selection;
-  selection.now_ms = cmeta_monotonic_ms();
+  selection.now_ms = monotonic_ms();
   status = cnet_destination_choose(&selection, &selected);
   if (status != SALTS_OK) return status;
   for (index = 0u; index < selection.endpoint_count; ++index) {
@@ -445,7 +445,7 @@ static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *resp
    * ordinary user cancel wins if already admitted before the timeout. */
   if (slot->rpc_deadline_cancelled ||
       (slot->rpc_deadline_at_ms != 0u && !slot->cancel_requested &&
-       cmeta_monotonic_ms() >= slot->rpc_deadline_at_ms)) {
+       monotonic_ms() >= slot->rpc_deadline_at_ms)) {
     status = SALTS_ETIMEDOUT;
     native_status = 0;
     stage = "rpc-deadline";
@@ -1032,7 +1032,7 @@ static bool chttp_h2_sessions_stop_ready(const chttp_client_impl *impl) {
 }
 
 static uint32_t chttp_stop_remaining_ms(uint64_t started_ms, uint32_t timeout_ms) {
-  const uint64_t elapsed_ms = cmeta_monotonic_ms() - started_ms;
+  const uint64_t elapsed_ms = monotonic_ms() - started_ms;
   return elapsed_ms >= timeout_ms ? 0u : timeout_ms - (uint32_t)elapsed_ms;
 }
 
@@ -1634,7 +1634,7 @@ int chttp_async_request_cancel(chttp_async_client *client, chttp_request request
  * Cancellation follows the ordinary CNet/H2 terminal drain contract. */
 static int chttp_rpc_expire_deadlines(chttp_async_client *client,
                                      chttp_client_impl *impl) {
-  const uint64_t now = cmeta_monotonic_ms();
+  const uint64_t now = monotonic_ms();
   size_t i;
   int first_status = SALTS_OK;
   for (i = 0u; i < impl->request_capacity; ++i) {
@@ -1664,7 +1664,7 @@ static int chttp_rpc_expire_deadlines(chttp_async_client *client,
 
 static uint32_t chttp_rpc_deadline_poll_budget(const chttp_client_impl *impl,
                                                uint32_t timeout_ms) {
-  const uint64_t now = cmeta_monotonic_ms();
+  const uint64_t now = monotonic_ms();
   uint64_t budget = timeout_ms;
   size_t i;
   for (i = 0u; i < impl->request_capacity; ++i) {
@@ -1729,7 +1729,7 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
 
 int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
   chttp_client_impl *impl = chttp_client_get(client);
-  const uint64_t started_ms = cmeta_monotonic_ms();
+  const uint64_t started_ms = monotonic_ms();
   int first_status = SALTS_OK;
   int stop_status;
   size_t index;
@@ -1784,7 +1784,7 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
         break;
       }
       file_status = chttp_file_runtime_progress(impl);
-      if (file_status == SALTS_OK) cmeta_thread_yield();
+      if (file_status == SALTS_OK) sync_thread_yield();
     }
     if (file_status != SALTS_OK && first_status == SALTS_OK) first_status = file_status;
   }

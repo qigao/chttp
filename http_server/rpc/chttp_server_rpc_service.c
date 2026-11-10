@@ -1,9 +1,9 @@
 #include <http_server/rpc_service.h>
 #include "chttp_server_rpc_service_internal.h"
 
-#include <salts/error_codes.h>
-#include <salts/plugin.h>
-#include <cmeta_buffer.h>
+#include <core/error_codes.h>
+#include <cmeta/plugin.h>
+#include <memory/buffer.h>
 
 #include <cserde/cserde.h>
 

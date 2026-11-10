@@ -2,8 +2,8 @@
 #include "tinytest.h"
 #include <http_client/http.h>
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -297,14 +297,14 @@ static size_t chttp_server_test_count(const char *text, const char *needle) {
 
 static int chttp_server_test_wait_active(chttp_server *server, uint64_t expected,
                                          uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   for (;;) {
     chttp_server_stats stats = {0};
     const int status = chttp_server_get_stats(server, &stats);
     if (status != SALTS_OK) return status;
     if (stats.active_connections == expected) return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
@@ -313,26 +313,26 @@ static int chttp_server_test_wait_active(chttp_server *server, uint64_t expected
  * the actual rejected-connection counter with a bounded public-stats barrier. */
 static int chttp_server_test_wait_rejected(chttp_server *server, uint64_t minimum,
                                            uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   for (;;) {
     chttp_server_stats stats = {0};
     const int status = chttp_server_get_stats(server, &stats);
     if (status != SALTS_OK) return status;
     if (stats.rejected_connections >= minimum) return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
 static int chttp_server_test_wait_stopping(chttp_server *server, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   for (;;) {
     chttp_server_stats stats = {0};
     const int status = chttp_server_get_stats(server, &stats);
     if (status != SALTS_OK) return status;
     if (stats.stopping != 0) return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
@@ -608,7 +608,7 @@ static int chttp_server_test_blocking(void *user, const chttp_server_request_vie
   (void)request;
   atomic_store_explicit(&probe->entered, 1, memory_order_release);
   while (atomic_load_explicit(&probe->release, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
   return chttp_server_reply(response, 200u, "text/plain", "released", 8u);
 }
 
@@ -639,7 +639,7 @@ static void chttp_server_test_deferred_terminal_entry(void *user) {
       .body_size = 4u};
   chttp_server_test_deferred_terminal *terminal = (chttp_server_test_deferred_terminal *)user;
   while (atomic_load_explicit(terminal->start, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
   terminal->status = terminal->cancel ? chttp_server_deferred_cancel(&terminal->handle)
                                       : chttp_server_deferred_reply(&terminal->handle, &response);
 }
@@ -792,8 +792,8 @@ static int chttp_test_authenticated_admission(void *user, const chttp_server_req
 
 static int chttp_test_slow_handler(void *user, const chttp_server_request_view *request,
                                    chttp_server_response *response) {
-  const uint64_t until = cmeta_monotonic_ms() + CHTTP_TEST_DEADLINE_MS * 2u;
-  while (cmeta_monotonic_ms() < until) cmeta_thread_yield();
+  const uint64_t until = monotonic_ms() + CHTTP_TEST_DEADLINE_MS * 2u;
+  while (monotonic_ms() < until) sync_thread_yield();
   return chttp_server_test_static(user, request, response);
 }
 
@@ -889,15 +889,15 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &socket_value), SALTS_OK);
-    const uint64_t start = cmeta_monotonic_ms();
+    const uint64_t start = monotonic_ms();
     check_equal(chttp_server_test_raw_send(socket_value, partial, sizeof(partial) - 1u), SALTS_OK);
     for (unsigned int index = 1; index <= 3; ++index) {
-      while (cmeta_monotonic_ms() < start + index * CHTTP_TEST_DEADLINE_MS) cmeta_thread_yield();
+      while (monotonic_ms() < start + index * CHTTP_TEST_DEADLINE_MS) sync_thread_yield();
       check_equal(chttp_server_test_raw_send(socket_value, "a", 1u), SALTS_OK);
     }
     check_equal(chttp_server_test_raw_receive(socket_value, response, sizeof(response), &size, true, NULL), SALTS_OK);
     check_equal(size, 0u);
-    check(cmeta_monotonic_ms() - start < CHTTP_TEST_DEADLINE_MS * 7u);
+    check(monotonic_ms() - start < CHTTP_TEST_DEADLINE_MS * 7u);
     chttp_server_test_close_socket(socket_value);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
@@ -919,8 +919,8 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &socket_value), SALTS_OK);
     check_equal(chttp_server_test_raw_send(socket_value, partial, sizeof(partial) - 1u), SALTS_OK);
-    const uint64_t until = cmeta_monotonic_ms() + CHTTP_TEST_DEADLINE_MS * 2u;
-    while (cmeta_monotonic_ms() < until) cmeta_thread_yield();
+    const uint64_t until = monotonic_ms() + CHTTP_TEST_DEADLINE_MS * 2u;
+    while (monotonic_ms() < until) sync_thread_yield();
     check_equal(chttp_server_test_raw_send(socket_value, "cd", 2u), SALTS_OK);
     check_equal(chttp_server_test_raw_receive(socket_value, response, sizeof(response), &size, true, NULL), SALTS_OK);
     check_not_null(strstr(response, "200 OK"));
@@ -1754,10 +1754,10 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &pipelined), SALTS_OK);
     check_equal(chttp_server_test_raw_send(pipelined, requests, sizeof(requests) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
     check_equal(chttp_server_get_stats(&server, &deferred_stats), SALTS_OK);
     check_true(deferred_stats.buffer_bytes < server_config.network.max_send_bytes);
@@ -1825,11 +1825,11 @@ spec("CHTTP background HTTP/1.1 server") {
         chttp_server_test_raw_send(client, request, sizeof(request) - 1u),
         SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(
                &deferred_probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(
             &deferred_probe.acquired, memory_order_acquire),
@@ -1865,11 +1865,11 @@ spec("CHTTP background HTTP/1.1 server") {
             &server, 0u, CHTTP_SERVER_TEST_TIMEOUT_MS),
         SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(
                &retained_probe.releases, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(&retained_probe.releases, memory_order_acquire),
         1);
@@ -1918,11 +1918,11 @@ spec("CHTTP background HTTP/1.1 server") {
         chttp_server_test_raw_send(client, request, sizeof(request) - 1u),
         SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(
                &deferred_probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(
             &deferred_probe.acquired, memory_order_acquire),
@@ -2000,10 +2000,10 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
     check_equal(chttp_server_test_raw_send(client, request, sizeof(request) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
 
     stale = probe.handle;
@@ -2020,10 +2020,10 @@ spec("CHTTP background HTTP/1.1 server") {
     atomic_store_explicit(&probe.acquired, 0, memory_order_release);
     check_equal(chttp_server_test_raw_connect(port, &reused_client), SALTS_OK);
     check_equal(chttp_server_test_raw_send(reused_client, request, sizeof(request) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
     check_true(probe.handle.generation != stale.generation);
     check_equal(chttp_server_deferred_cancel(&stale), SALTS_ENOENT);
@@ -2048,8 +2048,8 @@ spec("CHTTP background HTTP/1.1 server") {
     chttp_server_test_deferred_terminal reply;
     chttp_server_test_deferred_terminal cancel;
     chttp_server_test_socket client = CHTTP_SERVER_TEST_INVALID_SOCKET;
-    cmeta_thread_t reply_thread = NULL;
-    cmeta_thread_t cancel_thread = NULL;
+    sync_thread_t reply_thread = NULL;
+    sync_thread_t cancel_thread = NULL;
     atomic_int start;
     char response[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
     size_t response_size = 0u;
@@ -2068,10 +2068,10 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
     check_equal(chttp_server_test_raw_send(client, request, sizeof(request) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
 
     reply = (chttp_server_test_deferred_terminal){
@@ -2079,14 +2079,14 @@ spec("CHTTP background HTTP/1.1 server") {
     cancel = (chttp_server_test_deferred_terminal){
         .handle = probe.handle, .start = &start, .cancel = 1, .status = SALTS_EIO};
     check_equal(
-        cmeta_thread_create(&reply_thread, chttp_server_test_deferred_terminal_entry, &reply),
+        sync_thread_create(&reply_thread, chttp_server_test_deferred_terminal_entry, &reply),
         SALTS_OK);
     check_equal(
-        cmeta_thread_create(&cancel_thread, chttp_server_test_deferred_terminal_entry, &cancel),
+        sync_thread_create(&cancel_thread, chttp_server_test_deferred_terminal_entry, &cancel),
         SALTS_OK);
     atomic_store_explicit(&start, 1, memory_order_release);
-    check_equal(cmeta_thread_join(&reply_thread), SALTS_OK);
-    check_equal(cmeta_thread_join(&cancel_thread), SALTS_OK);
+    check_equal(sync_thread_join(&reply_thread), SALTS_OK);
+    check_equal(sync_thread_join(&cancel_thread), SALTS_OK);
     check_true((reply.status == SALTS_OK) != (cancel.status == SALTS_OK));
     check_true(reply.status == SALTS_OK || reply.status == SALTS_EALREADY ||
                reply.status == SALTS_ENOENT);
@@ -2138,10 +2138,10 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
     check_equal(chttp_server_test_raw_send(client, request, sizeof(request) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
 
     check_equal(chttp_server_deferred_reply(&probe.handle, &deferred_response), SALTS_ENOBUFS);
@@ -2179,10 +2179,10 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
     check_equal(chttp_server_test_raw_send(client, request, sizeof(request) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
 
     stale = probe.handle;
@@ -2190,11 +2190,11 @@ spec("CHTTP background HTTP/1.1 server") {
     client = CHTTP_SERVER_TEST_INVALID_SOCKET;
     check_equal(chttp_server_deferred_cancel(&probe.handle), SALTS_OK);
     check_equal(chttp_server_test_wait_active(&server, 0u, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     do {
       if (chttp_server_deferred_cancel(&stale) == SALTS_ENOENT) break;
-      cmeta_thread_yield();
-    } while (cmeta_monotonic_ms() < deadline);
+      sync_thread_yield();
+    } while (monotonic_ms() < deadline);
     check_equal(chttp_server_deferred_cancel(&stale), SALTS_ENOENT);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
@@ -2208,7 +2208,7 @@ spec("CHTTP background HTTP/1.1 server") {
     chttp_server_test_deferred_probe probe;
     chttp_server_test_stop stop;
     chttp_server_test_socket client = CHTTP_SERVER_TEST_INVALID_SOCKET;
-    cmeta_thread_t stop_thread = NULL;
+    sync_thread_t stop_thread = NULL;
     char response[CHTTP_SERVER_TEST_RAW_BYTES] = {0};
     size_t response_size = 0u;
     uint64_t deadline;
@@ -2228,17 +2228,17 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check_equal(chttp_server_test_raw_connect(port, &client), SALTS_OK);
     check_equal(chttp_server_test_raw_send(client, request, sizeof(request) - 1u), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.acquired, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.acquired, memory_order_acquire), 1);
 
-    check_equal(cmeta_thread_create(&stop_thread, chttp_server_test_stop_entry, &stop), SALTS_OK);
+    check_equal(sync_thread_create(&stop_thread, chttp_server_test_stop_entry, &stop), SALTS_OK);
     check_equal(chttp_server_test_wait_stopping(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(atomic_load_explicit(&stop.status, memory_order_acquire), SALTS_EBUSY);
     check_equal(chttp_server_deferred_cancel(&probe.handle), SALTS_OK);
-    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
+    check_equal(sync_thread_join(&stop_thread), SALTS_OK);
     check_equal(atomic_load_explicit(&stop.status, memory_order_acquire), SALTS_OK);
     receive_status = chttp_server_test_raw_receive(client, response, sizeof(response),
                                                    &response_size, true, NULL);
@@ -3124,7 +3124,7 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_get(&server, "/static", chttp_server_test_static, NULL), SALTS_OK);
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
-    admission_deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    admission_deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     for (index = 0u; index < CHTTP_SERVER_TEST_PRESSURE_CLIENTS; ++index) {
       int status = SALTS_ETIMEDOUT;
       do {
@@ -3138,7 +3138,7 @@ spec("CHTTP background HTTP/1.1 server") {
           break;
         }
         chttp_server_test_close_socket(candidate);
-      } while (status == SALTS_ETIMEDOUT && cmeta_monotonic_ms() < admission_deadline);
+      } while (status == SALTS_ETIMEDOUT && monotonic_ms() < admission_deadline);
       check_equal(status, SALTS_OK);
     }
 
@@ -3171,7 +3171,7 @@ spec("CHTTP background HTTP/1.1 server") {
     chttp_server_config config = chttp_server_test_config();
     chttp_server_test_blocking_probe probe;
     chttp_server_test_raw_client client = {0};
-    cmeta_thread_t client_thread = NULL;
+    sync_thread_t client_thread = NULL;
     uint64_t deadline;
 
     atomic_init(&probe.entered, 0);
@@ -3183,18 +3183,18 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_port(&server, &client.port), SALTS_OK);
     client.request = request;
     client.status = SALTS_EIO;
-    check_equal(cmeta_thread_create(&client_thread, chttp_server_test_raw_client_entry, &client),
+    check_equal(sync_thread_create(&client_thread, chttp_server_test_raw_client_entry, &client),
                 SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&probe.entered, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&probe.entered, memory_order_acquire), 1);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_STOP_TIMEOUT_MS), SALTS_ETIMEDOUT);
     atomic_store_explicit(&probe.release, 1, memory_order_release);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
-    check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
-    cmeta_thread_destroy(&client_thread);
+    check_equal(sync_thread_join(&client_thread), SALTS_OK);
+    sync_thread_destroy(&client_thread);
     check_equal(client.status, SALTS_OK);
     check_not_null(strstr(client.response, "HTTP/1.1 200 OK"));
     check_equal(chttp_server_destroy(&server), SALTS_OK);

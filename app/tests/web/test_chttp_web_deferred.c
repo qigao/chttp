@@ -2,9 +2,9 @@
 #include "tinytest.h"
 
 #include <http_client/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
-#include <vstr.h>
+#include <core/clock.h>
+#include <threads/threads.h>
+#include <core/vstr.h>
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -61,7 +61,7 @@ typedef enum web_deferred_mode {
 
 typedef struct web_deferred_job {
   chttp_server_deferred deferred;
-  cmeta_thread_t thread;
+  sync_thread_t thread;
   web_deferred_mode mode;
   atomic_int acquired;
   atomic_int release;
@@ -174,7 +174,7 @@ static void web_deferred_worker(void *user) {
   web_deferred_model model = {.value = vstr_from_cstr(job->value)};
 
   while (atomic_load_explicit(&job->release, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
 
   job->web_status = chttp_web_renderer_init(
       &renderer, templates, 1u, &config, &error);
@@ -205,7 +205,7 @@ static int web_deferred_handler(
   if (status != SALTS_OK) return status;
 
   if (job->mode != WEB_DEFERRED_HOLD) {
-    status = cmeta_thread_create(&job->thread, web_deferred_worker, job);
+    status = sync_thread_create(&job->thread, web_deferred_worker, job);
     if (status != SALTS_OK) {
       (void)chttp_server_deferred_cancel(&job->deferred);
       return status;
@@ -229,24 +229,24 @@ static int web_deferred_server_start(
 
 static int web_deferred_wait(
     atomic_int *value, int expected, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   while (atomic_load_explicit(value, memory_order_acquire) != expected) {
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
   return SALTS_OK;
 }
 
 static int web_deferred_wait_inactive(
     chttp_server *server, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   for (;;) {
     chttp_server_stats stats = {0};
     const int status = chttp_server_get_stats(server, &stats);
     if (status != SALTS_OK) return status;
     if (stats.active_connections == 0u) return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
@@ -316,8 +316,8 @@ spec("CHttp::App deferred worker rendering") {
       web_deferred_job_reset(&app.job, WEB_DEFERRED_REPLY);
       check_equal(
           web_deferred_call(&client, port, target, &response), SALTS_OK);
-      check_equal(cmeta_thread_join(&app.job.thread), SALTS_OK);
-      cmeta_thread_destroy(&app.job.thread);
+      check_equal(sync_thread_join(&app.job.thread), SALTS_OK);
+      sync_thread_destroy(&app.job.thread);
       check_equal(app.job.web_status, CHTTP_WEB_OK);
       check_equal(app.job.native_status, SALTS_OK);
       check_equal(response.status_code, 200u);
@@ -337,7 +337,7 @@ spec("CHttp::App deferred worker rendering") {
     chttp_server server = {0};
     web_deferred_app app;
     web_deferred_client_call call = {0};
-    cmeta_thread_t client_thread = NULL;
+    sync_thread_t client_thread = NULL;
     chttp_server_deferred stale;
     chttp_web_renderer renderer = {0};
     static const char page[] = "<p>{{ value }}</p>";
@@ -359,7 +359,7 @@ spec("CHttp::App deferred worker rendering") {
     call.port = port;
     snprintf(call.target, sizeof(call.target), "/work/stale");
     check_equal(
-        cmeta_thread_create(
+        sync_thread_create(
             &client_thread, web_deferred_client_thread, &call),
         SALTS_OK);
     check_equal(
@@ -372,8 +372,8 @@ spec("CHttp::App deferred worker rendering") {
     check_equal(
         web_deferred_wait_inactive(&server, WEB_DEFERRED_TIMEOUT_MS),
         SALTS_OK);
-    check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
-    cmeta_thread_destroy(&client_thread);
+    check_equal(sync_thread_join(&client_thread), SALTS_OK);
+    sync_thread_destroy(&client_thread);
 
     check_equal(
         chttp_web_renderer_init(
@@ -396,7 +396,7 @@ spec("CHttp::App deferred worker rendering") {
     chttp_server server = {0};
     web_deferred_app app;
     web_deferred_client_call call = {0};
-    cmeta_thread_t client_thread = NULL;
+    sync_thread_t client_thread = NULL;
     uint16_t port = 0u;
 
     memset(&app, 0, sizeof(app));
@@ -406,7 +406,7 @@ spec("CHttp::App deferred worker rendering") {
     call.port = port;
     snprintf(call.target, sizeof(call.target), "/work/stop");
     check_equal(
-        cmeta_thread_create(
+        sync_thread_create(
             &client_thread, web_deferred_client_thread, &call),
         SALTS_OK);
     check_equal(
@@ -421,10 +421,10 @@ spec("CHttp::App deferred worker rendering") {
     check_equal(
         chttp_server_stop(&server, WEB_DEFERRED_TIMEOUT_MS), SALTS_OK);
 
-    check_equal(cmeta_thread_join(&app.job.thread), SALTS_OK);
-    cmeta_thread_destroy(&app.job.thread);
-    check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
-    cmeta_thread_destroy(&client_thread);
+    check_equal(sync_thread_join(&app.job.thread), SALTS_OK);
+    sync_thread_destroy(&app.job.thread);
+    check_equal(sync_thread_join(&client_thread), SALTS_OK);
+    sync_thread_destroy(&client_thread);
     check_equal(app.job.web_status, CHTTP_WEB_OK);
     check_equal(app.job.native_status, SALTS_OK);
     /* HTTP/1.1 shutdown closes the active transport before the deferred

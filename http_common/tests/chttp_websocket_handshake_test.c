@@ -2,7 +2,7 @@
 #include <http_server/http.h>
 #include "tinytest.h"
 
-#include <base64_utils.h>
+#include <core/base64.h>
 
 #include <stdlib.h>
 #include <string.h>

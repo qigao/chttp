@@ -1,8 +1,8 @@
 #include "chttp_server_runtime.h"
 
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -81,9 +81,9 @@ static size_t owner_cpu_calibrate(uint64_t target_ns, uint64_t *out_measured_ns)
   if (target_ns == 0u) return 0u;
 
   while (iterations <= (SIZE_MAX / 2u)) {
-    started = cmeta_hrtime();
+    started = hrtime();
     (void)owner_cpu_burn(iterations);
-    elapsed = cmeta_hrtime() - started;
+    elapsed = hrtime() - started;
     if (elapsed >= UINT64_C(2000000)) break;
     iterations *= 2u;
   }
@@ -97,9 +97,9 @@ static size_t owner_cpu_calibrate(uint64_t target_ns, uint64_t *out_measured_ns)
     else iterations = (size_t)scaled;
   }
 
-  started = cmeta_hrtime();
+  started = hrtime();
   (void)owner_cpu_burn(iterations);
-  elapsed = cmeta_hrtime() - started;
+  elapsed = hrtime() - started;
   if (out_measured_ns != NULL) *out_measured_ns = elapsed;
   return iterations;
 }
@@ -277,7 +277,7 @@ static int owner_cpu_request(owner_cpu_socket socket_value, const char *target,
       "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n",
       target);
   if (request_size <= 0 || (size_t)request_size >= sizeof(request)) return -1;
-  started = cmeta_hrtime();
+  started = hrtime();
   if (owner_cpu_send_all(socket_value, request, (size_t)request_size) != 0) return -1;
   while (used < sizeof(response) - 1u) {
     int got = recv(socket_value, (char *)response + used,
@@ -291,7 +291,7 @@ static int owner_cpu_request(owner_cpu_socket socket_value, const char *target,
     used += (size_t)got;
     response[used] = '\0';
     if (strstr((const char *)response, "\r\n\r\nok") != NULL) {
-      *out_ns = cmeta_hrtime() - started;
+      *out_ns = hrtime() - started;
       return 0;
     }
   }
@@ -319,12 +319,12 @@ static size_t owner_cpu_sum(const size_t values[OWNER_CPU_MAX_OWNERS],
 static int owner_cpu_wait_total(chttp_server_impl *impl, size_t owner_count,
                                 size_t expected,
                                 size_t leases[OWNER_CPU_MAX_OWNERS]) {
-  const uint64_t deadline = cmeta_monotonic_ms() + OWNER_CPU_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + OWNER_CPU_TIMEOUT_MS;
   do {
     owner_cpu_snapshot(impl, owner_count, leases);
     if (owner_cpu_sum(leases, owner_count) == expected) return 0;
-    cmeta_thread_yield();
-  } while (cmeta_monotonic_ms() < deadline);
+    sync_thread_yield();
+  } while (monotonic_ms() < deadline);
   return -1;
 }
 
@@ -351,7 +351,7 @@ static void owner_cpu_client_main(void *user) {
   atomic_store_explicit(&client->status, SALTS_OK, memory_order_release);
   atomic_fetch_add_explicit(&client->barrier->ready, 1, memory_order_acq_rel);
   while (atomic_load_explicit(&client->barrier->start, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
   for (index = 0u; index < client->requests; ++index) {
     if (owner_cpu_request(client->socket_value, client->target,
                           &client->latencies[index]) != 0) {
@@ -375,7 +375,7 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   size_t leases[OWNER_CPU_MAX_OWNERS] = {0};
   size_t before[OWNER_CPU_MAX_OWNERS] = {0};
   owner_cpu_client clients[OWNER_CPU_CONNECTIONS];
-  cmeta_thread_t threads[OWNER_CPU_CONNECTIONS] = {0};
+  sync_thread_t threads[OWNER_CPU_CONNECTIONS] = {0};
   bool thread_started[OWNER_CPU_CONNECTIONS] = {false};
   owner_cpu_barrier barrier;
   uint64_t latencies[OWNER_CPU_CONNECTIONS][OWNER_CPU_MAX_REQUESTS] = {{0}};
@@ -447,23 +447,23 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
         .latencies = latencies[index],
         .barrier = &barrier};
     atomic_init(&clients[index].status, SALTS_EIO);
-    if (cmeta_thread_create(&threads[index], owner_cpu_client_main, &clients[index]) != SALTS_OK)
+    if (sync_thread_create(&threads[index], owner_cpu_client_main, &clients[index]) != SALTS_OK)
       goto cleanup_threads;
     thread_started[index] = true;
   }
 
   while (atomic_load_explicit(&barrier.ready, memory_order_acquire) !=
          OWNER_CPU_CONNECTIONS)
-    cmeta_thread_yield();
+    sync_thread_yield();
 
   cpu_started = clock();
-  started_ns = cmeta_hrtime();
+  started_ns = hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
 
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
     size_t sample;
-    if (cmeta_thread_join(&threads[index]) != SALTS_OK) goto cleanup_threads;
-    cmeta_thread_destroy(&threads[index]);
+    if (sync_thread_join(&threads[index]) != SALTS_OK) goto cleanup_threads;
+    sync_thread_destroy(&threads[index]);
     thread_started[index] = false;
     if (atomic_load_explicit(&clients[index].status, memory_order_acquire) != SALTS_OK)
       goto cleanup_threads;
@@ -475,7 +475,7 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
     }
   }
 
-  wall_ns = cmeta_hrtime() - started_ns;
+  wall_ns = hrtime() - started_ns;
   cpu_elapsed = clock() - cpu_started;
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK ||
       stats.rejected_connections != 0u)
@@ -538,8 +538,8 @@ cleanup_threads:
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
     if (thread_started[index]) {
-      (void)cmeta_thread_join(&threads[index]);
-      cmeta_thread_destroy(&threads[index]);
+      (void)sync_thread_join(&threads[index]);
+      sync_thread_destroy(&threads[index]);
       thread_started[index] = false;
     }
   }

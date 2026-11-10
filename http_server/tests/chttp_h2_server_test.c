@@ -7,9 +7,9 @@
 
 #include <http_client/http.h>
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
-#include <cmeta_buffer.h>
+#include <core/clock.h>
+#include <threads/threads.h>
+#include <memory/buffer.h>
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -567,10 +567,10 @@ static int chttp_h2_server_test_deferred_handler(void *user,
 }
 
 static int chttp_h2_server_test_wait_atomic(atomic_int *value, int expected) {
-  const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
   while (atomic_load_explicit(value, memory_order_acquire) < expected &&
-         cmeta_monotonic_ms() < deadline)
-    cmeta_thread_yield();
+         monotonic_ms() < deadline)
+    sync_thread_yield();
   return atomic_load_explicit(value, memory_order_acquire) >= expected ? SALTS_OK : SALTS_ETIMEDOUT;
 }
 
@@ -1039,8 +1039,8 @@ static int chttp_h2_test_admission(void *user, const chttp_server_request_view *
   if (request->body != NULL || request->session != NULL) return SALTS_EPROTO;
   if (strcmp(request->path, "/echo") == 0) result->status_code = 429;
   if (strcmp(request->path, "/slow-admission") == 0) {
-    const uint64_t until = cmeta_monotonic_ms() + CHTTP_H2_TEST_DEADLINE_MS * 2u;
-    while (cmeta_monotonic_ms() < until) cmeta_thread_yield();
+    const uint64_t until = monotonic_ms() + CHTTP_H2_TEST_DEADLINE_MS * 2u;
+    while (monotonic_ms() < until) sync_thread_yield();
   }
   return SALTS_OK;
 }
@@ -1090,8 +1090,8 @@ static void chttp_check_interceptor_failure(chttp_interceptor_failure_fixture *f
   options.user = &fixture->healthy;
   if (protocol == CHTTP_HTTP_2)
     check_equal(chttp_async_client_submit(&fixture->client, &options, &request), SALTS_OK);
-  const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
-  while (fixture->failed.calls == 0u && cmeta_monotonic_ms() < deadline)
+  const uint64_t deadline = monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+  while (fixture->failed.calls == 0u && monotonic_ms() < deadline)
     check_equal(chttp_async_client_poll(&fixture->client, 10u, &completions), SALTS_OK);
   check_equal(fixture->failed.calls, (size_t)1u);
   check_not_equal(fixture->failed.status, SALTS_OK);
@@ -1102,11 +1102,11 @@ static void chttp_check_interceptor_failure(chttp_interceptor_failure_fixture *f
     check_equal(chttp_server_deferred_cancel(&fixture->deferred.handle), SALTS_OK);
     int status;
     while ((status = chttp_async_client_submit(&fixture->client, &options, &request)) == SALTS_ENOBUFS &&
-           cmeta_monotonic_ms() < deadline)
+           monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture->client, 10u, &completions), SALTS_OK);
     check_equal(status, SALTS_OK);
   }
-  while (fixture->healthy.calls == 0u && cmeta_monotonic_ms() < deadline)
+  while (fixture->healthy.calls == 0u && monotonic_ms() < deadline)
     check_equal(chttp_async_client_poll(&fixture->client, 10u, &completions), SALTS_OK);
   check_equal(fixture->healthy.calls, (size_t)1u);
   check_equal(fixture->healthy.status, SALTS_OK);
@@ -1906,11 +1906,11 @@ spec("CHTTP background HTTP/2 server") {
         chttp_server_deferred_token(stale.generation, CHTTP_SERVER_DEFERRED_CANCELED),
         memory_order_release);
     check_equal(cnet_client_wake(&target->server->network), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
     while (chttp_server_deferred_token_state(atomic_load_explicit(
                target->token, memory_order_acquire)) != CHTTP_SERVER_DEFERRED_IDLE &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(chttp_server_deferred_token_state(
                     atomic_load_explicit(target->token, memory_order_acquire)),
                 CHTTP_SERVER_DEFERRED_IDLE);
@@ -1957,12 +1957,12 @@ spec("CHTTP background HTTP/2 server") {
 
     chttp_h2_server_test_socket_close(socket_value);
     socket_value = CHTTP_H2_SERVER_TEST_INVALID_SOCKET;
-    deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
     do {
       check_equal(chttp_server_get_stats(&server, &stats), SALTS_OK);
       if (stats.active_connections == 0u) break;
-      cmeta_thread_yield();
-    } while (cmeta_monotonic_ms() < deadline);
+      sync_thread_yield();
+    } while (monotonic_ms() < deadline);
     check_equal(stats.active_connections, 0u);
     check_equal(chttp_server_deferred_cancel(&stale), SALTS_ENOENT);
 
@@ -2532,8 +2532,8 @@ spec("CHTTP background HTTP/2 server") {
     options.user = &good;
     check_equal(chttp_async_client_submit(&client, &options, &good_request), SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
-    while ((failed.calls == 0u || good.calls == 0u) && cmeta_monotonic_ms() < deadline) {
+    deadline = monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+    while ((failed.calls == 0u || good.calls == 0u) && monotonic_ms() < deadline) {
       size_t completions = 0u;
       check_equal(chttp_async_client_poll(&client, 20u, &completions), SALTS_OK);
     }
@@ -2814,7 +2814,7 @@ spec("CHTTP background HTTP/2 server") {
     chttp_h2_server_test_peer peer = {0};
     chttp_h2_server_test_stop stop = {&server, SALTS_EBUSY};
     chttp_h2_server_test_socket socket_value = CHTTP_H2_SERVER_TEST_INVALID_SOCKET;
-    cmeta_thread_t stop_thread = NULL;
+    sync_thread_t stop_thread = NULL;
     uint64_t deadline;
     uint16_t port = 0u;
     size_t index;
@@ -2836,18 +2836,18 @@ spec("CHTTP background HTTP/2 server") {
         chttp_h2_server_test_peer_submit(&peer, headers, sizeof(headers) / sizeof(headers[0])),
         SALTS_OK);
     check_equal(chttp_h2_server_test_peer_send(&peer, socket_value), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_H2_SERVER_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&handler_called, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(atomic_load_explicit(&handler_called, memory_order_acquire), 1);
 
-    check_equal(cmeta_thread_create(&stop_thread, chttp_h2_server_test_stop_thread, &stop),
+    check_equal(sync_thread_create(&stop_thread, chttp_h2_server_test_stop_thread, &stop),
                 SALTS_OK);
     pump_status = chttp_h2_server_test_peer_pump(&peer, socket_value, 1u);
     check_equal(pump_status, SALTS_OK);
-    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
-    cmeta_thread_destroy(&stop_thread);
+    check_equal(sync_thread_join(&stop_thread), SALTS_OK);
+    sync_thread_destroy(&stop_thread);
     check_equal(chttp_h2_server_test_peer_read_to_close(&peer, socket_value), SALTS_OK);
     check_equal(stop.status, SALTS_OK);
     check_equal(peer.results[0].error_code, CHTTP_H2_ERR_NO_ERROR);

@@ -26,3 +26,7 @@ target_link_libraries(chttp_s3 PUBLIC CHttp::Client
   PRIVATE Salts::Core Salts::XmlParser)
 install(TARGETS chttp_s3 EXPORT ChttpTargets)
 install(DIRECTORY include/s3 DESTINATION include)
+
+if(BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

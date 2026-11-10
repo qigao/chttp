@@ -4,8 +4,8 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
 
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -220,7 +220,7 @@ static int chttp_websocket_test_jwt_open(void *user, chttp_websocket *websocket,
  * before opening the replacement connection; never retry a failed connect. */
 static bool chttp_websocket_test_wait_retired_connection(
     const chttp_server *server, uint64_t minimum_accepted, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   for (;;) {
     chttp_server_stats stats = {0};
     if (chttp_server_get_stats(server, &stats) != SALTS_OK ||
@@ -229,9 +229,9 @@ static bool chttp_websocket_test_wait_retired_connection(
     if (stats.accepted_connections >= minimum_accepted &&
         stats.active_connections == 0u)
       return true;
-    if (cmeta_monotonic_ms() >= deadline)
+    if (monotonic_ms() >= deadline)
       return false;
-    cmeta_sleep_ms(1u);
+    sleep_ms(1u);
   }
 }
 

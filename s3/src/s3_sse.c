@@ -1,6 +1,6 @@
 #include "s3_internal.h"
 
-#include <base64_utils.h>
+#include <core/base64.h>
 
 #include <cmeta_crypto.h>
 

@@ -69,19 +69,10 @@ Applications include the public entry point:
 #include <chttp_app/app.h>
 ```
 
-The installed App behavior test links only `CHttp::App` and
-executes Web parsing/validation/upload adapters plus Service initialization
-and destruction against the installed SDK. From `app/tests/installed`, use
-`installed-release-user` for configure/build/CTest after the root release
-preset installs the SDK. The test preset owns `CHTTP_ROOT`, deriving it from
-`${sourceDir}/../../../stage/sdk/$env{QIGAO_SDK_RID}` with forward slashes,
-including on Windows; it does not consume the parent process's `CHTTP_ROOT`.
-macOS uses `installed-macos-release-user`. Both share the root vcpkg manifest.
-Consumers outside this formal test set their own `CHTTP_ROOT` in their preset
-environment, using forward slashes on Windows and preserving the package
-discovery expression above.
-Full HTTP MethodPlan, deferred execution and DSO behavior remain covered by
-the formal integration tests under `app/tests/service` and `app/tests/web`.
+App initialization, parsing, validation, uploads, generated MethodPlan,
+deferred execution and DSO behavior are verified by the formal integration
+tests under `app/tests/service` and `app/tests/web`. Use the root user preset
+and CTest entries described in [the build guide](../cmake/BUILD.md).
 
 ## Generated service capability
 

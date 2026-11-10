@@ -7,8 +7,8 @@
 #include "chttp_service_cflow_unsupported.service_native.h"
 #include "tinytest.h"
 
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stddef.h>
 #include <stdint.h>

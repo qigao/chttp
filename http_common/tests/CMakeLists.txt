@@ -1,5 +1,5 @@
 add_executable(chttp_thread_cpu_test chttp_thread_cpu_test.c)
-target_link_libraries(chttp_thread_cpu_test PRIVATE Salts::Platform Salts::TinyTest)
+target_link_libraries(chttp_thread_cpu_test PRIVATE Salts::Core Salts::TinyTest)
 target_include_directories(chttp_thread_cpu_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 set_target_properties(chttp_thread_cpu_test PROPERTIES
   FOLDER "http_common/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
@@ -7,7 +7,7 @@ add_test(NAME chttp_thread_cpu_test COMMAND chttp_thread_cpu_test)
 set_tests_properties(chttp_thread_cpu_test PROPERTIES TIMEOUT 10)
 
 add_executable(chttp_file_transfer_test chttp_file_transfer_test.c)
-target_link_libraries(chttp_file_transfer_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_file_transfer_test PRIVATE CHttp::Client CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_file_transfer_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc)
 add_test(NAME chttp_file_transfer_test COMMAND chttp_file_transfer_test)
 set_target_properties(chttp_file_transfer_test PROPERTIES FOLDER "http_common/tests")
@@ -103,8 +103,4 @@ set_target_properties(chttp_cnet_retained_test PROPERTIES
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
 
-add_test(
-  NAME chttp_no_openssl_contract_test
-  COMMAND ${CMAKE_COMMAND}
-          -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/chttp_no_openssl_contract_test.cmake)
+add_subdirectory(integration)

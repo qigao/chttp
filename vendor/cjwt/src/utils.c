@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <base64_utils.h>
+#include <core/base64.h>
 
 #include "utils.h"
 

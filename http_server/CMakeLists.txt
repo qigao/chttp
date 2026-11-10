@@ -34,16 +34,20 @@ target_include_directories(chttp_server
           ${PROJECT_SOURCE_DIR}/http_common/rpc
           ${PROJECT_SOURCE_DIR}/vendor/cjwt/include)
 target_link_libraries(chttp_server
-  PUBLIC Salts::CNet Salts::CMeta Salts::CSerde Salts::DataBind
-  PRIVATE llhttp::llhttp_static Salts::Platform Salts::Core Salts::CFlow
-          Salts::Plugin Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
-          chttp_cjwt Salts::DateTimeParser Salts::CSTL)
+  PUBLIC Salts::CNet CMeta::CMeta Salts::CSerde Salts::DataBind
+  PRIVATE llhttp::llhttp_static Salts::Core Salts::Core CMeta::CFlow
+          CMeta::Plugin Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
+          chttp_cjwt Salts::DateTimeParser CMeta::CSTL)
 install(TARGETS chttp_server EXPORT ChttpTargets)
 install(DIRECTORY include/http_server DESTINATION include)
-if(BUILD_EXAMPLES OR (BUILD_TESTS AND BUILD_TESTING))
+if(BUILD_EXAMPLES OR (BUILD_TESTS))
   add_subdirectory(examples)
 endif()
 
-if(BUILD_BENCHMARKS)
+if(BUILD_BENCHMARK)
   add_subdirectory(benchmarks)
+endif()
+
+if(BUILD_TESTS)
+  add_subdirectory(tests)
 endif()

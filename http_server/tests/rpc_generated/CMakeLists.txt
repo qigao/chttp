@@ -10,7 +10,7 @@ salts_idl_target(
 # this unloadable DSO, not in the test executable. Only Plugin owns its DSO.
 add_library(chttp_rpc_generation_dso SHARED chttp_rpc_generation_dso.c)
 target_link_libraries(chttp_rpc_generation_dso PRIVATE
-  Salts::PluginABI Salts::Platform Salts::DataBind)
+  CMeta::PluginABI Salts::Core Salts::DataBind)
 set_target_properties(chttp_rpc_generation_dso PROPERTIES
   FOLDER "http_server/tests/fixtures" C_STANDARD 11 C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
@@ -18,7 +18,7 @@ set_target_properties(chttp_rpc_generation_dso PROPERTIES
 # Tests compile and link exclusively against the integrated native Owners.
 add_executable(chttp_rpc_service_test chttp_rpc_service_test.c)
 target_link_libraries(chttp_rpc_service_test PRIVATE
-  CHttp::Server CHttp::Client Salts::DataBind Salts::Plugin Salts::TinyTest)
+  CHttp::Server CHttp::Client Salts::DataBind CMeta::Plugin Salts::TinyTest)
 target_include_directories(chttp_rpc_service_test PRIVATE
   "${chttp_rpc_service_fixture_GENERATED_DIR}")
 target_compile_definitions(chttp_rpc_service_test PRIVATE
@@ -34,7 +34,7 @@ set_target_properties(chttp_rpc_service_test PROPERTIES
 # buffer lifecycle. This test checks real heap releases after Server drain.
 add_executable(chttp_rpc_owned_native_test chttp_rpc_owned_native_test.c)
 target_link_libraries(chttp_rpc_owned_native_test PRIVATE
-  CHttp::Server CHttp::Client Salts::DataBind Salts::CMeta Salts::TinyTest)
+  CHttp::Server CHttp::Client Salts::DataBind CMeta::CMeta Salts::TinyTest)
 target_include_directories(chttp_rpc_owned_native_test PRIVATE
   "${chttp_rpc_service_fixture_GENERATED_DIR}")
 add_dependencies(chttp_rpc_owned_native_test

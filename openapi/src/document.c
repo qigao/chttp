@@ -4,7 +4,7 @@
 #include <cflow/adapters.h>
 #include <cyaml/cyaml_json_adapter.h>
 #include <ctype.h>
-#include <vstr.h>
+#include <core/vstr.h>
 
 cmeta_enum(OaMethod,
     (OA_GET, 1, "get"), (OA_PUT, 2, "put"), (OA_POST, 3, "post"),

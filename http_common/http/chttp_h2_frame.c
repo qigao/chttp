@@ -1,6 +1,6 @@
 #include "chttp_h2_frame.h"
 
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 #include <limits.h>
 #include <string.h>

@@ -3,7 +3,7 @@
  * DataBind restores the entire request after partial ingress or completion. */
 #include <http_client/http.h>
 #include <http_server/rpc_service.h>
-#include <cmeta_cmeta_fixed_width.h>
+#include <cmeta/core_fixed_width.h>
 #include "chttp_rpc_service.rpc.h"
 #include "tinytest.h"
 

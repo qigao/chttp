@@ -2,7 +2,7 @@
 #define HTTP_COMMON_RPC_H
 
 #include <cnet/cnet.h>
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <cmeta/cmeta.h>

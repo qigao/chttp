@@ -1,7 +1,7 @@
 add_executable(chttp_response_owner_test
   chttp_response_owner_test.c chttp_response_scope_peer.c)
 target_link_libraries(chttp_response_owner_test PRIVATE
-  Salts::CNet Salts::CMeta Salts::TinyTest)
+  Salts::CNet CMeta::CMeta Salts::TinyTest)
 target_include_directories(chttp_response_owner_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_client/include
   ${PROJECT_SOURCE_DIR}/http_common/include)
@@ -38,7 +38,7 @@ set_target_properties(chttp_response_test PROPERTIES
 
 
 add_executable(chttp_file_sink_test chttp_file_sink_test.c)
-target_link_libraries(chttp_file_sink_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_file_sink_test PRIVATE CHttp::Client CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_file_sink_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_client/src ${PROJECT_SOURCE_DIR}/http_client/rpc)
 add_test(NAME chttp_file_sink_test COMMAND chttp_file_sink_test)
 set_target_properties(chttp_file_sink_test PROPERTIES FOLDER "http_client/tests")
@@ -50,7 +50,7 @@ set_target_properties(chttp_file_sink_test PROPERTIES
 
 add_executable(chttp_pool_lifecycle_test chttp_pool_lifecycle_test.c)
 target_link_libraries(chttp_pool_lifecycle_test PRIVATE
-  CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest llhttp::llhttp_static)
+  CHttp::Client CHttp::Server CMeta::CFlow Salts::TinyTest llhttp::llhttp_static)
 target_include_directories(chttp_pool_lifecycle_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc)
 set_target_properties(chttp_pool_lifecycle_test PROPERTIES

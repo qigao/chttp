@@ -28,9 +28,9 @@ int chttp_server_acceptor_cancel_pending(
 }
 
 void chttp_server_stats_rejected_connection(chttp_server_impl *server) {
-  cmeta_mutex_lock(&server->mutex);
+  sync_mutex_lock(&server->mutex);
   ++server->stats.rejected_connections;
-  cmeta_mutex_unlock(&server->mutex);
+  sync_mutex_unlock(&server->mutex);
 }
 
 static int chttp_server_admission_owner(

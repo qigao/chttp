@@ -1,26 +1,10 @@
-# CHttp.Native
+# Historical NuGet packaging
 
-Prebuilt Release SDKs for qigao/chttp.
-
-`2.1.0-rc.1` is the prepared prerelease. CMake library/package compatibility
-uses numeric `2.1.0`; the installed config exposes `CHTTP_RELEASE_VERSION`
-with the full prerelease identifier. NuGet metadata and the release tag use
-`2.1.0-rc.1` and `v2.1.0-rc.1` respectively.
-
-Manual `native-sdk-release.yml` runs build, test, install and pack without
-publishing. Only a matching pushed version tag enables publication; existing
-package versions are not silently skipped or replaced.
-
-`CHttp.Native` contains the prebuilt CHttp SDK only. Consumers restore these SDKs explicitly:
-
-- `Salts.Native`
-- `SaltsUtils.Native`
-
-The current integration resolves `Salts.Native 2.3.0-*` and
-`SaltsUtils.Native 4.3.0-*` on each run. Record both resolved SDK versions and
-commits from their manifests; rebuild consumers when moving to this SDK family.
-TLS and protocol crypto use the Salts GmSSL-backed APIs, so consumers do not
-add OpenSSL/BoringSSL or a public GmSSL CMake dependency.
+This directory preserves the old CHttp.Native package layout. Its floating
+monolithic dependency restore and publication workflow have been retired.
+Current builds use the [split SDK CI](../../.github/workflows/ci.yml) and
+[explicit release inputs](../../cmake/BUILD.md). This migration does not publish
+a new NuGet package. The layout below is historical, not a current build entry.
 
 ## Layout
 

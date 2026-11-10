@@ -8,7 +8,7 @@
 
 #include <cnet/websocket.h>
 #include <cnet/websocket_transport.h>
-#include <salts/clock.h>
+#include <core/clock.h>
 #include <uri_parser.h>
 
 #include <limits.h>
@@ -140,7 +140,7 @@ static void chttp_websocket_client_event_push(void *user, cnet_websocket *websoc
   if (event->kind == CNET_WEBSOCKET_EVENT_MESSAGE &&
       client->profile_receive_started_ns != 0u &&
       client->profile_message_event_ns == 0u) {
-    client->profile_message_event_ns = cmeta_hrtime();
+    client->profile_message_event_ns = hrtime();
     client->profile_message_plaintext_bytes =
         client->profile_plaintext_bytes;
   }
@@ -400,7 +400,7 @@ static void chttp_websocket_client_on_receive(void *user, cnet_connection connec
   client->receive_pending = false;
   if (client->profile_receive_started_ns != 0u) {
     if (client->profile_cnet_receive_ns == 0u)
-      client->profile_cnet_receive_ns = cmeta_hrtime();
+      client->profile_cnet_receive_ns = hrtime();
     ++client->profile_receive_callbacks;
     client->profile_plaintext_bytes += view->size;
   }
@@ -453,7 +453,7 @@ static void chttp_websocket_client_on_receive(void *user, cnet_connection connec
 }
 
 static uint64_t chttp_websocket_client_deadline(uint32_t timeout_ms) {
-  const uint64_t now = cmeta_monotonic_ms();
+  const uint64_t now = monotonic_ms();
   if (timeout_ms == 0u) return 0u;
   return UINT64_MAX - now < timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
@@ -477,7 +477,7 @@ static int chttp_websocket_client_poll(chttp_websocket_client_impl *client, uint
   uint32_t wait_ms = 1000u;
   size_t events = 0u;
   if (deadline != 0u) {
-    const uint64_t now = cmeta_monotonic_ms();
+    const uint64_t now = monotonic_ms();
     uint64_t remaining;
     if (now >= deadline) return SALTS_ETIMEDOUT;
     remaining = deadline - now;
@@ -1175,7 +1175,7 @@ int chttp_websocket_client_receive(chttp_websocket_client *client, uint32_t time
   if (impl->phase != CHTTP_WEBSOCKET_CLIENT_OPEN && impl->event_count == 0u) return SALTS_ESHUTDOWN;
   impl->operation_active = true;
   deadline = chttp_websocket_client_deadline(timeout_ms);
-  impl->profile_receive_started_ns = cmeta_hrtime();
+  impl->profile_receive_started_ns = hrtime();
   impl->profile_cnet_receive_ns = 0u;
   impl->profile_message_event_ns = 0u;
   impl->profile_receive_return_ns = 0u;
@@ -1202,7 +1202,7 @@ int chttp_websocket_client_receive(chttp_websocket_client *client, uint32_t time
   } else if (status == SALTS_OK) {
     status = impl->terminal_status == SALTS_OK ? SALTS_ECONNRESET : impl->terminal_status;
   }
-  impl->profile_receive_return_ns = cmeta_hrtime();
+  impl->profile_receive_return_ns = hrtime();
   impl->operation_active = false;
   return status;
 }

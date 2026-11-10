@@ -5,7 +5,7 @@ add_library(openapi_generator STATIC src/plugin.c src/extract.c src/document.c s
 add_library(OpenAPI::Generator ALIAS openapi_generator)
 target_include_directories(openapi_generator PUBLIC include PRIVATE src)
 target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sitter
-  Salts::CMeta Salts::CFlow Salts::JsonParser Salts::CYamlJsonAdapter Salts::DataBind
+  CMeta::CMeta CMeta::CFlow Salts::JsonParser Salts::CYamlJsonAdapter Salts::DataBind
   PRIVATE ${CMAKE_DL_LIBS})
 
 add_library(openapi_ui_model STATIC src/ui_model.c)
@@ -35,7 +35,7 @@ add_library(openapi_c MODULE "${CMAKE_CURRENT_BINARY_DIR}/generated/c.c")
 target_include_directories(openapi_c PRIVATE include)
 target_link_libraries(openapi_c PRIVATE "${OPENAPI_C_GRAMMAR_LIBRARY}" unofficial::tree-sitter::tree-sitter)
 set_target_properties(openapi_c PROPERTIES PREFIX "")
-if(BUILD_TESTS AND BUILD_TESTING)
+if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 if(BUILD_EXAMPLES)
