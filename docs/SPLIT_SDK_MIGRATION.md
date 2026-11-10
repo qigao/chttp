@@ -37,6 +37,11 @@ contract assertions are not verification entry points for this migration.
 The superseded floating NuGet, source-candidate and installed-consumer workflows
 are retired in favor of the single split-SDK matrix. Runtime test and benchmark
 sources remain in their owning modules.
+The main-branch P-384/SHA-384 and X.509 HTTPS tests are preserved and always
+included in `BUILD_TESTS`, without a test-subset option. Their 21 fixed PEM
+inputs now belong to `http_client/tests/fixtures`, with the immutable original
+source recorded there. The historical X.509 qualification document distinguishes
+earlier monolithic results from the still-unqualified split SDK composition.
 
 ## CI composition
 

@@ -11,6 +11,8 @@
 
 enum { CHTTP_TLS_TEST_TIMEOUT_MS = 5000 };
 
+#define CHTTP_X509_PATH(name) CHTTP_X509_FIXTURE_DIR "/" name
+
 typedef struct chttp_tls_test_probe {
   size_t middleware_calls;
   cnet_stream_peer peer;
@@ -195,6 +197,89 @@ static int chttp_tls_test_poll_until(chttp_async_client *client, chttp_tls_async
   return SALTS_OK;
 }
 
+static int chttp_tls_test_matrix_case(const char *name, const char *ca_file,
+                                      const char *cert_file, const char *key_file,
+                                      int expect_success) {
+  static const char *h1[] = {"http/1.1"};
+  chttp_server server = {0};
+  chttp_client client = {0};
+  chttp_tls_profile profile = {0};
+  chttp_tls_test_probe probe = {0};
+  chttp_server_config server_config = chttp_tls_test_server_config();
+  chttp_client_config client_config = chttp_tls_test_client_config();
+  cnet_tls_server_config server_tls = {.size = sizeof(server_tls),
+                                        .cert_file = cert_file,
+                                        .key_file = key_file,
+                                        .client_auth = CNET_TLS_CLIENT_AUTH_NONE,
+                                        .alpn_protocols = h1,
+                                        .alpn_protocol_count = 1u};
+  cnet_tls_client_config client_tls = {.size = sizeof(client_tls),
+                                        .ca_file = ca_file,
+                                        .server_name = "localhost",
+                                        .alpn_protocols = h1,
+                                        .alpn_protocol_count = 1u};
+  chttp_response response = {0};
+  char uri[64];
+  uint16_t port = 0u;
+  int profile_ready = 0, server_ready = 0, server_started = 0, client_ready = 0;
+  int status, result = SALTS_EPROTO;
+
+  status = chttp_tls_profile_init(&profile, &client_tls);
+  if (status != SALTS_OK) {
+    result = expect_success ? status :
+                              (probe.middleware_calls == 0u ? SALTS_OK : SALTS_EPROTO);
+    goto cleanup;
+  }
+  profile_ready = 1;
+  server_config.tls = &server_tls;
+  status = chttp_server_init(&server, &server_config);
+  if (status != SALTS_OK) {
+    result = expect_success ? status :
+                              (probe.middleware_calls == 0u ? SALTS_OK : SALTS_EPROTO);
+    goto cleanup;
+  }
+  server_ready = 1;
+  if (chttp_server_use(&server, chttp_tls_test_middleware, &probe) != SALTS_OK ||
+      chttp_server_get(&server, "/session", chttp_tls_test_session, NULL) != SALTS_OK ||
+      chttp_server_start(&server) != SALTS_OK) {
+    result = expect_success ? SALTS_EIO :
+                              (probe.middleware_calls == 0u ? SALTS_OK : SALTS_EPROTO);
+    goto cleanup;
+  }
+  server_started = 1;
+  if (chttp_server_port(&server, &port) != SALTS_OK ||
+      snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port) <= 0 ||
+      chttp_client_init(&client, &client_config) != SALTS_OK) {
+    result = SALTS_EIO;
+    goto cleanup;
+  }
+  client_ready = 1;
+  status = chttp_tls_test_get(&client, uri, &profile, NULL, 0u, &response);
+  if (expect_success) {
+    result = status == SALTS_OK && response.status_code == 200u &&
+                     response.body_size == 1u && response.body != NULL &&
+                     memcmp(response.body, "1", 1u) == 0 &&
+                     probe.middleware_calls == 1u
+                 ? SALTS_OK
+                 : SALTS_EPROTO;
+  } else {
+    result = status != SALTS_OK && probe.middleware_calls == 0u
+                 ? SALTS_OK
+                 : SALTS_EPROTO;
+  }
+
+cleanup:
+  chttp_response_destroy(&response);
+  if (client_ready && chttp_client_destroy(&client, CHTTP_TLS_TEST_TIMEOUT_MS) != SALTS_OK)
+    result = SALTS_EIO;
+  if (server_started && chttp_server_stop(&server, CHTTP_TLS_TEST_TIMEOUT_MS) != SALTS_OK)
+    result = SALTS_EIO;
+  if (server_ready && chttp_server_destroy(&server) != SALTS_OK) result = SALTS_EIO;
+  if (profile_ready && chttp_tls_profile_destroy(&profile) != SALTS_OK) result = SALTS_EIO;
+  if (result != SALTS_OK) fprintf(stderr, "X.509 matrix case failed: %s\n", name);
+  return result;
+}
+
 spec("CHTTP HTTPS adapter") {
   it("rejects unsupported or incomplete server TLS policy before listen") {
     static const char *h2[] = {"h2"};
@@ -299,6 +384,204 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_async_client_stop(&client, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_async_client_destroy(&client), SALTS_OK);
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
+  }
+
+  it("verifies a P-384 SHA-384 issuing CA before dispatching HTTPS requests") {
+    static const char *h1[] = {"http/1.1"};
+    chttp_server server = {0};
+    chttp_client client = {0};
+    chttp_tls_profile valid_profile = {0};
+    chttp_tls_profile wrong_ca_profile = {0};
+    chttp_tls_profile wrong_name_profile = {0};
+    chttp_tls_test_probe probe = {0};
+    chttp_server_config server_config = chttp_tls_test_server_config();
+    chttp_client_config client_config = chttp_tls_test_client_config();
+    cnet_tls_server_config server_tls;
+    cnet_tls_client_config valid_tls;
+    cnet_tls_client_config wrong_ca_tls;
+    cnet_tls_client_config wrong_name_tls;
+    chttp_response response = {0};
+    const struct {
+      const char *name;
+      const char *certificate;
+      size_t certificate_size;
+    } rejected_server_certificates[] = {
+        {"expired", CHTTP_TLS_TEST_P384_EXPIRED_SERVER_CERTIFICATE,
+         sizeof(CHTTP_TLS_TEST_P384_EXPIRED_SERVER_CERTIFICATE) - 1u},
+        {"tampered", CHTTP_TLS_TEST_P384_TAMPERED_SERVER_CERTIFICATE,
+         sizeof(CHTTP_TLS_TEST_P384_TAMPERED_SERVER_CERTIFICATE) - 1u}};
+    char uri[64];
+    char *server_cert_path = tt_make_temp_file("chttp-p384-server-cert", ".pem");
+    char *server_key_path = tt_make_temp_file("chttp-p384-server-key", ".pem");
+    char *ca_path = tt_make_temp_file("chttp-p384-ca", ".pem");
+    char *wrong_ca_path = tt_make_temp_file("chttp-p384-wrong-ca", ".pem");
+    uint16_t port = 0u;
+    int status;
+
+    check_not_null(server_cert_path);
+    check_not_null(server_key_path);
+    check_not_null(ca_path);
+    check_not_null(wrong_ca_path);
+    check_equal(tt_write_file(server_cert_path, CHTTP_TLS_TEST_P384_SERVER_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_P384_SERVER_CERTIFICATE) - 1u),
+                0);
+    check_equal(tt_write_file(server_key_path, CHTTP_TLS_TEST_P384_SERVER_KEY,
+                              sizeof(CHTTP_TLS_TEST_P384_SERVER_KEY) - 1u),
+                0);
+    check_equal(tt_write_file(ca_path, CHTTP_TLS_TEST_P384_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_P384_CA_CERTIFICATE) - 1u),
+                0);
+    check_equal(tt_write_file(wrong_ca_path, CHTTP_TLS_TEST_P384_WRONG_CA_CERTIFICATE,
+                              sizeof(CHTTP_TLS_TEST_P384_WRONG_CA_CERTIFICATE) - 1u),
+                0);
+
+    server_tls = (cnet_tls_server_config){.size = sizeof(server_tls),
+                                          .cert_file = server_cert_path,
+                                          .key_file = server_key_path,
+                                          .client_auth = CNET_TLS_CLIENT_AUTH_NONE,
+                                          .alpn_protocols = h1,
+                                          .alpn_protocol_count = 1u};
+    valid_tls = (cnet_tls_client_config){.size = sizeof(valid_tls),
+                                         .ca_file = ca_path,
+                                         .server_name = "localhost",
+                                         .alpn_protocols = h1,
+                                         .alpn_protocol_count = 1u};
+    wrong_ca_tls = valid_tls;
+    wrong_ca_tls.ca_file = wrong_ca_path;
+    wrong_name_tls = valid_tls;
+    wrong_name_tls.server_name = "wrong.example";
+    server_config.tls = &server_tls;
+
+    check_equal(chttp_tls_profile_init(&valid_profile, &valid_tls), SALTS_OK);
+    check_equal(chttp_tls_profile_init(&wrong_ca_profile, &wrong_ca_tls), SALTS_OK);
+    check_equal(chttp_tls_profile_init(&wrong_name_profile, &wrong_name_tls), SALTS_OK);
+    check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+    check_equal(chttp_server_use(&server, chttp_tls_test_middleware, &probe), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
+
+    check_equal(tt_remove_file(server_cert_path), 0);
+    check_equal(tt_remove_file(server_key_path), 0);
+    check_equal(tt_remove_file(ca_path), 0);
+    check_equal(tt_remove_file(wrong_ca_path), 0);
+    free(server_cert_path);
+    free(server_key_path);
+    free(ca_path);
+    free(wrong_ca_path);
+
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);
+    check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+
+    check_equal(chttp_tls_test_get(&client, uri, &valid_profile, NULL, 0u, &response), SALTS_OK);
+    check_equal(response.status_code, 200u);
+    check_equal(response.body, "1", 1u);
+    chttp_response_destroy(&response);
+    check_equal(probe.middleware_calls, (size_t)1u);
+
+    status = chttp_tls_test_get(&client, uri, &wrong_ca_profile, NULL, 0u, &response);
+    check_not_equal(status, SALTS_OK);
+    check_equal(probe.middleware_calls, (size_t)1u);
+    chttp_response_destroy(&response);
+
+    status = chttp_tls_test_get(&client, uri, &wrong_name_profile, NULL, 0u, &response);
+    check_not_equal(status, SALTS_OK);
+    check_equal(probe.middleware_calls, (size_t)1u);
+    chttp_response_destroy(&response);
+
+    check_equal(chttp_client_destroy(&client, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_stop(&server, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+
+    for (size_t case_index = 0u;
+         case_index < sizeof(rejected_server_certificates) /
+                          sizeof(rejected_server_certificates[0]);
+         ++case_index) {
+      char *rejected_cert_path = tt_make_temp_file(
+          rejected_server_certificates[case_index].name, ".pem");
+      char *rejected_key_path = tt_make_temp_file("chttp-p384-rejected-key", ".pem");
+      check_not_null(rejected_cert_path);
+      check_not_null(rejected_key_path);
+      check_equal(tt_write_file(rejected_cert_path,
+                                rejected_server_certificates[case_index].certificate,
+                                rejected_server_certificates[case_index].certificate_size),
+                  0);
+      check_equal(tt_write_file(rejected_key_path, CHTTP_TLS_TEST_P384_SERVER_KEY,
+                                sizeof(CHTTP_TLS_TEST_P384_SERVER_KEY) - 1u),
+                  0);
+
+      server = (chttp_server){0};
+      client = (chttp_client){0};
+      server_tls.cert_file = rejected_cert_path;
+      server_tls.key_file = rejected_key_path;
+      server_config.tls = &server_tls;
+      check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+      check_equal(chttp_server_use(&server, chttp_tls_test_middleware, &probe), SALTS_OK);
+      check_equal(chttp_server_get(&server, "/session", chttp_tls_test_session, NULL), SALTS_OK);
+      check_equal(tt_remove_file(rejected_cert_path), 0);
+      check_equal(tt_remove_file(rejected_key_path), 0);
+      free(rejected_cert_path);
+      free(rejected_key_path);
+
+      check_equal(chttp_server_start(&server), SALTS_OK);
+      check_equal(chttp_server_port(&server, &port), SALTS_OK);
+      check_greater(snprintf(uri, sizeof(uri), "tls://127.0.0.1:%u", (unsigned int)port), 0);
+      check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
+      status = chttp_tls_test_get(&client, uri, &valid_profile, NULL, 0u, &response);
+      check_not_equal(status, SALTS_OK);
+      check_equal(probe.middleware_calls, (size_t)1u);
+      chttp_response_destroy(&response);
+      check_equal(chttp_client_destroy(&client, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_server_stop(&server, CHTTP_TLS_TEST_TIMEOUT_MS), SALTS_OK);
+      check_equal(chttp_server_destroy(&server), SALTS_OK);
+    }
+
+    check_equal(chttp_tls_profile_destroy(&valid_profile), SALTS_OK);
+    check_equal(chttp_tls_profile_destroy(&wrong_ca_profile), SALTS_OK);
+    check_equal(chttp_tls_profile_destroy(&wrong_name_profile), SALTS_OK);
+  }
+
+  it("qualifies common X.509 profiles through real HTTPS dispatch") {
+    const struct {
+      const char *name;
+      const char *ca_file;
+      const char *cert_file;
+      const char *key_file;
+      int expect_success;
+    } cases[] = {
+        {"P384 intermediate chain", CHTTP_X509_PATH("p384-chain-root-cert.pem"),
+         CHTTP_X509_P384_FULLCHAIN, CHTTP_X509_PATH("p384-chain-server-key.pem"), 1},
+        {"missing P384 intermediate", CHTTP_X509_PATH("p384-chain-root-cert.pem"),
+         CHTTP_X509_PATH("p384-chain-server-cert.pem"),
+         CHTTP_X509_PATH("p384-chain-server-key.pem"), 0},
+        {"CA false intermediate", CHTTP_X509_PATH("invalid-ca-root-cert.pem"),
+         CHTTP_X509_INVALID_CA_FULLCHAIN,
+         CHTTP_X509_PATH("invalid-ca-server-key.pem"), 0},
+        {"P256 SHA256", CHTTP_X509_PATH("p256-test-root-cert.pem"),
+         CHTTP_X509_PATH("p256-test-server-cert.pem"),
+         CHTTP_X509_PATH("p256-test-server-key.pem"), 1},
+        {"RSA3072 SHA256", CHTTP_X509_PATH("rsa3072-test-root-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 1},
+        {"RSA-PSS certificate signature", CHTTP_X509_PATH("rsa3072-test-root-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-pss-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 0},
+        {"ECDSA SHA512 certificate signature", CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),
+         CHTTP_X509_PATH("sha512-mixed-server-cert.pem"),
+         CHTTP_X509_PATH("sha512-mixed-server-key.pem"), 0},
+        {"P521 issuer", CHTTP_X509_PATH("unsupported-p521-root-cert.pem"),
+         CHTTP_X509_PATH("unsupported-p521-server-cert.pem"),
+         CHTTP_X509_PATH("sha512-mixed-server-key.pem"), 0},
+        {"Ed25519 identity", CHTTP_X509_PATH("p384-chain-root-cert.pem"),
+         CHTTP_X509_PATH("unsupported-ed25519-server-cert.pem"),
+         CHTTP_X509_PATH("unsupported-ed25519-server-key.pem"), 0}};
+    size_t case_index;
+    for (case_index = 0u; case_index < sizeof(cases) / sizeof(cases[0]); ++case_index)
+      check_equal(chttp_tls_test_matrix_case(
+                      cases[case_index].name, cases[case_index].ca_file,
+                      cases[case_index].cert_file, cases[case_index].key_file,
+                      cases[case_index].expect_success),
+                  SALTS_OK);
   }
 
   it("serves HTTPS middleware and sessions across fixed owners") {
