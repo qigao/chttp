@@ -211,7 +211,7 @@ static int chttp_websocket_test_jwt_open(void *user, chttp_websocket *websocket,
   subject_size = strlen(request->jwt_claims->subject);
   if (subject_size >= sizeof(probe->subject)) return SALTS_ENOBUFS;
   memcpy(probe->subject, request->jwt_claims->subject, subject_size + 1u);
-  atomic_fetch_add_explicit(&probe->opened, 1, memory_order_relaxed);
+  atomic_fetch_add_explicit(&probe->opened, 1, memory_order_release);
   return SALTS_OK;
 }
 
@@ -388,11 +388,14 @@ spec("CHTTP WebSocket client/server") {
       for (size_t index = 0u; index < 4u; ++index) {
         unsigned int http_status = 0u;
         chttp_websocket_event event = {0};
+        atomic_store_explicit(&probe.captured, 0, memory_order_relaxed);
         check_true(snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/bridge/%s",
                               (unsigned int)port, paths[index]) > 0);
         options.uri = uri;
         check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
         const int status = chttp_websocket_client_connect(&client, &options, &http_status);
+        /* Publish this connection's session before main submits copied commands. */
+        check_equal(atomic_load_explicit(&probe.captured, memory_order_acquire), 1);
         if (index == 0u) {
           check_equal(status, SALTS_EPROTO);
           check_equal(http_status, 500u);
@@ -424,6 +427,10 @@ spec("CHTTP WebSocket client/server") {
           check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
         }
         check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
+        if (index != 3u) {
+          check_true(chttp_websocket_test_wait_retired_connection(
+              &server, index + 1u, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS));
+        }
       }
       check_equal(chttp_server_stop(&server, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
       chttp_server_stats stats = {0};
@@ -548,7 +555,7 @@ spec("CHTTP WebSocket client/server") {
     check_equal(chttp_websocket_client_init(&client, &client_config), SALTS_OK);
     check_equal(chttp_websocket_client_connect(&client, &connect_options, &http_status), SALTS_OK);
     check_equal(http_status, 101u);
-    check_equal(atomic_load_explicit(&probe.opened, memory_order_relaxed), 1);
+    check_equal(atomic_load_explicit(&probe.opened, memory_order_acquire), 1);
     check_equal(probe.subject, "alice");
     check_equal(chttp_websocket_client_destroy(&client, CHTTP_WEBSOCKET_TEST_TIMEOUT_MS), SALTS_OK);
 

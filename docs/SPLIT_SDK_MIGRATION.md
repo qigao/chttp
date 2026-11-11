@@ -112,6 +112,13 @@ there is no authentication fallback in the committed restoration code.
 
 ## Migration and rollback
 
+CI 42947933660 identified five TSan reports in WebSocket test probes. The
+session reader now acquires the callback's publication flag, each connection
+retires before that flag is reused, and JWT subject publication uses matching
+release/acquire ordering. Network response arrival alone does not synchronize
+ordinary fixture memory. The Windows WebSocket CTests pass; the new Linux TSan
+run remains the qualification for this synchronization fix.
+
 Restore new releases into version/profile-specific directories, update only
 the dependency fields in the local environment, and configure with `--fresh`
 to remove stale compiler/package caches. Preserve unrelated machine settings

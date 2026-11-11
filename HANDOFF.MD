@@ -51,3 +51,9 @@
 - `.env` now names the actual published SDKs restored into versioned roots.
   Its unrelated fields were compared and preserved. CMake does not load dotenv.
   Keep original failure logs and do not retry unchanged CI jobs.
+- CI 42947933660 reported five TSan races in the io_uring WebSocket fixture:
+  session capture was release-published but read without acquire, and JWT
+  subject publication used a relaxed counter. Acquire the captured session,
+  retire each connection before resetting its publication flag, and publish
+  the subject with release/acquire. The published-SDK Windows build and
+  WebSocket CTests pass; Linux TSan validation requires the new CI run.
