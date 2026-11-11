@@ -12,7 +12,7 @@ salts_idl_target(
 target_sources(http_example_contract_native PRIVATE http_example_business.c)
 set_target_properties(http_example_contract_native http_example_contract_idl_codegen
   http_example_contract_plugin http_example_contract_plugin_client
-  PROPERTIES FOLDER "http_server/examples")
+  PROPERTIES FOLDER "http_server/tests/fixtures")
 
 # Freeze editable Jinja sources into the binary, without a runtime file loader.
 foreach(name layout page)
@@ -27,7 +27,7 @@ foreach(name layout page)
 endforeach()
 configure_file(http_example_templates.h.in http_example_templates.h @ONLY)
 
-# Private application composition shared by the CLI and real HTTP tests.
+# Private application composition retained by the real HTTP regression tests.
 add_library(http_example_app STATIC
   http_example_configurator.c http_example_interceptor.c http_example_handlers.c)
 target_compile_features(http_example_app PUBLIC c_std_11)
@@ -38,11 +38,4 @@ target_link_libraries(http_example_app PUBLIC
   CHttp::App http_example_contract_native
   http_example_contract_plugin_client CMeta::Plugin CMeta::CFlow Salts::Core)
 add_dependencies(http_example_app http_example_contract_idl_codegen)
-set_target_properties(http_example_app PROPERTIES FOLDER "http_server/examples")
-
-if(BUILD_EXAMPLES)
-  add_executable(crpc_server_example crpc_server_example.c)
-  target_link_libraries(crpc_server_example PRIVATE http_example_app)
-  add_dependencies(crpc_server_example http_example_contract_plugin)
-  set_target_properties(crpc_server_example PROPERTIES FOLDER "http_server/examples")
-endif()
+set_target_properties(http_example_app PROPERTIES FOLDER "http_server/tests/fixtures")

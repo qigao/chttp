@@ -106,15 +106,6 @@ typedef struct chttp_server_rpc_config {
   { sizeof(chttp_server_rpc_config), 8u, 64u, 8u, 4u, \
     4096u, 65536u, 16384u, 16u, 256u, 65536u, 4u }
 
-/** Allocate a stopped, host-owned registry before any RPC method is registered. */
-int chttp_server_rpc_configure(chttp_server *server,
-                              const chttp_server_rpc_config *config);
-
-/** Register one fixed-path JSON-RPC method on the existing HTTP server. */
-int chttp_server_rpc_register(chttp_server *server, const char *target,
-                              const crpc_method *method,
-                              crpc_server_method_fn handler, void *user);
-
 #ifdef __cplusplus
 }
 #endif

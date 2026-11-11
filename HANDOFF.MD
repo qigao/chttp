@@ -1,5 +1,18 @@
 # Split SDK migration handoff
 
+- Reflected Application migration: route engine `user` now points to an action
+  binding record, while body-open/body-close callbacks require the ACE-owned
+  Controller receiver. Forward both callbacks through explicit adapters; passing
+  them through unchanged sends the wrong object. Formal Application tests cover
+  H2 streamed-body open/write/close receiver identity and exactly-once close.
+  Deferred MethodPlan finalizers may still borrow Beans after response terminal;
+  Application close must wait for the runtime's in-flight count before destroying
+  the ACE graph. A real blocked native invocation verifies timeout retains the
+  owner/Beans and later drain destroys them once. Published-SDK Windows full
+  build, 105/105 CTest and install passed (`migration-application-final-*` logs);
+  subsequent C11 scoped-owner cases passed the focused Application CTest
+  (`migration-application-scoped-ctest.log`). No device or final CI claim here.
+
 - Socket policy audit: HTTP async/blocking Client, Server accepted streams and
   standalone WebSocket already forward CNet options. H2 WebSocket Pool omitted
   both validation and application of `config.client.socket_options`; apply it

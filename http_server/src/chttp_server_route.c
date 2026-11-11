@@ -1,3 +1,4 @@
+#include "chttp_server_engine.h"
 #include "chttp_server_runtime.h"
 
 #include <stdio.h>
@@ -89,6 +90,7 @@ int chttp_server_route_register(chttp_server_impl *server,
   route->middleware_count = options->middleware_count;
   route->param_count = param_count;
   route->handler = options->handler;
+  route->operation = options->operation;
   route->user = options->user;
   route->body_open = options->body_open;
   route->body_close = options->body_close;

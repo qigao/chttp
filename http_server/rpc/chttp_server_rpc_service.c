@@ -1,4 +1,5 @@
-#include <http_server/rpc_service.h>
+#include "../src/chttp_server_engine.h"
+#include "chttp_rpc_mount.h"
 #include "chttp_server_rpc_service_internal.h"
 
 #include <core/error_codes.h>

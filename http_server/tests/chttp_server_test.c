@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 #include <http_server/rate_limit.h>
 #include "tinytest.h"
 #include <http_client/http.h>

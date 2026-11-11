@@ -24,24 +24,16 @@ frame slots                 request-slot ID + deadline
 
 ## Server
 
-Include `<http_server/rpc.h>` for low-level JSON-RPC registration and `<http_server/rpc_service.h>` for generated-plan mounting.
-
-```c
-chttp_server server = {0};
-chttp_server_rpc_config rpc = CHTTP_SERVER_RPC_CONFIG_INIT;
-chttp_server_rpc_mount_options mount = CHTTP_SERVER_RPC_MOUNT_OPTIONS_INIT;
-
-/* http_config and generated method_plan/native_binding/execution are supplied
-   by the caller; configure/mount must precede server start. */
-chttp_server_init(&server, &http_config);
-chttp_server_rpc_configure(&server, &rpc);
-mount.target = "/rpc";
-mount.method_plan = method_plan;
-mount.native_binding = native_binding;
-mount.execution = execution;
-chttp_server_rpc_mount(&server, &mount);
-chttp_server_start(&server);
-```
+Server applications include `<chttp_app/app.h>` and link `CHttp::App`.
+The low-level registration and generated mount APIs are internal. Declare a
+`chttp_rpc_method` on an ACE-owned Controller, supplying the endpoint path,
+immutable `DataBindRpcMethodPlan`, canonical native binding and execution.
+Application binds the execution context to the Controller receiver, validates
+the generated ABI, and configures the protocol registry before listener start.
+Set `chttp_application_config.rpc` capacities explicitly and use
+`chttp_application_init/start/close` for the complete lifetime. Plans and
+provider metadata remain alive until close settles. See
+[Application contracts](../app/README.md#application-controller-and-service).
 
 Registration is bounded by configured method capacity. Each generated native invocation leases an independent preallocated request/response/error frame and DataBind workspace; immutable MethodPlan descriptors are borrowed until Server drain/destroy. Native frame alignment and padding are charged to the configured frame capacity. Ingress uses canonical DataBind binding, and `DataBindBindingCallLifetime` is restored exactly once before the slot is returned. Unsupported generated ABI/ownership/layout is rejected during mount. Server stop/destroy controls the entire RPC registry; there is no independent RPC stop or teardown.
 
@@ -64,6 +56,6 @@ Generated input binding uses the immutable DataBind plan: optional presence/null
 
 Tests include mixed HTTP GET / JSON-RPC POST on one Server; generated native success, defaulting and remote error; three HTTP Owners contending for two bounded generated frame slots; H1/H2 asynchronous request cancellation and absolute RPC deadline; duplicate active wire IDs; rejected typed-call output staying unchanged; and stop-timeout/drain before descriptor release. The owned-native conformance uses two heap-backed string fields in a real Server-mounted RPC method, with partial-ingress/duplicate-field rollback, successful and failed native execution, and counted exactly-once buffer releases checked only after stop/destroy. Separately, the CSerde failure test rejects a partially written result and checks the next RPC does not inherit staged bytes.
 
-The standalone C11 and C++17 public API/installed SDK conformance links only `CHttp::Server` and `CHttp::Client` (plus their declared transitive dependencies), never `CHttp::RpcService`.
+Formal protocol tests retain private engine access; public server applications link `CHttp::App`, while standalone RPC clients link `CHttp::Client`.
 
 The following are **not** provided: automatic settlement retry/replay, dynamic schema interpretation in the hot path, streaming JSON-RPC, HTTP/3 or a second CNet runtime. Exact cancellation, plugin generation and sanitizer checks remain explicit release gates.

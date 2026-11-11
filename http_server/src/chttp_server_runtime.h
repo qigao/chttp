@@ -1,3 +1,4 @@
+#include "chttp_server_engine.h"
 #ifndef CHTTP_SERVER_RUNTIME_H
 #define CHTTP_SERVER_RUNTIME_H
 
@@ -53,6 +54,7 @@ typedef enum chttp_server_wire_protocol {
 } chttp_server_wire_protocol;
 
 typedef struct chttp_server_route_record {
+  const cmeta_function_desc *operation;
   chttp_method method;
   char *path;
   chttp_server_middleware *middleware;

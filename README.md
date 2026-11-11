@@ -41,36 +41,36 @@ and [build instructions](cmake/BUILD.md).
 | --- | --- | --- |
 | App (generated services + server-driven Web) | `CHttp::App` | `<chttp_app/app.h>` |
 | HTTP / RPC client | `CHttp::Client` | `<http_client/http.h>`, `<http_client/rpc.h>` |
-| HTTP / RPC server | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
+| HTTP / RPC engine primitives | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
 | S3 client | `CHttp::S3` | `<s3/s3.h>` |
 
 Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
 
 ### App entry point
 
-Applications combining generated IDL services and Jinja pages can include
-`<chttp_app/app.h>` and link only `CHttp::App`. This installed C11/C++17
-shared library contains the Service and Web implementations. The HTTP server
-example and the App behavior tests use this entry point.
+Server applications include `<chttp_app/app.h>` (C11) or
+`<chttp_app/application.hpp>` (C++17) and link `CHttp::App`. Application owns
+the HTTP engine and a CMeta ACE Component graph. Controllers declare reflected
+actions or generated DataBind MethodPlans; Services are injected through
+canonical CMeta interfaces; ordered Interceptors surround HTTP dispatch.
 
-Service and Web are fully merged into `app/` and one `chttp_app` shared library.
-The earlier interface-only facade left two deployment units and duplicate
-module entry points; the shared library gives applications one build, include
-and deployment boundary. `CHttp::Server` remains independent of Jinja.
-App consumers acquire both the generated-service and rendering dependencies.
+The public programming model is Application / Controller / Service. Manual
+`chttp_service` mounting and Server route/middleware/RPC registration are now
+internal implementation APIs. This is a source-breaking migration: rebuild
+applications and replace manual registration with Controller descriptors.
+There are no compatibility aliases. Server remains the protocol engine and
+retains HTTP/1.1, HTTP/2, TLS, sessions, streaming, WebSocket and RPC semantics.
 
-Within App, Service still owns MethodPlan admission, invocation storage,
-executor work and plugin leases; Web owns rendering and browser adapters.
-Their existing function names, struct layouts, configuration, error codes and
-stop/drain/destroy contracts remain intact. Merging libraries creates no global
-runtime, extra dispatch, threads or allocations, and makes no CPU-speed claim.
+Start with the buildable [C example](app/examples/application.c),
+[C++ RAII example](app/examples/application.cpp), or the
+[OpenAPI UI Controller](openapi/examples/ui_server.c).
+[Application contracts](app/README.md#application-controller-and-service) and
+the [design decision](docs/HTTP_APPLICATION_DESIGN.md) describe ownership,
+reflection admission, interception and migration. Existing engine fixtures live
+under their owning modules' tests; they are not public application examples.
 
-Migration requires rebuilding applications: replace the old Service/Web link
-targets with `CHttp::App`, and includes with `<chttp_app/app.h>` (or the focused
-`<chttp_app/service.h>` / `<chttp_app/web.h>`). Deploy `chttp_app` instead of the
-two old shared libraries. Old binaries cannot use the new library without
-relinking. Install into a clean SDK prefix so stale libraries are not shipped.
-Rollback restores the preceding SDK and rebuilds consumers against its targets.
+Install into a clean SDK prefix so removed public headers are not shipped.
+Rollback restores the preceding SDK and rebuilds consumers against it.
 
 ## Repository layout
 

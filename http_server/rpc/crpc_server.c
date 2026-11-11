@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 #include <http_server/rpc.h>
 #include "crpc_internal.h"
 #include "../src/chttp_server_runtime.h"

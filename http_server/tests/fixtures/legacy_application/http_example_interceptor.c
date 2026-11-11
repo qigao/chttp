@@ -1,3 +1,4 @@
+#include "../../../src/chttp_server_engine.h"
 #include "http_example_app.h"
 
 /* Prepare headers before continuing: handlers may commit their replies. */

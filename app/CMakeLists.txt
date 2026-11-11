@@ -1,17 +1,6 @@
-add_library(chttp_app SHARED
-  src/chttp_service.c
-  src/chttp_web.c
-  src/chttp_web_context.c
-  src/chttp_web_form.c
-  src/chttp_web_form_plan.c
-  src/chttp_web_multipart.c
-  src/chttp_web_upload.c
-  src/chttp_web_auth.c
-  src/chttp_web_assets.c
-  src/chttp_web_validation.c
-  src/chttp_web_session.c
-  src/chttp_web_security.c
-  src/chttp_web_sse.c)
+file(GLOB CHTTP_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${CHTTP_APP_SOURCES})
+add_library(chttp_app SHARED ${CHTTP_APP_SOURCES})
 add_library(CHttp::App ALIAS chttp_app)
 set_target_properties(chttp_app PROPERTIES
   EXPORT_NAME App FOLDER "app"
@@ -23,7 +12,7 @@ target_include_directories(chttp_app PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chttp_app
-  PUBLIC CHttp::Server CMeta::CMeta Salts::DataBindPlugin CMeta::CFlow
+  PUBLIC CHttp::Server CMeta::ACE CMeta::CMeta Salts::DataBindPlugin CMeta::CFlow
   PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core Salts::CSerde chttp_digest
   INTERFACE
     $<LINK_ONLY:Salts::JinjaCMeta>

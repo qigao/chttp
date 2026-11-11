@@ -40,10 +40,6 @@ target_link_libraries(chttp_server
           chttp_cjwt chttp_digest Salts::DateTimeParser CMeta::CSTL)
 install(TARGETS chttp_server EXPORT ChttpTargets)
 install(DIRECTORY include/http_server DESTINATION include)
-if(BUILD_EXAMPLES OR (BUILD_TESTS))
-  add_subdirectory(examples)
-endif()
-
 if(BUILD_BENCHMARK)
   add_subdirectory(benchmarks)
 endif()

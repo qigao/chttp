@@ -1,5 +1,6 @@
-#ifndef CHTTP_SERVICE_SERVICE_H
-#define CHTTP_SERVICE_SERVICE_H
+#include "../../http_server/src/chttp_server_engine.h"
+#ifndef CHTTP_METHOD_RUNTIME_H
+#define CHTTP_METHOD_RUNTIME_H
 
 #include <http_server/http.h>
 
@@ -16,11 +17,11 @@
 extern "C" {
 #endif
 
-typedef struct chttp_service {
+typedef struct chttp_method_runtime {
   void *impl;
-} chttp_service;
+} chttp_method_runtime;
 
-typedef struct chttp_service_config {
+typedef struct chttp_method_runtime_config {
   size_t size;
   size_t method_capacity;
   size_t max_binding_value_bytes;
@@ -31,32 +32,32 @@ typedef struct chttp_service_config {
   size_t native_max_depth;
   size_t native_max_items;
   size_t native_max_owned_bytes;
-} chttp_service_config;
+} chttp_method_runtime_config;
 
-#define CHTTP_SERVICE_CONFIG_INIT \
-  { sizeof(chttp_service_config), 0u, 1024u, 4096u, 65536u, 16384u, 16u, 256u, 65536u }
+#define CHTTP_METHOD_RUNTIME_CONFIG_INIT \
+  { sizeof(chttp_method_runtime_config), 0u, 1024u, 4096u, 65536u, 16384u, 16u, 256u, 65536u }
 
-typedef enum chttp_service_execution_mode {
+typedef enum chttp_method_runtime_execution_mode {
   /** Execute the admitted DataBindNativeExecution on the HTTP owner callback. */
-  CHTTP_SERVICE_EXECUTION_INLINE_DIRECT = 0,
+  CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT = 0,
   /**
    * Bind/materialize on the HTTP owner callback, defer the response, then run
    * the admitted DataBindNativeExecution on the borrowed bounded executor.
    */
-  CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT = 1,
+  CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT = 1,
   /**
    * Bind/materialize on the HTTP owner callback, defer the response, then run
    * the producer-owned typed Service projection through an immutable CFlow Plan
    * on the borrowed bounded executor.
    */
-  CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW = 2,
+  CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW = 2,
   /**
    * Resolve one generated Plugin Service capability at mount, retain a
    * dedicated Plugin lease, then execute the admitted exact native adapter on
    * the borrowed bounded executor.
    */
-  CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN = 3
-} chttp_service_execution_mode;
+  CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN = 3
+} chttp_method_runtime_execution_mode;
 
 /**
  * One admitted generated HTTP operation.
@@ -78,14 +79,14 @@ typedef enum chttp_service_execution_mode {
  * UNKNOWN or alternate ownership semantics fail closed before route publication.
  * Request execution performs no FunctionDesc/FunctionAbi lookup.
  */
-typedef struct chttp_service_http_mount {
+typedef struct chttp_method_runtime_http_mount {
   size_t size;
   const DataBindHttpMethodPlan *method_plan;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
   const chttp_server_middleware *middleware;
   size_t middleware_count;
-  chttp_service_execution_mode execution_mode;
+  chttp_method_runtime_execution_mode execution_mode;
   /**
    * Borrowed bounded executor required by DEFERRED_DIRECT.
    *
@@ -117,11 +118,11 @@ typedef struct chttp_service_http_mount {
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_ref plugin_ref;
   const char *plugin_export_id;
-} chttp_service_http_mount;
+} chttp_method_runtime_http_mount;
 
-#define CHTTP_SERVICE_HTTP_MOUNT_INIT \
-  { sizeof(chttp_service_http_mount), NULL, NULL, NULL, NULL, 0u, \
-    CHTTP_SERVICE_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, {0u, 0u}, NULL }
+#define CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT \
+  { sizeof(chttp_method_runtime_http_mount), NULL, NULL, NULL, NULL, 0u, \
+    CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, {0u, 0u}, NULL }
 
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.
@@ -143,15 +144,15 @@ typedef struct chttp_service_http_mount {
  * the immutable Plan on workers. A canonical FunctionDesc carrying
  * CMETA_EFFECT_ASYNC is still rejected at mount.
  */
-int chttp_service_init(
-    chttp_service *service, const chttp_service_config *config);
+int chttp_method_runtime_init(
+    chttp_method_runtime *service, const chttp_method_runtime_config *config);
 
 /**
  * Mount one already-compiled DataBind HTTP MethodPlan on CHttp::Server.
  *
  * method_plan, native_binding, the selected execution capability, and every
  * descriptor/code provider they reference are borrowed until
- * chttp_service_destroy(). Mount performs canonical semantic/ABI admission
+ * chttp_method_runtime_destroy(). Mount performs canonical semantic/ABI admission
  * exactly once before route publication. The server copies route metadata,
  * while its route user pointer references immutable service-owned
  * mounted-operation storage.
@@ -166,10 +167,10 @@ int chttp_service_init(
  * Deferred modes keep request/CNet views callback-scoped: only the already
  * materialized native request frame crosses to the worker.
  */
-int chttp_service_mount_http(
-    chttp_service *service,
+int chttp_method_runtime_mount_http(
+    chttp_method_runtime *service,
     chttp_server *server,
-    const chttp_service_http_mount *mount);
+    const chttp_method_runtime_http_mount *mount);
 
 /**
  * Release service-owned bounded scratch/method records.
@@ -188,10 +189,11 @@ int chttp_service_mount_http(
  * remain authoritative in DataBind/CMeta; the Service does not introduce a
  * second native ownership model.
  */
-int chttp_service_destroy(chttp_service *service);
+int chttp_method_runtime_destroy(chttp_method_runtime *service);
+int chttp_method_runtime_quiescent(const chttp_method_runtime *service);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* CHTTP_SERVICE_SERVICE_H */
+#endif /* CHTTP_METHOD_RUNTIME_H */
