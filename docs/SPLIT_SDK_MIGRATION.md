@@ -93,10 +93,17 @@ as an accepted cancellation of an already-observed completion. It now advances
 through the configured write deadline and verifies the retained buffer lease,
 final timeout, absence of suffix writes and successful pool reuse. That test
 passes. Core selection is aligned to published 0.1.4, with its release manifest
-and SDK source trees verified. The latest full Windows CTest run passes 102/103.
-`chttp_h2_client_test` still times out during H2-over-TLS on Core 0.1.3 and 0.1.4.
-The complete matrix remains pending that integration failure. Logs are retained
-in `build/migration-crypto-final-full-ctest.log`.
+and SDK source trees verified.
+
+The H2 TLS fixture initialized its CNet client on main and admitted retained
+sends on a worker, violating CNet's owner-thread contract. The rejected send
+returned SALTS_EPERM inside a callback. The fixture overwrote that error with
+the successful poll result, then timed out. Client initialization and teardown
+now run on the worker, and poll completion preserves the first callback error.
+The test joins the worker before checking the response. The complete Windows
+CTest run against the published SDK passes 103/103. Original failures remain in
+`build/migration-crypto-final-full-ctest.log`, and the successful run is recorded
+in `build/migration-h2-owner-published-ctest.log`.
 
 Local restoration initially stopped on HTTP 401 from dotenv GitHub credentials.
 For this task, restoration explicitly selected the already authenticated gh

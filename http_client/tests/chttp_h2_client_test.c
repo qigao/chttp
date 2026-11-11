@@ -58,6 +58,7 @@ typedef struct chttp_h2_test_completion {
 
 typedef struct chttp_h2_tls_server {
   cnet_client network;
+  cnet_client_config network_config;
   cnet_listener listener;
   cnet_tls_server tls;
   cnet_connection connection;
@@ -649,12 +650,15 @@ static void chttp_h2_tls_server_run(void *user) {
   uint64_t deadline;
   int ready = 0;
   if (server == NULL) return;
+  /* Retained sends are admitted on the thread that initializes the client. */
+  server->status = cnet_client_init(&server->network, &server->network_config);
+  if (server->status != SALTS_OK) goto cleanup;
   protocol_callbacks.user_data = server;
   protocol_callbacks.on_end_headers = chttp_h2_tls_server_on_end;
   server->protocol = chttp_h2_proto_create(CHTTP_H2_PROTO_SERVER, NULL, &protocol_callbacks);
   if (server->protocol == NULL) {
     server->status = SALTS_ENOMEM;
-    return;
+    goto cleanup;
   }
   server->status = cnet_listener_wait(&server->listener, CHTTP_H2_TEST_TIMEOUT_MS, &ready);
   observer = (cnet_observer){.on_state = chttp_h2_tls_server_state,
@@ -668,13 +672,17 @@ static void chttp_h2_tls_server_run(void *user) {
   deadline = monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
   while (server->status == SALTS_OK && !server->terminal && monotonic_ms() < deadline) {
     size_t events = 0u;
-    server->status = cnet_client_poll(&server->network, 5u, &events);
+    const int status = cnet_client_poll(&server->network, 5u, &events);
+    if (server->status == SALTS_OK) server->status = status;
   }
   if (server->status == SALTS_OK && !server->terminal) server->status = SALTS_ETIMEDOUT;
+cleanup:
   (void)cnet_listener_close(&server->listener);
   (void)cnet_listener_destroy(&server->listener);
-  (void)cnet_client_stop(&server->network, CHTTP_H2_TEST_TIMEOUT_MS);
-  (void)cnet_client_destroy(&server->network);
+  if (server->network.impl != NULL) {
+    (void)cnet_client_stop(&server->network, CHTTP_H2_TEST_TIMEOUT_MS);
+    (void)cnet_client_destroy(&server->network);
+  }
   (void)cnet_tls_server_destroy(&server->tls);
   chttp_h2_proto_destroy(server->protocol);
   server->protocol = NULL;
@@ -1620,7 +1628,7 @@ spec("CHTTP HTTP/2 client") {
                                           .alpn_protocols = h2,
                                           .alpn_protocol_count = 1u};
 
-    check_equal(cnet_client_init(&server.network, &server_network), SALTS_OK);
+    server.network_config = server_network;
     check_equal(cnet_listener_init(&server.listener, &listener_config), SALTS_OK);
     check_equal(cnet_tls_server_init(&server.tls, &server_tls), SALTS_OK);
     check_equal(cnet_listener_port(&server.listener, &port), SALTS_OK);
@@ -1635,12 +1643,7 @@ spec("CHTTP HTTP/2 client") {
                               .tls = &profile,
                               .protocol = CHTTP_HTTP_2};
 
-    check_equal(chttp_get(&client, &options, &response, &error), SALTS_OK);
-    check_equal(response.http_major, 2u);
-    check_equal(response.status_code, 200u);
-    check_equal(chttp_response_header(&response, "x-transport"), "tls-h2");
-    check_equal(response.body, "tls", 3u);
-    chttp_response_destroy(&response);
+    const int request_status = chttp_get(&client, &options, &response, &error);
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
     check_equal(chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(sync_thread_join(&thread), SALTS_OK);
@@ -1648,6 +1651,12 @@ spec("CHTTP HTTP/2 client") {
     check_equal(server.status, SALTS_OK);
     check_equal(server.connected, 1);
     check_equal(server.response_submitted, 1);
+    check_equal(request_status, SALTS_OK);
+    check_equal(response.http_major, 2u);
+    check_equal(response.status_code, 200u);
+    check_equal(chttp_response_header(&response, "x-transport"), "tls-h2");
+    check_equal(response.body, "tls", 3u);
+    chttp_response_destroy(&response);
     check_equal(tt_remove_file(cert_path), 0);
     check_equal(tt_remove_file(key_path), 0);
     check_equal(tt_remove_file(ca_path), 0);

@@ -30,9 +30,21 @@
   accepted cancellation through the write deadline and the eventual timeout
   plus resource release, matching CNet's observed-completion contract.
   Core 0.1.4 is restored from its published, verified SDK. The latest full build
-  passes and CTest passes 102/103. H2-over-TLS still times out on Core 0.1.3 and
-  0.1.4. See `build/migration-crypto-final-full-ctest.log`. Temporary diagnostics
-  and unsuccessful H2 fixture experiments were removed. CHttp remains draft.
+  passes. The initial 102/103 result and H2 TLS failure are retained in
+  `build/migration-crypto-final-full-ctest.log`.
+- H2 TLS root cause was the fixture's thread ownership. It initialized the
+  server CNet client on main but sent retained responses on its worker. CNet
+  rejected the send with SALTS_EPERM. Assigning the poll return into the same
+  status then hid that callback failure behind a later timeout. Initialize
+  the client on the worker and preserve the callback's first error. Drain
+  and join the worker before response assertions so a failed request cannot
+  leave a thread borrowing its stack fixture. Published Core 0.1.4 now passes
+  the complete Windows suite, 103/103, recorded in
+  `build/migration-h2-owner-published-ctest.log`.
+- Diagnosis used a temporary Core v0.1.4 source worktree with TLS size/status
+  traces through the existing CHttp CTest. Product configuration was restored
+  to the published SDK before final validation. Temporary source changes,
+  worktree and investigation branches are removed after retaining their logs.
 - Local dotenv credentials yielded HTTP 401 during restoration. The local task
   helper explicitly selected the existing gh login and preserved credentials.
   Committed CI uses its job token and the shared verified archive transport.
