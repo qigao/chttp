@@ -59,7 +59,8 @@ typedef struct chttp_websocket_client_config {
   size_t h2_hpack_dynamic_table_bytes;
   /** HTTP/2 SETTINGS entries accepted per frame; zero selects 16. */
   size_t h2_max_settings_count;
-  /** Optional CNet socket policy; zeroed size preserves platform defaults. */
+  /** Optional CNet socket policy for this client or a pool's shared H2 connection.
+   * A zeroed size preserves platform defaults. */
   cnet_stream_socket_options socket_options;
 } chttp_websocket_client_config;
 

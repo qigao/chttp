@@ -1,5 +1,18 @@
 # Split SDK migration handoff
 
+- Socket policy audit: HTTP async/blocking Client, Server accepted streams and
+  standalone WebSocket already forward CNet options. H2 WebSocket Pool omitted
+  both validation and application of `config.client.socket_options`; apply it
+  after CNet initialization and before Manager/connection admission. Omitted
+  policy remains unchanged. The module-owned socket test reads NODELAY and
+  KEEPALIVE from the real H2 socket through CNet; two sessions share that policy.
+  Original failures are in `build/migration-websocket-socket-red-fixture-ctest.log`;
+  the fixed focused regression passes in `build/migration-websocket-socket-fixed-ctest.log`.
+  Full published-SDK Windows build and CTest pass 104/104, recorded in
+  `build/migration-websocket-socket-full-ctest.log`. ManagedDial/recovery remains
+  separate #231 work: socket option forwarding does not authorize HTTP replay
+  or prove protocol READY/old-request settlement.
+
 - The existing working tree contained the shared-presets migration. It was
   preserved and extended; see `docs/SPLIT_SDK_MIGRATION.md` for dependency
   ownership, the explicit eight-profile matrix and rollback.

@@ -57,6 +57,15 @@ set_target_properties(chttp_pool_lifecycle_test PROPERTIES
   FOLDER "http_client/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 add_test(NAME chttp_pool_lifecycle_test COMMAND chttp_pool_lifecycle_test)
 
+add_executable(chttp_websocket_pool_socket_test chttp_websocket_pool_socket_test.c)
+target_link_libraries(chttp_websocket_pool_socket_test PRIVATE
+  CHttp::Client CHttp::Server Salts::URI Salts::TinyTest)
+target_include_directories(chttp_websocket_pool_socket_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_common/http)
+set_target_properties(chttp_websocket_pool_socket_test PROPERTIES
+  FOLDER "http_client/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_websocket_pool_socket_test COMMAND chttp_websocket_pool_socket_test)
+
 add_executable(chttp_destination_test chttp_destination_test.c)
 target_link_libraries(chttp_destination_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
 set_target_properties(chttp_destination_test PROPERTIES

@@ -84,8 +84,14 @@ HTTPS policy、H1 Upgrade、H2 Extended CONNECT、路由和 byte-stream Adapter�
 
 这里的 keep-alive 是 HTTP/1.1 顺序复用或 HTTP/2 session 多 stream 复用，不等于内核
 `SO_KEEPALIVE` 探测参数。内核 socket policy 统一使用 CNet 的
-`cnet_stream_socket_options`：server 在启动前调用 `chttp_server_set_socket_options()`，同步
-WebSocket client 通过 `chttp_websocket_client_config.socket_options` 配置。零值保留系统默认；
+`cnet_stream_socket_options`：server 在启动前调用 `chttp_server_set_socket_options()`；普通 HTTP
+client 使用 `chttp_client_set_socket_options()` 或 `chttp_async_client_set_socket_options()`。
+独立 WebSocket client 通过 `chttp_websocket_client_config.socket_options` 配置，H2 WebSocket
+pool 使用 `chttp_websocket_pool_config.client.socket_options`，作用于共享物理连接，不能逐 stream
+设置不同策略。WebSocket 配置中 `socket_options.size == 0` 表示未配置；启用时从
+`CNET_STREAM_SOCKET_OPTIONS_INIT` 初始化。`nodelay = 1` 可显式请求 `TCP_NODELAY`，
+`keepalive = 1` 可显式请求 `SO_KEEPALIVE`；探测时间及次数按 CNet 的平台契约配置。
+Pool 初始化校验并复制策略，调用方配置内存之后无需保留。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
 CHTTP 的 production transport send 只使用 CNet retained ownership。长期 H1/H2/WebSocket
