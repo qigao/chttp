@@ -118,6 +118,9 @@ int chttp_h2_proto_set_local_settings(chttp_h2_proto *p, uint32_t header_table_s
 
 /* Effective peer limits after SETTINGS exchange. */
 uint32_t chttp_h2_proto_peer_max_concurrent_streams(chttp_h2_proto *p);
+/* Advisory owner-local capacity check, without creating a stream. A subsequent
+ * submit can still fail encoding/storage and that failure must be propagated. */
+int chttp_h2_proto_can_submit_request(const chttp_h2_proto *p);
 int chttp_h2_proto_settings_acked(const chttp_h2_proto *p);
 /* Optional DATA payload cap (0 = use the peer MAX_FRAME_SIZE).  Lets the
  * caller emit smaller DATA frames (e.g. streaming tests). */

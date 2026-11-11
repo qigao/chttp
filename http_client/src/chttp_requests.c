@@ -24,9 +24,12 @@ typedef struct chttp_blocking_client_impl {
   chttp_client_config config;
   cnet_stream_socket_options socket_options;
   chttp_h2_receive_window_policy h2_window_policy;
+  chttp_connection_recovery_options recovery_options;
   chttp_requests_probe probe;
   bool socket_options_set;
   bool h2_window_policy_set;
+  bool recovery_options_set;
+  bool admission_started;
   bool operation_active;
   bool usable;
 } chttp_blocking_client_impl;
@@ -80,6 +83,8 @@ static int chttp_requests_recover(chttp_blocking_client_impl *impl, uint32_t tim
   if (status == SALTS_OK && impl->socket_options_set)
     status = chttp_async_client_set_socket_options(
         &impl->async, &impl->socket_options);
+  if (status == SALTS_OK && impl->recovery_options_set)
+    status = chttp_async_client_set_connection_recovery(&impl->async, &impl->recovery_options);
   if (status == SALTS_OK) impl->usable = true;
   return status;
 }
@@ -131,6 +136,19 @@ int chttp_client_set_h2_receive_window_policy(
   return SALTS_OK;
 }
 
+int chttp_client_set_connection_recovery(chttp_client *client,
+    const chttp_connection_recovery_options *options) {
+  chttp_blocking_client_impl *impl = chttp_client_get_impl(client);
+  int status;
+  if (impl == NULL || options == NULL) return SALTS_EINVAL;
+  if (impl->admission_started || impl->operation_active) return SALTS_EBUSY;
+  status = chttp_async_client_set_connection_recovery(&impl->async, options);
+  if (status != SALTS_OK) return status;
+  impl->recovery_options = *options;
+  impl->recovery_options_set = true;
+  return SALTS_OK;
+}
+
 int chttp_client_set_socket_options(
     chttp_client *client,
     const cnet_stream_socket_options *options) {
@@ -177,6 +195,7 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
   if (impl->operation_active) return SALTS_EBUSY;
 
   impl->operation_active = true;
+  impl->admission_started = true;
   chttp_response_destroy(&impl->probe.response);
   impl->probe = (chttp_requests_probe){0};
   request_options = (chttp_request_options){.connection_uri = options->connection_uri,
@@ -211,15 +230,12 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
         status = SALTS_ETIMEDOUT;
         break;
       }
-      status = chttp_async_client_submit_destination(&impl->async, &request_options,
-                                                      out_destination, &request);
-    } else if (file_transfer != NULL)
-      status =
-          chttp_async_client_submit_file(&impl->async, &request_options, file_transfer, &request);
-    else if (file_sink_transfer != NULL)
-      status = chttp_async_client_submit_file_download(&impl->async, &request_options,
-                                                       file_sink_transfer, &request);
-    else status = chttp_async_client_submit(&impl->async, &request_options, &request);
+    }
+    status = chttp_async_client_submit_timed(&impl->async, &request_options,
+        file_transfer, file_sink_transfer, destinations != NULL ? out_destination : NULL,
+        deadline_at_ms, &request);
+    if (status == SALTS_ETIMEDOUT && deadline_at_ms != 0u && monotonic_ms() >= deadline_at_ms)
+      timed_out = true;
     if (status != SALTS_ENOBUFS || destinations != NULL) break;
     admission_progressed = true;
     {

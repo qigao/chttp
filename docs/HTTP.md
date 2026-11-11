@@ -94,6 +94,11 @@ pool 使用 `chttp_websocket_pool_config.client.socket_options`，作用于共�
 Pool 初始化校验并复制策略，调用方配置内存之后无需保留。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
+普通 HTTP Client 可在首次 admission 前调用 `chttp_client_set_connection_recovery()` 或
+`chttp_async_client_set_connection_recovery()` 显式启用有界 TCP/TLS/H1/H2 连接恢复。默认单次，
+不重放失败的 HTTP/RPC/S3 请求。配置、deadline、READY、所有权及安全边界见
+[显式连接恢复](CHTTP_CONNECTION_RECOVERY.md)。WebSocket client/pool 不使用这个 HTTP Client setter。
+
 CHTTP 的 production transport send 只使用 CNet retained ownership。长期 H1/H2/WebSocket
 wire buffer 通过 persistent external `mem_buffer_t` wrapper 交给 CNet；一次性 H1 request bytes
 把 malloc ownership 转交给 retained buffer。成功 admission 后 caller 不再修改对应 storage，直到

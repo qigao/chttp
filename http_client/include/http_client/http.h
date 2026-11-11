@@ -277,6 +277,33 @@ int chttp_async_client_set_h2_receive_window_policy(
     chttp_async_client *client,
     const chttp_h2_receive_window_policy *policy);
 
+/** Explicit physical TCP/TLS recovery; never replays a failed HTTP/RPC/S3 request.
+ * max_attempts includes the first dial. One attempt (the default) disables recovery.
+ * More attempts require a positive total episode budget and valid backoff bounds.
+ * All durations are milliseconds; CNet supplies bounded exponential jitter.
+ * The policy is copied by the setters; no caller storage is retained. */
+typedef struct chttp_connection_recovery_options {
+  size_t size;
+  uint32_t max_attempts;
+  uint32_t episode_timeout_ms;
+  uint32_t initial_backoff_ms;
+  uint32_t maximum_backoff_ms;
+  uint64_t jitter_seed;
+} chttp_connection_recovery_options;
+
+#define CHTTP_CONNECTION_RECOVERY_OPTIONS_INIT \
+  {sizeof(chttp_connection_recovery_options), 1u, 0u, 0u, 0u, 0u}
+
+/** Configure a fresh client before its first connection/request admission.
+ * EINVAL: invalid object/shape/budget; EBUSY: admission has started.
+ * Security, identity, protocol and local configuration failures never recover.
+ * Stop seals recovery before transport drain. Pipe IPC is not retried. */
+int chttp_async_client_set_connection_recovery(
+    chttp_async_client *client, const chttp_connection_recovery_options *options);
+/** Blocking counterpart; retained across internal timeout reinitialization. */
+int chttp_client_set_connection_recovery(
+    chttp_client *client, const chttp_connection_recovery_options *options);
+
 /**
  * Replaces CNet stream socket policy for future TCP/TLS connections.
  * Existing established/idle connections keep their current OS socket options.
