@@ -1,3 +1,10 @@
+add_executable(chttp_retry_budget_test chttp_retry_budget_test.c)
+target_link_libraries(chttp_retry_budget_test PRIVATE CHttp::Client Salts::TinyTest)
+target_include_directories(chttp_retry_budget_test PRIVATE ${PROJECT_SOURCE_DIR}/http_client/src)
+set_target_properties(chttp_retry_budget_test PROPERTIES
+  FOLDER "http_client/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+add_test(NAME chttp_retry_budget_test COMMAND chttp_retry_budget_test)
+
 add_executable(chttp_response_owner_test
   chttp_response_owner_test.c chttp_response_scope_peer.c)
 target_link_libraries(chttp_response_owner_test PRIVATE

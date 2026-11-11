@@ -26,7 +26,21 @@ static struct {
   int status;
   int native_status;
   char stage[64];
+  cnet_observer recorded_observer;
+  uint32_t maximum_attempts;
+  int observer_status;
 } recovery_test;
+
+static void recovery_test_record_attempt(void *user, cnet_connection connection,
+    cnet_connection_state state, const cnet_error *error) {
+  chttp_client_impl *impl = chttp_client_get(&recovery_test.client);
+  cnet_managed_dial_snapshot snapshot;
+  const int status = cnet_managed_dial_get_snapshot(&impl->h1_sessions[0].recovery.dial, &snapshot);
+  if (status != SALTS_OK) recovery_test.observer_status = status;
+  else if (snapshot.recovery.attempts > recovery_test.maximum_attempts)
+    recovery_test.maximum_attempts = snapshot.recovery.attempts;
+  recovery_test.recorded_observer.on_state(user, connection, state, error);
+}
 
 static int recovery_test_reply(void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
@@ -538,22 +552,21 @@ spec("CHttp explicit connection recovery") {
     chttp_request_options options = recovery_test_request(CHTTP_HTTP_1_1);
     chttp_request request = {0};
     chttp_connection_recovery *r = recovery_test_dial(CHTTP_HTTP_1_1);
-    cnet_managed_dial_snapshot snapshot;
-    uint32_t attempts = 0u;
     const uint64_t deadline = monotonic_ms() + RECOVERY_TEST_TIMEOUT_MS;
     recovery_test_peer_stop();
     recovery_test.policy.max_attempts = 2u;
     check_equal(chttp_async_client_set_connection_recovery(&recovery_test.client,
                                                           &recovery_test.policy), SALTS_OK);
     check_equal(chttp_async_client_submit(&recovery_test.client, &options, &request), SALTS_OK);
+    /* An entire fast refusal/recycle may occur within one poll. Capture the
+     * actual callback snapshot instead of periodically sampling live storage. */
+    recovery_test.recorded_observer = r->observer;
+    r->observer.on_state = recovery_test_record_attempt;
     while (recovery_test.results == 0u && monotonic_ms() < deadline) {
-      if (r->dial.impl != NULL) {
-        check_equal(cnet_managed_dial_get_snapshot(&r->dial, &snapshot), SALTS_OK);
-        if (snapshot.recovery.attempts > attempts) attempts = snapshot.recovery.attempts;
-      }
       recovery_test_poll();
     }
-    check_equal(attempts, (uint32_t)2u);
+    check_equal(recovery_test.observer_status, SALTS_OK);
+    check_equal(recovery_test.maximum_attempts, (uint32_t)2u);
     check_equal(recovery_test.results, (size_t)1u);
     check_not_equal(recovery_test.status, SALTS_OK);
     check_equal(atomic_load_explicit(&recovery_test.requests, memory_order_relaxed), 0);

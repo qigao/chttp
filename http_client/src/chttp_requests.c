@@ -199,11 +199,7 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
   bool admission_progressed = false;
   bool settled = false;
   chttp_retry_request owned = {0};
-  uint32_t attempts = 0u;
-  size_t byte_budget = retry != NULL ? retry->retry_body_byte_budget : 0u;
-  uint64_t exponential_ms = retry != NULL ? retry->initial_backoff_ms : 0u;
-  uint64_t random = retry != NULL && retry->jitter_seed != 0u
-      ? retry->jitter_seed : UINT64_C(0x9e3779b97f4a7c15);
+  chttp_retry_budget budget = {0};
 
   if (out_destination != NULL) *out_destination = (cnet_destination_result){.index = SIZE_MAX};
   if (out_response == NULL || out_error == NULL) return SALTS_EINVAL;
@@ -232,9 +228,9 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
       goto finished;
     }
     options = &owned.options;
+    chttp_retry_budget_init(&budget, retry, method, options->body_size, deadline_at_ms);
   }
 attempt:
-  ++attempts;
   admitted = false;
   admission_progressed = false;
   settled = false;
@@ -373,51 +369,23 @@ finished:
   }
   if (retry != NULL && retry->max_attempts > 1u && settled && admitted && impl->probe.done && status != SALTS_OK &&
       impl->probe.attempt.retryable_failure && !impl->probe.attempt.response_started) {
-    uint64_t delay = 0u, not_before, now = monotonic_ms();
-    cnet_retry_input input = {.size = sizeof(input), .version = CNET_RECOVERY_POLICY_VERSION,
-        .attempts_used = attempts, .max_attempts = retry->max_attempts,
-        .now_ms = now, .deadline_ms = deadline_at_ms,
-        .request_body_bytes = options->body_size, .remaining_retry_byte_budget = byte_budget,
-        .explicitly_enabled = retry->max_attempts > 1u,
-        .cancelled = status == SALTS_ECANCELED || status == SALTS_ESHUTDOWN,
-        .security_failure = impl->probe.attempt.security_failure || status == SALTS_EAUTH,
-        .owned_replayable_body = true,
-        .protocol_proves_not_executed = impl->probe.attempt.protocol_not_executed,
-        .application_declares_idempotent = retry->application_declares_idempotent ||
-            method == CHTTP_METHOD_GET || method == CHTTP_METHOD_HEAD ||
-            method == CHTTP_METHOD_PUT || method == CHTTP_METHOD_DELETE ||
-            method == CHTTP_METHOD_OPTIONS};
     cnet_retry_result decision;
-    int gate = cnet_retry_evaluate(&input, &decision);
+    int gate = chttp_retry_budget_prepare(&budget, &impl->probe.attempt,
+        status, monotonic_ms(), &decision);
     if (gate != SALTS_OK) { status = gate; goto retry_error; }
     if (!decision.allowed) goto retry_denied;
-    random ^= random << 13u; random ^= random >> 7u; random ^= random << 17u;
-    {
-      const cnet_backoff_input backoff = {.attempts = attempts,
-          .initial_ms = retry->initial_backoff_ms, .maximum_ms = retry->maximum_backoff_ms,
-          .exponential_ms = exponential_ms, .random_value = random};
-      gate = cnet_backoff_exponential_jitter(NULL, &backoff, &delay);
-    }
-    if (gate != SALTS_OK) { status = gate; goto retry_error; }
-    if (delay > UINT64_MAX - now) { status = SALTS_ERANGE; goto retry_error; }
-    not_before = now + delay;
-    input.backoff_not_before_ms = not_before;
     for (;;) {
-      input.now_ms = monotonic_ms();
-      gate = cnet_retry_evaluate(&input, &decision);
+      gate = chttp_retry_budget_advance(&budget, monotonic_ms(), &decision);
       if (gate != SALTS_OK) { status = gate; goto retry_error; }
       if (decision.reason != CNET_RETRY_WAIT_BACKOFF) break;
       {
-        const uint64_t remaining = not_before - input.now_ms;
+        const uint64_t remaining = budget.gate.backoff_not_before_ms - budget.gate.now_ms;
         const uint32_t wait = remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
         gate = chttp_async_client_poll(&impl->async, wait, &completions);
         if (gate != SALTS_OK) { status = gate; goto retry_error; }
       }
     }
     if (!decision.allowed) goto retry_denied;
-    byte_budget -= options->body_size;
-    exponential_ms = exponential_ms > retry->maximum_backoff_ms / 2u
-        ? retry->maximum_backoff_ms : exponential_ms * 2u;
     *out_error = (chttp_error){0};
     goto attempt;
 retry_denied:
@@ -425,7 +393,7 @@ retry_denied:
       status = SALTS_ETIMEDOUT;
       out_error->status = status;
       out_error->stage = "retry-deadline";
-    } else if (decision.reason == CNET_RETRY_BUDGET && attempts < retry->max_attempts) {
+    } else if (decision.reason == CNET_RETRY_BUDGET && budget.gate.attempts_used < retry->max_attempts) {
       status = SALTS_ENOBUFS;
       out_error->status = status;
       out_error->stage = "retry-byte-budget";
