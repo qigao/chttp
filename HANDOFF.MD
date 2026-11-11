@@ -151,3 +151,11 @@
   Published-SDK Windows native-release-user full build and CTest pass 106/106:
   `build/migration-retry-clock-budget-build.log` and
   `build/migration-retry-clock-budget-ctest.log`.
+- CI 42975102602 failed the old physical-attempt exhaustion assertion under
+  TSan (sampled 1, expected 2), without a TSan race report. Sampling a live
+  ManagedDial snapshot only between polls misses a fast final refusal/recycle
+  completed within one poll. The test now records the snapshot in the actual
+  state callback and forwards the original observer unchanged, retaining the
+  exact two-attempt assertion. No retry, sleep, production hook or TinyTest
+  modification is needed. Windows full build and focused recovery suite pass:
+  `build/migration-retry-clock-attempt-observer-ctest.log`.
