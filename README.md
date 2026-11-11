@@ -16,7 +16,7 @@ plugins and CFlow execution; SaltsUtils supplies DataBind, IDL and Jinja.
 | --- | --- | --- | --- |
 | `SALTS_BASE_VERSION=0.1.4` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
 | `CMETA_VERSION=0.1.4` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
-| `SALTS_CORE_VERSION=0.1.3` | `SaltsCore` | `SALTS_CORE_ROOT` | CNet and Crypto |
+| `SALTS_CORE_VERSION=0.1.4` | `SaltsCore` | `SALTS_CORE_ROOT` | CNet and Crypto |
 | `SALTS_UTILS_VERSION=0.1.1` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
 | `VCPKG_CACHE_VERSION=0.1.3` | preinstalled vcpkg profile | `VCPKG_INSTALLED_DIR` | Third-party packages and compiler contract |
 
@@ -153,7 +153,7 @@ cross-building and installation do not prove device execution.
 
 The current published SDK intersection contains eight profiles: Windows MSVC
 and LLVM-MinGW x64, Linux Clang and GCC x64, Linux Clang x64 TSan, macOS Clang
-ARM64, Android ARM64 and x64. CNet 0.1.3 has no published Linux ARM64 SDK, so
+ARM64, Android ARM64 and x64. CNet 0.1.4 has no published Linux ARM64 SDK, so
 the Base/CMeta/Utils ARM64 Linux lanes cannot be used for this composition.
 Missing assets and failed jobs stop their flows. There is no source-build
 fallback, floating NuGet selection or automatic retry.

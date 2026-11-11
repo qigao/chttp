@@ -208,7 +208,6 @@ static void pool_test_inflight_send(bool expire) {
   check_greater(native_stats.active_requests, (size_t)0u);
 
   if (expire) {
-    int expiry_status = SALTS_OK;
     /* Observe the real success, but retain it until after the owner deadline.
      * No synthetic byte count or completion is routed into CNet. */
     deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
@@ -233,16 +232,15 @@ static void pool_test_inflight_send(bool expire) {
     check_equal(fixture.delayed_completion.kind, NATIVE_IO_COMPLETION_OK);
     check_equal(fixture.delayed_completion.bytes, (size_t)64u);
     /* Only the first body chunk reached the wire; HTTP still needs the suffix. */
-    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + POOL_TEST_WRITE_TIMEOUT_MS;
     do {
-      expiry_status = pool_test_external_step(false);
-      if (expiry_status != SALTS_OK) break;
+      check_equal(pool_test_external_step(false), SALTS_OK);
       sleep_ms(1u);
     } while (monotonic_ms() < deadline);
-    /* NativeIO already retired the observed handle. Its cancellation returns
-     * ENOENT; CNet retains the write-timeout result until this event is routed.
-     * The exact SDK's cnet_owner_profile_test exercises the same contract. */
-    check_equal(expiry_status, SALTS_ENOENT);
+    /* The external host holds the observed completion. CNet accepts its
+     * cancellation and retains the timeout and payload lease until routing.
+     * Advance once at/after the deadline before delivering that completion. */
+    check_equal(pool_test_external_step(false), SALTS_OK);
     check_equal(chttp_client_pool_progress(impl), SALTS_OK);
   } else {
     check_equal(chttp_async_request_cancel(&fixture.client, upload), SALTS_OK);

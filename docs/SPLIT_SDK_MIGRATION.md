@@ -88,10 +88,15 @@ CSRF, WebSocket handshake and S3 regressions also pass.
 The first full CTest run passed 100 of 103 tests. OpenAPI conformance initially
 lacked its declared Python requirements. After installing the existing pinned
 requirements file, that formal test passed. CI installs the same requirements.
-Two existing CNet composition tests still fail with the selected Core 0.1.3 SDK,
-`chttp_pool_lifecycle_test` and `chttp_h2_client_test`. Their timeout failures
-remain recorded in `build/migration-crypto-private-full-ctest.log`; the complete
-matrix requires further qualification before merging.
+The pool lifecycle test expected an intermediate ENOENT that CNet now treats
+as an accepted cancellation of an already-observed completion. It now advances
+through the configured write deadline and verifies the retained buffer lease,
+final timeout, absence of suffix writes and successful pool reuse. That test
+passes. Core selection is aligned to published 0.1.4, with its release manifest
+and SDK source trees verified. The latest full Windows CTest run passes 102/103.
+`chttp_h2_client_test` still times out during H2-over-TLS on Core 0.1.3 and 0.1.4.
+The complete matrix remains pending that integration failure. Logs are retained
+in `build/migration-crypto-final-full-ctest.log`.
 
 Local restoration initially stopped on HTTP 401 from dotenv GitHub credentials.
 For this task, restoration explicitly selected the already authenticated gh

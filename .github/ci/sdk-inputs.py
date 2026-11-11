@@ -55,12 +55,12 @@ def github(repo, path):
 
 
 def sdk_entry(repo, manifest, platform):
-    field = 'profile' if repo == 'salts-utils' else 'platform'
+    field = 'profile' if repo != 'cmeta' else 'platform'
     matches = [sdk for sdk in manifest['sdks'] if sdk[field] == platform]
     if len(matches) != 1:
         raise ValueError(repo + ' must publish exactly one SDK for ' + platform)
     sdk = matches[0]
-    if repo == 'salts-utils':
+    if repo != 'cmeta':
         return {'file': sdk['asset'], 'sha256': sdk['sha256']}
     return sdk
 
@@ -87,20 +87,20 @@ if args.phase == 'prepare':
             raise ValueError('Expected published stable SDK: ' + repo)
         metadata = asset(release, f'{repo}-{version}-manifest.json')
         manifest = read(acquire(metadata))
-        if repo == 'salts-utils':
+        if repo != 'cmeta':
             if (manifest['schema'] != 1 or manifest['version'] != version
-                    or manifest['repository'] != 'qigao/salts-utils'):
-                raise ValueError('Unqualified SaltsUtils release manifest')
+                    or manifest['repository'] != 'qigao/' + repo):
+                raise ValueError('Unqualified release manifest')
             tag = github(repo, f'git/ref/tags/v{version}')['object']
             if tag['type'] != 'commit' or tag['sha'] != manifest['commit']:
-                raise ValueError('SaltsUtils manifest commit disagrees with release tag')
+                raise ValueError('Manifest commit disagrees with release tag')
             producer = github(repo, f"actions/runs/{manifest['producer_run']}")
             if producer['conclusion'] != 'success' or producer['html_url'] != manifest['producer_url']:
-                raise ValueError('SaltsUtils release producer did not qualify')
+                raise ValueError('Release producer did not qualify')
             sources = {manifest['commit'], *(sdk['sdk_manifest']['source'] for sdk in manifest['sdks'])}
             for source in sources:
                 if github(repo, f'git/commits/{source}')['tree']['sha'] != manifest['tree']:
-                    raise ValueError('SaltsUtils release and SDK source trees differ')
+                    raise ValueError('Release and SDK source trees differ')
         elif (manifest['schemaVersion'] != 1 or manifest['version'] != version
                 or manifest['cmakePackage'] != package or manifest['tag'] != release['tag_name']
                 or manifest['repository'] != f'https://github.com/qigao/{repo}'
@@ -113,7 +113,7 @@ if args.phase == 'prepare':
             value = asset(release, sdk['file'])
             if value['digest'] != 'sha256:' + sdk['sha256']:
                 raise ValueError('SDK manifest/asset mismatch: ' + sdk['file'])
-            if repo != 'salts-utils' and value['size'] != sdk['sizeBytes']:
+            if repo == 'cmeta' and value['size'] != sdk['sizeBytes']:
                 raise ValueError('SDK manifest/asset mismatch: ' + sdk['file'])
             acquire(value)
             selected.append({'profile': profile, 'size': value['size']})
@@ -141,7 +141,7 @@ else:
         destination.mkdir(parents=True)
         with tarfile.open(archive) as source:
             source.extractall(destination, filter='data')
-        producer = manifest['producer_run'] if repo == 'salts-utils' else manifest['ci']['runId']
+        producer = manifest['producer_run'] if repo != 'cmeta' else manifest['ci']['runId']
         receipt = {'version':manifest['version'],'source':manifest['commit'], 'sha256':sdk['sha256'],
                    'producer':producer, 'root':destination.as_posix(), 'profile':args.profile}
         write(destination / 'sdk-restore-receipt.json', receipt)

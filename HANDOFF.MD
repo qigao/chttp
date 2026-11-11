@@ -26,10 +26,13 @@
   all 11 cjwt CTests and HTTP JWT/CSRF/WebSocket/S3 tests. Source provenance,
   license, ownership and failure contracts are in `vendor/cjwt/crypto/README.md`.
 - Full CTest initially passed 100/103. Installing the existing pinned OpenAPI
-  Python requirements resolves `generator_conformance`. Pool write-timeout and
-  H2-over-TLS tests still fail with Core 0.1.3. Keep the original failures in
-  `build/migration-crypto-private-full-ctest.log`; CHttp remains draft pending
-  complete qualification.
+  requirements resolves `generator_conformance`. The pool test now checks
+  accepted cancellation through the write deadline and the eventual timeout
+  plus resource release, matching CNet's observed-completion contract.
+  Core 0.1.4 is restored from its published, verified SDK. The latest full build
+  passes and CTest passes 102/103. H2-over-TLS still times out on Core 0.1.3 and
+  0.1.4. See `build/migration-crypto-final-full-ctest.log`. Temporary diagnostics
+  and unsuccessful H2 fixture experiments were removed. CHttp remains draft.
 - Local dotenv credentials yielded HTTP 401 during restoration. The local task
   helper explicitly selected the existing gh login and preserved credentials.
   Committed CI uses its job token and the shared verified archive transport.
