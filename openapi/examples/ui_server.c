@@ -302,13 +302,13 @@ static int validate_render_bundle(ui_app *app) {
 }
 
 typedef struct UiController {
-    size_t file_count;
+    int file_count;
     ui_app *app;
     const char *const *paths;
     chttp_server_file_options *files;
 } UiController;
-cmeta_reflect_data(UiController, "openapi.UiController", cmeta_field(size_t, file_count));
-cmeta_component_empty(UiComponent);
+cmeta_reflect_data(UiController, "openapi.UiController", cmeta_field(int, file_count));
+cmeta_component_configured_empty(UiComponent, cmeta_reflected_data(UiController));
 static void ui_destroy(void *context, void *object) { (void)context; free(object); }
 static const cmeta_object_lifecycle ui_lifecycle = {
     sizeof(cmeta_object_lifecycle), NULL, NULL, NULL, ui_destroy};
@@ -327,22 +327,22 @@ static cmeta_status ui_create(void *context, const cmeta_data_desc *data,
 }
 CHTTP_ACTION(ui_docs);
 int ui_docs(void *self, const chttp_exchange *exchange) {
-    return serve_docs(exchange->request, exchange->response, ((UiController *)self)->app);
+    return serve_docs(((UiController *)self)->app, exchange->request, exchange->response);
 }
 CHTTP_ACTION(ui_list);
 int ui_list(void *self, const chttp_exchange *exchange) {
-    return serve_operation_list(exchange->request, exchange->response, ((UiController *)self)->app);
+    return serve_operation_list(((UiController *)self)->app, exchange->request, exchange->response);
 }
 CHTTP_ACTION(ui_detail);
 int ui_detail(void *self, const chttp_exchange *exchange) {
-    return serve_operation_detail(exchange->request, exchange->response, ((UiController *)self)->app);
+    return serve_operation_detail(((UiController *)self)->app, exchange->request, exchange->response);
 }
 CHTTP_ACTION(ui_file);
 int ui_file(void *self, const chttp_exchange *exchange) {
     UiController *controller = self;
-    for (size_t i = 0u; i < controller->file_count; ++i)
+    for (int i = 0; i < controller->file_count; ++i)
         if (strcmp(exchange->request->path, controller->paths[i]) == 0)
-            return serve_file(exchange->request, exchange->response, &controller->files[i]);
+            return serve_file(&controller->files[i], exchange->request, exchange->response);
     return SALTS_EINVAL;
 }
 

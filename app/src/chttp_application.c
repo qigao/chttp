@@ -8,11 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const cmeta_type_identity exchange_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.exchange");
-static const cmeta_type_desc exchange_type = {"chttp_exchange", sizeof(chttp_exchange),
-    _Alignof(chttp_exchange), CMETA_T_OBJECT, NULL, NULL, &exchange_identity};
-const cmeta_type_desc chttp_exchange_pointer_type = {"const chttp_exchange *",
-    sizeof(chttp_exchange *), _Alignof(chttp_exchange *), CMETA_T_POINTER, &exchange_type, NULL, NULL};
 CHTTP_ACTION(chttp_expected_action);
 
 typedef struct application_action { const chttp_action *action; void *receiver; } application_action;

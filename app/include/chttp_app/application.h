@@ -35,7 +35,14 @@ typedef struct chttp_exchange {
 } chttp_exchange;
 
 typedef int (*chttp_action_fn)(void *, const chttp_exchange *);
-extern const cmeta_type_desc chttp_exchange_pointer_type;
+/* Static metadata keeps C11 FunctionDecl initializers constant across DLLs.
+ * CMeta compares the explicit semantic identity, never descriptor addresses. */
+static const cmeta_type_identity chttp_exchange_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.exchange");
+static const cmeta_type_desc chttp_exchange_type = {"chttp_exchange", sizeof(chttp_exchange),
+    CMETA_ALIGNOF(chttp_exchange), CMETA_T_OBJECT, NULL, NULL, &chttp_exchange_identity};
+static const cmeta_type_desc chttp_exchange_pointer_type = {"const chttp_exchange *",
+    sizeof(chttp_exchange *), CMETA_ALIGNOF(chttp_exchange *), CMETA_T_POINTER,
+    &chttp_exchange_type, NULL, NULL};
 
 /** Declare the native action and its canonical reflection from one signature.
  * The receiver is the ACE-owned Controller object; all arguments are borrowed. */

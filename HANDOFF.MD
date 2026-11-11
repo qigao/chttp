@@ -12,6 +12,18 @@
   build, 105/105 CTest and install passed (`migration-application-final-*` logs);
   subsequent C11 scoped-owner cases passed the focused Application CTest
   (`migration-application-scoped-ctest.log`). No device or final CI claim here.
+- OpenAPI UI was gated entirely by BUILD_EXAMPLES, so the default test graph
+  did not compile its Controller or run its four HTTP regressions. Build its
+  example target whenever BUILD_TESTS is enabled and register those tests in
+  the module's formal suite. The expanded Windows graph passed 109/109 and
+  install (`migration-application-ui-qualified-*`). UI configuration is an
+  explicit configured ACE Component; its native adapters keep user/request/
+  response argument order. CI's MSVC link found that a public DLL data symbol
+  is unsuitable for C11 constant FunctionDecl metadata. Exchange descriptors
+  now use static immutable metadata with CMeta's explicit semantic identity
+  equality across translation units/DLLs, preserving canonical ABI admission.
+  Full build and focused Application/UI runtime tests passed after that fix
+  (`migration-application-static-metadata-*`, `migration-application-static-ui-*`).
 
 - Socket policy audit: HTTP async/blocking Client, Server accepted streams and
   standalone WebSocket already forward CNet options. H2 WebSocket Pool omitted
