@@ -39,6 +39,8 @@ typedef struct chttp_connection_recovery {
 } chttp_connection_recovery;
 
 int chttp_connection_recovery_validate(const chttp_connection_recovery_options *options);
+cnet_reconnect_failure_kind chttp_transport_failure_classify(bool tls,
+    bool transport_connected, cnet_connection_state state, const cnet_error *error);
 int chttp_connection_recovery_init(chttp_connection_recovery *recovery,
     const chttp_connection_recovery_options *options, cnet_client *client,
     cnet_manager *manager, cnet_client_pool *pool, const cnet_pool_key *key,

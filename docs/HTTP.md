@@ -108,6 +108,9 @@ receive；H2 为处理 WINDOW_UPDATE/PING 等控制帧允许收发全双工，�
 send in-flight。这个完成事实仍不等于应用级 exactly-once，CHTTP 不会根据断线猜测 peer 是否消费
 请求，也不做隐式 retry。
 
+阻塞内存请求的 [`chttp_request_retry()`](CHTTP_LOGICAL_RETRY.md) 是独立的显式入口，
+要求业务或协议证据、可重放 body 和固定总预算；不会为既有 RPC/S3/source/sink 自动授权。
+
 ## HTTP Server：路由、中间件与 Session
 
 ### 文件服务边界

@@ -117,3 +117,26 @@
   build and `chttp_h2_client_test` pass; logs:
   `build/migration-h2-replay-boundary-build.log` and
   `build/migration-h2-replay-boundary-ctest.log`.
+- #231 logical retry is opt-in per blocking call through chttp_request_retry;
+  old HTTP/RPC/S3/file/async calls remain single attempts. Keep typed attempt
+  evidence in the request owner and copy it during terminal callback before
+  slot recycle. Diagnostic stage strings never prove remote execution safety.
+  One owned Base-tstr/header/body snapshot and one absolute deadline survive
+  all attempts. CNet retry gate and backoff helper authorize each new attempt
+  only after old request/stream/payload settlement; byte budget is cumulative.
+- A GOAWAY error must remain permanent for streams below Last-Stream-ID too:
+  their later transport loss cannot erase that protocol failure or restart
+  physical recovery. Partial H2 frame/header input conservatively disables
+  replay if response attribution is incomplete. TLS identity/ALPN rejection
+  still permits only one connection even with application idempotence enabled.
+- Raw H2 failure fixtures must consume the test body and SETTINGS ACK before
+  closing. Closing with unread DATA can create a native write reset instead
+  of the intended observed-response-prefix boundary. Check queued speculative
+  connections while CNet still owns Winsock initialization, before destroying
+  the client (WSACleanup otherwise invalidates this raw-peer observation).
+- Published-SDK native-release-user full build, CTest 105/105 and install pass:
+  `build/migration-logical-retry-goaway-final-ctest.log` and
+  `build/migration-logical-retry-goaway-final-install.log`. The final fixture
+  change also passes chttp_h2_client_test:
+  `build/migration-logical-retry-peer-drain-ctest.log`.
+  API/ownership/errors/limitations and rollback: docs/CHTTP_LOGICAL_RETRY.md.

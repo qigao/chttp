@@ -264,6 +264,48 @@ static chttp_server_config chttp_test_server_config(void) {
 }
 
 spec("CHTTP advanced async client API") {
+  it("exports bounded logical retry and rejects unsupported streams before admission") {
+    chttp_client client = {0};
+    chttp_client_config config = chttp_test_config();
+    chttp_retry_options retry = CHTTP_RETRY_OPTIONS_INIT;
+    chttp_options options = {.connection_uri = "tcp://127.0.0.1:1",
+        .authority = "retry.test", .target = "/", .timeout_ms = 100u};
+    chttp_response response = {0};
+    chttp_error error = {0};
+    chttp_test_source source = {.data = (const unsigned char *)"abc", .size = 3u, .chunk_size = 3u};
+    const chttp_body_source body = {.read = chttp_test_source_read, .user = &source};
+    const chttp_body_sink sink = {.write = chttp_test_response_sink};
+    check_equal(chttp_client_init(&client, &config), SALTS_OK);
+    retry.max_attempts = 2u;
+    options.body_source = &body;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_POST, &options, &retry,
+                                    &response, &error), SALTS_ENOTSUP);
+    check_equal(source.calls, (size_t)0u);
+    options.body_source = NULL; options.body_sink = &sink;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_GET, &options, &retry,
+                                    &response, &error), SALTS_ENOTSUP);
+    options.body_sink = NULL; options.timeout_ms = 0u;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_GET, &options, &retry,
+                                    &response, &error), SALTS_EINVAL);
+    options.timeout_ms = 100u; --retry.size;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_GET, &options, &retry,
+                                    &response, &error), SALTS_EINVAL);
+    retry.size = sizeof(retry); retry.max_attempts = 0u;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_GET, &options, &retry,
+                                    &response, &error), SALTS_EINVAL);
+    retry.max_attempts = 2u; retry.initial_backoff_ms = 1u;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_GET, &options, &retry,
+                                    &response, &error), SALTS_EINVAL);
+    retry.initial_backoff_ms = 0u;
+    options.body = "abc"; options.body_size = config.max_request_body_bytes + 1u;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_POST, &options, &retry,
+                                    &response, &error), SALTS_EMSGSIZE);
+    options.body = NULL; options.body_size = 0u;
+    options.header_count = config.max_header_count + 1u;
+    check_equal(chttp_request_retry(&client, CHTTP_METHOD_GET, &options, &retry,
+                                    &response, &error), SALTS_EMSGSIZE);
+    check_equal(chttp_client_destroy(&client, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+  }
   it("exports explicit connection recovery with a one-attempt default") {
     chttp_async_client client = {0};
     chttp_client_config config = chttp_test_config();

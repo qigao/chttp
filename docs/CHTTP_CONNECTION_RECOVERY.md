@@ -95,4 +95,5 @@ episode deadline 引发的 close 在真实 terminal 后以超时交给 HTTP，�
 - 公开 C API 和既有 C++17 header/link 测试覆盖新增 setter，不创建独立 consumer 验证工程。
 
 回滚须一起移除新增公开声明、实现与调用；保持原单次路径及其测试。没有运行时 fallback、第二实现
-开关或协议降级。#231 的逻辑 HTTP retry 授权/编排仍未实现，不能据此关闭整个 issue。
+开关或协议降级。逻辑 HTTP retry 使用独立的
+[按调用阻塞入口](CHTTP_LOGICAL_RETRY.md)，物理恢复本身不能授权请求重放。

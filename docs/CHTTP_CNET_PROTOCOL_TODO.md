@@ -135,7 +135,8 @@ CNet 或 NativeIO。迁移时记录实际源 commit，保留 SigV4、URL、XML�
 - 连接计数保留一个 fixture H1 连接加一个 H2 连接，没有额外的恢复连接。
 
 这些前置测试验证协议/池边界；显式 ManagedDial 接入及其扩展测试见
-[连接恢复设计与接口](CHTTP_CONNECTION_RECOVERY.md)，HTTP 请求重试仍未实现。
+[连接恢复设计与接口](CHTTP_CONNECTION_RECOVERY.md)。阻塞内存请求可使用独立的
+[逻辑重试入口](CHTTP_LOGICAL_RETRY.md)；async logical retry 和 stream rewind 未实现。
 接入继续使用当前 attempt 的 recovery ticket，并同时满足 protocol READY、旧请求/
 保留字节/stream lease 的 terminal settlement 和 Manager recycle；不能把单个池快照当作所有
 资源均可回收的证明。恢复开关及预算必须显式，TLS/ALPN/authority 失败不能授权重放或降级。

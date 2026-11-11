@@ -41,6 +41,7 @@ typedef enum chttp_slot_state {
 } chttp_slot_state;
 
 typedef struct chttp_slot {
+  chttp_attempt_facts attempt;
   chttp_client_impl *client;
   chttp_request public_handle;
   chttp_h1_session *h1;
@@ -441,6 +442,14 @@ static chttp_slot *chttp_slot_find(chttp_client_impl *impl, chttp_request reques
              : NULL;
 }
 
+int chttp_async_client_attempt_facts(chttp_async_client *client,
+    chttp_request request, chttp_attempt_facts *out) {
+  chttp_slot *slot = chttp_slot_find(chttp_client_get(client), request);
+  if (out == NULL || slot == NULL) return SALTS_EINVAL;
+  *out = slot->protocol == CHTTP_HTTP_2 ? slot->h2_request.attempt : slot->attempt;
+  return SALTS_OK;
+}
+
 static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *response, int status,
                                int native_status, const char *stage) {
   chttp_client_impl *impl;
@@ -771,6 +780,13 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
   if (!chttp_h1_connection_matches(session, connection)) return;
   slot = session->request;
   if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+    if (slot != NULL && !slot->result_delivered) {
+      const cnet_reconnect_failure_kind kind = chttp_transport_failure_classify(
+          strncmp(session->connection_uri, "tls://", 6u) == 0,
+          slot->state != CHTTP_SLOT_CONNECTING, state, error);
+      slot->attempt.retryable_failure = kind == CNET_RECONNECT_TRANSIENT;
+      slot->attempt.security_failure = kind == CNET_RECONNECT_SECURITY;
+    }
     session->transport_closed = true;
     session->send_pending = false;
     session->receive_armed = false;
@@ -900,6 +916,7 @@ static void chttp_cnet_receive(void *user, cnet_connection connection,
     chttp_slot_fail_and_close(slot, SALTS_ENOTSUP, 0, "transport-kind");
     return;
   }
+  if (view->size != 0u) slot->attempt.response_started = true;
   status = chttp_response_parser_execute(&slot->response_parser, view->data, view->size);
   if (status != SALTS_OK) {
     chttp_slot_fail_and_close(slot, status, slot->response_parser.parser_status,
