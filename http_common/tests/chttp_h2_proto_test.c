@@ -267,6 +267,28 @@ static void e2e_request_headers(chttp_h2_hpack_header headers[4], const char *me
 }
 
 spec("CHTTP HTTP/2 protocol engine") {
+  it("waits for actual peer stream capacity before opening a request") {
+    uint8_t settings[] = {0u, 0u, 6u, 4u, 0u, 0u, 0u, 0u, 0u,
+                          0u, 3u, 0u, 0u, 0u, 0u};
+    e2e_t e;
+    e2e_init(&e);
+    check_not_null(e.client);
+    check_not_null(e.server);
+    pump(&e);
+    /* A peer may advertise zero streams and later increase the limit. */
+    check_equal(chttp_h2_proto_recv(e.client, settings, sizeof(settings)),
+                (ptrdiff_t)sizeof(settings));
+    check_true(chttp_h2_proto_peer_settings_received(e.client));
+    check_false(chttp_h2_proto_can_submit_request(e.client));
+    settings[14] = 1u;
+    check_equal(chttp_h2_proto_recv(e.client, settings, sizeof(settings)),
+                (ptrdiff_t)sizeof(settings));
+    check_true(chttp_h2_proto_can_submit_request(e.client));
+    check_equal(e.req_headers, 0);
+    chttp_h2_proto_destroy(e.client);
+    chttp_h2_proto_destroy(e.server);
+  }
+
   it("starts an idle client handshake without queuing application headers") {
     static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
     e2e_t e;

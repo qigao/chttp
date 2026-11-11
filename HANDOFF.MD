@@ -99,3 +99,12 @@
   `build/migration-recovery-final-full-ctest.log` and
   `build/migration-recovery-final-install.log`. Earlier failed logs are retained.
   Cross-platform and sanitizer qualification requires the feature CI run.
+- Feature CI 42966502206 exposed four budget cases on Linux/macOS: fast refusal
+  let CNet determine that the next backoff cannot fit the deadline, represented
+  by next_attempt_ms=UINT64_MAX. Convert this exhausted episode into the owned
+  HTTP timeout result, preserving native status, instead of returning it from
+  poll before the request callback. A longer first-attempt budget plus a larger
+  backoff now exercises this boundary on Windows too. Never mark idle restored
+  H2 READY while the peer advertises zero stream capacity. Windows full CTest
+  passes 105/105 (`build/migration-recovery-budget-preflight-ctest.log`);
+  the failed first CI remains available and was not retried unchanged.

@@ -1396,7 +1396,8 @@ int chttp_h2_session_pool_progress(chttp_h2_session *session) {
       chttp_h2_proto_peer_settings_received(session->protocol)) {
     if (session->recovery.configured && !session->recovery.ready) {
       /* A warm idle session has no pending request to activate. */
-      if (session->active_requests != 0u) return SALTS_OK;
+      if (session->active_requests != 0u ||
+          !chttp_h2_proto_can_submit_request(session->protocol)) return SALTS_OK;
       status = chttp_connection_recovery_ready(&session->recovery);
       if (status != SALTS_OK) return status;
     }

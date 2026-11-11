@@ -242,7 +242,10 @@ static void recovery_test_admission_deadline(chttp_protocol protocol, bool rpc) 
   check_equal(snapshot.recovery.deadline_ms, deadline);
   recovery_test_wait_result(1u);
   check_equal(recovery_test.status, SALTS_ETIMEDOUT);
-  if (rpc) check_equal(recovery_test.stage, "rpc-deadline");
+  /* Fast refusal can exhaust the recovery budget before the RPC deadline:
+   * its next backoff would exceed the same fixed absolute limit. */
+  if (rpc) check(strcmp(recovery_test.stage, "rpc-deadline") == 0 ||
+                 strcmp(recovery_test.stage, "connection-recovery") == 0);
 }
 
 static void recovery_test_warm(chttp_protocol protocol) {
@@ -422,6 +425,20 @@ spec("CHttp explicit connection recovery") {
     }
     check_equal(recovery_test.results, (size_t)1u);
     check_equal(recovery_test.status, SALTS_ETIMEDOUT);
+  }
+  it("completes the request when the next backoff cannot fit the episode") {
+    chttp_request_options options = recovery_test_request(CHTTP_HTTP_1_1);
+    chttp_request request = {0};
+    recovery_test_peer_stop();
+    recovery_test.policy.episode_timeout_ms = 4000u;
+    recovery_test.policy.initial_backoff_ms = 10000u;
+    recovery_test.policy.maximum_backoff_ms = 10000u;
+    check_equal(chttp_async_client_set_connection_recovery(&recovery_test.client,
+                                                          &recovery_test.policy), SALTS_OK);
+    check_equal(chttp_async_client_submit(&recovery_test.client, &options, &request), SALTS_OK);
+    recovery_test_wait_result(1u);
+    check_equal(recovery_test.status, SALTS_ETIMEDOUT);
+    check_equal(atomic_load_explicit(&recovery_test.requests, memory_order_relaxed), 0);
   }
   it("retains the blocking policy across internal timeout reinitialization") {
     chttp_blocking_client_impl *impl;

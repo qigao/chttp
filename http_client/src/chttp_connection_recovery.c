@@ -217,13 +217,19 @@ int chttp_connection_recovery_seal(chttp_connection_recovery *r) {
 int chttp_connection_recovery_progress(chttp_connection_recovery *r) {
   cnet_managed_dial_snapshot s;
   uint64_t wait = 0u;
+  uint64_t now;
   int status;
   if (r->dial.impl == NULL) return SALTS_OK;
   status = cnet_managed_dial_get_snapshot(&r->dial, &s);
   if (status != SALTS_OK) return status;
   *r->managed = s.managed;
   if (r->defer_stop && s.managed.slot != 0u && !r->terminal) return SALTS_OK;
-  if (!r->stopping && !r->ready && monotonic_ms() >= s.recovery.deadline_ms) {
+  now = monotonic_ms();
+  /* CNet also exhausts the episode when the next backoff cannot fit its
+   * deadline. Consume that terminal budget result at the HTTP result boundary,
+   * rather than leaking ETIMEDOUT from poll before completing the request. */
+  if (!r->stopping && !r->ready &&
+      (now >= s.recovery.deadline_ms || s.recovery.next_attempt_ms == UINT64_MAX)) {
     r->last_status = SALTS_ETIMEDOUT;
     r->permanent = true;
   }
@@ -244,7 +250,7 @@ int chttp_connection_recovery_progress(chttp_connection_recovery *r) {
     }
     return cnet_managed_dial_destroy(&r->dial);
   }
-  status = cnet_managed_dial_advance(&r->dial, monotonic_ms(), &wait);
+  status = cnet_managed_dial_advance(&r->dial, now, &wait);
   if (status != SALTS_OK && status != SALTS_EBUSY) {
     r->last_status = status;
     r->permanent = true;

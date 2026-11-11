@@ -50,6 +50,8 @@ int status = chttp_client_set_connection_recovery(&client, &recovery);
 - 每个 episode 固定一个绝对 monotonic deadline，退避和尝试不重置它。阻塞和 RPC 已有的绝对
   deadline 在 admission 时限制初始 episode；普通 async HTTP 的响应超时契约不被改成新的总请求超时。
   先前 READY peer 丢失后，空连接恢复有自己的新 episode，不继承已完成请求的过期 deadline。
+  下一次退避无法装入剩余预算时，CNet 可以提前判定该 episode 超时；错误经请求完成回调交付，
+  不作为正常 owner progress 的 `poll()` 错误泄漏。尚未到 RPC deadline 时保留 `connection-recovery` stage。
 
 ## 失败分类
 
