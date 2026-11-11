@@ -140,3 +140,14 @@
   change also passes chttp_h2_client_test:
   `build/migration-logical-retry-peer-drain-ctest.log`.
   API/ownership/errors/limitations and rollback: docs/CHTTP_LOGICAL_RETRY.md.
+- #231 deterministic budget qualification: retry counters, fixed absolute
+  deadline, byte credit and seeded backoff now live in the owner-local private
+  chttp_retry_budget. prepare follows real attempt settlement; advance commits
+  admission credit only once. Time is an explicit input, not a global clock
+  override or runtime test hook. Formal chttp_retry_budget_test covers exact
+  seeded waits, late/exhausted budgets, duplicate prepare/advance, method/protocol
+  authorization, cancellation/authentication, zero-body bounds and overflow.
+  Existing real-peer and retained-NativeIO regressions continue through CTest.
+  Published-SDK Windows native-release-user full build and CTest pass 106/106:
+  `build/migration-retry-clock-budget-build.log` and
+  `build/migration-retry-clock-budget-ctest.log`.

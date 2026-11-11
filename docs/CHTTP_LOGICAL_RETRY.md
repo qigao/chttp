@@ -56,6 +56,11 @@ attempt，不添加队列、线程或 timer。只向调用方返回一个最终 
 deadline，不提前回收 NativeIO payload。H2 单 stream 失败保持正常 sibling，GOAWAY
 按原排空规则换连接，不为逻辑重试重建整池。
 
+私有 retry budget 保存固定 deadline、剩余 body 字节、尝试数和退避状态，时间由 owner
+显式传入。`prepare` 在旧 attempt 排空后检查授权并计划一次退避；`advance` 在所有 CNet
+gate 放行时仅提交一次尝试/字节扣减。等待中的重复 prepare 返回 EBUSY，已提交后的重复
+advance 返回 EALREADY。组件本身不读时钟、不 poll、不持有协议存储或配置测试开关。
+
 配置和 URI/authority/target/headers/flat body 在首次 admission 前复制一次。字符串使用
 Base tstr；URI/authority 各受 max_header_bytes、target 受 max_start_line_bytes 限制，
 header 数量/累计名称和值字节、body 分别使用现有上限。分配、算术和 admission 失败明确
@@ -80,6 +85,9 @@ header 数量/累计名称和值字节、body 分别使用现有上限。分配�
 body 与精确请求/连接次数、partial response/frame、错误 GOAWAY、503、attempt/byte/
 deadline 上限、原接口无重放及失败后复用。`chttp_connection_recovery_test` 验证显式
 幂等声明仍不能绕过 TLS 身份/ALPN 拒绝；C API 和 C++ header/link 测试覆盖新入口。
+`chttp_retry_budget_test` 用传入时间和固定 seed 验证精确退避时刻、deadline 不重置、
+截止点拒绝、attempt/body credit 仅提交一次，以及取消、安全、零 body 和溢出边界；
+不使用 sleep、环境时钟替换或生产测试 hook。
 
 回滚一起移除新声明、logical loop、输入 owner 和相关调用/测试，保留旧单次路径和独立
 物理恢复。本改动不宣称 async retry 或整个 #231 的全部验收完成。
