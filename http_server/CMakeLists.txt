@@ -36,7 +36,7 @@ target_include_directories(chttp_server
 target_link_libraries(chttp_server
   PUBLIC Salts::CNet CMeta::CMeta Salts::CSerde Salts::DataBind
   PRIVATE llhttp::llhttp_static Salts::Core Salts::Core CMeta::CFlow
-          CMeta::Plugin Salts::UriParser Salts::JsonParser Salts::JsonCSerdeAdapter
+          CMeta::Plugin Salts::URI Salts::JsonParser Salts::JsonCSerdeAdapter
           chttp_cjwt Salts::DateTimeParser CMeta::CSTL)
 install(TARGETS chttp_server EXPORT ChttpTargets)
 install(DIRECTORY include/http_server DESTINATION include)

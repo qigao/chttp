@@ -38,7 +38,7 @@ The superseded floating NuGet, source-candidate and installed-consumer workflows
 are retired in favor of the single split-SDK matrix. Runtime test and benchmark
 sources remain in their owning modules.
 The main-branch P-384/SHA-384 and X.509 HTTPS tests are preserved and always
-included in `BUILD_TESTS`, without a test-subset option. Their 21 fixed PEM
+included in `BUILD_TESTS`, without a test-subset option. Their 22 fixed PEM
 inputs now belong to `http_client/tests/fixtures`, with the immutable original
 source recorded there. The historical X.509 qualification document distinguishes
 earlier monolithic results from the still-unqualified split SDK composition.
@@ -67,21 +67,23 @@ The first Windows LLVM-MinGW configure used Base 0.1.4, CMeta 0.1.4,
 CNet/SaltsCore 0.1.3, Utils 0.1.0 and vcpkg-cache 0.1.3. Release manifests,
 archive sizes and SHA-256 digests were verified before extraction.
 
-**HIGH:** `SaltsUtilsConfig.cmake` includes `IDL.cmake`, but Utils 0.1.0 does
-not install that module. Its compiler template files also need installation
-with the same relative layout used in the build tree. Actual CHttp configure
-failed at this required include; tests have not run. The upstream packaging
-fix is prepared separately and requires a new qualified release.
+Utils 0.1.1 ships `IDL.cmake` and the compiler templates that were missing in
+0.1.0. The preparation job validates the published Utils manifest against its
+release tag and successful producer CI, checks the SDK source trees, and
+verifies each archive against its digest and GitHub asset size.
+Windows LLVM-MinGW configuration passed with this SDK after restoring the
+missing Ed25519 test key and selecting Base's exported `Salts::URI` target.
+The existing `http_example_contract_idl_codegen` target and
+`chttp_thread_cpu_test` passed.
 
-**HIGH:** the current CHttp implementation needs the old general JOSE crypto
-interface (`salts/crypto.h`) and digest helpers (`cmeta_crypto.h`). Neither is
-provided by the split SDKs. Required operations include HMAC, SHA-1/SHA-256,
+**HIGH:** `vendor/cjwt` owns JWT/JWE and currently calls the old JOSE primitive
+interface (`salts/crypto.h`). HTTP and S3 also use the old digest helpers
+(`cmeta_crypto.h`). The full Windows build stops at the missing cjwt include.
+Required operations include HMAC, SHA-1/SHA-256,
 key import, RSA/ECDSA/EdDSA signing and verification, OAEP, AES-GCM, key wrap,
 PBKDF2, secure clearing and constant-time comparison. CNet's published SHA-256
-and TLS interfaces do not supply that entire API. An upstream public API
-decision is required; no feature is disabled or crypto implementation copied
-into CHttp. Existing JWT/JWE/S3/WebSocket tests must qualify the completed
-composition in addition to the upstream crypto tests.
+and TLS interfaces do not supply that entire API. Existing
+JWT/JWE/S3/WebSocket tests must qualify the completed composition.
 
 Local restoration initially stopped on HTTP 401 from dotenv GitHub credentials.
 For this task, restoration explicitly selected the already authenticated gh

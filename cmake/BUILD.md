@@ -22,8 +22,8 @@ CI reuses the immutable CMeta entry point for Base/cache/compiler/host tools.
 Missing inputs stop before product configuration; no alternate feed, SDK root,
 toolchain, source build or disabled module is selected after a failure.
 
-The [migration record](../docs/SPLIT_SDK_MIGRATION.md) documents the current
-Utils packaging and Crypto API gaps. These releases cannot yet build CHttp.
+The [migration record](../docs/SPLIT_SDK_MIGRATION.md) documents the remaining
+Crypto dependency and the IDL generation verified with SaltsUtils 0.1.1.
 
 ## Configure, build, test and install
 
