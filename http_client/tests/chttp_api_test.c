@@ -264,6 +264,21 @@ static chttp_server_config chttp_test_server_config(void) {
 }
 
 spec("CHTTP advanced async client API") {
+  it("exports explicit connection recovery with a one-attempt default") {
+    chttp_async_client client = {0};
+    chttp_client_config config = chttp_test_config();
+    chttp_connection_recovery_options options = CHTTP_CONNECTION_RECOVERY_OPTIONS_INIT;
+    check_equal(chttp_async_client_set_connection_recovery(&client, &options), SALTS_EINVAL);
+    check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+    check_equal(options.max_attempts, (uint32_t)1u);
+    check_equal(chttp_async_client_set_connection_recovery(&client, &options), SALTS_OK);
+    options.max_attempts = 3u;
+    check_equal(chttp_async_client_set_connection_recovery(&client, &options), SALTS_EINVAL);
+    options.episode_timeout_ms = CHTTP_TEST_TIMEOUT_MS;
+    check_equal(chttp_async_client_set_connection_recovery(&client, &options), SALTS_OK);
+    check_equal(chttp_async_client_stop(&client, CHTTP_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+  }
   it("applies explicit stream socket policy to future async connections") {
     chttp_async_client client = {0};
     chttp_client_config config = chttp_test_config();

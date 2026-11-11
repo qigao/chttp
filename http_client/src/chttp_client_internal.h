@@ -20,6 +20,13 @@ int chttp_async_client_submit_destination(chttp_async_client *client,
                                            const cnet_destination_result *destination,
                                            chttp_request *out_request);
 
+/* One owner admission path for blocking/file/destination callers that already
+ * own an absolute logical deadline. Zero keeps ordinary async semantics. */
+int chttp_async_client_submit_timed(chttp_async_client *client,
+    const chttp_request_options *options, chttp_file_transfer *source,
+    chttp_file_sink_transfer *sink, const cnet_destination_result *destination,
+    uint64_t deadline_at_ms, chttp_request *out_request);
+
 int chttp_async_client_file_runtime(chttp_async_client *client,
                                     cflow_io_file_runtime **out_runtime);
 int chttp_async_client_file_sink_capacity(chttp_async_client *client, size_t *out_capacity);

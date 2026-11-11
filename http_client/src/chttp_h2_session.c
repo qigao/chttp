@@ -291,6 +291,8 @@ int chttp_h2_request_prepare(chttp_h2_request_state *request, const chttp_reques
 
 void chttp_h2_request_destroy(chttp_h2_request_state *request) {
   if (request == NULL) return;
+  free(request->opening_headers);
+  free(request->opening_header_bytes);
   if (request->file_transfer != NULL)
     chttp_file_transfer_set_ready(request->file_transfer, NULL, NULL);
   if (request->file_sink_transfer != NULL)
@@ -662,6 +664,11 @@ static void chttp_h2_on_goaway(void *user, uint32_t last_stream_id, uint32_t err
 
 static int chttp_h2_session_try_close(chttp_h2_session *session) {
   int status;
+  if (session != NULL && session->recovery.configured &&
+      (session->failed || session->recovery.stopping || !session->close_after_flush)) {
+    status = chttp_connection_recovery_seal(&session->recovery);
+    if (status != SALTS_OK) return status;
+  }
   if (session == NULL || session->state == CHTTP_H2_SESSION_FREE ||
       session->state == CHTTP_H2_SESSION_TERMINAL || session->close_admitted)
     return SALTS_OK;
@@ -684,6 +691,7 @@ static void chttp_h2_session_fail(chttp_h2_session *session, int status, int nat
                                   const char *stage) {
   if (session == NULL || session->state == CHTTP_H2_SESSION_TERMINAL) return;
   session->failed = true;
+  session->recovery.permanent = true;
   chttp_h2_session_fail_requests(session, status, native_status, stage);
   session->state = CHTTP_H2_SESSION_DRAINING;
   session->close_after_flush = false;
@@ -769,6 +777,11 @@ static void chttp_h2_cnet_state(void *user, cnet_connection connection, cnet_con
   if (state != CNET_CONNECTION_CLOSED && state != CNET_CONNECTION_FAILED) return;
   session->receive_armed = false;
   session->send_active = false;
+  if (session->recovery.configured &&
+      chttp_connection_recovery_opening_retry(&session->recovery)) {
+    session->state = CHTTP_H2_SESSION_TERMINAL;
+    return;
+  }
   if (session->active_requests != 0u) {
     const int failure_status =
         state == CNET_CONNECTION_FAILED && error != NULL ? error->status : SALTS_ECONNRESET;
@@ -825,10 +838,52 @@ static void chttp_h2_manager_recycle(void *user) {
   session->managed = (cnet_managed_connection){0};
 }
 
+static bool chttp_h2_recovery_settled(void *user) {
+  chttp_h2_session *s = user;
+  for (size_t index = 0u; index < s->request_capacity; ++index) {
+    const chttp_h2_request_state *r = s->requests[index];
+    if (r != NULL && (r->opening_headers == NULL || r->completed || r->terminal_pending))
+      return false;
+  }
+  return s->pending_output_retained == NULL || mem_buffer_ref_count(s->pending_output_retained) == 1u;
+}
+
+static int chttp_h2_recovery_reset(void *user) {
+  chttp_h2_session *s = user;
+  const chttp_h2_proto_callbacks callbacks = {.user_data = s,
+      .on_begin_headers = chttp_h2_on_begin_headers, .on_header = chttp_h2_on_header,
+      .on_end_headers = chttp_h2_on_end_headers, .on_data = chttp_h2_on_data,
+      .on_stream_close = chttp_h2_on_stream_close, .on_goaway = chttp_h2_on_goaway};
+  chttp_h2_proto *next = chttp_h2_proto_create(CHTTP_H2_PROTO_CLIENT, &s->protocol_config, &callbacks);
+  if (next == NULL) return SALTS_ENOMEM;
+  chttp_h2_proto_set_send_chunk(next, s->limits.stream_chunk_bytes);
+  chttp_h2_proto_destroy(s->protocol);
+  s->protocol = next;
+  s->pending_output_size = 0u;
+  s->receive_armed = false;
+  s->send_active = false;
+  s->close_after_flush = false;
+  s->close_admitted = false;
+  s->close_pending = false;
+  s->pool_ready = false;
+  s->pool_draining = false;
+  s->failed = false;
+  s->state = CHTTP_H2_SESSION_CONNECTING;
+  return SALTS_OK;
+}
+
+static void chttp_h2_recovery_fail(void *user, int status, int native_status) {
+  chttp_h2_session *s = user;
+  chttp_h2_session_fail_requests(s, status, native_status, "connection-recovery");
+  if (s->managed.slot == 0u) s->state = CHTTP_H2_SESSION_TERMINAL;
+}
+
 int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
                           cnet_manager *manager, cnet_client_pool *pool,
                           const cnet_pool_key *key,
                           const chttp_request_options *options, chttp_tls_profile_impl *tls_profile,
+                          const chttp_connection_recovery_options *recovery_options,
+                          uint64_t deadline_at_ms,
                           const chttp_h2_proto_config *protocol_config, const chttp_limits *limits,
                           const chttp_h2_session_callbacks *callbacks) {
   chttp_h2_proto_callbacks protocol_callbacks = {0};
@@ -890,7 +945,14 @@ int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
                                           .user = session,
                                           .on_send = chttp_h2_cnet_send},
                              .tls_client = chttp_tls_profile_client(session->tls_profile)};
-  {
+  session->state = CHTTP_H2_SESSION_CONNECTING;
+  if (recovery_options->max_attempts > 1u) {
+    session->context_released = true;
+    status = chttp_connection_recovery_init(&session->recovery, recovery_options,
+        network, manager, pool, key, &session->pooled, &session->managed, &session->connection,
+        deadline_at_ms, &connect_options, chttp_h2_recovery_reset, chttp_h2_recovery_settled,
+        chttp_h2_recovery_fail, session);
+  } else {
     const cnet_manager_attachment attachment = {
         .observer = connect_options.observer, .on_recycle = chttp_h2_manager_recycle,
         .hold_context = true};
@@ -922,7 +984,8 @@ bool chttp_h2_session_matches(const chttp_h2_session *session, const chttp_reque
 
 bool chttp_h2_session_terminal(const chttp_h2_session *session) {
   return session != NULL && session->state == CHTTP_H2_SESSION_TERMINAL &&
-      session->active_requests == 0u && session->managed.slot == 0u && session->pooled.slot == 0u;
+      session->active_requests == 0u && session->managed.slot == 0u && session->pooled.slot == 0u &&
+      session->recovery.dial.impl == NULL;
 }
 
 static int chttp_h2_headers_build(const chttp_request_options *options,
@@ -1158,6 +1221,35 @@ int chttp_h2_session_submit(chttp_h2_session *session, chttp_h2_request_state *r
   if (index == session->request_capacity) return SALTS_EBUSY;
   status = chttp_h2_headers_build(options, &headers, &header_names, &header_count);
   if (status != SALTS_OK) return status;
+  if (session->recovery.configured && !session->recovery.ready) {
+    size_t bytes = 0u, offset = 0u;
+    char *storage;
+    for (size_t h = 0u; h < header_count; ++h) {
+      if (!chttp_h2_size_add(bytes, headers[h].name_size, &bytes) ||
+          !chttp_h2_size_add(bytes, headers[h].value_size, &bytes) ||
+          bytes > session->limits.max_header_bytes) {
+        free(header_names); free(headers); return SALTS_EMSGSIZE;
+      }
+    }
+    storage = malloc(bytes);
+    if (storage == NULL) { free(header_names); free(headers); return SALTS_ENOMEM; }
+    for (size_t h = 0u; h < header_count; ++h) {
+      memcpy(storage + offset, headers[h].name, headers[h].name_size);
+      headers[h].name = storage + offset; offset += headers[h].name_size;
+      memcpy(storage + offset, headers[h].value, headers[h].value_size);
+      headers[h].value = storage + offset; offset += headers[h].value_size;
+    }
+    free(header_names);
+    request->opening_headers = headers;
+    request->opening_header_bytes = storage;
+    request->opening_header_count = header_count;
+    request->opening_body_size = options->body_size;
+    request->session = session;
+    request->registry_index = index;
+    session->requests[index] = request;
+    ++session->active_requests;
+    return SALTS_OK;
+  }
   if (chttp_h2_proto_submit_request_ex(
           session->protocol, headers, header_count, request->request_body, options->body_size,
           request->source_enabled ? chttp_h2_request_source : NULL,
@@ -1184,10 +1276,46 @@ int chttp_h2_session_submit(chttp_h2_session *session, chttp_h2_request_state *r
   return SALTS_OK;
 }
 
+static int chttp_h2_activate_opening_requests(chttp_h2_session *s) {
+  if (!s->recovery.configured || s->state != CHTTP_H2_SESSION_ACTIVE ||
+      !chttp_h2_proto_peer_settings_received(s->protocol)) return SALTS_OK;
+  if (chttp_h2_proto_peer_max_concurrent_streams(s->protocol) == 0u) return SALTS_OK;
+  for (size_t index = 0u; index < s->request_capacity; ++index) {
+    chttp_h2_request_state *r = s->requests[index];
+    int32_t stream = 0;
+    int status;
+    if (r == NULL || r->opening_headers == NULL || r->completed || r->terminal_pending) continue;
+    if (!chttp_h2_proto_can_submit_request(s->protocol)) return SALTS_OK;
+    /* Headers and source reads become eligible only after this attempt's
+     * SETTINGS and exact READY ticket have both passed admission. */
+    if (!s->recovery.ready) {
+      status = chttp_connection_recovery_ready(&s->recovery);
+      if (status != SALTS_OK) return status;
+    }
+    if (chttp_h2_proto_submit_request_ex(s->protocol, r->opening_headers,
+            r->opening_header_count, r->request_body, r->opening_body_size,
+            r->source_enabled ? chttp_h2_request_source : NULL,
+            r->source_enabled ? r : NULL, 0u, 0, 0, &stream) != 0) return SALTS_ENOBUFS;
+    r->stream_id = stream;
+    if (chttp_h2_proto_set_stream_user_data(s->protocol, stream, r) != 0) return SALTS_EPROTO;
+    free(r->opening_headers); r->opening_headers = NULL;
+    free(r->opening_header_bytes); r->opening_header_bytes = NULL;
+  }
+  return SALTS_OK;
+}
+
 int chttp_h2_session_cancel(chttp_h2_session *session, chttp_h2_request_state *request) {
   int status;
   if (session == NULL || request == NULL || request->session != session || request->completed)
     return SALTS_ENOENT;
+  if (request->opening_headers != NULL) {
+    chttp_h2_session_record_terminal(request, SALTS_ECANCELED, 0, "h2-cancel");
+    if (session->active_requests == 1u && !session->recovery.ready) {
+      session->recovery.stopping = true;
+      session->recovery.permanent = true;
+    }
+    return SALTS_OK;
+  }
   session->defer_completions = true;
   status = chttp_h2_proto_submit_rst_stream(session->protocol, request->stream_id,
                                             CHTTP_H2_ERR_CANCEL) == 0
@@ -1206,8 +1334,7 @@ int chttp_h2_session_cancel(chttp_h2_session *session, chttp_h2_request_state *r
 int chttp_h2_session_progress(chttp_h2_session *session) {
   size_t index;
   int status;
-  if (session == NULL || session->state == CHTTP_H2_SESSION_FREE ||
-      session->state == CHTTP_H2_SESSION_TERMINAL)
+  if (session == NULL || session->state == CHTTP_H2_SESSION_FREE)
     return SALTS_OK;
   for (index = 0u; index < session->request_capacity; ++index) {
     chttp_h2_request_state *request = session->requests[index];
@@ -1220,6 +1347,12 @@ int chttp_h2_session_progress(chttp_h2_session *session) {
                                 terminal_stage);
     }
   }
+  if (session->state == CHTTP_H2_SESSION_TERMINAL) return SALTS_OK;
+  status = chttp_h2_activate_opening_requests(session);
+  if (status != SALTS_OK) {
+    chttp_h2_session_fail(session, status, 0, "h2-opening-admission");
+    return status;
+  }
   if (session->close_pending) {
     status = chttp_h2_session_try_close(session);
     if (status != SALTS_OK) return status;
@@ -1228,6 +1361,11 @@ int chttp_h2_session_progress(chttp_h2_session *session) {
 }
 
 int chttp_h2_session_begin_stop(chttp_h2_session *session) {
+  if (session != NULL && session->recovery.configured) {
+    session->recovery.stopping = true;
+    session->recovery.permanent = true;
+    session->recovery.defer_stop = session->managed.slot != 0u;
+  }
   if (session == NULL || session->state == CHTTP_H2_SESSION_FREE ||
       session->state == CHTTP_H2_SESSION_TERMINAL || session->state == CHTTP_H2_SESSION_CLOSING)
     return SALTS_OK;
@@ -1256,7 +1394,15 @@ int chttp_h2_session_pool_progress(chttp_h2_session *session) {
   if (session == NULL || session->state == CHTTP_H2_SESSION_FREE) return SALTS_OK;
   if (session->state == CHTTP_H2_SESSION_ACTIVE && !session->pool_ready &&
       chttp_h2_proto_peer_settings_received(session->protocol)) {
-    status = cnet_pool_bind_ready(session->pool, session->pooled, session->managed,
+    if (session->recovery.configured && !session->recovery.ready) {
+      /* A warm idle session has no pending request to activate. */
+      if (session->active_requests != 0u) return SALTS_OK;
+      status = chttp_connection_recovery_ready(&session->recovery);
+      if (status != SALTS_OK) return status;
+    }
+    status = session->recovery.configured
+        ? chttp_connection_recovery_bind(&session->recovery, session->request_capacity)
+        : cnet_pool_bind_ready(session->pool, session->pooled, session->managed,
                                   session->request_capacity);
     if (status != SALTS_OK) return status;
     session->pool_ready = true;
@@ -1270,6 +1416,7 @@ int chttp_h2_session_pool_progress(chttp_h2_session *session) {
   }
   if (session->state != CHTTP_H2_SESSION_TERMINAL || session->active_requests != 0u)
     return SALTS_OK;
+  if (session->recovery.configured) return SALTS_OK;
   if (session->pooled.slot != 0u) {
     status = cnet_pool_terminal(session->pool, session->pooled);
     if (status != SALTS_OK) return status;

@@ -6,6 +6,7 @@
 #include "chttp_h2_proto.h"
 #include "chttp_internal.h"
 #include "chttp_tls.h"
+#include "chttp_connection_recovery.h"
 
 #include <stdbool.h>
 #include <cnet/client_pool.h>
@@ -23,6 +24,10 @@ typedef enum chttp_h2_session_state {
 typedef struct chttp_h2_session chttp_h2_session;
 
 typedef struct chttp_h2_request_state {
+  chttp_h2_hpack_header *opening_headers;
+  char *opening_header_bytes;
+  size_t opening_header_count;
+  size_t opening_body_size;
   chttp_h2_session *session;
   void *request_user;
   chttp_response_view response;
@@ -80,6 +85,7 @@ typedef struct chttp_h2_session_callbacks {
 } chttp_h2_session_callbacks;
 
 struct chttp_h2_session {
+  chttp_connection_recovery recovery;
   cnet_client *network;
   cnet_manager *manager;
   cnet_client_pool *pool;
@@ -124,6 +130,8 @@ int chttp_h2_session_open(chttp_h2_session *session, cnet_client *network,
                           cnet_manager *manager, cnet_client_pool *pool,
                           const cnet_pool_key *key,
                           const chttp_request_options *options, chttp_tls_profile_impl *tls_profile,
+                          const chttp_connection_recovery_options *recovery_options,
+                          uint64_t deadline_at_ms,
                           const chttp_h2_proto_config *protocol_config, const chttp_limits *limits,
                           const chttp_h2_session_callbacks *callbacks);
 bool chttp_h2_session_matches(const chttp_h2_session *session, const chttp_request_options *options,

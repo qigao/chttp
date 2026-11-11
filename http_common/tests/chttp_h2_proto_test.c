@@ -267,6 +267,23 @@ static void e2e_request_headers(chttp_h2_hpack_header headers[4], const char *me
 }
 
 spec("CHTTP HTTP/2 protocol engine") {
+  it("starts an idle client handshake without queuing application headers") {
+    static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    e2e_t e;
+    const uint8_t *wire = NULL;
+    ptrdiff_t size;
+    e2e_init(&e);
+    check_not_null(e.client);
+    check_not_null(e.server);
+    check_equal(chttp_h2_proto_want_write(e.client), 1);
+    size = chttp_h2_proto_send(e.client, &wire);
+    check_greater(size, (ptrdiff_t)(sizeof(preface) - 1u));
+    check_equal(memcmp(wire, preface, sizeof(preface) - 1u), 0);
+    check_equal(chttp_h2_proto_want_write(e.client), 0);
+    check_equal(chttp_h2_proto_send(e.client, &wire), (ptrdiff_t)0);
+    chttp_h2_proto_destroy(e.client);
+    chttp_h2_proto_destroy(e.server);
+  }
   it("advertises explicit receive windows in SETTINGS and connection credit") {
     const chttp_h2_proto_config config = {
         .stream_capacity = 8u,

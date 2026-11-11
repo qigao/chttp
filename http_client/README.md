@@ -90,8 +90,11 @@ drain 仍按既有协议完成，不能提前回收借用资源。
 完整可运行用例在 [chttp_destination_test.c](tests/chttp_destination_test.c)，覆盖五种策略、
 H1/H2 复用与代际隔离、相同 URI 的不同 ID、输入释放、失效快照、容量拒绝及阻塞入口。
 
-这里完成的是远端选择接入。共享宿主 SG（#230）、managed reconnect、显式请求 retry
-及其 deadline/rewind/not-executed 证明（#231 其余部分）仍未接入；本入口不启用这些行为。
+远端选择本身不启用重试。普通 HTTP Client 可在首次 admission 前使用独立的
+`chttp_async_client_set_connection_recovery()` / `chttp_client_set_connection_recovery()`
+显式配置 ManagedDial，恢复 TCP/TLS/H1/H2 连接能力；默认仍单次，不重放失败请求。
+配置、预算、READY 与 terminal 所有权见[显式连接恢复](../docs/CHTTP_CONNECTION_RECOVERY.md)。
+共享宿主 SG（#230）和逻辑请求 retry/rewind/not-executed 编排（#231 其余部分）仍未接入。
 
 ## RC2 WS composition (#238)
 
@@ -177,7 +180,8 @@ stream 预留和旧 WS/lease 结算 gate，CONNECTED 不能代替协议 READY。
 邻居连接隔离；现有 WS/WSS H1/H2 集成覆盖 handshake、发送、拒绝与池容量。
 
 该集成验证使用配套 Salts `2.3.0-rc.2` / SaltsUtils `4.3.0-rc.2` SDK。
-ManagedDial 的队列满关闭重试修复另在 Salts rc.3 源码工作树验证，尚未进入这些预编译 SDK。
+当时 ManagedDial 的队列满关闭重试修复另在 Salts rc.3 源码工作树验证，未进入该批旧 SDK。
+当前普通 HTTP 的显式恢复使用拆包后的 CNet 0.1.4 SDK；该旧 WS 迁移记录不代表它的发布状态。
 本阶段没有吞吐量或 CPU 改善的测量结论。
 
 最终 Chttp 全量回归：Clang Release 99/99、MSVC Release 95/95、Debug/ASan

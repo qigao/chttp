@@ -724,6 +724,12 @@ static void proto_maybe_close(chttp_h2_proto *p, chttp_h2_proto_stream *s) {
 
 /* ── Submit requests / responses ──────────────────────────────────── */
 
+int chttp_h2_proto_can_submit_request(const chttp_h2_proto *p) {
+  return p != NULL && p->mode == CHTTP_H2_PROTO_CLIENT && !p->draining && !p->failed &&
+      p->next_stream_id <= 0x7ffffffe && proto_active_streams(p) < p->stream_cap &&
+      proto_active_local_streams(p) < p->peer.max_concurrent_streams;
+}
+
 int chttp_h2_proto_submit_request_ex(chttp_h2_proto *p, const chttp_h2_hpack_header *hdrs,
                                      size_t count, const uint8_t *body, size_t body_len,
                                      chttp_h2_proto_source_fn source, void *source_ud,
@@ -1200,7 +1206,8 @@ ptrdiff_t chttp_h2_proto_send(chttp_h2_proto *p, const uint8_t **out) {
 }
 
 int chttp_h2_proto_want_write(chttp_h2_proto *p) {
-  return p && (p->out.size > 0 || proto_any_pending_body(p));
+  return p && ((p->mode == CHTTP_H2_PROTO_CLIENT && !p->client_preface_done) ||
+               p->out.size > 0 || proto_any_pending_body(p));
 }
 
 int chttp_h2_proto_want_read(chttp_h2_proto *p) {

@@ -80,3 +80,22 @@
   retire each connection before resetting its publication flag, and publish
   the subject with release/acquire. The published-SDK Windows build and
   WebSocket CTests pass; Linux TSan validation requires the new CI run.
+- #231 explicit physical connection recovery uses published CNet ManagedDial;
+  the default remains one attempt and failed HTTP/RPC/S3 requests are never
+  replayed. H2 stages bounded owned headers until verified transport and peer
+  SETTINGS, while retaining the existing body/source ownership contract.
+- NativeIO can report generic EIO with a signed native connection-refused code;
+  classify only explicit transport codes. Before verified TLS CONNECTED, an
+  undiagnosed reset can mean rejected SNI and must remain permanent.
+- A logical cancellation must not release a request lease while a retained
+  NativeIO send is outstanding. Deliver the terminal result only after actual
+  transport terminal, then recycle Manager state before another attempt.
+  Episode timeout closes the real transport but reaches HTTP as ETIMEDOUT,
+  rather than response EOF. Blocking/RPC absolute deadlines cap the initial
+  episode and never restart on backoff. Design and rollback are recorded in
+  `docs/CHTTP_CONNECTION_RECOVERY.md`.
+- Published-SDK Windows LLVM-MinGW full build, install and CTest pass, 105/105:
+  `build/migration-recovery-deadline-terminal-build.log`,
+  `build/migration-recovery-final-full-ctest.log` and
+  `build/migration-recovery-final-install.log`. Earlier failed logs are retained.
+  Cross-platform and sanitizer qualification requires the feature CI run.
