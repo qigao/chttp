@@ -64,6 +64,16 @@
 - `.env` now names the actual published SDKs restored into versioned roots.
   Its unrelated fields were compared and preserved. CMake does not load dotenv.
   Keep original failure logs and do not retry unchanged CI jobs.
+- #231 READY qualification: `chttp_pool_lifecycle_test` now withholds the real
+  H2 receive completion while continuing other NativeIO routing. TCP CONNECTED
+  alone leaves the pool CONNECTING; consumed peer SETTINGS publishes READY.
+  A pre-SETTINGS cancellation remains one ECANCELED result after late bytes,
+  with its old request handle retired and no additional physical connection.
+  The fixture matches native request slot/generation, owns the delayed
+  completion through delivery/teardown and closes H2 as well as H1 before
+  external stop. No product hook, ManagedDial or retry API was introduced.
+  Published-SDK Windows build and full CTest pass 104/104; evidence:
+  `build/migration-h2-ready-full-ctest.log`. #231 remains open.
 - CI 42947933660 reported five TSan races in the io_uring WebSocket fixture:
   session capture was release-published but read without acquire, and JWT
   subject publication used a relaxed counter. Acquire the captured session,
