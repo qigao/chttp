@@ -798,6 +798,10 @@ int chttp_websocket_pool_init(chttp_websocket_pool *pool,
       config->session_capacity > UINT32_MAX ||
       config->client.network.max_send_bytes <= CNET_WEBSOCKET_MAX_HEADER_BYTES)
     return SALTS_EINVAL;
+  if (config->client.socket_options.size != 0u) {
+    status = cnet_stream_socket_options_validate(&config->client.socket_options);
+    if (status != SALTS_OK) return status;
+  }
   frame_bytes = config->client.max_frame_bytes;
   if (frame_bytes == 0u) {
     frame_bytes = config->client.network.max_send_bytes - CNET_WEBSOCKET_MAX_HEADER_BYTES;
@@ -911,6 +915,10 @@ int chttp_websocket_pool_init(chttp_websocket_pool *pool,
   }
   status = cnet_client_init(&impl->network, &config->client.network);
   if (status != SALTS_OK) goto fail;
+  if (config->client.socket_options.size != 0u) {
+    status = cnet_client_set_stream_socket_options(&impl->network, &config->client.socket_options);
+    if (status != SALTS_OK) goto fail;
+  }
   status = chttp_managed_stream_init(&impl->transport_owner, &impl->network);
   if (status != SALTS_OK) goto fail;
   pool->impl = impl;
