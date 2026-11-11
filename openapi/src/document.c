@@ -2,7 +2,7 @@
 #include <cmeta/enum.h>
 #include <cflow/stream.h>
 #include <cflow/adapters.h>
-#include <cyaml/cyaml_json_adapter.h>
+#include <cyaml_json_adapter.h>
 #include <ctype.h>
 #include <core/vstr.h>
 

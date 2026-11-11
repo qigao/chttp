@@ -24,7 +24,7 @@ target_include_directories(chttp_app PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chttp_app
   PUBLIC CHttp::Server CMeta::CMeta Salts::DataBindPlugin CMeta::CFlow
-  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core Salts::CSerde
+  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core Salts::CSerde chttp_digest
   INTERFACE
     $<LINK_ONLY:Salts::JinjaCMeta>
     $<LINK_ONLY:Salts::DataBind>)

@@ -62,6 +62,7 @@ foreach(package IN ITEMS SaltsBase CMeta SaltsCore SaltsUtils)
     PATHS "$ENV{${input}_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 endforeach()
 find_package(llhttp CONFIG REQUIRED)
+find_package(GmSSL CONFIG REQUIRED)
 
 add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
@@ -70,6 +71,14 @@ add_subdirectory(http_server)
 add_subdirectory(app)
 add_subdirectory(s3)
 add_subdirectory(openapi)
+
+# MinGW stops implicit exports when linked static SDK objects carry explicit
+# export annotations. Preserve the libraries' WINDOWS_EXPORT_ALL_SYMBOLS contract.
+if(MINGW)
+  foreach(library IN ITEMS chttp_client chttp_server chttp_app chttp_s3)
+    target_link_options(${library} PRIVATE -Wl,--export-all-symbols)
+  endforeach()
+endif()
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(

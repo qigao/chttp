@@ -192,12 +192,12 @@ static int s3_parse_u64(const char *text, uint64_t *out_value) {
   return SALTS_OK;
 }
 
-static int s3_object_info_parse(salts_xml_node node, s3_object_info *out) {
-  const salts_xml_node key = s3_xml_child(node, "Key");
-  const salts_xml_node modified = s3_xml_child(node, "LastModified");
-  const salts_xml_node etag = s3_xml_child(node, "ETag");
-  const salts_xml_node size = s3_xml_child(node, "Size");
-  const salts_xml_node storage = s3_xml_child(node, "StorageClass");
+static int s3_object_info_parse(xml_node node, s3_object_info *out) {
+  const xml_node key = s3_xml_child(node, "Key");
+  const xml_node modified = s3_xml_child(node, "LastModified");
+  const xml_node etag = s3_xml_child(node, "ETag");
+  const xml_node size = s3_xml_child(node, "Size");
+  const xml_node storage = s3_xml_child(node, "StorageClass");
   char *size_text;
   int status;
   if (key.impl == NULL || size.impl == NULL || out == NULL) return SALTS_EPROTO;
@@ -220,10 +220,10 @@ static int s3_object_info_parse(salts_xml_node node, s3_object_info *out) {
 
 static int s3_object_list_parse(const s3_client_impl *client, const s3_response *response,
                                 s3_object_list *out) {
-  salts_xml_document document = {0};
-  salts_xml_node root = {0};
-  salts_xml_node truncated;
-  salts_xml_node next_token;
+  xml_document document = {0};
+  xml_node root = {0};
+  xml_node truncated;
+  xml_node next_token;
   size_t count = 0u;
   size_t index;
   size_t output_index = 0u;
@@ -231,9 +231,9 @@ static int s3_object_list_parse(const s3_client_impl *client, const s3_response 
       response->http.body, response->http.body_size, client->base.config.max_xml_bytes,
       client->base.config.max_xml_nodes, "ListBucketResult", &document, &root);
   if (status != SALTS_OK) return status;
-  for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
-    const salts_xml_node child = salts_xml_node_child_at(root, index);
-    if (salts_xml_node_type(child) == SALTS_XML_ELEMENT &&
+  for (index = 0u; index < xml_node_child_count(root); ++index) {
+    const xml_node child = xml_node_child_at(root, index);
+    if (xml_node_type(child) == SALTS_XML_ELEMENT &&
         s3_xml_node_name_equal(child, "Contents"))
       ++count;
   }
@@ -250,9 +250,9 @@ static int s3_object_list_parse(const s3_client_impl *client, const s3_response 
     }
   }
   out->count = count;
-  for (index = 0u; index < salts_xml_node_child_count(root) && status == SALTS_OK; ++index) {
-    const salts_xml_node child = salts_xml_node_child_at(root, index);
-    if (salts_xml_node_type(child) == SALTS_XML_ELEMENT &&
+  for (index = 0u; index < xml_node_child_count(root) && status == SALTS_OK; ++index) {
+    const xml_node child = xml_node_child_at(root, index);
+    if (xml_node_type(child) == SALTS_XML_ELEMENT &&
         s3_xml_node_name_equal(child, "Contents"))
       status = s3_object_info_parse(child, &out->items[output_index++]);
   }
@@ -269,7 +269,7 @@ static int s3_object_list_parse(const s3_client_impl *client, const s3_response 
     status = s3_xml_text_dup(next_token, &out->next_continuation_token);
 
 done:
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   if (status != SALTS_OK) s3_object_list_destroy(out);
   return status;
 }

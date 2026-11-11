@@ -76,14 +76,22 @@ missing Ed25519 test key and selecting Base's exported `Salts::URI` target.
 The existing `http_example_contract_idl_codegen` target and
 `chttp_thread_cpu_test` passed.
 
-**HIGH:** `vendor/cjwt` owns JWT/JWE and currently calls the old JOSE primitive
-interface (`salts/crypto.h`). HTTP and S3 also use the old digest helpers
-(`cmeta_crypto.h`). The full Windows build stops at the missing cjwt include.
-Required operations include HMAC, SHA-1/SHA-256,
-key import, RSA/ECDSA/EdDSA signing and verification, OAEP, AES-GCM, key wrap,
-PBKDF2, secure clearing and constant-time comparison. CNet's published SHA-256
-and TLS interfaces do not supply that entire API. Existing
-JWT/JWE/S3/WebSocket tests must qualify the completed composition.
+The missing JOSE interface is resolved by restoring cjwt's prior GmSSL/libecc
+adapter inside `vendor/cjwt/crypto`. Symbols use the private `cjwt_crypto_`
+namespace. The original commit, dependency/license decisions, ownership and
+error contracts are recorded in that directory's README. HTTP and S3 use
+`http_common/http/chttp_digest` for the existing digest and clearing operations.
+Windows LLVM-MinGW builds the complete graph and installs the SDK successfully.
+All 11 cjwt CTests, including the independent JWS/JWE vectors, pass. HTTP JWT,
+CSRF, WebSocket handshake and S3 regressions also pass.
+
+The first full CTest run passed 100 of 103 tests. OpenAPI conformance initially
+lacked its declared Python requirements. After installing the existing pinned
+requirements file, that formal test passed. CI installs the same requirements.
+Two existing CNet composition tests still fail with the selected Core 0.1.3 SDK,
+`chttp_pool_lifecycle_test` and `chttp_h2_client_test`. Their timeout failures
+remain recorded in `build/migration-crypto-private-full-ctest.log`; the complete
+matrix requires further qualification before merging.
 
 Local restoration initially stopped on HTTP 401 from dotenv GitHub credentials.
 For this task, restoration explicitly selected the already authenticated gh

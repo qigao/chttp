@@ -20,10 +20,16 @@
   Utils release schema. CHttp configuration, the HTTP example IDL generation
   target and the thread CPU CTest passed after switching to the release and
   fixing the missing Ed25519 fixture and the `Salts::URI` target name.
-- `vendor/cjwt` owns JWT/JWE. The build first fails at its missing
-  `<salts/crypto.h>` dependency. The HTTP and S3 modules also require digest
-  operations from the old `<cmeta_crypto.h>` interface. See
-  `build/migration-utils-011-first-build.log` for the full build result.
+- `vendor/cjwt` owns JWT/JWE and now builds its prior GmSSL/libecc primitives
+  privately. The old SDK header dependency is removed. HTTP/S3 use the internal
+  `chttp_digest` target. Full Windows LLVM-MinGW build and install pass, as do
+  all 11 cjwt CTests and HTTP JWT/CSRF/WebSocket/S3 tests. Source provenance,
+  license, ownership and failure contracts are in `vendor/cjwt/crypto/README.md`.
+- Full CTest initially passed 100/103. Installing the existing pinned OpenAPI
+  Python requirements resolves `generator_conformance`. Pool write-timeout and
+  H2-over-TLS tests still fail with Core 0.1.3. Keep the original failures in
+  `build/migration-crypto-private-full-ctest.log`; CHttp remains draft pending
+  complete qualification.
 - Local dotenv credentials yielded HTTP 401 during restoration. The local task
   helper explicitly selected the existing gh login and preserved credentials.
   Committed CI uses its job token and the shared verified archive transport.

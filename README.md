@@ -27,9 +27,10 @@ match the compiler, architecture, configuration and selected release. Package
 discovery is exact and restricted to those roots; SDK roots are never added to
 `CMAKE_PREFIX_PATH`.
 
-SaltsUtils 0.1.1 restores IDL generation. The full CHttp build still requires
-the JOSE primitives used by `vendor/cjwt` and the digest helpers used by
-the HTTP and S3 modules.
+SaltsUtils 0.1.1 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
+private GmSSL/libecc adapter. HTTP and S3 use internal GmSSL digest helpers.
+Provider provenance and ownership are documented in
+[`vendor/cjwt/crypto/README.md`](vendor/cjwt/crypto/README.md).
 
 See [the migration decision and validation record](docs/SPLIT_SDK_MIGRATION.md)
 and [build instructions](cmake/BUILD.md).

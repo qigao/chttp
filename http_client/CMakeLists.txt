@@ -35,7 +35,7 @@ target_link_libraries(chttp_client
   PUBLIC Salts::CNet CMeta::CMeta Salts::CSerde Salts::DataBind
   PRIVATE llhttp::llhttp_static Salts::Core Salts::Core CMeta::CFlow
           Salts::URI Salts::JsonParser Salts::JsonCSerdeAdapter
-          chttp_cjwt)
+          chttp_cjwt chttp_digest)
 install(TARGETS chttp_client EXPORT ChttpTargets)
 install(DIRECTORY include/http_client DESTINATION include)
 

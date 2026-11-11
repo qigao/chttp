@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2021-2022 Comcast Cable Communications Management, LLC */
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include <salts/crypto.h>
+#include "cjwt_crypto.h"
 #include <core/fmt.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -33,7 +33,7 @@ static cjwt_code_t derive_kek(const cjwt_t *jwt, const uint8_t *password, size_t
     const char *name = alg_to_string(jwt->header.alg);
     const char *encoded = json_get_string(jwt->header.private_headers, "p2s");
     json_value_t *iterations = json_object_get(jwt->header.private_headers, "p2c");
-    salts_crypto_hash hash;
+    cjwt_crypto_hash hash;
     uint8_t *raw = NULL, *salt = NULL;
     size_t raw_size = 0, name_size, salt_size = 0;
     double count;
@@ -55,17 +55,17 @@ static cjwt_code_t derive_kek(const cjwt_t *jwt, const uint8_t *password, size_t
     memcpy(salt + name_size + 1, raw, raw_size);
     *kek_size = wrapping_key_size(jwt->header.alg);
     hash = *kek_size == 16 ? SALTS_CRYPTO_SHA256 : *kek_size == 24 ? SALTS_CRYPTO_SHA384 : SALTS_CRYPTO_SHA512;
-    if (salts_crypto_pbkdf2(hash, password, password_size, salt, salt_size,
+    if (cjwt_crypto_pbkdf2(hash, password, password_size, salt, salt_size,
         (uint32_t)count, kek, *kek_size) == SALTS_CRYPTO_OK) result = CJWTE_OK;
 done:
-    salts_crypto_clear(salt, salt_size); free(salt); free(raw);
+    cjwt_crypto_clear(salt, salt_size); free(salt); free(raw);
     return result;
 }
 
 static cjwt_code_t crypt_cek(const cjwt_t *jwt, int decrypt,
     const uint8_t *key_data, size_t key_size, const cjwt_jwk_t *jwk,
     const uint8_t *input, size_t input_size, uint8_t **output, size_t *output_size) {
-    salts_crypto_key *key = NULL;
+    cjwt_crypto_key *key = NULL;
     uint8_t kek[32], *buffer = NULL;
     const uint8_t *wrapping_key = key_data;
     size_t capacity = 0, size = 0, kek_size = 0;
@@ -80,15 +80,15 @@ static cjwt_code_t crypt_cek(const cjwt_t *jwt, int decrypt,
         *output = buffer; *output_size = key_size; return CJWTE_OK;
     }
     if (jwt->header.alg == alg_rsa_oaep || jwt->header.alg == alg_rsa_oaep_256) {
-        salts_crypto_hash hash = jwt->header.alg == alg_rsa_oaep ? SALTS_CRYPTO_SHA1 : SALTS_CRYPTO_SHA256;
+        cjwt_crypto_hash hash = jwt->header.alg == alg_rsa_oaep ? SALTS_CRYPTO_SHA1 : SALTS_CRYPTO_SHA256;
         result = jws_load_key(key_data, key_size, jwk, decrypt, &key);
         if (result != CJWTE_OK) goto done;
-        if (salts_crypto_key_type(key) != SALTS_CRYPTO_KEY_RSA) { result = CJWTE_SIGNATURE_INVALID_KEY; goto done; }
-        capacity = salts_crypto_key_signature_size(key);
+        if (cjwt_crypto_key_type(key) != SALTS_CRYPTO_KEY_RSA) { result = CJWTE_SIGNATURE_INVALID_KEY; goto done; }
+        capacity = cjwt_crypto_key_signature_size(key);
         buffer = malloc(capacity);
         if (!buffer) { result = CJWTE_OUT_OF_MEMORY; goto done; }
-        status = decrypt ? salts_crypto_key_oaep_decrypt(key, hash, input, input_size, buffer, capacity, &size) :
-                           salts_crypto_key_oaep_encrypt(key, hash, input, input_size, buffer, capacity, &size);
+        status = decrypt ? cjwt_crypto_key_oaep_decrypt(key, hash, input, input_size, buffer, capacity, &size) :
+                           cjwt_crypto_key_oaep_encrypt(key, hash, input, input_size, buffer, capacity, &size);
     } else {
         kek_size = wrapping_key_size(jwt->header.alg);
         if (!kek_size) { result = CJWTE_SIGNATURE_UNSUPPORTED_ALG; goto done; }
@@ -106,14 +106,14 @@ static cjwt_code_t crypt_cek(const cjwt_t *jwt, int decrypt,
         }
         buffer = malloc(capacity);
         if (!buffer) { result = CJWTE_OUT_OF_MEMORY; goto done; }
-        status = decrypt ? salts_crypto_aes_key_unwrap(wrapping_key, kek_size, input, input_size, buffer, capacity, &size) :
-                           salts_crypto_aes_key_wrap(wrapping_key, kek_size, input, input_size, buffer, capacity, &size);
+        status = decrypt ? cjwt_crypto_aes_key_unwrap(wrapping_key, kek_size, input, input_size, buffer, capacity, &size) :
+                           cjwt_crypto_aes_key_wrap(wrapping_key, kek_size, input, input_size, buffer, capacity, &size);
     }
     if (status != SALTS_CRYPTO_OK) { result = CJWTE_SIGNATURE_VALIDATION_FAILED; goto done; }
     *output = buffer; buffer = NULL; *output_size = size; result = CJWTE_OK;
 done:
-    salts_crypto_clear(buffer, buffer ? capacity : 0); free(buffer);
-    salts_crypto_clear(kek, sizeof(kek)); salts_crypto_key_destroy(key);
+    cjwt_crypto_clear(buffer, buffer ? capacity : 0); free(buffer);
+    cjwt_crypto_clear(kek, sizeof(kek)); cjwt_crypto_key_destroy(key);
     return result;
 }
 
@@ -144,15 +144,15 @@ cjwt_code_t jwe_decrypt(const cjwt_t *jwt, const struct section *header,
     if (ciphertext_size == SIZE_MAX) { status = CJWTE_INVALID_PARAMETERS; goto done; }
     result = malloc(ciphertext_size + 1);
     if (!result) { status = CJWTE_OUT_OF_MEMORY; goto done; }
-    if (salts_crypto_aes_gcm_decrypt(cek, required, iv, iv_size, header->data, header->len,
+    if (cjwt_crypto_aes_gcm_decrypt(cek, required, iv, iv_size, header->data, header->len,
         ciphertext, ciphertext_size, tag, tag_size, result, ciphertext_size) != SALTS_CRYPTO_OK) {
         status = CJWTE_SIGNATURE_VALIDATION_FAILED; goto done;
     }
     result[ciphertext_size] = 0;
     *plaintext = result; *plaintext_size = ciphertext_size; result = NULL; status = CJWTE_OK;
 done:
-    salts_crypto_clear(result, result ? ciphertext_size + 1 : 0); free(result);
-    salts_crypto_clear(cek, cek_size); free(cek);
+    cjwt_crypto_clear(result, result ? ciphertext_size + 1 : 0); free(result);
+    cjwt_crypto_clear(cek, cek_size); free(cek);
     free(encrypted_key); free(iv); free(ciphertext); free(tag);
     return status;
 }
@@ -169,9 +169,9 @@ cjwt_code_t jwe_pbes2_prepare(cjwt_t *jwt) {
     if (!p2s) {
         uint8_t salt[16];
         char *encoded;
-        if (salts_crypto_random(salt, sizeof(salt)) != SALTS_CRYPTO_OK) return CJWTE_SIGNATURE_VALIDATION_FAILED;
+        if (cjwt_crypto_random(salt, sizeof(salt)) != SALTS_CRYPTO_OK) return CJWTE_SIGNATURE_VALIDATION_FAILED;
         encoded = b64url_encode_with_alloc(salt, sizeof(salt), NULL);
-        salts_crypto_clear(salt, sizeof(salt));
+        cjwt_crypto_clear(salt, sizeof(salt));
         if (!encoded) return CJWTE_OUT_OF_MEMORY;
         json_object_set_string(jwt->header.private_headers, "p2s", encoded);
         free(encoded);
@@ -201,18 +201,18 @@ cjwt_code_t jwe_encrypt(const cjwt_t *jwt, const char *header,
     if (jwt->header.alg == alg_dir) {
         if (key_size < cek_size) return CJWTE_SIGNATURE_INVALID_KEY;
         memcpy(cek, key_data, cek_size);
-    } else if (salts_crypto_random(cek, cek_size) != SALTS_CRYPTO_OK) {
+    } else if (cjwt_crypto_random(cek, cek_size) != SALTS_CRYPTO_OK) {
         status = CJWTE_SIGNATURE_VALIDATION_FAILED; goto done;
     }
     status = crypt_cek(jwt, 0, key_data, key_size, jwk, cek, cek_size, &encrypted_key, &encrypted_size);
     if (status != CJWTE_OK) goto done;
     status = CJWTE_OUT_OF_MEMORY;
-    if (salts_crypto_random(iv, sizeof(iv)) != SALTS_CRYPTO_OK) {
+    if (cjwt_crypto_random(iv, sizeof(iv)) != SALTS_CRYPTO_OK) {
         status = CJWTE_SIGNATURE_VALIDATION_FAILED; goto done;
     }
     ciphertext = malloc(plaintext_size ? plaintext_size : 1);
     if (!ciphertext) goto done;
-    if (salts_crypto_aes_gcm_encrypt(cek, cek_size, iv, sizeof(iv), header, strlen(header),
+    if (cjwt_crypto_aes_gcm_encrypt(cek, cek_size, iv, sizeof(iv), header, strlen(header),
         plaintext, plaintext_size, ciphertext, plaintext_size, tag, sizeof(tag)) != SALTS_CRYPTO_OK) {
         status = CJWTE_SIGNATURE_VALIDATION_FAILED; goto done;
     }
@@ -227,7 +227,7 @@ cjwt_code_t jwe_encrypt(const cjwt_t *jwt, const char *header,
     if (*output) status = CJWTE_OK;
 done:
     tstr_free(token); free(encoded_key); free(encoded_iv); free(encoded_content); free(encoded_tag);
-    salts_crypto_clear(cek, sizeof(cek)); salts_crypto_clear(tag, sizeof(tag));
+    cjwt_crypto_clear(cek, sizeof(cek)); cjwt_crypto_clear(tag, sizeof(tag));
     free(ciphertext); free(encrypted_key);
     return status;
 }

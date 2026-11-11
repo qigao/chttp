@@ -1,6 +1,6 @@
 #include "s3_internal.h"
 
-#include <cmeta_crypto.h>
+#include "chttp_digest.h"
 
 #include <file/fs.h>
 #include <core/uuid.h>
@@ -127,9 +127,9 @@ static int s3_multipart_headers(const s3_client_impl *client, const s3_put_objec
 
 static int s3_multipart_upload_id_parse(const s3_client_impl *client, const s3_response *response,
                                         char **out_upload_id) {
-  salts_xml_document document = {0};
-  salts_xml_node root = {0};
-  salts_xml_node upload_id;
+  xml_document document = {0};
+  xml_node root = {0};
+  xml_node upload_id;
   int status;
   if (client == NULL || response == NULL || out_upload_id == NULL || *out_upload_id != NULL)
     return SALTS_EINVAL;
@@ -145,7 +145,7 @@ static int s3_multipart_upload_id_parse(const s3_client_impl *client, const s3_r
       status = SALTS_EPROTO;
     }
   }
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   return status;
 }
 
@@ -462,7 +462,7 @@ static int s3_multipart_checkpoint_temp_path(const char *checkpoint_path, char *
   return SALTS_OK;
 }
 
-static int s3_multipart_checkpoint_write_all(cmeta_file_t file, const char *data, size_t size) {
+static int s3_multipart_checkpoint_write_all(file_t file, const char *data, size_t size) {
   size_t offset = 0u;
   while (offset < size) {
     const size_t remaining = size - offset;
@@ -480,7 +480,7 @@ static int s3_multipart_checkpoint_store(const s3_client_base *client,
                                          const char *checkpoint_path) {
   tstr xml = NULL;
   char *temporary_path = NULL;
-  cmeta_file_t file = SALTS_INVALID_FILE;
+  file_t file = SALTS_INVALID_FILE;
   int close_status = SALTS_OK;
   int status = s3_multipart_checkpoint_xml(client, upload, source_path, file_stat, part_size, &xml);
   if (status == SALTS_OK)
@@ -516,13 +516,13 @@ static int s3_multipart_parse_u64(const char *text, uint64_t *out_value) {
   return SALTS_OK;
 }
 
-static int s3_multipart_child_text(salts_xml_node parent, const char *name, char **out_text) {
-  const salts_xml_node child = s3_xml_child(parent, name);
+static int s3_multipart_child_text(xml_node parent, const char *name, char **out_text) {
+  const xml_node child = s3_xml_child(parent, name);
   if (child.impl == NULL || out_text == NULL || *out_text != NULL) return SALTS_EPROTO;
   return s3_xml_text_dup(child, out_text);
 }
 
-static int s3_multipart_checkpoint_part_parse(s3_multipart_impl *upload, salts_xml_node node) {
+static int s3_multipart_checkpoint_part_parse(s3_multipart_impl *upload, xml_node node) {
   char *number_text = NULL;
   char *size_text = NULL;
   char *etag = NULL;
@@ -548,13 +548,13 @@ static int s3_multipart_checkpoint_part_parse(s3_multipart_impl *upload, salts_x
   return status;
 }
 
-static int s3_multipart_checkpoint_parts_parse(s3_multipart_impl *upload, salts_xml_node parts) {
+static int s3_multipart_checkpoint_parts_parse(s3_multipart_impl *upload, xml_node parts) {
   size_t index;
   int status = SALTS_OK;
   if (parts.impl == NULL) return SALTS_EPROTO;
-  for (index = 0u; index < salts_xml_node_child_count(parts) && status == SALTS_OK; ++index) {
-    const salts_xml_node child = salts_xml_node_child_at(parts, index);
-    if (salts_xml_node_type(child) == SALTS_XML_ELEMENT) {
+  for (index = 0u; index < xml_node_child_count(parts) && status == SALTS_OK; ++index) {
+    const xml_node child = xml_node_child_at(parts, index);
+    if (xml_node_type(child) == SALTS_XML_ELEMENT) {
       if (!s3_xml_node_name_equal(child, "Part")) return SALTS_EPROTO;
       status = s3_multipart_checkpoint_part_parse(upload, child);
     }
@@ -562,7 +562,7 @@ static int s3_multipart_checkpoint_parts_parse(s3_multipart_impl *upload, salts_
   return status;
 }
 
-static int s3_multipart_checkpoint_identity(const s3_client_base *client, salts_xml_node root,
+static int s3_multipart_checkpoint_identity(const s3_client_base *client, xml_node root,
                                             const char *bucket, const char *key,
                                             const char *source_path,
                                             const fs_stat_t *file_stat, size_t part_size,
@@ -615,9 +615,9 @@ static int s3_multipart_checkpoint_load(const s3_client_base *client, const char
                                         s3_multipart *out_upload) {
   fs_stat_t checkpoint_stat = {0};
   fs_buf_t file = {0};
-  salts_xml_document document = {0};
-  salts_xml_node root = {0};
-  salts_xml_node parts;
+  xml_document document = {0};
+  xml_node root = {0};
+  xml_node parts;
   s3_multipart_impl *upload = NULL;
   size_t parts_bytes = 0u;
   int status;
@@ -660,7 +660,7 @@ static int s3_multipart_checkpoint_load(const s3_client_base *client, const char
     upload = NULL;
   }
   s3_multipart_impl_free(upload);
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   fs_buf_free(&file);
   return status;
 }
@@ -731,21 +731,21 @@ static int s3_multipart_validate_completion(const s3_multipart_impl *upload) {
 
 static int s3_multipart_complete_response_validate(const s3_client_impl *client,
                                                    s3_response *response, s3_error *out_error) {
-  salts_xml_document document = {0};
-  salts_xml_node root = {0};
+  xml_document document = {0};
+  xml_node root = {0};
   if (response->http.body == NULL || response->http.body_size == 0u)
     return s3_multipart_error(out_error, SALTS_EPROTO, "s3-multipart-complete-parse");
   int status = s3_xml_parse_root(
       response->http.body, response->http.body_size, client->base.config.max_xml_bytes,
       client->base.config.max_xml_nodes, "CompleteMultipartUploadResult", &document, &root);
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   if (status == SALTS_OK) return SALTS_OK;
   if (status != SALTS_EPROTO)
     return s3_multipart_error(out_error, status, "s3-multipart-complete-parse");
   status = s3_xml_parse_root(response->http.body, response->http.body_size,
                              client->base.config.max_xml_bytes, client->base.config.max_xml_nodes,
                              "Error", &document, &root);
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   if (status != SALTS_OK)
     return s3_multipart_error(out_error, status, "s3-multipart-complete-parse");
   status = s3_response_parse_service_error(response, client->base.config.max_xml_bytes,
@@ -816,7 +816,7 @@ int s3_multipart_abort(s3_client *client, s3_multipart *upload, s3_response *out
   return status;
 }
 
-static int s3_multipart_file_read_part(cmeta_file_t file, unsigned char *buffer, size_t size,
+static int s3_multipart_file_read_part(file_t file, unsigned char *buffer, size_t size,
                                        uint64_t offset, s3_error *out_error) {
   size_t consumed = 0u;
   if (file == SALTS_INVALID_FILE || buffer == NULL || size == 0u || offset > INT64_MAX)
@@ -880,7 +880,7 @@ int s3_put_object_multipart_file(s3_client *client, const char *bucket, const ch
   fs_stat_t file_stat = {0};
   fs_stat_t final_stat = {0};
   fs_stat_t checkpoint_stat = {0};
-  cmeta_file_t file = SALTS_INVALID_FILE;
+  file_t file = SALTS_INVALID_FILE;
   unsigned char *buffer = NULL;
   size_t part_size;
   size_t part_count;
@@ -992,14 +992,14 @@ int s3_put_object_multipart_file(s3_client *client, const char *bucket, const ch
   if (status != SALTS_OK) goto failed;
   if (fs_unlink(options->checkpoint_path) != SALTS_OK)
     status = s3_multipart_error(out_error, SALTS_EIO, "multipart-checkpoint-remove");
-  cmeta_crypto_clear(buffer, part_size);
+  chttp_crypto_clear(buffer, part_size);
   free(buffer);
   (void)s3_multipart_destroy(&upload);
   return status;
 
 failed:
   if (file != SALTS_INVALID_FILE) (void)fs_close(file);
-  cmeta_crypto_clear(buffer, part_size);
+  chttp_crypto_clear(buffer, part_size);
   free(buffer);
   return s3_multipart_file_failure(client, &upload, options->checkpoint_path,
                                    options->preserve_on_failure && checkpoint_available, status,

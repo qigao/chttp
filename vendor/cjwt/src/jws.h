@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #include "cjwt.h"
-#include <salts/crypto.h>
+#include "cjwt_crypto.h"
 
 struct sig_section {
     const uint8_t *data;
@@ -23,7 +23,7 @@ struct sig_input {
     struct sig_section full;
     struct sig_section sig;
     struct sig_section key;
-    void *pkey; /* Optional borrowed immutable salts_crypto_key. */
+    void *pkey; /* Optional borrowed immutable cjwt_crypto_key. */
     jws_pkey_type_t pkey_type;
 };
 
@@ -35,7 +35,7 @@ cjwt_code_t jws_jwk_to_pkey(const cjwt_jwk_t *jwk, void **pkey,
                             jws_pkey_type_t *pkey_type);
 void jws_pkey_free(void *pkey, jws_pkey_type_t pkey_type);
 cjwt_code_t jws_load_key(const uint8_t *data, size_t size, const cjwt_jwk_t *jwk,
-                         int private_key, salts_crypto_key **output);
+                         int private_key, cjwt_crypto_key **output);
 cjwt_code_t jws_sign(const cjwt_alg_t alg, const uint8_t *full, size_t full_len, 
                      const uint8_t *key, size_t key_len, 
                      uint8_t **sig, size_t *sig_len);

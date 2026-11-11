@@ -2,7 +2,7 @@
 
 #include <s3/s3_object.h>
 
-#include <cmeta_crypto.h>
+#include "chttp_digest.h"
 
 #include <file/fs.h>
 
@@ -25,8 +25,8 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
   static const char digits[] = "0123456789abcdef";
   fs_stat_t file_stat = {0};
   fs_stat_t after_stat = {0};
-  cmeta_file_t file = SALTS_INVALID_FILE;
-  cmeta_sha256_stream *context = NULL;
+  file_t file = SALTS_INVALID_FILE;
+  chttp_sha256_stream *context = NULL;
   unsigned char digest[S3_FILE_SHA256_BYTES];
   unsigned char buffer[S3_FILE_HASH_CHUNK_BYTES];
   size_t index;
@@ -53,11 +53,11 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
     *out_error = (s3_error){.status = SALTS_EIO, .stage = "file-hash-open"};
     return SALTS_EIO;
   }
-  status = cmeta_sha256_stream_create(&context);
+  status = chttp_sha256_stream_create(&context);
   if (status != SALTS_OK) goto done;
   status = SALTS_OK;
   while ((read_size = fs_read(file, (char *)buffer, sizeof(buffer))) > 0) {
-    status = cmeta_sha256_stream_update(context, buffer, (size_t)read_size);
+    status = chttp_sha256_stream_update(context, buffer, (size_t)read_size);
     if (status != SALTS_OK) break;
   }
   if (read_size < 0 && status == SALTS_OK) {
@@ -65,7 +65,7 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
     *out_error =
         (s3_error){.status = status, .native_status = read_size, .stage = "file-hash-read"};
   }
-  if (status == SALTS_OK) status = cmeta_sha256_stream_finish(context, digest);
+  if (status == SALTS_OK) status = chttp_sha256_stream_finish(context, digest);
   if (status == SALTS_OK) {
     for (index = 0u; index < sizeof(digest); ++index) {
       out_hex[index * 2u] = digits[digest[index] >> 4u];
@@ -76,9 +76,9 @@ static int s3_file_sha256(const char *path, char out_hex[S3_SIGNER_SHA256_HEX_SI
   }
 
 done:
-  cmeta_sha256_stream_destroy(context);
-  cmeta_crypto_clear(buffer, sizeof(buffer));
-  cmeta_crypto_clear(digest, sizeof(digest));
+  chttp_sha256_stream_destroy(context);
+  chttp_crypto_clear(buffer, sizeof(buffer));
+  chttp_crypto_clear(digest, sizeof(digest));
   close_status = fs_close(file);
   if (status == SALTS_OK && close_status != SALTS_OK) {
     status = SALTS_EIO;
@@ -156,7 +156,7 @@ int s3_put_object_file(s3_client *client, const char *bucket, const char *key, c
                                  out_error);
   if (status != SALTS_OK && out_error->status == SALTS_OK)
     *out_error = (s3_error){.status = status, .stage = "s3-put-file"};
-  cmeta_crypto_clear(payload_sha256, sizeof(payload_sha256));
+  chttp_crypto_clear(payload_sha256, sizeof(payload_sha256));
   s3_sse_headers_destroy(&sse_headers);
   return status;
 }

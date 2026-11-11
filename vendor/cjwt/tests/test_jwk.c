@@ -1,6 +1,6 @@
 #include "tinytest.h"
 #include "cjwt.h"
-#include <salts/crypto.h>
+#include "cjwt_crypto.h"
 #include <string.h>
 #include <stdlib.h>
 

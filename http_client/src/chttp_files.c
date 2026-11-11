@@ -228,7 +228,7 @@ int chttp_download_file(chttp_client *client, const chttp_options *options, cons
     return chttp_file_error(out_response, out_error, cleanup_status, "file-close");
   }
   if (!async_flush_supported) {
-    cmeta_file_t sync_file = fs_open(temporary_path, SALTS_FS_O_WRONLY, 0);
+    file_t sync_file = fs_open(temporary_path, SALTS_FS_O_WRONLY, 0);
     if (sync_file == SALTS_INVALID_FILE) {
       (void)fs_unlink(temporary_path);
       tstr_free(temporary_path);

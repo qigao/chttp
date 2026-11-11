@@ -76,9 +76,9 @@ void s3_bucket_list_destroy(s3_bucket_list *list) {
   *list = (s3_bucket_list){0};
 }
 
-static int s3_bucket_info_parse(salts_xml_node node, s3_bucket_info *out) {
-  const salts_xml_node name = s3_xml_child(node, "Name");
-  const salts_xml_node creation_date = s3_xml_child(node, "CreationDate");
+static int s3_bucket_info_parse(xml_node node, s3_bucket_info *out) {
+  const xml_node name = s3_xml_child(node, "Name");
+  const xml_node creation_date = s3_xml_child(node, "CreationDate");
   if (name.impl == NULL || creation_date.impl == NULL || out == NULL) return SALTS_EPROTO;
   {
     int status = s3_xml_text_dup(name, &out->name);
@@ -89,9 +89,9 @@ static int s3_bucket_info_parse(salts_xml_node node, s3_bucket_info *out) {
 
 static int s3_bucket_list_parse(const s3_client_impl *client, const s3_response *response,
                                 s3_bucket_list *out) {
-  salts_xml_document document = {0};
-  salts_xml_node root = {0};
-  salts_xml_node buckets;
+  xml_document document = {0};
+  xml_node root = {0};
+  xml_node buckets;
   size_t count = 0u;
   size_t index;
   size_t output_index = 0u;
@@ -104,9 +104,9 @@ static int s3_bucket_list_parse(const s3_client_impl *client, const s3_response 
     status = SALTS_EPROTO;
     goto done;
   }
-  for (index = 0u; index < salts_xml_node_child_count(buckets); ++index) {
-    const salts_xml_node child = salts_xml_node_child_at(buckets, index);
-    if (salts_xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, "Bucket"))
+  for (index = 0u; index < xml_node_child_count(buckets); ++index) {
+    const xml_node child = xml_node_child_at(buckets, index);
+    if (xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, "Bucket"))
       ++count;
   }
   if (count > client->base.config.max_list_entries ||
@@ -122,14 +122,14 @@ static int s3_bucket_list_parse(const s3_client_impl *client, const s3_response 
     }
   }
   out->count = count;
-  for (index = 0u; index < salts_xml_node_child_count(buckets) && status == SALTS_OK; ++index) {
-    const salts_xml_node child = salts_xml_node_child_at(buckets, index);
-    if (salts_xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, "Bucket"))
+  for (index = 0u; index < xml_node_child_count(buckets) && status == SALTS_OK; ++index) {
+    const xml_node child = xml_node_child_at(buckets, index);
+    if (xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, "Bucket"))
       status = s3_bucket_info_parse(child, &out->items[output_index++]);
   }
 
 done:
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   if (status != SALTS_OK) s3_bucket_list_destroy(out);
   return status;
 }
