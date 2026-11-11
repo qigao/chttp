@@ -32,6 +32,7 @@ static struct {
   bool terminal_failed;
   bool external;
   bool completion_waiting;
+  bool hold_h2_receive;
   size_t source_bytes;
   char uri[64];
 } fixture;
@@ -111,6 +112,27 @@ static int pool_test_external_step(bool observe) {
     if (status != SALTS_OK && status != SALTS_ETIMEDOUT) return status;
     for (size_t index = 0u; index < count; ++index) {
       bool consumed = false;
+      if (fixture.hold_h2_receive) {
+        cnet_external_request_snapshot requests[4];
+        size_t request_count = 0u;
+        const cnet_connection connection = impl->h2_sessions[0].connection;
+        status = cnet_client_external_request_snapshots(
+            &impl->network, connection, requests, 4u, &request_count);
+        if (status != SALTS_OK) return status;
+        for (size_t request_index = 0u; request_index < request_count; ++request_index) {
+          const cnet_external_request_snapshot *request = &requests[request_index];
+          if (request->operation_kind == NATIVE_IO_OPERATION_STREAM_RECV &&
+              request->request.slot == completions[index].request.slot &&
+              request->request.generation == completions[index].request.generation) {
+            if (fixture.completion_waiting) return SALTS_EPROTO;
+            fixture.delayed_completion = completions[index];
+            fixture.completion_waiting = true;
+            consumed = true;
+            break;
+          }
+        }
+        if (consumed) continue;
+      }
       status = cnet_client_route_external_completion(&impl->network, &completions[index],
                                                       &consumed, &events);
       if (status != SALTS_OK) return status;
@@ -143,11 +165,27 @@ static int pool_test_source(void *user, void *buffer, size_t capacity, size_t *o
   return SALTS_OK;
 }
 
-static void pool_test_inflight_send(bool expire) {
+static void pool_test_external_init(void) {
   chttp_client_impl *impl = chttp_client_get(&fixture.client);
   const native_io_backend_config backend_config = {
       fixture.network_config.backend, 2u * fixture.network_config.connection_capacity,
       fixture.network_config.request_capacity, fixture.network_config.completion_batch_capacity};
+  cnet_pool_snapshot pool;
+  fixture.hold_send = false;
+  pool_test_deliver_send();
+  check_equal(cnet_client_stop(&impl->network, POOL_TEST_TIMEOUT_MS), SALTS_OK);
+  check_equal(chttp_client_pool_progress(impl), SALTS_OK);
+  check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
+  check_true(pool.drained);
+  check_equal(cnet_client_destroy(&impl->network), SALTS_OK);
+  check_equal(native_io_backend_init(&fixture.backend, &backend_config), SALTS_OK);
+  check_equal(cnet_client_init_external(&impl->network, &fixture.network_config,
+                                        &fixture.backend), SALTS_OK);
+  fixture.external = true;
+}
+
+static void pool_test_inflight_send(bool expire) {
+  chttp_client_impl *impl = chttp_client_get(&fixture.client);
   const chttp_body_source source = {
       .read = pool_test_source, .content_length_known = 1, .content_length = 128u};
   chttp_request_options options = pool_test_options();
@@ -163,17 +201,7 @@ static void pool_test_inflight_send(bool expire) {
     fixture.network_config.write_timeout_ms = POOL_TEST_WRITE_TIMEOUT_MS;
     fixture.network_config.read_timeout_ms = 0u;
   }
-  fixture.hold_send = false;
-  pool_test_deliver_send();
-  check_equal(cnet_client_stop(&impl->network, POOL_TEST_TIMEOUT_MS), SALTS_OK);
-  check_equal(chttp_client_pool_progress(impl), SALTS_OK);
-  check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
-  check_true(pool.drained);
-  check_equal(cnet_client_destroy(&impl->network), SALTS_OK);
-  check_equal(native_io_backend_init(&fixture.backend, &backend_config), SALTS_OK);
-  check_equal(cnet_client_init_external(&impl->network, &fixture.network_config,
-                                        &fixture.backend), SALTS_OK);
-  fixture.external = true;
+  pool_test_external_init();
   /* No live attachment survives switching the test's progress owner. */
   check_equal(chttp_async_client_submit(&fixture.client, &options, &warm), SALTS_OK);
   deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
@@ -280,6 +308,28 @@ static void pool_test_inflight_send(bool expire) {
   check_equal(fixture.result_status, SALTS_OK);
 }
 
+static uint64_t pool_test_h2_before_settings(chttp_request *request) {
+  chttp_client_impl *impl = chttp_client_get(&fixture.client);
+  chttp_request_options options = pool_test_options();
+  cnet_pool_snapshot pool;
+  const uint64_t deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+  pool_test_external_init();
+  options.protocol = CHTTP_HTTP_2;
+  fixture.hold_h2_receive = true;
+  check_equal(chttp_async_client_submit(&fixture.client, &options, request), SALTS_OK);
+  while (!fixture.completion_waiting && monotonic_ms() < deadline)
+    check_equal(pool_test_external_step(true), SALTS_OK);
+  check_true(fixture.completion_waiting);
+  check_equal(impl->h2_sessions[0].state, CHTTP_H2_SESSION_ACTIVE);
+  check_false(chttp_h2_proto_peer_settings_received(impl->h2_sessions[0].protocol));
+  check_false(impl->h2_sessions[0].pool_ready);
+  check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
+  check_equal(pool.ready, (size_t)0u);
+  check_equal(pool.connecting, (size_t)1u);
+  check_equal(fixture.results, (size_t)1u);
+  return deadline;
+}
+
 spec("CHttp Pool callback and context lifecycle") {
   before_each() {
     chttp_client_config config = {
@@ -370,6 +420,7 @@ spec("CHttp Pool callback and context lifecycle") {
   }
 
   after_each() {
+    fixture.hold_h2_receive = false;
     check_equal(pool_test_deliver_native(), SALTS_OK);
     fixture.hold_send = false;
     fixture.hold_terminal = false;
@@ -392,6 +443,13 @@ spec("CHttp Pool callback and context lifecycle") {
         if (fixture.session->connection.slot != 0u && !fixture.session->transport_closed) {
           status = cnet_close(&impl->network, fixture.session->connection);
           check_true(status == SALTS_OK || status == SALTS_EALREADY || status == SALTS_ENOENT);
+        }
+        for (size_t index = 0u; index < impl->h2_session_capacity; ++index) {
+          chttp_h2_session *session = &impl->h2_sessions[index];
+          if (session->state == CHTTP_H2_SESSION_FREE ||
+              session->state == CHTTP_H2_SESSION_TERMINAL)
+            continue;
+          check_equal(cnet_close(&impl->network, session->connection), SALTS_OK);
         }
         do {
           check_equal(pool_test_external_step(true), SALTS_OK);
@@ -478,6 +536,49 @@ spec("CHttp Pool callback and context lifecycle") {
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_equal(fixture.results, (size_t)2u);
     check_equal(fixture.result_status, SALTS_OK);
+  }
+
+  it("keeps TCP-connected H2 out of READY until peer SETTINGS are consumed") {
+    chttp_client_impl *impl = chttp_client_get(&fixture.client);
+    chttp_request request = {0};
+    cnet_pool_snapshot pool;
+    const uint64_t deadline = pool_test_h2_before_settings(&request);
+    fixture.hold_h2_receive = false;
+    check_equal(pool_test_deliver_native(), SALTS_OK);
+    while ((!impl->h2_sessions[0].pool_ready || fixture.results != 2u) &&
+           monotonic_ms() < deadline)
+      check_equal(pool_test_external_step(true), SALTS_OK);
+    check_true(impl->h2_sessions[0].pool_ready);
+    check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
+    check_equal(pool.ready, (size_t)1u);
+    check_equal(pool.connecting, (size_t)0u);
+    check_equal(fixture.results, (size_t)2u);
+    check_equal(fixture.result_status, SALTS_OK);
+  }
+
+  it("keeps a pre-SETTINGS cancellation terminal when the peer bytes arrive late") {
+    chttp_client_impl *impl = chttp_client_get(&fixture.client);
+    chttp_request request = {0};
+    cnet_pool_snapshot pool;
+    chttp_server_stats stats;
+    const uint64_t deadline = pool_test_h2_before_settings(&request);
+    check_equal(chttp_async_request_cancel(&fixture.client, request), SALTS_OK);
+    check_equal(chttp_h2_progress_sessions(impl), SALTS_OK);
+    check_equal(chttp_client_pool_progress(impl), SALTS_OK);
+    check_equal(fixture.results, (size_t)2u);
+    check_equal(fixture.result_status, SALTS_ECANCELED);
+    fixture.hold_h2_receive = false;
+    check_equal(pool_test_deliver_native(), SALTS_OK);
+    while (!impl->h2_sessions[0].pool_ready && monotonic_ms() < deadline)
+      check_equal(pool_test_external_step(true), SALTS_OK);
+    check_true(impl->h2_sessions[0].pool_ready);
+    check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
+    check_equal(pool.active_leases, (size_t)0u);
+    check_equal(fixture.results, (size_t)2u);
+    check_equal(fixture.result_status, SALTS_ECANCELED);
+    check_equal(chttp_async_request_cancel(&fixture.client, request), SALTS_ENOENT);
+    check_equal(chttp_server_get_stats(&fixture.server, &stats), SALTS_OK);
+    check_equal(stats.accepted_connections, UINT64_C(2));
   }
 
   it("recycles a failed H2 session before admitting another connection at capacity one") {
