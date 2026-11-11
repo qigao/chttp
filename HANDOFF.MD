@@ -108,3 +108,12 @@
   H2 READY while the peer advertises zero stream capacity. Windows full CTest
   passes 105/105 (`build/migration-recovery-budget-preflight-ctest.log`);
   the failed first CI remains available and was not retried unchanged.
+- #231 H2 replay boundary: the real protocol peer can reject the first stream
+  with REFUSED_STREAM or send GOAWAY Last-Stream-ID=0 before a response.
+  Under both default and explicit physical-recovery policies, the original GET
+  returns one ECONNRESET/native REFUSED_STREAM; only a later explicit GET reaches
+  the peer again. Exact paths/request/connection counts also verify healthy
+  stream-session reuse versus GOAWAY replacement. Published-SDK Windows full
+  build and `chttp_h2_client_test` pass; logs:
+  `build/migration-h2-replay-boundary-build.log` and
+  `build/migration-h2-replay-boundary-ctest.log`.

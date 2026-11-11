@@ -36,6 +36,8 @@ typedef struct chttp_h2_test_server {
   char paths[4][64];
   size_t expected_requests;
   size_t goaway_responses;
+  int refuse_first_stream;
+  int unprocessed_goaway;
   size_t request_count;
   size_t accepted_connections;
   int empty_responses;
@@ -281,6 +283,11 @@ static int chttp_h2_test_on_end(void *user, int32_t stream_id, int end_stream) {
   if (request_index < sizeof(server->paths) / sizeof(server->paths[0]))
     memcpy(server->paths[request_index], server->path, sizeof(server->path));
   ++server->request_count;
+  if (request_index == 0u && server->refuse_first_stream)
+    return chttp_h2_proto_submit_rst_stream(server->protocol, stream_id,
+                                           CHTTP_H2_ERR_REFUSED_STREAM);
+  if (request_index == 0u && server->unprocessed_goaway)
+    return chttp_h2_proto_submit_goaway(server->protocol, 0u, CHTTP_H2_ERR_NO_ERROR);
   if (server->invalid_trailers) {
     if (chttp_h2_proto_submit_headers(server->protocol, stream_id, response_headers,
                                       sizeof(response_headers) / sizeof(response_headers[0]),
@@ -707,7 +714,74 @@ static void chttp_h2_test_on_complete(void *user, chttp_request request,
   ++completion->count;
 }
 
+static void chttp_h2_test_no_replay(bool goaway, bool recovery) {
+  chttp_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
+  chttp_h2_test_server server = {0};
+  sync_thread_t thread = NULL;
+  chttp_response response = {0};
+  chttp_error first_error = {0}, error = {0};
+  chttp_options options;
+  chttp_connection_recovery_options policy = CHTTP_CONNECTION_RECOVERY_OPTIONS_INIT;
+  char uri[64], authority[64];
+  uint16_t port = 0u;
+  int first_status, next_status, close_status;
+  check_equal(chttp_client_init(&client, &config), SALTS_OK);
+  if (recovery) {
+    policy.max_attempts = 3u;
+    policy.episode_timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS;
+    check_equal(chttp_client_set_connection_recovery(&client, &policy), SALTS_OK);
+  }
+  check_equal(chttp_h2_test_listener(&listener, &port), SALTS_OK);
+  check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
+  check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
+  server.listener = listener;
+  server.expected_requests = 2u;
+  server.empty_responses = 1;
+  server.refuse_first_stream = !goaway;
+  server.unprocessed_goaway = goaway;
+  check_equal(sync_thread_create(&thread,
+      goaway ? chttp_h2_test_serve_goaway : chttp_h2_test_serve, &server), SALTS_OK);
+  options = (chttp_options){.connection_uri = uri, .authority = authority,
+      .target = "/original", .timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS,
+      .protocol = CHTTP_HTTP_2};
+  /* Even GET plus protocol-not-executed evidence is not replay permission.
+   * Only this second explicit call may send another application request. */
+  first_status = chttp_get(&client, &options, &response, &first_error);
+  chttp_response_destroy(&response);
+  options.target = "/explicit-next";
+  next_status = chttp_get(&client, &options, &response, &error);
+  chttp_response_destroy(&response);
+  close_status = chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS);
+  check_equal(sync_thread_join(&thread), SALTS_OK);
+  sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(listener);
+  check_equal(close_status, SALTS_OK);
+  check_equal(first_status, SALTS_ECONNRESET);
+  check_equal(first_error.native_status, (int)CHTTP_H2_ERR_REFUSED_STREAM);
+  check_equal(first_error.stage, "h2-refused-stream");
+  check_equal(next_status, SALTS_OK);
+  check_equal(server.status, SALTS_OK);
+  check_equal(server.request_count, (size_t)2u);
+  check_equal(server.accepted_connections, goaway ? (size_t)2u : (size_t)1u);
+  check_equal(server.paths[0], "/original");
+  check_equal(server.paths[1], "/explicit-next");
+}
+
 spec("CHTTP HTTP/2 client") {
+  it("does not replay GET after REFUSED_STREAM with the default policy") {
+    chttp_h2_test_no_replay(false, false);
+  }
+  it("does not turn physical recovery into GET replay after REFUSED_STREAM") {
+    chttp_h2_test_no_replay(false, true);
+  }
+  it("does not replay GET above GOAWAY Last-Stream-ID with the default policy") {
+    chttp_h2_test_no_replay(true, false);
+  }
+  it("restores a GOAWAY connection only for the next explicit GET") {
+    chttp_h2_test_no_replay(true, true);
+  }
   it("validates explicit H2 receive-window policy before session creation") {
     chttp_async_client async = {0};
     chttp_client blocking = {0};
