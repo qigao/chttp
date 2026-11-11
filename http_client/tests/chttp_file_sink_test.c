@@ -2,9 +2,9 @@
 
 #include "tinytest.h"
 
-#include <salts/clock.h>
-#include <salts/error_codes.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <core/error_codes.h>
+#include <threads/threads.h>
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -30,15 +30,15 @@ static const uint64_t CHTTP_FILE_SINK_TEST_TIMEOUT_NS = UINT64_C(5000000000);
 
 static int chttp_file_sink_test_drive(cflow_io_file_runtime *runtime,
                                       chttp_file_sink_transfer *transfer) {
-  const uint64_t started = cmeta_hrtime();
+  const uint64_t started = hrtime();
   for (;;) {
     size_t progressed = 0u;
     int status = cflow_io_file_runtime_run_ready(runtime, 32u, &progressed);
     if (status != SALTS_OK) return status;
     if (chttp_file_sink_transfer_ready(transfer)) return SALTS_OK;
-    if (cmeta_hrtime() - started >= CHTTP_FILE_SINK_TEST_TIMEOUT_NS)
+    if (hrtime() - started >= CHTTP_FILE_SINK_TEST_TIMEOUT_NS)
       return SALTS_ETIMEDOUT;
-    if (progressed == 0u) cmeta_thread_yield();
+    if (progressed == 0u) sync_thread_yield();
   }
 }
 

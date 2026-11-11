@@ -1,6 +1,6 @@
 #include "chttp_rate_limit_internal.h"
 #include "tinytest.h"
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include <stdatomic.h>
 #include <string.h>
 
@@ -23,7 +23,7 @@ static void rate_concurrent_worker(void *user) {
   chttp_server_request_view request = {0};
   atomic_fetch_add_explicit(&probe->ready, 1, memory_order_release);
   while (!atomic_load_explicit(&probe->go, memory_order_acquire))
-    cmeta_thread_yield();
+    sync_thread_yield();
   for (size_t i = 0u; i < 64u; ++i) {
     chttp_server_admission_result result = {0};
     const int status =
@@ -45,8 +45,8 @@ spec("CHTTP bounded rate limiter") {
     chttp_rate_limiter limiter = {0};
     chttp_rate_limit_config config = rate_config(CHTTP_RATE_LIMIT_GLOBAL);
     rate_concurrent_probe probe = {.limiter = &limiter};
-    cmeta_thread_t first = NULL;
-    cmeta_thread_t second = NULL;
+    sync_thread_t first = NULL;
+    sync_thread_t second = NULL;
 
     config.burst = 17u;
     config.refill_tokens = 1u;
@@ -58,16 +58,16 @@ spec("CHTTP bounded rate limiter") {
     atomic_init(&probe.errors, 0);
 
     check_equal(chttp_rate_limiter_init(&limiter, &config), SALTS_OK);
-    check_equal(cmeta_thread_create(&first, rate_concurrent_worker, &probe), SALTS_OK);
-    check_equal(cmeta_thread_create(&second, rate_concurrent_worker, &probe), SALTS_OK);
+    check_equal(sync_thread_create(&first, rate_concurrent_worker, &probe), SALTS_OK);
+    check_equal(sync_thread_create(&second, rate_concurrent_worker, &probe), SALTS_OK);
     while (atomic_load_explicit(&probe.ready, memory_order_acquire) != 2)
-      cmeta_thread_yield();
+      sync_thread_yield();
     atomic_store_explicit(&probe.go, true, memory_order_release);
 
-    check_equal(cmeta_thread_join(&first), SALTS_OK);
-    check_equal(cmeta_thread_join(&second), SALTS_OK);
-    cmeta_thread_destroy(&first);
-    cmeta_thread_destroy(&second);
+    check_equal(sync_thread_join(&first), SALTS_OK);
+    check_equal(sync_thread_join(&second), SALTS_OK);
+    sync_thread_destroy(&first);
+    sync_thread_destroy(&second);
 
     check_equal(atomic_load_explicit(&probe.allowed, memory_order_relaxed), 17);
     check_equal(atomic_load_explicit(&probe.limited, memory_order_relaxed), 111);

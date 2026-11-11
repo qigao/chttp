@@ -2,7 +2,7 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
 
-#include <salts/clock.h>
+#include <core/clock.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -217,12 +217,12 @@ static chttp_client_config chttp_test_config(void) {
 }
 
 static int chttp_test_poll_until(chttp_async_client *client, chttp_test_probe *probe) {
-  const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
   while (probe->called == 0) {
     size_t completions = 0u;
     const int status = chttp_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
 }
@@ -418,9 +418,9 @@ spec("CHTTP advanced async client API") {
     options.user = &probes[1];
     check_equal(chttp_async_client_submit(&client, &options, &requests[1]), SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
     while ((!probes[0].called || !probes[1].called) &&
-           cmeta_monotonic_ms() < deadline)
+           monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
     for (size_t i = 0u; i < 2u; ++i) {
       check_equal(probes[i].called, 1);
@@ -433,8 +433,8 @@ spec("CHTTP advanced async client API") {
      * have finished their response bodies and returned to IDLE. */
     options.user = &probes[2];
     check_equal(chttp_async_client_submit(&client, &options, &requests[2]), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
-    while (!probes[2].called && cmeta_monotonic_ms() < deadline)
+    deadline = monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+    while (!probes[2].called && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
     check_equal(probes[2].called, 1);
     check_equal(probes[2].status, SALTS_OK);
@@ -534,14 +534,14 @@ spec("CHTTP advanced async client API") {
       check_equal(chttp_async_client_init(&second_owner, &config), SALTS_OK);
       for (size_t round = 0u; round < 2u; ++round) {
         const size_t first = round * 2u;
-        const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+        const uint64_t deadline = monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
         for (size_t owner = 0u; owner < 2u; ++owner) {
           options.user = &probes[first + owner];
           check_equal(chttp_async_client_submit(owners[owner], &options, &requests[first + owner]),
                       SALTS_OK);
         }
         while ((!probes[first].called || !probes[first + 1u].called) &&
-               cmeta_monotonic_ms() < deadline) {
+               monotonic_ms() < deadline) {
           size_t completions = 0u;
           for (size_t owner = 0u; owner < 2u; ++owner)
             check_equal(chttp_async_client_poll(owners[owner], 5u, &completions), SALTS_OK);
@@ -642,11 +642,11 @@ spec("CHTTP advanced async client API") {
         check_equal(received, wire_request, sizeof(wire_request) - 1u);
         if (index == 1u) {
           chttp_request rejected = {0};
-          const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
+          const uint64_t deadline = monotonic_ms() + CHTTP_TEST_TIMEOUT_MS;
           /* Two body bytes are visible, but the advertised five are not complete. */
           check_equal(chttp_test_send_all(peer, response, sizeof(response) - 4u), SALTS_OK);
           while (probes[index].body_size < 2u && probes[index].called == 0 &&
-                 cmeta_monotonic_ms() < deadline)
+                 monotonic_ms() < deadline)
             check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
           check_equal(probes[index].body_size, (size_t)2u);
           check_equal(probes[index].called, 0);

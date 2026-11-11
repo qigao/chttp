@@ -1,6 +1,6 @@
 #include "chttp_managed_stream.h"
-#include <fmt.h>
-#include <salts/clock.h>
+#include <core/fmt.h>
+#include <core/clock.h>
 #include <tinytest.h>
 
 enum { WAIT_MS = 3000 };
@@ -29,8 +29,8 @@ static cnet_connect_options options(const char *target) {
       .observer = {.on_state = on_state, .on_receive = on_receive, .user = &stream}};
 }
 static void wait_count(size_t *count, size_t expected) {
-  const uint64_t deadline = cmeta_monotonic_ms() + WAIT_MS;
-  while (*count < expected && cmeta_monotonic_ms() < deadline) {
+  const uint64_t deadline = monotonic_ms() + WAIT_MS;
+  while (*count < expected && monotonic_ms() < deadline) {
     size_t events = 0u;
     check_equal(cnet_client_poll(&client, 1u, &events), SALTS_OK);
     check_equal(chttp_managed_stream_progress(&stream), SALTS_OK);

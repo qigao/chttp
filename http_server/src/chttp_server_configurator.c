@@ -327,8 +327,8 @@ void chttp_server_impl_free(chttp_server_impl *impl) {
   free(impl->host);
   if (impl->tls_initialized) (void)cnet_tls_server_destroy(&impl->tls_server);
   if (impl->sync_initialized) {
-    cmeta_cond_destroy(&impl->changed);
-    cmeta_mutex_destroy(&impl->mutex);
+    sync_cond_destroy(&impl->changed);
+    sync_mutex_destroy(&impl->mutex);
   }
   free(impl);
 }
@@ -453,8 +453,8 @@ int chttp_server_init(chttp_server *server, const chttp_server_config *config) {
       return status;
     }
   }
-  cmeta_mutex_init(&impl->mutex);
-  cmeta_cond_init(&impl->changed);
+  sync_mutex_init(&impl->mutex);
+  sync_cond_init(&impl->changed);
   impl->sync_initialized = true;
   impl->stats.terminal_status = SALTS_OK;
   server->impl = impl;

@@ -2,7 +2,7 @@
 
 #include "openapi_databind.http.h"
 
-#include <cyaml/cyaml_json_adapter.h>
+#include <cyaml_json_adapter.h>
 #include <json_parser.h>
 
 #include <stdio.h>

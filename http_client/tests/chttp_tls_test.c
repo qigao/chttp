@@ -3,7 +3,7 @@
 
 #include <http_client/http.h>
 #include <http_server/http.h>
-#include <salts/clock.h>
+#include <core/clock.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,9 +11,7 @@
 
 enum { CHTTP_TLS_TEST_TIMEOUT_MS = 5000 };
 
-#if defined(CHTTP_X509_MATRIX_ACCEPTANCE_TESTS)
 #define CHTTP_X509_PATH(name) CHTTP_X509_FIXTURE_DIR "/" name
-#endif
 
 typedef struct chttp_tls_test_probe {
   size_t middleware_calls;
@@ -189,17 +187,16 @@ static void chttp_tls_test_async_complete(void *user, chttp_request request,
 }
 
 static int chttp_tls_test_poll_until(chttp_async_client *client, chttp_tls_async_probe *probe) {
-  const uint64_t deadline = cmeta_monotonic_ms() + CHTTP_TLS_TEST_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + CHTTP_TLS_TEST_TIMEOUT_MS;
   while (probe->called == 0) {
     size_t completions = 0u;
     const int status = chttp_async_client_poll(client, 5u, &completions);
     if (status != SALTS_OK) return status;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return SALTS_OK;
 }
 
-#if defined(CHTTP_X509_MATRIX_ACCEPTANCE_TESTS)
 static int chttp_tls_test_matrix_case(const char *name, const char *ca_file,
                                       const char *cert_file, const char *key_file,
                                       int expect_success) {
@@ -282,7 +279,6 @@ cleanup:
   if (result != SALTS_OK) fprintf(stderr, "X.509 matrix case failed: %s\n", name);
   return result;
 }
-#endif
 
 spec("CHTTP HTTPS adapter") {
   it("rejects unsupported or incomplete server TLS policy before listen") {
@@ -390,7 +386,6 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
   }
 
-#if defined(CHTTP_P384_SHA384_ACCEPTANCE_TESTS)
   it("verifies a P-384 SHA-384 issuing CA before dispatching HTTPS requests") {
     static const char *h1[] = {"http/1.1"};
     chttp_server server = {0};
@@ -545,9 +540,7 @@ spec("CHTTP HTTPS adapter") {
     check_equal(chttp_tls_profile_destroy(&wrong_ca_profile), SALTS_OK);
     check_equal(chttp_tls_profile_destroy(&wrong_name_profile), SALTS_OK);
   }
-#endif
 
-#if defined(CHTTP_X509_MATRIX_ACCEPTANCE_TESTS)
   it("qualifies common X.509 profiles through real HTTPS dispatch") {
     const struct {
       const char *name;
@@ -590,7 +583,6 @@ spec("CHTTP HTTPS adapter") {
                       cases[case_index].expect_success),
                   SALTS_OK);
   }
-#endif
 
   it("serves HTTPS middleware and sessions across fixed owners") {
     static const char *h1[] = {"http/1.1"};

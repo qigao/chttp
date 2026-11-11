@@ -23,6 +23,10 @@ target_include_directories(chttp_s3
          $<INSTALL_INTERFACE:include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(chttp_s3 PUBLIC CHttp::Client
-  PRIVATE Salts::Core Salts::XmlParser)
+  PRIVATE Salts::Core Salts::XmlParser chttp_digest)
 install(TARGETS chttp_s3 EXPORT ChttpTargets)
 install(DIRECTORY include/s3 DESTINATION include)
+
+if(BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

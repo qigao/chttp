@@ -7,8 +7,8 @@
 #include "chttp_service_wasm_path.h"
 #include "tinytest.h"
 
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -134,7 +134,7 @@ static void chttp_service_wasm_executor_gate_run(void *user) {
   if (gate == NULL) return;
   atomic_store_explicit(&gate->started, 1, memory_order_release);
   while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
 }
 
 static void chttp_service_wasm_executor_noop(void *user) {
@@ -300,10 +300,10 @@ spec("CHttp::App generated WASM execution") {
     check_equal(
         cflow_executor_try_post_task(&executor, &gate_task),
         CFLOW_ADMISSION_ACCEPTED);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_WASM_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVICE_WASM_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&gate.started, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(&gate.started, memory_order_acquire), 1);
     check_equal(

@@ -3,8 +3,8 @@
 
 #include "tinytest.h"
 
-#include <salts/error_codes.h>
-#include <cmeta_fs.h>
+#include <core/error_codes.h>
+#include <file/fs.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -89,8 +89,8 @@ static chttp_client_config assets_http_client_config(void) {
 }
 
 static int assets_http_write(const char *path, const char *bytes) {
-  cmeta_fs_buf_t buffer = {(char *)bytes, strlen(bytes)};
-  return cmeta_fs_write_file(path, &buffer);
+  fs_buf_t buffer = {(char *)bytes, strlen(bytes)};
+  return fs_write_file(path, &buffer);
 }
 
 static int assets_http_path(
@@ -212,12 +212,12 @@ spec("CHttp::App safe asset mount") {
     check_equal(assets_http_path(shell_path, root, "index.html"), SALTS_OK);
     check_equal(assets_http_path(outside_path, outside, "secret.txt"), SALTS_OK);
     check_equal(assets_http_path(link_path, root, "escape.txt"), SALTS_OK);
-    check_equal(cmeta_fs_mkdir(css_dir, 0700), SALTS_OK);
+    check_equal(fs_mkdir(css_dir, 0700), SALTS_OK);
     check_equal(assets_http_write(css_path, css), SALTS_OK);
     check_equal(assets_http_write(js_path, js), SALTS_OK);
     check_equal(assets_http_write(shell_path, shell), SALTS_OK);
     check_equal(assets_http_write(outside_path, secret), SALTS_OK);
-    symlink_status = cmeta_fs_symlink(outside_path, link_path, 0);
+    symlink_status = fs_symlink(outside_path, link_path, 0);
 
     mount.url_prefix = "/assets";
     mount.filesystem_root = root;

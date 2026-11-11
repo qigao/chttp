@@ -1,7 +1,7 @@
 #ifndef CHTTP_RPC_GENERATION_DSO_H
 #define CHTTP_RPC_GENERATION_DSO_H
 
-#include <salts/plugin_decl.h>
+#include <cmeta/plugin_decl.h>
 #include <data_bind_native_binding.h>
 #include <stdatomic.h>
 #include <stddef.h>

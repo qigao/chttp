@@ -31,7 +31,7 @@ set_target_properties(http_example_incompatible_plugin http_example_incompatible
   http_example_incompatible_idl_codegen PROPERTIES FOLDER "http_server/tests")
 
 add_executable(chttp_server_retry_test chttp_server_retry_test.c)
-target_link_libraries(chttp_server_retry_test PRIVATE CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_server_retry_test PRIVATE CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_retry_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
   ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
@@ -41,7 +41,7 @@ add_test(NAME chttp_server_retry_test COMMAND chttp_server_retry_test)
 set_tests_properties(chttp_server_retry_test PROPERTIES TIMEOUT 10)
 
 add_executable(chttp_server_manager_test chttp_server_manager_test.c)
-target_link_libraries(chttp_server_manager_test PRIVATE CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_server_manager_test PRIVATE CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_manager_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
   ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
@@ -51,7 +51,7 @@ add_test(NAME chttp_server_manager_test COMMAND chttp_server_manager_test)
 set_tests_properties(chttp_server_manager_test PROPERTIES TIMEOUT 10)
 
 add_executable(chttp_server_parser_test chttp_server_parser_test.c)
-target_link_libraries(chttp_server_parser_test PRIVATE CHttp::Client CHttp::Server llhttp::llhttp_static Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_server_parser_test PRIVATE CHttp::Client CHttp::Server llhttp::llhttp_static CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_parser_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
 add_test(NAME chttp_server_parser_test COMMAND chttp_server_parser_test)
 set_target_properties(chttp_server_parser_test PROPERTIES FOLDER "http_server/tests")
@@ -83,7 +83,7 @@ set_target_properties(chttp_server_execution_options_test PROPERTIES
 
 add_executable(chttp_server_configurator_test chttp_server_configurator_test.c)
 target_link_libraries(chttp_server_configurator_test PRIVATE
-  CHttp::Server Salts::CFlow Salts::TinyTest llhttp::llhttp_static)
+  CHttp::Server CMeta::CFlow Salts::TinyTest llhttp::llhttp_static)
 target_include_directories(chttp_server_configurator_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
   ${PROJECT_SOURCE_DIR}/http_server/src)
@@ -93,7 +93,7 @@ add_test(NAME chttp_server_configurator_test COMMAND chttp_server_configurator_t
 
 add_executable(chttp_websocket_commands_test chttp_websocket_commands_test.c)
 target_link_libraries(chttp_websocket_commands_test PRIVATE
-  CHttp::Server Salts::CFlow Salts::TinyTest llhttp::llhttp_static)
+  CHttp::Server CMeta::CFlow Salts::TinyTest llhttp::llhttp_static)
 target_include_directories(chttp_websocket_commands_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
   ${PROJECT_SOURCE_DIR}/http_server/src)
@@ -104,7 +104,7 @@ set_tests_properties(chttp_websocket_commands_test PROPERTIES TIMEOUT 15)
 
 
 add_executable(chttp_server_owner_topology_test chttp_server_owner_topology_test.c)
-target_link_libraries(chttp_server_owner_topology_test PRIVATE CHttp::Client CHttp::Server Salts::CNet Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_server_owner_topology_test PRIVATE CHttp::Client CHttp::Server Salts::CNet CMeta::CFlow Salts::TinyTest)
 target_include_directories(
   chttp_server_owner_topology_test
   PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
@@ -120,7 +120,7 @@ set_target_properties(chttp_server_owner_topology_test PROPERTIES
 
 
 add_executable(chttp_session_snapshot_test chttp_session_snapshot_test.c)
-target_link_libraries(chttp_session_snapshot_test PRIVATE CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_session_snapshot_test PRIVATE CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(
   chttp_session_snapshot_test
   PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
@@ -136,7 +136,7 @@ set_target_properties(chttp_session_snapshot_test PROPERTIES
 
 
 add_executable(chttp_server_deferred_token_test chttp_server_deferred_token_test.c)
-target_link_libraries(chttp_server_deferred_token_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_server_deferred_token_test PRIVATE CHttp::Client CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_deferred_token_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
 add_test(NAME chttp_server_deferred_token_test COMMAND chttp_server_deferred_token_test)
 set_target_properties(chttp_server_deferred_token_test PROPERTIES FOLDER "http_server/tests")
@@ -147,7 +147,7 @@ set_target_properties(chttp_server_deferred_token_test PROPERTIES
 
 
 add_executable(chttp_h2_server_test chttp_h2_server_test.c)
-target_link_libraries(chttp_h2_server_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_h2_server_test PRIVATE CHttp::Client CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_h2_server_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
 add_test(NAME chttp_h2_server_test COMMAND chttp_h2_server_test)
 set_target_properties(chttp_h2_server_test PROPERTIES FOLDER "http_server/tests")
@@ -169,7 +169,7 @@ set_target_properties(chttp_h2_jwt_isolation_test PROPERTIES
 
 
 add_executable(chttp_jwt_test chttp_jwt_test.c)
-target_link_libraries(chttp_jwt_test PRIVATE CHttp::Client CHttp::Server Salts::CFlow Salts::TinyTest)
+target_link_libraries(chttp_jwt_test PRIVATE CHttp::Client CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_jwt_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc)
 add_test(NAME chttp_jwt_test COMMAND chttp_jwt_test)
 set_target_properties(chttp_jwt_test PROPERTIES FOLDER "http_server/tests")

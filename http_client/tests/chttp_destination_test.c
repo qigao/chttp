@@ -1,7 +1,7 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
-#include <salts/clock.h>
-#include <fmt.h>
+#include <core/clock.h>
+#include <core/fmt.h>
 #include <string.h>
 #include "tinytest.h"
 
@@ -50,9 +50,9 @@ static size_t destination_accepts(size_t peer) {
 }
 
 static void destination_wait(size_t completed) {
-  const uint64_t deadline = cmeta_monotonic_ms() + DESTINATION_TEST_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + DESTINATION_TEST_TIMEOUT_MS;
   size_t count = 0u;
-  while (fixture.completed < completed && cmeta_monotonic_ms() < deadline)
+  while (fixture.completed < completed && monotonic_ms() < deadline)
     check_equal(chttp_async_client_poll(&fixture.async, 5u, &count), SALTS_OK);
   check_equal(fixture.completed, completed);
   check_equal(fixture.status, SALTS_OK);

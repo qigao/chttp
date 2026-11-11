@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int s3_xml_status_map(salts_xml_status status) {
+static int s3_xml_status_map(xml_status status) {
   if (status == SALTS_XML_OK) return SALTS_OK;
   if (status == SALTS_XML_ALLOCATION_FAILED) return SALTS_ENOMEM;
   if (status == SALTS_XML_LIMIT_EXCEEDED) return SALTS_EMSGSIZE;
@@ -12,21 +12,21 @@ static int s3_xml_status_map(salts_xml_status status) {
   return SALTS_EPROTO;
 }
 
-int s3_xml_node_name_equal(salts_xml_node node, const char *expected) {
-  const salts_xml_string_view name = salts_xml_node_local_name(node);
+int s3_xml_node_name_equal(xml_node node, const char *expected) {
+  const xml_string_view name = xml_node_local_name(node);
   const size_t size = expected != NULL ? strlen(expected) : 0u;
   return expected != NULL && name.data != NULL && name.size == size &&
          memcmp(name.data, expected, size) == 0;
 }
 
-salts_xml_node s3_xml_child(salts_xml_node parent, const char *name) {
+xml_node s3_xml_child(xml_node parent, const char *name) {
   size_t index;
-  for (index = 0u; index < salts_xml_node_child_count(parent); ++index) {
-    const salts_xml_node child = salts_xml_node_child_at(parent, index);
-    if (salts_xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, name))
+  for (index = 0u; index < xml_node_child_count(parent); ++index) {
+    const xml_node child = xml_node_child_at(parent, index);
+    if (xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, name))
       return child;
   }
-  return (salts_xml_node){0};
+  return (xml_node){0};
 }
 
 static int s3_xml_codepoint_valid(uint32_t value) {
@@ -95,14 +95,14 @@ static int s3_xml_entity_value(const char *entity, size_t size, uint32_t *out_va
   return SALTS_OK;
 }
 
-int s3_xml_text_dup(salts_xml_node node, char **out_text) {
+int s3_xml_text_dup(xml_node node, char **out_text) {
   char *raw;
   char *decoded;
   size_t input = 0u;
   size_t output = 0u;
   size_t size;
   if (node.impl == NULL || out_text == NULL || *out_text != NULL) return SALTS_EINVAL;
-  raw = salts_xml_node_text_dup(node);
+  raw = xml_node_text_dup(node);
   if (raw == NULL) return SALTS_ENOMEM;
   size = strlen(raw);
   decoded = (char *)malloc(size + 1u);
@@ -140,27 +140,27 @@ int s3_xml_text_dup(salts_xml_node node, char **out_text) {
 
 int s3_xml_parse_root(const void *body, size_t body_size, size_t max_xml_bytes,
                       size_t max_xml_nodes, const char *expected_root,
-                      salts_xml_document *out_document, salts_xml_node *out_root) {
-  salts_xml_limits limits = salts_xml_default_limits();
-  salts_xml_diagnostic diagnostic = {0};
-  salts_xml_status xml_status;
+                      xml_document *out_document, xml_node *out_root) {
+  xml_limits limits = xml_default_limits();
+  xml_diagnostic diagnostic = {0};
+  xml_status xml_status;
   if ((body == NULL && body_size != 0u) || body_size == 0u || max_xml_bytes == 0u ||
       max_xml_nodes == 0u || expected_root == NULL || out_document == NULL ||
       out_document->impl != NULL || out_root == NULL)
     return SALTS_EINVAL;
-  *out_root = (salts_xml_node){0};
+  *out_root = (xml_node){0};
   if (body_size > max_xml_bytes) return SALTS_EMSGSIZE;
   limits.max_input_bytes = max_xml_bytes;
   limits.max_nodes = max_xml_nodes;
   limits.max_attributes = max_xml_nodes;
   limits.max_depth = max_xml_nodes;
   limits.max_retained_string_bytes = max_xml_bytes;
-  xml_status = salts_xml_parse(out_document, (const char *)body, body_size, &limits, &diagnostic);
+  xml_status = xml_parse(out_document, (const char *)body, body_size, &limits, &diagnostic);
   if (xml_status != SALTS_XML_OK) return s3_xml_status_map(xml_status);
-  *out_root = salts_xml_document_root(out_document);
+  *out_root = xml_document_root(out_document);
   if (!s3_xml_node_name_equal(*out_root, expected_root)) {
-    salts_xml_document_destroy(out_document);
-    *out_root = (salts_xml_node){0};
+    xml_document_destroy(out_document);
+    *out_root = (xml_node){0};
     return SALTS_EPROTO;
   }
   return SALTS_OK;

@@ -3,7 +3,7 @@
 #include "chttp_websocket_handshake.h"
 #include "chttp_cnet_retained.h"
 
-#include <salts/clock.h>
+#include <core/clock.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +52,7 @@ void chttp_server_websocket_profile_send_complete(
       connection->websocket_send_started_ns == 0u)
     return;
   profile = connection->websocket_send_profile;
-  elapsed = cmeta_hrtime() - connection->websocket_send_started_ns;
+  elapsed = hrtime() - connection->websocket_send_started_ns;
   atomic_fetch_add_explicit(&profile->send_completion_samples, 1u,
                             memory_order_relaxed);
   chttp_server_websocket_profile_add(&profile->send_completion_ns, elapsed);
@@ -105,7 +105,7 @@ int chttp_server_websocket_profile_callback_send_begin(
       connection->websocket_send_started_ns != 0u)
     return SALTS_EBUSY;
   connection->websocket_send_profile = profile;
-  connection->websocket_send_started_ns = cmeta_hrtime();
+  connection->websocket_send_started_ns = hrtime();
   return SALTS_OK;
 }
 
@@ -692,7 +692,7 @@ static int chttp_server_websocket_command_submit(
   /* Reserve before allocating: copied, queued and retrying payloads share the
    * same hard slot bound. Keep the claim until the last use of server/profile
    * so destroy cannot overtake a producer copying outside the lifecycle lock. */
-  cmeta_mutex_lock(&server->mutex);
+  sync_mutex_lock(&server->mutex);
   if (!server->stats.running || server->stats.stopping || server->worker_done)
     status = SALTS_ESHUTDOWN;
   else if (owner->websocket_command_claims >= server->config.network.command_capacity -
@@ -701,36 +701,36 @@ static int chttp_server_websocket_command_submit(
   if (status != SALTS_OK) {
     if (profile != NULL)
       atomic_fetch_add_explicit(&profile->failed_commands, 1u, memory_order_relaxed);
-    cmeta_mutex_unlock(&server->mutex);
+    sync_mutex_unlock(&server->mutex);
     return status;
   }
   ++owner->websocket_command_claims;
-  cmeta_mutex_unlock(&server->mutex);
-  if (profile != NULL) copy_started = cmeta_hrtime();
+  sync_mutex_unlock(&server->mutex);
+  if (profile != NULL) copy_started = hrtime();
   if (size != 0u) {
     status = chttp_server_buffer_grow(server, &copy, &copy_capacity, size, size, 0u);
     if (status == SALTS_OK) memcpy(copy, data, size);
   }
   if (profile != NULL)
     chttp_server_websocket_profile_add(
-        &profile->copy_ns, cmeta_hrtime() - copy_started);
-  if (profile != NULL) enqueue_started = cmeta_hrtime();
-  cmeta_mutex_lock(&server->mutex);
+        &profile->copy_ns, hrtime() - copy_started);
+  if (profile != NULL) enqueue_started = hrtime();
+  sync_mutex_lock(&server->mutex);
   if (status == SALTS_OK &&
       (!server->stats.running || server->stats.stopping || server->worker_done))
     status = SALTS_ESHUTDOWN;
   if (status != SALTS_OK) {
-    cmeta_mutex_unlock(&server->mutex);
+    sync_mutex_unlock(&server->mutex);
     if (profile != NULL) {
       chttp_server_websocket_profile_add(
-          &profile->enqueue_ns, cmeta_hrtime() - enqueue_started);
+          &profile->enqueue_ns, hrtime() - enqueue_started);
       atomic_fetch_add_explicit(&profile->failed_commands, 1u,
                                 memory_order_relaxed);
     }
     chttp_server_buffer_release(server, copy, copy_capacity);
-    cmeta_mutex_lock(&server->mutex);
+    sync_mutex_lock(&server->mutex);
     --owner->websocket_command_claims;
-    cmeta_mutex_unlock(&server->mutex);
+    sync_mutex_unlock(&server->mutex);
     return status;
   }
   command = &owner->websocket_commands[owner->websocket_command_count];
@@ -738,7 +738,7 @@ static int chttp_server_websocket_command_submit(
       .session = *session,
       .data = copy,
       .profile = profile,
-      .profile_enqueued_ns = profile != NULL ? cmeta_hrtime() : 0u,
+      .profile_enqueued_ns = profile != NULL ? hrtime() : 0u,
       .size = size,
       .close_code = close_code,
       .kind = kind};
@@ -746,17 +746,17 @@ static int chttp_server_websocket_command_submit(
   --owner->websocket_command_claims;
   if (profile != NULL) {
     chttp_server_websocket_profile_add(
-        &profile->enqueue_ns, cmeta_hrtime() - enqueue_started);
+        &profile->enqueue_ns, hrtime() - enqueue_started);
     atomic_fetch_add_explicit(&profile->commands, 1u, memory_order_relaxed);
     atomic_fetch_add_explicit(&profile->bytes, (uint64_t)size,
                               memory_order_relaxed);
-    wake_started = cmeta_hrtime();
+    wake_started = hrtime();
   }
   (void)chttp_server_owner_wake_locked(owner);
   if (profile != NULL)
     chttp_server_websocket_profile_add(
-        &profile->wake_ns, cmeta_hrtime() - wake_started);
-  cmeta_mutex_unlock(&server->mutex);
+        &profile->wake_ns, hrtime() - wake_started);
+  sync_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }
 
@@ -819,7 +819,7 @@ int chttp_server_websocket_commands_progress(
   /* Snapshot at most command_capacity entries. New publications wait for the
    * next pass, after all older retrying commands. No payload copy, allocation,
    * transport call or callback occurs under the producer lock. */
-  cmeta_mutex_lock(&server->mutex);
+  sync_mutex_lock(&server->mutex);
   memcpy(owner->websocket_pending + owner->websocket_pending_count,
          owner->websocket_commands,
          owner->websocket_command_count * sizeof(*owner->websocket_commands));
@@ -828,7 +828,7 @@ int chttp_server_websocket_commands_progress(
          owner->websocket_command_count * sizeof(*owner->websocket_commands));
   owner->websocket_command_count = 0u;
   owner->websocket_pending_count = count;
-  cmeta_mutex_unlock(&server->mutex);
+  sync_mutex_unlock(&server->mutex);
   /* Peer-local state avoids a quadratic search for earlier blocked commands,
    * and keeps independent H2 streams independent as well. */
   for (size_t index = 0u; index < count; ++index) {
@@ -843,7 +843,7 @@ int chttp_server_websocket_commands_progress(
     int status;
     if (command->profile != NULL && !command->profile_residence_recorded) {
       const uint64_t residence =
-          cmeta_hrtime() - command->profile_enqueued_ns;
+          hrtime() - command->profile_enqueued_ns;
       chttp_server_websocket_profile_add(
           &command->profile->queue_residence_ns, residence);
       chttp_server_websocket_profile_max(
@@ -863,7 +863,7 @@ int chttp_server_websocket_commands_progress(
           connection != NULL &&
           connection->websocket_send_profile == NULL;
       const uint64_t send_started =
-          command->profile != NULL ? cmeta_hrtime() : 0u;
+          command->profile != NULL ? hrtime() : 0u;
       if (profile_h1) {
         connection->websocket_send_profile = command->profile;
         connection->websocket_send_started_ns = send_started;
@@ -871,7 +871,7 @@ int chttp_server_websocket_commands_progress(
       status = chttp_server_websocket_apply(peer, command->kind, command->close_code,
                                             command->data, command->size);
       if (command->profile != NULL)
-        command->profile_send_ns += cmeta_hrtime() - send_started;
+        command->profile_send_ns += hrtime() - send_started;
       if (profile_h1 && status != SALTS_OK) {
         connection->websocket_send_profile = NULL;
         connection->websocket_send_started_ns = 0u;
@@ -899,8 +899,8 @@ int chttp_server_websocket_commands_progress(
   }
   memset(owner->websocket_pending + kept, 0,
          (count - kept) * sizeof(*owner->websocket_pending));
-  cmeta_mutex_lock(&server->mutex);
+  sync_mutex_lock(&server->mutex);
   owner->websocket_pending_count = kept;
-  cmeta_mutex_unlock(&server->mutex);
+  sync_mutex_unlock(&server->mutex);
   return SALTS_OK;
 }

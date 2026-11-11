@@ -1,13 +1,13 @@
 #include <chttp_app/service.h>
 
-#include <salts/error_codes.h>
-#include <cmeta_buffer.h>
+#include <core/error_codes.h>
+#include <memory/buffer.h>
 #include <data_bind_plugin_execution.h>
 
 #include <cserde/cserde.h>
 #include <cflow/plan.h>
 #include <cmeta/data.h>
-#include <salts/plugin_scope.h>
+#include <cmeta/plugin_scope.h>
 
 #include <errno.h>
 #include <inttypes.h>

@@ -9,7 +9,7 @@
 
 #include <stdbool.h>
 #include <cnet/client_pool.h>
-#include <cmeta_buffer.h>
+#include <memory/buffer.h>
 
 typedef enum chttp_h2_session_state {
   CHTTP_H2_SESSION_FREE = 0,

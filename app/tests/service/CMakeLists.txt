@@ -47,12 +47,12 @@ if(NOT CHTTP_SERVICE_CFLOW_LINKS)
 endif()
 list(FIND CHTTP_SERVICE_CFLOW_LINKS "Salts::DataBind"
   CHTTP_SERVICE_CFLOW_DATABIND_INDEX)
-list(FIND CHTTP_SERVICE_CFLOW_LINKS "Salts::CFlow"
+list(FIND CHTTP_SERVICE_CFLOW_LINKS "CMeta::CFlow"
   CHTTP_SERVICE_CFLOW_CFLOW_INDEX)
 if(CHTTP_SERVICE_CFLOW_DATABIND_INDEX LESS 0 OR
    CHTTP_SERVICE_CFLOW_CFLOW_INDEX LESS 0)
   message(FATAL_ERROR
-    "generated NATIVE target must publicly expose Salts::DataBind + Salts::CFlow")
+    "generated NATIVE target must publicly expose Salts::DataBind + CMeta::CFlow")
 endif()
 
 salts_idl_target(
@@ -201,7 +201,7 @@ add_executable(chttp_service_generic_cross_tu_test
 
 target_link_libraries(chttp_service_generic_cross_tu_test PRIVATE
   chttp_service_generic_fixture_native
-  Salts::CMeta
+  CMeta::CMeta
   Salts::DataBind)
 
 target_include_directories(chttp_service_generic_cross_tu_test PRIVATE

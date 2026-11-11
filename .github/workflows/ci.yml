@@ -1,0 +1,221 @@
+name: CHttp split SDK CI
+permissions:
+  contents: read
+concurrency:
+  group: chttp-sdk-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  VCPKG_CACHE_VERSION: ${{ vars.VCPKG_CACHE_VERSION }}
+  SALTS_BASE_VERSION: ${{ vars.SALTS_BASE_VERSION }}
+  CMETA_REF: ${{ vars.CMETA_REF }}
+  CMETA_VERSION: ${{ vars.CMETA_VERSION }}
+  SALTS_CORE_VERSION: ${{ vars.SALTS_CORE_VERSION }}
+  SALTS_UTILS_VERSION: ${{ vars.SALTS_UTILS_VERSION }}
+jobs:
+  prepare:
+    name: Download shared SDK inputs once
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VCPKG_CACHE_REPOSITORY_ROOT: ${{ github.workspace }}/build/ci-infrastructure/vcpkg-cache
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/vcpkg-cache
+        ref: v${{ env.VCPKG_CACHE_VERSION }}
+        path: build/ci-infrastructure/vcpkg-cache
+        persist-credentials: false
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/cmeta
+        ref: ${{ env.CMETA_REF }}
+        path: build/upstream/cmeta
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Resolve and download exact published inputs
+      id: inputs
+      shell: pwsh
+      run: |
+        python build/upstream/cmeta/.github/ci/sdk-inputs.py prepare --consumer .
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $archive = [IO.Path]::GetFullPath('build/ci-inputs/infrastructure.tar')
+        git -C $env:VCPKG_CACHE_REPOSITORY_ROOT archive --format=tar HEAD --output $archive
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        python .github/ci/sdk-inputs.py prepare
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Select the published SDK intersection
+      id: matrix
+      shell: pwsh
+      run: |
+        $matrix = Get-Content .github/ci/sdk-matrix.json -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 10 -Compress
+        "matrix=$matrix" >> $env:GITHUB_OUTPUT
+    - uses: actions/upload-artifact@v4
+      with:
+        name: chttp-shared-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/ci-inputs
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 7
+  qualify:
+    needs: prepare
+    name: ${{ matrix.sdk }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VCPKG_CACHE_REPOSITORY_ROOT: ${{ github.workspace }}/build/ci-infrastructure/vcpkg-cache
+      QIGAO_PREPARED_INPUTS: ${{ github.workspace }}/build/ci-inputs
+      VCPKG_TARGET_TRIPLET: ${{ matrix.triplet }}
+      CI_PRESET: ${{ matrix.preset }}
+      ANDROID_ABI: ${{ matrix.android_abi }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 3
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/cmeta
+        ref: ${{ env.CMETA_REF }}
+        path: build/upstream/cmeta
+        persist-credentials: false
+    - uses: actions/download-artifact@v4
+      with:
+        name: chttp-shared-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/ci-inputs
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Restore the shared infrastructure snapshot and SDKs
+      run: |
+        New-Item -ItemType Directory -Path $env:VCPKG_CACHE_REPOSITORY_ROOT -Force | Out-Null
+        tar xf build/ci-inputs/infrastructure.tar -C $env:VCPKG_CACHE_REPOSITORY_ROOT
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        python build/upstream/cmeta/.github/ci/sdk-inputs.py restore --consumer . --profile '${{ matrix.sdk }}'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        python .github/ci/sdk-inputs.py restore --profile '${{ matrix.sdk }}'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Restore declared Android code-generator host SDKs
+      if: '!matrix.test'
+      run: |
+        python build/upstream/cmeta/.github/ci/sdk-inputs.py restore --consumer . --profile linux-clang-x64 --prefix HOST_
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        python .github/ci/sdk-inputs.py restore --profile linux-clang-x64 --prefix HOST_
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Restore prepared LLVM-MinGW compiler
+      if: matrix.sdk == 'windows-llvm-mingw-x64'
+      run: |
+        $lock = Get-Content build/ci-inputs/locks/windows-compiler.json -Raw | ConvertFrom-Json
+        $payload = [IO.Path]::GetFileNameWithoutExtension(([Uri]$lock.source.url).AbsolutePath)
+        python "$env:VCPKG_CACHE_REPOSITORY_ROOT/scripts/restore-native-dependency.py" locked `
+          build/ci-inputs/locks/windows-compiler.json --destination build/ci-llvm-mingw `
+          --payload $payload --executable bin/x86_64-w64-mingw32-clang.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $receipt = Get-Content build/ci-llvm-mingw/receipt.json -Raw | ConvertFrom-Json
+        "LLVM_MINGW_ROOT=$($receipt.root)" >> $env:GITHUB_ENV
+    - name: Locate Visual Studio developer environment
+      if: runner.os == 'Windows'
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+        $root = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($LASTEXITCODE -ne 0 -or !$root) { throw 'Visual Studio C++ tools are required' }
+        "VSDEVCMD_BAT=$root/Common7/Tools/VsDevCmd.bat" >> $env:GITHUB_ENV
+    - name: Install Linux system development dependencies
+      if: startsWith(matrix.sdk, 'linux-')
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install --yes --no-install-recommends pkg-config libpipewire-0.3-dev libx11-dev libxext-dev
+    - name: Install formal OpenAPI test dependencies
+      if: matrix.test
+      run: |
+        python -m pip install -r openapi/tests/requirements-conformance.txt
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Configure the complete CHttp graph
+      run: |
+        $options = @('--preset', $env:CI_PRESET)
+        if ('${{ matrix.test }}' -eq 'false') {
+          $options += @("-DSaltsUtils_IDLC_EXECUTABLE=$env:HOST_SALTS_UTILS_ROOT/bin/salts-idlc",
+            "-DSaltsUtils_IDLC_HOST_SALTS_BASE_ROOT=$env:HOST_SALTS_BASE_ROOT",
+            "-DSaltsUtils_IDLC_HOST_CMETA_ROOT=$env:HOST_CMETA_ROOT")
+        }
+        if ($IsWindows) { & ./cmake/WithVs.cmd cmake @options }
+        else { cmake @options }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Build complete graph
+      run: |
+        if ($IsWindows) { & ./cmake/WithVs.cmd cmake --build --preset $env:CI_PRESET }
+        else { cmake --build --preset $env:CI_PRESET }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Run formal native CTests
+      if: matrix.test
+      run: |
+        $report = [IO.Path]::GetFullPath("build/$env:CI_PRESET/ctest.xml")
+        $options = @('--preset', $env:CI_PRESET, '--output-on-failure', '--no-tests=error', '--output-junit', $report)
+        if ($IsWindows) { & ./cmake/WithVs.cmd ctest @options }
+        else { ctest @options }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Install and archive SDK
+      run: |
+        if ($IsWindows) { & ./cmake/WithVs.cmd cmake --build --preset "install-$env:CI_PRESET" }
+        else { cmake --build --preset "install-$env:CI_PRESET" }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        @{schema=1; source=$env:GITHUB_SHA; profile='${{ matrix.sdk }}';
+          preset=$env:CI_PRESET; base_version=$env:SALTS_BASE_VERSION;
+          base=(Get-Content "$env:SALTS_BASE_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
+          cmeta=(Get-Content "$env:CMETA_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
+          core=(Get-Content "$env:SALTS_CORE_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
+          utils=(Get-Content "$env:SALTS_UTILS_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
+          vcpkg_cache_version=$env:VCPKG_CACHE_VERSION; native_tests='${{ matrix.test }}'} |
+          ConvertTo-Json -Depth 5 | Set-Content "build/$env:CI_PRESET/stage/chttp-sdk-manifest.json" -Encoding utf8
+        $archive = [IO.Path]::GetFullPath("build/$env:CI_PRESET/chttp-sdk.tar")
+        tar cf $archive -C "build/$env:CI_PRESET/stage" .
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - uses: actions/upload-artifact@v4
+      with:
+        name: chttp-sdk-${{ matrix.sdk }}-${{ github.sha }}
+        path: build/${{ matrix.preset }}/chttp-sdk.tar
+        if-no-files-found: error
+        compression-level: 0
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: chttp-diagnostics-${{ matrix.sdk }}-${{ github.sha }}
+        path: |
+          build/${{ matrix.preset }}/CMakeCache.txt
+          build/${{ matrix.preset }}/ctest.xml
+          build/${{ matrix.preset }}/Testing/Temporary
+          build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
+        if-no-files-found: warn
+  result:
+    name: CHttp CI result
+    needs:
+    - prepare
+    - qualify
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+    - env:
+        PREPARE: ${{ needs.prepare.result }}
+        QUALIFY: ${{ needs.qualify.result }}
+      run: test "$PREPARE" = success && test "$QUALIFY" = success
+'on':
+  pull_request: null
+  push:
+    branches:
+    - master
+  workflow_dispatch: null

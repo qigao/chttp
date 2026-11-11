@@ -2,9 +2,9 @@
 
 #include "chttp_client_internal.h"
 
-#include <cmeta_fs.h>
-#include <tstr.h>
-#include <cmeta_uuid.h>
+#include <file/fs.h>
+#include <core/tstr.h>
+#include <core/uuid.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -41,7 +41,7 @@ static int chttp_file_upload(chttp_client *client, const chttp_options *options,
                              chttp_progress_fn progress, void *progress_user,
                              chttp_response *out_response, chttp_error *out_error,
                              chttp_method method) {
-  cmeta_fs_stat_t file_stat = {0};
+  fs_stat_t file_stat = {0};
   cflow_io_file_runtime *runtime = NULL;
   chttp_file_transfer transfer = {0};
   chttp_body_source source;
@@ -57,7 +57,7 @@ static int chttp_file_upload(chttp_client *client, const chttp_options *options,
       (method != CHTTP_METHOD_POST && method != CHTTP_METHOD_PUT) || options->body != NULL ||
       options->body_size != 0u || options->body_source != NULL)
     return SALTS_EINVAL;
-  native_status = cmeta_fs_stat(path, &file_stat);
+  native_status = fs_stat(path, &file_stat);
   if (native_status != SALTS_OK)
     return chttp_file_error(out_response, out_error, native_status, "file-stat");
   if (!file_stat.is_file) {
@@ -114,7 +114,7 @@ int chttp_put_file(chttp_client *client, const chttp_options *options, const cha
 static int chttp_file_temp_path(const char *output_path, tstr *out_path) {
   static const char prefix[] = ".chttp-";
   static const char suffix[] = ".part";
-  cmeta_uuid_t uuid;
+  uuid_t uuid;
   char uuid_text[SALTS_UUID_STRING_SIZE];
   size_t output_size;
   size_t total_size;
@@ -122,9 +122,9 @@ static int chttp_file_temp_path(const char *output_path, tstr *out_path) {
   int status;
   if (output_path == NULL || out_path == NULL) return SALTS_EINVAL;
   *out_path = NULL;
-  status = cmeta_uuid_v4_generate(&uuid);
+  status = uuid_v4_generate(uuid);
   if (status != SALTS_OK) return status;
-  status = cmeta_uuid_format(&uuid, uuid_text, sizeof(uuid_text));
+  status = uuid_format(uuid, uuid_text, sizeof(uuid_text));
   if (status != SALTS_OK) return status;
   output_size = strlen(output_path);
   if (output_size >
@@ -171,7 +171,7 @@ int chttp_download_file(chttp_client *client, const chttp_options *options, cons
   status = chttp_client_file_runtime(client, &runtime);
   if (status == SALTS_OK) status = chttp_client_file_sink_capacity(client, &sink_capacity);
   if (status != SALTS_OK) {
-    (void)cmeta_fs_unlink(temporary_path);
+    (void)fs_unlink(temporary_path);
     tstr_free(temporary_path);
     *out_error = (chttp_error){.status = status, .stage = "file-runtime"};
     return status;
@@ -179,7 +179,7 @@ int chttp_download_file(chttp_client *client, const chttp_options *options, cons
   status = chttp_file_sink_transfer_open(&transfer, runtime, temporary_path, sink_capacity,
                                          progress, progress_user);
   if (status != SALTS_OK) {
-    (void)cmeta_fs_unlink(temporary_path);
+    (void)fs_unlink(temporary_path);
     tstr_free(temporary_path);
     return chttp_file_error(out_response, out_error, status, "file-open");
   }
@@ -190,7 +190,7 @@ int chttp_download_file(chttp_client *client, const chttp_options *options, cons
   transfer_status = chttp_file_sink_transfer_status(&transfer, &native_status);
   if (status != SALTS_OK) {
     cleanup_status = chttp_file_sink_transfer_drain_destroy(&transfer, runtime);
-    (void)cmeta_fs_unlink(temporary_path);
+    (void)fs_unlink(temporary_path);
     tstr_free(temporary_path);
     if (transfer_status != SALTS_OK)
       *out_error = (chttp_error){
@@ -204,7 +204,7 @@ int chttp_download_file(chttp_client *client, const chttp_options *options, cons
              out_response->body_size);
   if (out_response->status_code < 200u || out_response->status_code >= 300u) {
     cleanup_status = chttp_file_sink_transfer_drain_destroy(&transfer, runtime);
-    (void)cmeta_fs_unlink(temporary_path);
+    (void)fs_unlink(temporary_path);
     tstr_free(temporary_path);
     if (cleanup_status != SALTS_OK)
       return chttp_file_error(out_response, out_error, cleanup_status, "file-close");
@@ -216,36 +216,36 @@ int chttp_download_file(chttp_client *client, const chttp_options *options, cons
     status = chttp_file_sink_transfer_flush_drain(&transfer, runtime);
     if (status != SALTS_OK) {
       (void)chttp_file_sink_transfer_drain_destroy(&transfer, runtime);
-      (void)cmeta_fs_unlink(temporary_path);
+      (void)fs_unlink(temporary_path);
       tstr_free(temporary_path);
       return chttp_file_error(out_response, out_error, status, "file-sync");
     }
   }
   cleanup_status = chttp_file_sink_transfer_drain_destroy(&transfer, runtime);
   if (cleanup_status != SALTS_OK) {
-    (void)cmeta_fs_unlink(temporary_path);
+    (void)fs_unlink(temporary_path);
     tstr_free(temporary_path);
     return chttp_file_error(out_response, out_error, cleanup_status, "file-close");
   }
   if (!async_flush_supported) {
-    cmeta_file_t sync_file = cmeta_fs_open(temporary_path, SALTS_FS_O_WRONLY, 0);
+    file_t sync_file = fs_open(temporary_path, SALTS_FS_O_WRONLY, 0);
     if (sync_file == SALTS_INVALID_FILE) {
-      (void)cmeta_fs_unlink(temporary_path);
+      (void)fs_unlink(temporary_path);
       tstr_free(temporary_path);
       return chttp_file_error(out_response, out_error, 0, "file-sync-open");
     }
-    native_status = cmeta_fs_fsync(sync_file);
-    cleanup_status = cmeta_fs_close(sync_file);
+    native_status = fs_fsync(sync_file);
+    cleanup_status = fs_close(sync_file);
     if (native_status == SALTS_OK) native_status = cleanup_status;
     if (native_status != SALTS_OK) {
-      (void)cmeta_fs_unlink(temporary_path);
+      (void)fs_unlink(temporary_path);
       tstr_free(temporary_path);
       return chttp_file_error(out_response, out_error, native_status, "file-sync");
     }
   }
-  native_status = cmeta_fs_rename(temporary_path, output_path);
+  native_status = fs_rename(temporary_path, output_path);
   if (native_status != SALTS_OK) {
-    (void)cmeta_fs_unlink(temporary_path);
+    (void)fs_unlink(temporary_path);
     tstr_free(temporary_path);
     return chttp_file_error(out_response, out_error, native_status, "file-commit");
   }

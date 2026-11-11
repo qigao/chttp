@@ -2,8 +2,8 @@
 
 #include <jinja_cmeta.h>
 #include <jinja_cmeta_runtime.h>
-#include <salts/error_codes.h>
-#include <vstr.h>
+#include <core/error_codes.h>
+#include <core/vstr.h>
 
 #include <stdint.h>
 #include <stdio.h>

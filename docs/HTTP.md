@@ -686,30 +686,30 @@ Windows 命令必须先进入 `VsDevCmd.bat` 环境。llhttp 的上游 API 与 s
 
 ## 密码库迁移边界
 
-CHTTP 的 WebSocket SHA-1、S3 SHA-256/HMAC/MD5、流式文件摘要、CSRF 恒定时间比较及
-敏感数据清零统一使用 Salts Core 的 `cmeta_crypto.h`。当前 Salts 实现使用 GmSSL，
-CHTTP 无需导入 GmSSL 类型或建立第二套密码库封装。SHA-1 和 MD5 仅用于现有协议要求，
-不改变协议算法。摘要上下文由文件操作拥有并在所有退出路径销毁；CSRF 比较失败仍拒绝请求。
+CHTTP 的 WebSocket SHA-1、S3 SHA-256/HMAC/MD5、流式文件摘要、CSRF 恒定时间比较和
+敏感数据清零由内部 `http_common/http/chttp_digest` 调用 GmSSL 完成。错误继续使用
+Salts 状态码。文件操作拥有摘要上下文并在退出路径销毁，CSRF 比较失败拒绝请求。
+SHA-1 和 MD5 用于现有协议要求。
 
-候选方案是直接改写为 GmSSL 调用，或复用已有 Salts API。选择后者，以保持 provider 类型和
-构建依赖封装在原有归属模块。公开 HTTP/S3/Web API、错误分类、签名字节格式与 TLS/CNet
-行为保持不变。回滚应恢复对应实现和匹配 SDK；不增加运行时密码库 fallback。
+JWT/JWE 归属 `vendor/cjwt`。其私有 `chttp_cjwt_crypto` 目标使用已有 GmSSL 包与固定
+libecc 源码，提供密钥导入、签名和认证加密。适配器源自 SaltsUtils 提交
+`234c4a73bcefc455d48b3550ec2142d7ff1c3f5a`，许可证、依赖版本、修改和所有权见
+[`vendor/cjwt/crypto/README.md`](../vendor/cjwt/crypto/README.md)。
 
-`vendor/cjwt/src/jws_salts.c` 和 `jwe_salts.c` 已统一调用 `Salts::Crypto`；原 OpenSSL
-后端与 `find_package(OpenSSL)` / `OpenSSL::Crypto` 链接已移除。保留 HS/RS/PS
-256/384/512、ES256/384/512/256K、Ed25519/Ed448，以及 RSA-OAEP、RSA-OAEP-256、
-dir、AES-KW、PBES2 和 AES-GCM 128/192/256。JWS 的 HMAC/public-key 算法准入选项不变；CHTTP 公开 JWT Bearer 仍只准入 HS256。
+已发布的拆分 SDK 只提供 CNet Crypto 的部分原语，旧通用 JOSE 头文件未随迁移保留。
+选择恢复 cjwt 已用的私有后端，以保留 HS/RS/PS 256/384/512、ES256/384/512/256K、
+Ed25519/Ed448、RSA-OAEP、RSA-OAEP-256、dir、AES-KW、PBES2 和 AES-GCM 128/192/256。
+公开 HTTP JWT Bearer admission 继续按 HS256 契约执行。TLS 由 CNet SDK 负责。
 
-当前构建需要 SaltsUtils Native 4.3.0-rc.4 和 GmSSL 3.2.0 port revision 9 overlay
-（通过共享 vcpkg-cache registry 分发）。
-CHTTP manifest 显式恢复 `gmssl`，用于解析静态 `Salts::Crypto` 导出的 provider 依赖。
-provider 原生 target 为 `GmSSL::GmSSL`，没有 OpenSSL 兼容别名。GmSSL/libecc 承担密码
-操作；SaltsUtils 负责密钥格式和拥有关系；cjwt 只处理 JOSE 算法、JSON 与 token 拼装。
-这避免了在各消费工程重复实现 RSA 编码、密钥导入和认证失败处理。
+另一方案需要在 CNet 扩充并发布完整 JOSE 密钥接口，会扩大上游公共接口及发布范围。
+当前实现复用已有、带互操作向量的后端，并将其符号改为 `cjwt_crypto_`。
+GmSSL 通过现有 vcpkg-cache 和 manifest 的 `gmssl` 依赖接入。libecc 使用 BSD 授权，
+固定上游提交并保留原始许可。libecc 的 SHA 符号有独立命名空间，以匹配自身上下文布局。
+适配器和头文件归属内部构建目标。迁移回滚需恢复旧实现及其匹配 SDK 组合。
 
 RSA 新增组件式 key API，在不改变现有 TLS RSA key ABI 的前提下支持 512–8192 位模数、
 最高 33 位奇数指数和仅含 `n/e/d` 的私钥。完整 CRT 参数会校验一致性。私钥操作使用随机
-盲化和输出前公钥复核，随机失败不回退到未盲化运算。Salts 密钥对象复制输入、只读共享、
+盲化和输出前公钥复核，随机失败不回退到未盲化运算。cjwt 私有密钥对象复制输入、只读共享、
 显式销毁并清零；JWS/JWE 在同步调用结束后销毁临时密钥。PEM 支持 SPKI、PKCS8、
 传统 RSA/EC 私钥，以及四个 JOSE EC 曲线的命名或显式参数和压缩公钥；没有密码回调。
 PSS 签名使用摘要长度的 salt，验签接受编码中的 salt 长度。认证失败不返回明文或 claims。
@@ -721,8 +721,7 @@ PSS 签名使用摘要长度的 salt，验签接受编码中的 salt 长度。�
 
 正式 `chttp_cjwt_*` 测试包含 15 组独立 JWS 向量和 27 组 JWE 组合，覆盖 PEM/JWK、
 最大 salt PSS、`n/e/d` OAEP、长 salt PBES2、往返和篡改拒绝。fixture 生成器使用 Python
-cryptography；C/C++ 测试与产品均不链接 OpenSSL。配套 SaltsUtils `crypto/tests` 验证
-独立 RSA/EC/对称算法向量、随机源失败、输出保留和边界。HTTP admission 的相关回归为
+cryptography。HTTP admission 的相关回归为
 `chttp_jwt_test`、`chttp_h2_jwt_isolation_test`、`chttp_session_snapshot_test` 和
 `chttp_websocket_handshake_test`。
 

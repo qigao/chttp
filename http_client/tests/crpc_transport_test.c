@@ -3,8 +3,8 @@
 
 #include <http_client/rpc.h>
 #include <http_server/rpc.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdatomic.h>
 
@@ -155,12 +155,12 @@ static void crpc_transport_test_complete(void *user, chttp_request request,
 
 static int crpc_transport_test_poll_until(chttp_async_client *client,
                                           crpc_transport_test_completion *completion) {
-  const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+  const uint64_t deadline = monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
   while (!completion->called) {
     size_t count = 0u;
     const int status = chttp_async_client_poll(client, 5u, &count);
     if (status != SALTS_OK) return status;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
   }
   return completion->status;
 }
@@ -203,12 +203,12 @@ static int crpc_transport_test_direct_async(
     }
   }
   {
-    const uint64_t deadline = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    const uint64_t deadline = monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
     while (!completion.called) {
       size_t count = 0u;
       status = chttp_async_client_poll(&client, 5u, &count);
       if (status != SALTS_OK) break;
-      if (cmeta_monotonic_ms() >= deadline) {
+      if (monotonic_ms() >= deadline) {
         status = SALTS_ETIMEDOUT;
         break;
       }
@@ -314,13 +314,13 @@ static int crpc_transport_test_blocking_handler(
       "{\"jsonrpc\":\"2.0\",\"result\":14,\"id\":99}";
   crpc_transport_test_blocking_rpc *gate =
       (crpc_transport_test_blocking_rpc *)user;
-  const uint64_t end = cmeta_monotonic_ms() + 4000u;
+  const uint64_t end = monotonic_ms() + 4000u;
   (void)request;
   if (gate == NULL) return SALTS_EINVAL;
   atomic_store_explicit(&gate->entered, 1, memory_order_release);
   while (!atomic_load_explicit(&gate->release, memory_order_acquire) &&
-         cmeta_monotonic_ms() < end)
-    cmeta_thread_yield();
+         monotonic_ms() < end)
+    sync_thread_yield();
   return chttp_server_reply(
       response, 200u, "application/json", body, sizeof(body) - 1u);
 }
@@ -369,9 +369,9 @@ spec("CRPC CHTTP transport parity") {
         &completed, &request), SALTS_OK);
     check(request.slot != 0u);
 
-    end = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    end = monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
     while (!atomic_load_explicit(&gate.entered, memory_order_acquire) &&
-           cmeta_monotonic_ms() < end) {
+           monotonic_ms() < end) {
       size_t count = 0u;
       status = chttp_async_client_poll(&client, 5u, &count);
       if (status != SALTS_OK) break;
@@ -384,8 +384,8 @@ spec("CRPC CHTTP transport parity") {
       check_equal(chttp_async_request_cancel(&client, request), SALTS_EALREADY);
     }
     atomic_store_explicit(&gate.release, 1, memory_order_release);
-    end = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
-    while (completed.terminal_calls == 0 && cmeta_monotonic_ms() < end) {
+    end = monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    while (completed.terminal_calls == 0 && monotonic_ms() < end) {
       size_t count = 0u;
       status = chttp_async_client_poll(&client, 5u, &count);
       if (status != SALTS_OK) break;
@@ -451,8 +451,8 @@ spec("CRPC CHTTP transport parity") {
         &client, &limits, &options, crpc_transport_test_complete,
         &completed, &request), SALTS_OK);
     check(request.slot != 0u);
-    end = cmeta_monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
-    while (!completed.called && cmeta_monotonic_ms() < end) {
+    end = monotonic_ms() + CRPC_TRANSPORT_TEST_TIMEOUT_MS;
+    while (!completed.called && monotonic_ms() < end) {
       size_t count = 0u;
       status = chttp_async_client_poll(&client, 250u, &count);
       if (status != SALTS_OK) break;

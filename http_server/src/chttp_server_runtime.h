@@ -8,8 +8,8 @@
 #include <cnet/manager.h>
 #include <cnet/handoff.h>
 #include <cnet/owner_placement.h>
-#include <salts/thread.h>
-#include <cmeta_buffer.h>
+#include <threads/threads.h>
+#include <memory/buffer.h>
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -329,7 +329,7 @@ struct chttp_server_owner_lane {
   cnet_client network_storage;
   cnet_manager manager;
   chttp_server_connection *manager_retired;
-  cmeta_thread_t thread;
+  sync_thread_t thread;
   chttp_server_websocket_command *websocket_commands;
   chttp_server_websocket_command *websocket_pending;
   cflow_io_file_runtime file_runtime;
@@ -443,17 +443,17 @@ struct chttp_server_impl {
   chttp_session_entry *session_entries;
   char *session_keys;
   char *session_values;
-  cmeta_mutex_t session_mutex;
+  sync_mutex_t session_mutex;
   cnet_client network;
   chttp_server_owner_lane owner;
   chttp_server_owner_lane *additional_owners;
   size_t owner_count;
   chttp_server_acceptor acceptor;
   cnet_tls_server tls_server;
-  cmeta_mutex_t mutex;
-  cmeta_cond_t changed;
-  cmeta_thread_t thread;
-  cmeta_thread_t listener_thread;
+  sync_mutex_t mutex;
+  sync_cond_t changed;
+  sync_thread_t thread;
+  sync_thread_t listener_thread;
   chttp_server_stats stats;
   chttp_server_websocket_profile *websocket_profile;
   size_t started_owner_count;

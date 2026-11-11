@@ -3,7 +3,7 @@
  * external NativeIO completion progress; no test hook enters the library. */
 #include "../src/chttp_client.c"
 #include <http_server/http.h>
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include "tinytest.h"
 
 enum { POOL_TEST_TIMEOUT_MS = 5000, POOL_TEST_WRITE_TIMEOUT_MS = 1000 };
@@ -176,8 +176,8 @@ static void pool_test_inflight_send(bool expire) {
   fixture.external = true;
   /* No live attachment survives switching the test's progress owner. */
   check_equal(chttp_async_client_submit(&fixture.client, &options, &warm), SALTS_OK);
-  deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-  while (fixture.results < 2u && cmeta_monotonic_ms() < deadline)
+  deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+  while (fixture.results < 2u && monotonic_ms() < deadline)
     check_equal(pool_test_external_step(true), SALTS_OK);
   check_equal(fixture.results, (size_t)2u);
   check_equal(fixture.result_status, SALTS_OK);
@@ -186,7 +186,7 @@ static void pool_test_inflight_send(bool expire) {
   check_equal(chttp_async_client_submit(&fixture.client, &options, &upload), SALTS_OK);
   slot = chttp_slot_find(impl, upload);
   check_not_null(slot);
-  deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+  deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
   do {
     cnet_external_request_snapshot requests[4];
     size_t count = 0u;
@@ -200,7 +200,7 @@ static void pool_test_inflight_send(bool expire) {
         body_send = requests[index].request;
       }
     if (!native_send_live) check_equal(pool_test_external_step(true), SALTS_OK);
-  } while (!native_send_live && cmeta_monotonic_ms() < deadline);
+  } while (!native_send_live && monotonic_ms() < deadline);
   check_true(native_send_live);
   check_greater(mem_buffer_ref_count(slot->source_retained), (uint32_t)1u);
   check_equal(fixture.source_bytes, (size_t)64u);
@@ -208,11 +208,10 @@ static void pool_test_inflight_send(bool expire) {
   check_greater(native_stats.active_requests, (size_t)0u);
 
   if (expire) {
-    int expiry_status = SALTS_OK;
     /* Observe the real success, but retain it until after the owner deadline.
      * No synthetic byte count or completion is routed into CNet. */
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-    while (!fixture.completion_waiting && cmeta_monotonic_ms() < deadline) {
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    while (!fixture.completion_waiting && monotonic_ms() < deadline) {
       native_io_completion completion;
       size_t count = 0u, events = 0u;
       bool consumed = false;
@@ -233,16 +232,15 @@ static void pool_test_inflight_send(bool expire) {
     check_equal(fixture.delayed_completion.kind, NATIVE_IO_COMPLETION_OK);
     check_equal(fixture.delayed_completion.bytes, (size_t)64u);
     /* Only the first body chunk reached the wire; HTTP still needs the suffix. */
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + POOL_TEST_WRITE_TIMEOUT_MS;
     do {
-      expiry_status = pool_test_external_step(false);
-      if (expiry_status != SALTS_OK) break;
-      cmeta_sleep_ms(1u);
-    } while (cmeta_monotonic_ms() < deadline);
-    /* NativeIO already retired the observed handle. Its cancellation returns
-     * ENOENT; CNet retains the write-timeout result until this event is routed.
-     * The exact SDK's cnet_owner_profile_test exercises the same contract. */
-    check_equal(expiry_status, SALTS_ENOENT);
+      check_equal(pool_test_external_step(false), SALTS_OK);
+      sleep_ms(1u);
+    } while (monotonic_ms() < deadline);
+    /* The external host holds the observed completion. CNet accepts its
+     * cancellation and retains the timeout and payload lease until routing.
+     * Advance once at/after the deadline before delivering that completion. */
+    check_equal(pool_test_external_step(false), SALTS_OK);
     check_equal(chttp_client_pool_progress(impl), SALTS_OK);
   } else {
     check_equal(chttp_async_request_cancel(&fixture.client, upload), SALTS_OK);
@@ -260,8 +258,8 @@ static void pool_test_inflight_send(bool expire) {
   check_true(native_io_backend_get_stats(&fixture.backend, &native_stats));
   submissions_at_failure = native_stats.submitted;
   check_equal(pool_test_deliver_native(), SALTS_OK);
-  deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-  while (fixture.results < 3u && cmeta_monotonic_ms() < deadline)
+  deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+  while (fixture.results < 3u && monotonic_ms() < deadline)
     check_equal(pool_test_external_step(true), SALTS_OK);
   check_equal(fixture.results, (size_t)3u);
   check_equal(fixture.result_status, expire ? SALTS_ETIMEDOUT : SALTS_ECANCELED);
@@ -275,8 +273,8 @@ static void pool_test_inflight_send(bool expire) {
   check_equal(native_stats.submitted, submissions_at_failure);
   options.body_source = NULL;
   check_equal(chttp_async_client_submit(&fixture.client, &options, &next), SALTS_OK);
-  deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-  while (fixture.results < 4u && cmeta_monotonic_ms() < deadline)
+  deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+  while (fixture.results < 4u && monotonic_ms() < deadline)
     check_equal(pool_test_external_step(true), SALTS_OK);
   check_equal(fixture.results, (size_t)4u);
   check_equal(fixture.result_status, SALTS_OK);
@@ -350,8 +348,8 @@ spec("CHttp Pool callback and context lifecycle") {
                                      &fixture.session->managed), SALTS_OK);
     check_equal(cnet_manager_connect(&impl->transport_manager, fixture.session->managed,
                                      &connect_options, &fixture.session->connection), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-    while (!fixture.connected && cmeta_monotonic_ms() < deadline)
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    while (!fixture.connected && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_true(fixture.connected);
     /* Seed a clean connected H1 session at the READY boundary. Admission and
@@ -363,8 +361,8 @@ spec("CHttp Pool callback and context lifecycle") {
                                      fixture.session->managed, 1u), SALTS_OK);
     fixture.session->pool_ready = true;
     check_equal(chttp_async_client_submit(&fixture.client, &options, &fixture.request), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-    while ((fixture.results == 0u || !fixture.send_waiting) && cmeta_monotonic_ms() < deadline)
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    while ((fixture.results == 0u || !fixture.send_waiting) && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_equal(fixture.results, (size_t)1u);
     check_equal(fixture.result_status, SALTS_OK);
@@ -384,7 +382,7 @@ spec("CHttp Pool callback and context lifecycle") {
         chttp_client_get(&fixture.client)->stopped = true;
       } else if (fixture.external) {
         chttp_client_impl *impl = chttp_client_get(&fixture.client);
-        const uint64_t deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+        const uint64_t deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
         cnet_pool_snapshot pool;
         cnet_manager_snapshot manager;
         int status;
@@ -398,7 +396,7 @@ spec("CHttp Pool callback and context lifecycle") {
         do {
           check_equal(pool_test_external_step(true), SALTS_OK);
           status = cnet_client_stop_external(&impl->network);
-        } while (status == SALTS_EBUSY && cmeta_monotonic_ms() < deadline);
+        } while (status == SALTS_EBUSY && monotonic_ms() < deadline);
         check_equal(status, SALTS_OK);
         check_equal(chttp_client_pool_progress(impl), SALTS_OK);
         check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
@@ -446,14 +444,14 @@ spec("CHttp Pool callback and context lifecycle") {
     chttp_client_impl *impl = chttp_client_get(&fixture.client);
     cnet_manager_snapshot manager;
     cnet_pool_snapshot pool;
-    const uint64_t deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    const uint64_t deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
     const cnet_connection old_connection = fixture.session->connection;
     chttp_request_options options = pool_test_options();
     chttp_request next = {0};
     size_t completions = 0u;
     fixture.hold_terminal = true;
     check_equal(cnet_close(&impl->network, old_connection), SALTS_OK);
-    while (!fixture.terminal_waiting && cmeta_monotonic_ms() < deadline)
+    while (!fixture.terminal_waiting && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_true(fixture.terminal_waiting);
     check_equal(cnet_manager_get_snapshot(&impl->transport_manager, &manager), SALTS_OK);
@@ -476,7 +474,7 @@ spec("CHttp Pool callback and context lifecycle") {
     chttp_cnet_state(fixture.session, old_connection, CNET_CONNECTION_CLOSED, NULL);
     check_equal(fixture.results, (size_t)1u);
     check_equal(fixture.session->state, CHTTP_H1_CONNECTING);
-    while (fixture.results < 2u && cmeta_monotonic_ms() < deadline)
+    while (fixture.results < 2u && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_equal(fixture.results, (size_t)2u);
     check_equal(fixture.result_status, SALTS_OK);
@@ -495,14 +493,14 @@ spec("CHttp Pool callback and context lifecycle") {
     fixture.hold_send = false;
     pool_test_deliver_send();
     check_equal(cnet_close(&impl->network, fixture.session->connection), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-    while (fixture.session->state != CHTTP_H1_FREE && cmeta_monotonic_ms() < deadline)
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    while (fixture.session->state != CHTTP_H1_FREE && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_equal(fixture.session->state, CHTTP_H1_FREE);
     options.protocol = CHTTP_HTTP_2;
     check_equal(chttp_async_client_submit(&fixture.client, &options, &requests[0]), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-    while (fixture.results < 2u && cmeta_monotonic_ms() < deadline)
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    while (fixture.results < 2u && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_equal(fixture.results, (size_t)2u);
     check_equal(fixture.result_status, SALTS_OK);
@@ -514,11 +512,11 @@ spec("CHttp Pool callback and context lifecycle") {
      * deliver it. The stream and the session must both reach true terminal. */
     check_equal(chttp_server_stop(&fixture.server, POOL_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&fixture.server), SALTS_OK);
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
     do {
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
       check_equal(cnet_pool_get_snapshot(&impl->connection_pool, &pool), SALTS_OK);
-    } while (!pool.drained && cmeta_monotonic_ms() < deadline);
+    } while (!pool.drained && monotonic_ms() < deadline);
     check_true(pool.drained);
     check_equal(fixture.results, (size_t)3u);
     check_not_equal(fixture.result_status, SALTS_OK);
@@ -535,8 +533,8 @@ spec("CHttp Pool callback and context lifecycle") {
     check_true(chars > 0 && (size_t)chars < sizeof(fixture.uri));
     check_equal(chttp_async_client_submit(&fixture.client, &options, &requests[2]), SALTS_OK);
     check_not_equal(requests[1].generation, requests[2].generation);
-    deadline = cmeta_monotonic_ms() + POOL_TEST_TIMEOUT_MS;
-    while (fixture.results < 4u && cmeta_monotonic_ms() < deadline)
+    deadline = monotonic_ms() + POOL_TEST_TIMEOUT_MS;
+    while (fixture.results < 4u && monotonic_ms() < deadline)
       check_equal(chttp_async_client_poll(&fixture.client, 5u, &completions), SALTS_OK);
     check_equal(fixture.results, (size_t)4u);
     check_equal(fixture.result_status, SALTS_OK);

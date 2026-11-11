@@ -1,5 +1,5 @@
 #include "http_example.service_native.h"
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 /* The generated adapter and page handler call the same typed operation. */
 int databind_11_HttpExample_10_Calculator_3_Add(

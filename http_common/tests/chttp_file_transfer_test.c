@@ -2,8 +2,8 @@
 
 #include "tinytest.h"
 
-#include <salts/error_codes.h>
-#include <salts/thread.h>
+#include <core/error_codes.h>
+#include <threads/threads.h>
 
 #include <string.h>
 
@@ -30,7 +30,7 @@ static int chttp_file_test_drive(cflow_io_file_runtime *runtime, chttp_file_tran
     int status = cflow_io_file_runtime_run_ready(runtime, 32u, &progressed);
     if (status != SALTS_OK) return status;
     if (chttp_file_transfer_ready(transfer)) return SALTS_OK;
-    if (progressed == 0u) cmeta_thread_yield();
+    if (progressed == 0u) sync_thread_yield();
   }
   return SALTS_ETIMEDOUT;
 }

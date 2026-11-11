@@ -1,8 +1,8 @@
 #include <chttp_app/web.h>
 
-#include <salts/error_codes.h>
-#include <cmeta_fs.h>
-#include <vstr.h>
+#include <core/error_codes.h>
+#include <file/fs.h>
+#include <core/vstr.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -148,8 +148,8 @@ static int chttp_web_asset_normalize_relative(
 }
 
 static int chttp_web_asset_path_has_reparse(
-    const char *path, cmeta_fs_stat_t *out) {
-  int status = cmeta_fs_lstat(path, out);
+    const char *path, fs_stat_t *out) {
+  int status = fs_lstat(path, out);
   if (status != SALTS_OK) return status;
 #ifdef _WIN32
   {
@@ -168,7 +168,7 @@ static int chttp_web_asset_resolve_file(
     const chttp_web_asset_mount *mount,
     const char *relative,
     char output[CHTTP_WEB_ASSET_FS_PATH_HARD_MAX + 1u]) {
-  cmeta_fs_stat_t metadata = {0};
+  fs_stat_t metadata = {0};
   size_t root_size;
   size_t output_size;
   const char *cursor;
@@ -212,7 +212,7 @@ static int chttp_web_asset_resolve_file(
     output_size += segment_size;
     output[output_size] = '\0';
 
-    metadata = (cmeta_fs_stat_t){0};
+    metadata = (fs_stat_t){0};
     status = chttp_web_asset_path_has_reparse(output, &metadata);
     if (status != SALTS_OK) return status;
     if (final) {
@@ -323,7 +323,7 @@ static int chttp_web_assets_middleware(
 
 static int chttp_web_asset_mount_valid(
     const chttp_web_asset_mount *mount) {
-  cmeta_fs_stat_t root_metadata = {0};
+  fs_stat_t root_metadata = {0};
   char fallback[CHTTP_WEB_ASSET_RELATIVE_HARD_MAX + 1u];
   size_t root_size;
   int status;

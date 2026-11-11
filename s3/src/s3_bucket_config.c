@@ -30,8 +30,8 @@ static int s3_bucket_config_request(s3_client *client, const char *bucket,
   s3_query_param query;
   chttp_header header = {"Content-Type", "application/xml"};
   s3_request_options request;
-  salts_xml_document document = {0};
-  salts_xml_node root = {0};
+  xml_document document = {0};
+  xml_node root = {0};
   int status = SALTS_OK;
   if (out_error == NULL) return SALTS_EINVAL;
   *out_error = (s3_error){0};
@@ -46,7 +46,7 @@ static int s3_bucket_config_request(s3_client *client, const char *bucket,
     status = s3_xml_parse_root(xml, xml_size, impl->base.config.max_xml_bytes,
                                impl->base.config.max_xml_nodes, subresource->root_name, &document,
                                &root);
-    salts_xml_document_destroy(&document);
+    xml_document_destroy(&document);
     if (status != SALTS_OK) return s3_bucket_config_error(out_error, status, subresource->stage);
   }
   query = (s3_query_param){subresource->query_name, ""};
@@ -64,7 +64,7 @@ static int s3_bucket_config_request(s3_client *client, const char *bucket,
   status = s3_xml_parse_root(out_response->http.body, out_response->http.body_size,
                              impl->base.config.max_xml_bytes, impl->base.config.max_xml_nodes,
                              subresource->root_name, &document, &root);
-  salts_xml_document_destroy(&document);
+  xml_document_destroy(&document);
   if (status != SALTS_OK) s3_bucket_config_error(out_error, status, subresource->stage);
   return status;
 }

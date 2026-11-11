@@ -27,34 +27,42 @@ if(MSVC)
   add_compile_options(/experimental:c11atomics)
 endif()
 
-include(CTest)
+if(BUILD_TESTS)
+  enable_testing()
+endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Sanitizers)
 
-if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
-  message(FATAL_ERROR "SALTS_ROOT must name the installed Salts SDK")
-endif()
-if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
-  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the installed SaltsUtils SDK")
-endif()
-file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
-file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
-unset(Salts_DIR CACHE)
-unset(Salts_DIR)
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
-find_package(Salts CONFIG REQUIRED PATHS "${SALTS_ROOT_PATH}"
-             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-# SaltsUtils.Native 4.3 exports Salts::Crypto with GmSSL::GmSSL in
-# INTERFACE_LINK_LIBRARIES. Resolve its declared vendor target explicitly
-# before CMake generates the imported SDK link closure.
-find_package(GmSSL CONFIG REQUIRED)
-find_package(SaltsUtils CONFIG REQUIRED PATHS "${SALTS_UTILS_ROOT_PATH}"
-             NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-if(NOT TARGET Salts::DataBind)
-  message(FATAL_ERROR "SaltsUtils must provide the Salts::DataBind component")
-endif()
+# Only the explicitly selected, compiler-matched SDK roots are admitted.
+foreach(input IN ITEMS VCPKG_INSTALLED_DIR VCPKG_TARGET_TRIPLET)
+  if("${${input}}" STREQUAL "")
+    message(FATAL_ERROR "${input} must select the restored vcpkg-cache profile")
+  endif()
+endforeach()
+list(PREPEND CMAKE_PREFIX_PATH
+  "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$ENV{VCPKG_CONFIGURATION_SUBDIR}"
+  "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+foreach(package IN ITEMS SaltsBase CMeta SaltsCore SaltsUtils)
+  # Version variables choose releases; roots never search a second SDK source.
+  if(package STREQUAL "SaltsBase")
+    set(input SALTS_BASE)
+  elseif(package STREQUAL "CMeta")
+    set(input CMETA)
+  elseif(package STREQUAL "SaltsCore")
+    set(input SALTS_CORE)
+  else()
+    set(input SALTS_UTILS)
+  endif()
+  if("$ENV{${input}_ROOT}" STREQUAL "" OR "$ENV{${input}_VERSION}" STREQUAL "")
+    message(FATAL_ERROR "${input}_ROOT and ${input}_VERSION must select an installed SDK release")
+  endif()
+  unset(${package}_DIR CACHE)
+  unset(${package}_DIR)
+  find_package(${package} "$ENV{${input}_VERSION}" EXACT CONFIG REQUIRED
+    PATHS "$ENV{${input}_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+endforeach()
 find_package(llhttp CONFIG REQUIRED)
+find_package(GmSSL CONFIG REQUIRED)
 
 add_subdirectory(vendor/cjwt)
 add_subdirectory(http_common)
@@ -64,12 +72,12 @@ add_subdirectory(app)
 add_subdirectory(s3)
 add_subdirectory(openapi)
 
-if(BUILD_TESTS)
-  add_subdirectory(http_common/tests)
-  add_subdirectory(http_common/tests/integration)
-  add_subdirectory(http_client/tests)
-  add_subdirectory(s3/tests)
-  add_subdirectory(http_server/tests)
+# MinGW stops implicit exports when linked static SDK objects carry explicit
+# export annotations. Preserve the libraries' WINDOWS_EXPORT_ALL_SYMBOLS contract.
+if(MINGW)
+  foreach(library IN ITEMS chttp_client chttp_server chttp_app chttp_s3)
+    target_link_options(${library} PRIVATE -Wl,--export-all-symbols)
+  endforeach()
 endif()
 
 include(CMakePackageConfigHelpers)

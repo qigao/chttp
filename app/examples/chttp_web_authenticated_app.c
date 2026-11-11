@@ -2,8 +2,8 @@
 #include <http_client/http.h>
 
 #include <cmeta/struct.h>
-#include <salts/error_codes.h>
-#include <vstr.h>
+#include <core/error_codes.h>
+#include <core/vstr.h>
 
 #include <stdbool.h>
 #include <stddef.h>

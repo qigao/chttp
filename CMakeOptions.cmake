@@ -1,13 +1,7 @@
-option(BUILD_TESTS "Build test suite" ON)
-option(BUILD_EXAMPLES "Build example programs" ON)
-option(BUILD_BENCHMARKS "Build benchmark executables" OFF)
-option(CHTTP_P384_SHA384_ACCEPTANCE_TESTS
-       "Enable the candidate P-384/SHA-384 HTTPS compatibility gate" OFF)
-set(CHTTP_X509_MATRIX_FIXTURE_DIR "" CACHE PATH
-    "Optional Salts CNet fixture directory for the CHttp X.509 product matrix")
-option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
-option(ENABLE_SANITIZER_UNDEFINED "Enable UndefinedBehaviorSanitizer" OFF)
-option(ENABLE_SANITIZER_LEAK "Enable LeakSanitizer" OFF)
-option(ENABLE_SANITIZER_THREAD "Enable ThreadSanitizer" OFF)
-option(ENABLE_SANITIZER_MEMORY "Enable MemorySanitizer" OFF)
+option(BUILD_TESTS "Enable TESTS" OFF)
+option(BUILD_BENCHMARK "Build benchmarks" OFF)
+option(BUILD_EXAMPLES "Build examples" OFF)
 
+option(SALTSCORE_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(SALTSCORE_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(SALTSCORE_ENABLE_TSAN "Enable ThreadSanitizer" OFF)

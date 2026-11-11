@@ -120,7 +120,6 @@ static const char CHTTP_TLS_TEST_CLIENT_KEY[] =
     "3HXFhgZSucf+NHqNzOjErAw7eUlXqfBaNM05SVqPONS3pI3F4Wo8lQKp\n"
     "-----END PRIVATE KEY-----\n";
 
-#if defined(CHTTP_P384_SHA384_ACCEPTANCE_TESTS)
 /*
  * P-384 issuer / P-256 leaf fixture shared with the Salts CNet compatibility
  * matrix. The leaf is signed with ECDSA/SHA-384 and contains localhost DNS and
@@ -208,6 +207,5 @@ static const char CHTTP_TLS_TEST_P384_TAMPERED_SERVER_CERTIFICATE[] =
     "RLKKkC8TZBvizRFAkVOqVqv/eyz8m4bdL0AkTw+yGM2514OsAjEAng/HSifx1mMb\n"
     "jajmAWrdr/s6oN6LQc7UtxXZsXw4C2oH+uuA3rjRz5XEA7c+bWeK\n"
     "-----END CERTIFICATE-----\n";
-#endif
 
 #endif /* CHTTP_TLS_TEST_MATERIAL_H */

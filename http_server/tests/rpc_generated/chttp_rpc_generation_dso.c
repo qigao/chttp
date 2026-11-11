@@ -1,6 +1,6 @@
 #include "chttp_rpc_generation_dso.h"
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 #include <stdbool.h>
 
 /* Layout must match the test's DataBind native record projections. */
@@ -28,11 +28,11 @@ static bool DATA_BIND_NATIVE_CALL chttp_rpc_generation_dso_invoke(
     atomic_fetch_add_explicit(&probe->invoked, 1, memory_order_acq_rel);
   if (probe != NULL &&
       atomic_load_explicit(&probe->enabled, memory_order_acquire)) {
-    const uint64_t deadline = cmeta_monotonic_ms() + 3000u;
+    const uint64_t deadline = monotonic_ms() + 3000u;
     atomic_fetch_add_explicit(&probe->entered, 1, memory_order_acq_rel);
     while (!atomic_load_explicit(&probe->release, memory_order_acquire)) {
-      if (cmeta_monotonic_ms() >= deadline) return false;
-      cmeta_thread_yield();
+      if (monotonic_ms() >= deadline) return false;
+      sync_thread_yield();
     }
   }
   request = (const chttp_rpc_generation_dso_request *)params[0];

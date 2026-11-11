@@ -1,8 +1,8 @@
 #include "chttp_server_runtime.h"
 #include "tinytest.h"
 #include <http_client/http.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdio.h>
 
@@ -80,7 +80,7 @@ static int owner_topology_get(
 static int owner_topology_wait_leases(
     chttp_server_impl *impl, size_t first, size_t second,
     uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   for (;;) {
     chttp_server_owner_lane *owner0 = chttp_server_owner_at(impl, 0u);
     chttp_server_owner_lane *owner1 = chttp_server_owner_at(impl, 1u);
@@ -88,8 +88,8 @@ static int owner_topology_wait_leases(
         chttp_server_owner_lease_count(owner0) == first &&
         chttp_server_owner_lease_count(owner1) == second)
       return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
@@ -120,7 +120,7 @@ static int owner_topology_block(
   if (probe == NULL) return SALTS_EINVAL;
   atomic_store_explicit(&probe->entered, 1, memory_order_release);
   while (!atomic_load_explicit(&probe->release, memory_order_acquire))
-    cmeta_thread_yield();
+    sync_thread_yield();
   return chttp_server_reply(response, 200u, "text/plain", "released", 8u);
 }
 
@@ -162,10 +162,10 @@ static void owner_topology_stop_thread(void *user) {
 
 static int owner_topology_wait_atomic(
     const atomic_int *value, int expected, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   while (atomic_load_explicit(value, memory_order_acquire) != expected) {
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
   return SALTS_OK;
 }
@@ -173,7 +173,7 @@ static int owner_topology_wait_atomic(
 static int owner_topology_wait_pending(
     chttp_server_impl *impl, size_t owner_index, size_t admission_count,
     size_t lease_count, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   chttp_server_owner_lane *owner;
   if (impl == NULL) return SALTS_EINVAL;
   owner = chttp_server_owner_at(impl, owner_index);
@@ -184,23 +184,23 @@ static int owner_topology_wait_pending(
     if (observed_admissions == admission_count &&
         chttp_server_owner_lease_count(owner) == lease_count)
       return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
 static int owner_topology_wait_stop_requested(
     chttp_server_impl *impl, uint32_t timeout_ms) {
-  const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
+  const uint64_t deadline = monotonic_ms() + timeout_ms;
   if (impl == NULL) return SALTS_EINVAL;
   for (;;) {
     bool stop_requested;
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     stop_requested = impl->stop_requested;
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     if (stop_requested) return SALTS_OK;
-    if (cmeta_monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
-    cmeta_thread_yield();
+    if (monotonic_ms() >= deadline) return SALTS_ETIMEDOUT;
+    sync_thread_yield();
   }
 }
 
@@ -377,9 +377,9 @@ spec("CHttp owner topology") {
     check_equal(
         chttp_server_owner_runtime_state_get(&impl->owner),
         CHTTP_SERVER_OWNER_RUNTIME_IDLE);
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     int wake_status = chttp_server_owner_wake_locked(&impl->owner);
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     check_equal(wake_status, SALTS_ESHUTDOWN);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
@@ -397,9 +397,9 @@ spec("CHttp owner topology") {
     check(!impl->listener_done);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
     check(port != 0u);
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     wake_status = chttp_server_owner_wake_locked(&impl->owner);
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     check_equal(wake_status, SALTS_OK);
 
     check_equal(chttp_server_stop(&server, 0u), SALTS_OK);
@@ -413,9 +413,9 @@ spec("CHttp owner topology") {
     check(impl->listener_done);
     check(!impl->thread_started);
     check(!impl->owner.thread_started);
-    cmeta_mutex_lock(&impl->mutex);
+    sync_mutex_lock(&impl->mutex);
     wake_status = chttp_server_owner_wake_locked(&impl->owner);
-    cmeta_mutex_unlock(&impl->mutex);
+    sync_mutex_unlock(&impl->mutex);
     check_equal(wake_status, SALTS_ESHUTDOWN);
     check_equal(chttp_server_stop(&server, 0u), SALTS_OK);
 
@@ -740,9 +740,9 @@ spec("CHttp owner topology") {
     owner_topology_request_thread_args blocked_request = {0};
     owner_topology_request_thread_args pending_request = {0};
     owner_topology_stop_thread_args stop_args = {0};
-    cmeta_thread_t blocked_thread = NULL;
-    cmeta_thread_t pending_thread = NULL;
-    cmeta_thread_t stop_thread = NULL;
+    sync_thread_t blocked_thread = NULL;
+    sync_thread_t pending_thread = NULL;
+    sync_thread_t stop_thread = NULL;
     char uri[64];
     uint16_t port = 0u;
 
@@ -786,7 +786,7 @@ spec("CHttp owner topology") {
     check(blocked_uri_chars > 0 &&
           (size_t)blocked_uri_chars < sizeof(blocked_request.uri));
     check_equal(
-        cmeta_thread_create(
+        sync_thread_create(
             &blocked_thread, owner_topology_request_thread, &blocked_request),
         SALTS_OK);
     check_equal(owner_topology_wait_atomic(&block.entered, 1, 2000u), SALTS_OK);
@@ -810,30 +810,30 @@ spec("CHttp owner topology") {
     check(pending_uri_chars > 0 &&
           (size_t)pending_uri_chars < sizeof(pending_request.uri));
     check_equal(
-        cmeta_thread_create(
+        sync_thread_create(
             &pending_thread, owner_topology_request_thread, &pending_request),
         SALTS_OK);
     check_equal(owner_topology_wait_pending(impl, 1u, 1u, 2u, 2000u), SALTS_OK);
 
     stop_args.server = &server;
     check_equal(
-        cmeta_thread_create(&stop_thread, owner_topology_stop_thread, &stop_args),
+        sync_thread_create(&stop_thread, owner_topology_stop_thread, &stop_args),
         SALTS_OK);
     check_equal(owner_topology_wait_stop_requested(impl, 2000u), SALTS_OK);
 
     /* Let owner1 leave the handler and enter its owner-local shutdown path. */
     atomic_store_explicit(&block.release, 1, memory_order_release);
     check_equal(owner_topology_wait_atomic(&stop_args.completed, 1, 5000u), SALTS_OK);
-    check_equal(cmeta_thread_join(&stop_thread), SALTS_OK);
-    cmeta_thread_destroy(&stop_thread);
+    check_equal(sync_thread_join(&stop_thread), SALTS_OK);
+    sync_thread_destroy(&stop_thread);
     check_equal(stop_args.status, SALTS_OK);
 
     check_equal(owner_topology_wait_atomic(&blocked_request.completed, 1, 2000u), SALTS_OK);
-    check_equal(cmeta_thread_join(&blocked_thread), SALTS_OK);
-    cmeta_thread_destroy(&blocked_thread);
+    check_equal(sync_thread_join(&blocked_thread), SALTS_OK);
+    sync_thread_destroy(&blocked_thread);
     check_equal(owner_topology_wait_atomic(&pending_request.completed, 1, 2000u), SALTS_OK);
-    check_equal(cmeta_thread_join(&pending_thread), SALTS_OK);
-    cmeta_thread_destroy(&pending_thread);
+    check_equal(sync_thread_join(&pending_thread), SALTS_OK);
+    sync_thread_destroy(&pending_thread);
     check(pending_request.status != SALTS_OK);
 
     check_equal(chttp_server_owner_lease_count(chttp_server_owner_at(impl, 0u)),

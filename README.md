@@ -1,104 +1,39 @@
-# CHTTP
+# CHttp
 
-**C11/C++17 HTTP, server-driven Web, JSON-RPC, S3, WebSocket, and OpenAPI infrastructure built on Salts.**
+[![CI](https://github.com/qigao/chttp/actions/workflows/ci.yml/badge.svg)](https://github.com/qigao/chttp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/qigao/chttp)](LICENSE)
 
-CHTTP is the HTTP/application-protocol layer of the Salts ecosystem. It reuses Salts transport, lifecycle, bounded execution, and typed semantics instead of embedding a separate networking runtime.
+C11/C++17 HTTP clients and servers, JSON-RPC, S3, WebSocket, server-driven HTML,
+and OpenAPI tooling built on the Salts libraries.
 
-**Tags:** C11 · C++17 · HTTP · JSON-RPC · S3 · WebSocket · OpenAPI · TLS · networking · async-io
+CHttp owns HTTP and application protocol policy. CNet owns connection progress
+and TLS; SaltsBase owns NativeIO and platform primitives; CMeta owns metadata,
+plugins and CFlow execution; SaltsUtils supplies DataBind, IDL and Jinja.
 
-The next prerelease is [2.1.0-rc.1](docs/releases/2.1.0-rc.1.md).
-Manual native SDK workflow runs prepare build/test/package artifacts;
-publication requires a matching version tag.
+## Upstream dependency versions
 
-## Built on Salts
+| Release input | CMake package | SDK root | Responsibility |
+| --- | --- | --- | --- |
+| `SALTS_BASE_VERSION=0.1.4` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
+| `CMETA_VERSION=0.1.4` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
+| `SALTS_CORE_VERSION=0.1.4` | `SaltsCore` | `SALTS_CORE_ROOT` | CNet and Crypto |
+| `SALTS_UTILS_VERSION=0.1.1` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
+| `VCPKG_CACHE_VERSION=0.1.3` | preinstalled vcpkg profile | `VCPKG_INSTALLED_DIR` | Third-party packages and compiler contract |
 
-CHTTP depends on the installed [Salts](https://github.com/qigao/salts) SDK and selected [SaltsUtils](https://github.com/qigao/salts-utils) components.
+Versions come from the parent environment or a locally loaded `.env`, without
+the `v` prefix. CMake does not load dotenv files. Merge [`.env.example`](.env.example)
+into existing machine settings and keep credentials private. Each SDK root must
+match the compiler, architecture, configuration and selected release. Package
+discovery is exact and restricted to those roots; SDK roots are never added to
+`CMAKE_PREFIX_PATH`.
 
-This integration branch requires the unified Salts CNet candidate tracked by
-[Salts #1050](https://github.com/qigao/salts/issues/1050) and
-[PR #1067](https://github.com/qigao/salts/pull/1067):
-`Salts::CNet` exports `<cnet/manager.h>` and `<cnet/handoff.h>` from the
-**same CNet shared library**, without `Salts::CNetManager` or a second manager DLL.
-This integration branch consumes floating prerelease package families
-`Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`.
-The qualified composition baseline is the paired `2.3.0-rc.2` / `4.3.0-rc.2`
-SDKs. Upgrade or roll back both together: Unicode is now exported by Salts,
-and the H1 WebSocket client requires `<cnet/websocket_transport.h>`.
-See [composition scope and qualification](http_client/README.md#rc2-ws-composition-238).
-NuGet resolves the latest matching versions on each CI run. A selected package
-must contain the expected SDK for the requested RID; missing files or
-ABI-incompatible SDKs fail immediately, with no fallback to Salts 2.2.x or
-SaltsUtils 4.2.x. Each server owner lane uses one fixed-capacity
-manager for TCP/TLS adoption and terminal attachment retirement. HTTP/1 deferred
-responses and HTTP/2 deferred streams keep their contexts until completion.
-Each lane's bounded admission inbox and generation-checked connection credits
-now use the optional CNet handoff helper. CHTTP still chooses the final owner,
-owns its listener/threads/TLS policy and protocol state, and keeps its public
-server API. Successful publication transfers the descriptor even if the host
-wake fails; shutdown drains that inbox after the existing `listener_done`
-barrier ensures no listener wake can race backend destruction. Rebuild consumers against the unified `Salts::CNet` SDK; do not retain or load
-the old `cnet_manager` DLL from an earlier installation. Raw CNet adoption
-remains available without initializing the manager.
+SaltsUtils 0.1.1 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
+private GmSSL/libecc adapter. HTTP and S3 use internal GmSSL digest helpers.
+Provider provenance and ownership are documented in
+[`vendor/cjwt/crypto/README.md`](vendor/cjwt/crypto/README.md).
 
-For normal PR/CI and release builds, `native-sdk-release.yml` resolves
-the latest matching `Salts.Native 2.3.0-*` and `SaltsUtils.Native 4.3.0-*`
-packages from GitHub NuGet. To qualify one
-exact upstream Salts SDK artifact, use the optional `salts_candidate_sha`
-workflow dispatch input; the SHA must match a successful producer CI with
-retained Linux, Windows and macOS SDK artifacts. In that explicit mode,
-`SaltsUtils.Native 4.3.0-*` still resolves from NuGet while Salts comes from
-the verified candidate artifact. Candidate mode skips cross compilation,
-packaging and publication. It does not relax the dependency ABI gate.
-The macOS profiles inherit `AppleClang`, matching the rc.2 producer SDK's
-native thread-local runtime ABI. Reconfigure an existing GCC build in a fresh
-build directory; do not reuse its compiler cache with the rc.2 TinyTest library.
-Native asynchronous file upload/download and static-file responses select
-Windows IOCP, Linux io_uring, or macOS Darwin AIO. The macOS path requires the
-matching candidate SDK exposing `CFLOW_IO_NATIVE_DARWIN_AIO`; kqueue/poll remain
-unsupported for regular files. There is no implicit synchronous or thread-pool
-fallback. File completions retain the same bounded runtime and owner callbacks.
-See [HTTP file transfer semantics](docs/HTTP.md) and the
-[CFlow backend contract](https://github.com/qigao/salts/blob/488b88e4cce9aae4479f63c403ab78911b7c51f8/cflow/README.md#macos-file-backend-design).
-
-CHttp directly depends only on `llhttp`, `tree-sitter`, and
-`tree-sitter-c` through its vcpkg manifest. It does not compile against or
-link the Lua or QuickJS-NG interpreter ports. Optional interpreter support
-belongs to its upstream SDKs and must not create redundant CHttp vcpkg
-dependencies.
-
-That gives the library a shared foundation:
-
-- **CNet / NativeIO** for transport, connection progress, async I/O, TLS/session ownership, and shutdown semantics.
-- **CMeta / CFlow** for typed metadata and execution boundaries where required.
-- **SaltsUtils parsers and DataBind** for JSON, related higher-level formats, and typed data binding through `Salts::DataBind`.
-- **SaltsUtils crypto helpers** where explicitly required by protocol features.
-- **Salts provider-neutral crypto APIs** for protocol hashing, HMAC, legacy compatibility digests, constant-time comparison, and secret wiping; provider types stay private.
-
-The current Salts CNet TLS and Salts Core crypto backends use GmSSL privately.
-CHTTP has no direct OpenSSL/BoringSSL dependency; HTTPS, H2 TLS and WSS use CNet,
-and public JWT admission remains HS256. The internal cjwt JWS/JWE backend uses
-SaltsUtils Crypto with GmSSL/libecc. Install SaltsUtils Native 4.3.0-rc.4 or a
-compatible newer SDK and restore GmSSL port revision 9 through the shared
-vcpkg-cache manifest; its CMake target resolves the static Crypto dependency.
-See [provider requirements and qualification](docs/HTTP.md#密码库迁移边界).
-Certificate-profile claims and their exact test limits are tracked in the
-[X.509 compatibility matrix](docs/X509_COMPATIBILITY_MATRIX.md).
-
-CHTTP owns HTTP, server-driven Web, RPC, S3, WebSocket, and OpenAPI domain behavior. It does not own Salts transport/runtime semantics and does not introduce a second hidden event loop.
-
-## Ecosystem role
-
-```text
-Salts
-  ├── salts-utils (including DataBind/TBE)
-  └── salts-net
-        ↓
-      CHTTP
-        ↓
-  application / workflow / service layers
-```
-
-CHTTP is domain infrastructure: higher-level projects can depend on it for HTTP-family protocols while still sharing the same Salts ownership, error, and async-I/O model.
+See [the migration decision and validation record](docs/SPLIT_SDK_MIGRATION.md)
+and [build instructions](cmake/BUILD.md).
 
 ## Modules
 
@@ -116,7 +51,7 @@ Client and Server each contain their own RPC-side implementation and link indepe
 Applications combining generated IDL services and Jinja pages can include
 `<chttp_app/app.h>` and link only `CHttp::App`. This installed C11/C++17
 shared library contains the Service and Web implementations. The HTTP server
-example and the installed App behavior test use this entry point.
+example and the App behavior tests use this entry point.
 
 Service and Web are fully merged into `app/` and one `chttp_app` shared library.
 The earlier interface-only facade left two deployment units and duplicate
@@ -195,96 +130,33 @@ BUILD_OPENAPI=ON
 
 ## Build and test
 
-Requirements:
-
-- CMake 3.25+
-- Ninja
-- vcpkg
-- C11/C++17 compiler
-- matching SDK profiles from the latest published Salts and SaltsUtils packages
-- .NET SDK 8 for the native SDK restore scripts
-
-Set `SALTS_ROOT`, `SALTS_UTILS_ROOT`, `PROJECT_ROOT`, `VCPKG_ROOT`, and
-`VCPKG_CACHE_REPOSITORY_ROOT` before configuration. The optional
-[Praktor build entry points](cmake/BUILD.md) load these settings from the ignored
-`.env` and invoke the same versioned presets.
-DataBind/TBE are components of the SaltsUtils installation. CHTTP consumes the
-concrete `Salts::DataBind` target from `find_package(SaltsUtils CONFIG REQUIRED)`.
-
-Local and CI builds use the [shared vcpkg cache](https://github.com/qigao/vcpkg-cache).
-Set `VCPKG_CACHE_REPOSITORY_ROOT` to that checkout; typical locations are
-`%LOCALAPPDATA%/qigao/vcpkg-cache` on Windows and `$HOME/.cache/qigao/vcpkg-cache`
-on Linux (NuGet binary restore also requires Mono).
-The hidden `vcpkg-cache` preset owns the outer toolchain, overlay ports, read-only
-GitHub Packages feed and writable local binary cache. Provide `GITHUB_TOKEN`
-with `read:packages` in the parent environment; credentials are never stored in
-presets. Existing vcpkg baseline and manifest dependencies remain authoritative.
-
-CI restores the latest published Salts and SaltsUtils packages with floating
-NuGet versions and `--no-cache --force-evaluate`. SDK roots come from that
-restore's `project.assets.json`, so older cached payloads cannot select an SDK.
-CI presets inherit the cache environment supplied by the setup action and derive
-overlay ports from `VCPKG_CACHE_REPOSITORY_ROOT`. Native CI uses
-`ci-sdk-release-tests-user` (Windows/Linux) or `ci-macos-sdk-release-tests-user`,
-which enable tests in the preset and build under `build/native-sdk-tests`.
-Package-only builds retain `ci-sdk-release-user` and its platform variants.
-
-SDK restoration uses one Bash script on all hosts, including Git Bash on Windows.
-It supports the existing GitHub environment output and JSON output for Praktor.
-For a local Windows restore, use PowerShell 7, put .NET SDK 8 and Python 3 on `PATH`,
-set `GITHUB_TOKEN` and `BASH_EXECUTABLE` to Git for Windows' `bin/bash.exe`, then
-run `./cmake/ci/restore-native-sdks.ps1 -Rid windows-x64 -Local` in the same
-PowerShell session used for the build. It sets `SALTS_ROOT` and
-`SALTS_UTILS_ROOT` to the resolved SDKs without overwriting installed packages.
-
-Windows Release (enter the Visual Studio `VsDevCmd.bat` environment first,
-retaining the configured dependency roots and `VCPKG_ROOT`):
+After restoring matched SDKs and loading their environment variables:
 
 ```powershell
-cmake --preset win-release-user
-cmake --build --preset win-release-user
-ctest --preset win-release-user
-cmake --build --preset install-win-release-user
+cmake/WithVs.cmd cmake --fresh --preset native-release-user
+cmake/WithVs.cmd cmake --build --preset native-release-user
+cmake/WithVs.cmd ctest --preset native-release-user --output-on-failure --no-tests=error
+cmake/WithVs.cmd cmake --build --preset install-native-release-user
 ```
 
-Linux uses the corresponding `linux-*` presets.
+Windows requires `VSDEVCMD_BAT` and the selected compiler SDK. Linux/macOS use
+`llvm-native-release-user` (or Linux `gcc-release-user`) without the Windows
+wrapper. Every module owns its tests. `BUILD_TESTS` and `BUILD_BENCHMARK` select
+the corresponding complete graphs; examples retain `BUILD_EXAMPLES`.
 
-Local install presets derive their destination from
-`$PROJECT_ROOT/external/pkgs/chttp/debug|release`; Android uses `chttp-android`.
-`CHTTP_ROOT` remains the downstream consumer's explicit CHTTP SDK root. SDK
-packaging retains `stage/sdk/<RID>`. After changing the toolchain or SDK roots,
-reconfigure with `cmake --preset win-release-user --fresh` before building.
+The [split SDK CI](.github/workflows/ci.yml) downloads release inputs once,
+verifies their manifests and SHA-256 digests, and shares locked original blobs
+with the matrix workers. Workers restore the selected profile, build the full
+graph, run native tests through CTest, and install/archive the SDK. Android
+uses a separately restored Linux host `salts-idlc` and its Base/CMeta runtime;
+cross-building and installation do not prove device execution.
 
-### CMeta reflection and plugin lifetime
-
-The 2.1 migration also uses the published `cmeta_*` platform/file APIs,
-`<cmeta_buffer.h>`, `<cmeta_fs.h>` and `<cmeta_uuid.h>`. Existing `mem_*`
-buffer operations, `SALTS_*` error codes and `Salts::*` CMake targets keep their
-published names. Typed declarations use `cmeta_type` and `cmeta_function`.
-
-Service and RPC continue to use producer-owned CMeta Function/Data descriptors
-and exact DataBind adapters. Service mount performs admission before publishing
-a route; request workers use the cached execution binding under its retained
-plugin lease. Salts 2.x plugin types/functions use `cmeta_plugin_*` and
-`CMETA_PLUGIN_*`; the runtime headers remain `<salts/plugin.h>` and the target
-remains `Salts::Plugin`.
-
-Service method slots use the CMeta cleanup obligation and Plugin lease adapter
-from `<salts/plugin_scope.h>`. Each successful acquisition arms exactly one
-obligation. Failed mount and Service destruction share its discharge path;
-cleanup runs after dependent CFlow state is destroyed. The registry must remain
-at a stable address until Service destruction, after server/executor drain.
-Lease release invariant violations fail fast instead of being silently ignored.
-
-Rebuild Service consumers and generated plugins together against matching
-SDKs; old `salts_plugin_*` source names and earlier reflection/plugin ABI epochs
-are not accepted. HTTP/RPC formats, export IDs and route semantics are unchanged.
-The Service HTTP test covers rejected export cleanup, successful mount retention,
-stop/admission closure and final unload.
-
-Always restore the latest Salts and SaltsUtils packages together, then regenerate
-IDL bindings and rebuild consumers against those SDKs. CMake does not pin or
-constrain their versions.
+The current published SDK intersection contains eight profiles: Windows MSVC
+and LLVM-MinGW x64, Linux Clang and GCC x64, Linux Clang x64 TSan, macOS Clang
+ARM64, Android ARM64 and x64. CNet 0.1.4 has no published Linux ARM64 SDK, so
+the Base/CMeta/Utils ARM64 Linux lanes cannot be used for this composition.
+Missing assets and failed jobs stop their flows. There is no source-build
+fallback, floating NuGet selection or automatic retry.
 
 ## Using CHTTP from CMake
 
@@ -298,7 +170,7 @@ target_link_libraries(my_app PRIVATE CHttp::Client)
 
 Use `CHttp::Server` for protocol/server applications, `CHttp::App` for server-driven HTML applications, and `CHttp::S3` for S3 consumers.
 
-The package resolves Salts and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
+The package resolves SaltsBase, CMeta, SaltsCore and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
 
 ## Runtime boundaries
 
@@ -315,43 +187,12 @@ CHTTP follows the same explicit system rules as Salts:
 
 CHTTP is intended to be reused by higher layers such as TurboFlow, Flowie, service applications, and product adapters. Those projects own their business/session/workflow semantics; CHTTP owns only the HTTP-family protocol and service infrastructure.
 
-## Origin and migration
+## Contributing
 
-This repository was extracted from the earlier Salts-hosted HTTP services implementation. Existing request lifecycle, state ownership, protocol, and error semantics were preserved through that move while package boundaries were made explicit.
+Read [AGENTS.md](AGENTS.md), keep protocol and ownership contracts explicit,
+and add regression coverage to the owning module's existing test suite.
 
-Additional technical references:
+## License
 
-- [HTTP runtime notes](docs/HTTP.md)
-- [RPC runtime notes](docs/RPC.md)
-- [CHttp::App product guide](app/README.md)
-- [module layout decision](docs/plans/2026-09-09-server-client-layout.md)
-
----
-
-**Salts provides the systems runtime. CHTTP provides the HTTP-family protocol layer.**
-
-### Native SDK dependency resolution
-
-Both Unix and Windows SDK restore scripts consume the same floating
-prerelease version ranges:
-
-```xml
-<ItemGroup>
-  <PackageReference Include="Salts.Native" Version="2.3.0-*" />
-  <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
-</ItemGroup>
-```
-
-The Salts PackageReference is omitted only in an *explicit* exact-SHA candidate
-qualification, where the SDK is obtained from a verified upstream artifact.
-Ordinary PR builds no longer use a stale branch-default candidate pin. Missing
-matching packages, SDK headers, unsupported ABI or CTest failures must fail
-rather than restore an older incompatible SDK. For exact-SHA artifact
-qualification, the upstream producer must have successful retained Linux,
-Windows and macOS SDKs; the selection is never an automatic fallback.
-
-Both floating prerelease ranges may resolve differently between runs.
-CI reports the resolved package identities and verifies the requested
-platform's SDK layout. For reproducible failure analysis, record the actual
-resolved versions and upstream source SHAs alongside the CI run. Do not add
-an implicit fallback or a permanent exact-version dependency.
+See [LICENSE](LICENSE), [NOTICE](NOTICE), and
+[third-party notices](THIRD_PARTY_NOTICES.md).

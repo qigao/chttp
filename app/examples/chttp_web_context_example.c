@@ -1,9 +1,9 @@
 #include <chttp_app/web.h>
 
 #include <cmeta/struct.h>
-#include <salts/error_codes.h>
-#include <cmeta_cmeta_data.h>
-#include <vstr.h>
+#include <core/error_codes.h>
+#include <cmeta/core_data.h>
+#include <core/vstr.h>
 
 #include <stdint.h>
 #include <stdio.h>

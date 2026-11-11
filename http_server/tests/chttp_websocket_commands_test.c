@@ -109,9 +109,9 @@ static void check_reserved_capacity(void) {
   check_equal(chttp_server_websocket_send_text(&sessions[1], "", 0u), SALTS_ENOBUFS);
 }
 static void stop_during_copy(void) {
-  cmeta_mutex_lock(&impl->mutex);
+  sync_mutex_lock(&impl->mutex);
   impl->stats.running = 0;
-  cmeta_mutex_unlock(&impl->mutex);
+  sync_mutex_unlock(&impl->mutex);
   check_equal(chttp_server_destroy(&fixture), SALTS_EBUSY);
   check_not_equal(fixture.impl, NULL);
 }

@@ -2,8 +2,8 @@
 #include "chttp_server_runtime.h"
 
 #include <stdatomic.h>
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 enum { TERMINAL_TEST_TIMEOUT_MS = 2000 };
 
@@ -12,7 +12,7 @@ typedef struct terminal_fixture_state {
   chttp_server_connection connection;
   chttp_server_response deferred_response;
   chttp_server_deferred handle;
-  cmeta_thread_t thread;
+  sync_thread_t thread;
   mem_buffer_t *body;
   atomic_int finished;
   int operation;
@@ -90,7 +90,7 @@ spec("CHTTP deferred completion lifecycle") {
     terminal_fixture = (terminal_fixture_state){0};
     chttp_server_impl *server = &terminal_fixture.server;
     chttp_server_connection *connection = &terminal_fixture.connection;
-    cmeta_mutex_init(&server->mutex);
+    sync_mutex_init(&server->mutex);
     atomic_init(&terminal_fixture.finished, 0);
     atomic_init(&server->buffer_bytes, 0u);
     atomic_init(&server->peak_buffer_bytes, 0u);
@@ -121,16 +121,16 @@ spec("CHTTP deferred completion lifecycle") {
   }
 
   after_each() {
-    if (terminal_fixture.locked) cmeta_mutex_unlock(&terminal_fixture.server.mutex);
+    if (terminal_fixture.locked) sync_mutex_unlock(&terminal_fixture.server.mutex);
     if (terminal_fixture.thread_started) {
-      check_equal(cmeta_thread_join(&terminal_fixture.thread), SALTS_OK);
-      cmeta_thread_destroy(&terminal_fixture.thread);
+      check_equal(sync_thread_join(&terminal_fixture.thread), SALTS_OK);
+      sync_thread_destroy(&terminal_fixture.thread);
     }
     mem_buffer_release(terminal_fixture.body);
     chttp_server_response_builder_destroy(&terminal_fixture.connection.deferred_builder);
     chttp_server_response_builder_destroy(&terminal_fixture.connection.request_state.response_builder);
     check_equal(atomic_load(&terminal_fixture.server.buffer_bytes), (size_t)0u);
-    cmeta_mutex_destroy(&terminal_fixture.server.mutex);
+    sync_mutex_destroy(&terminal_fixture.server.mutex);
   }
 
   it("keeps terminal ownership until the shutdown lock admits publication and wake") {
@@ -145,23 +145,23 @@ spec("CHTTP deferred completion lifecycle") {
           chttp_server_deferred_token(1u, CHTTP_SERVER_DEFERRED_PENDING));
       terminal_fixture.handle = (chttp_server_deferred){
           .impl = &terminal_fixture.connection.deferred_target, .generation = 1u};
-      cmeta_mutex_lock(&terminal_fixture.server.mutex);
+      sync_mutex_lock(&terminal_fixture.server.mutex);
       terminal_fixture.locked = true;
-      check_equal(cmeta_thread_create(&terminal_fixture.thread, terminal_complete, NULL), SALTS_OK);
+      check_equal(sync_thread_create(&terminal_fixture.thread, terminal_complete, NULL), SALTS_OK);
       terminal_fixture.thread_started = true;
-      const uint64_t deadline = cmeta_monotonic_ms() + TERMINAL_TEST_TIMEOUT_MS;
+      const uint64_t deadline = monotonic_ms() + TERMINAL_TEST_TIMEOUT_MS;
       while (chttp_server_deferred_token_state(atomic_load_explicit(
           &terminal_fixture.connection.deferred_token, memory_order_acquire)) ==
-          CHTTP_SERVER_DEFERRED_PENDING && cmeta_monotonic_ms() < deadline)
-        cmeta_thread_yield();
+          CHTTP_SERVER_DEFERRED_PENDING && monotonic_ms() < deadline)
+        sync_thread_yield();
       check_equal(chttp_server_deferred_token_state(atomic_load_explicit(
           &terminal_fixture.connection.deferred_token, memory_order_acquire)),
           CHTTP_SERVER_DEFERRED_WRITING);
       check_equal(atomic_load_explicit(&terminal_fixture.finished, memory_order_acquire), 0);
-      cmeta_mutex_unlock(&terminal_fixture.server.mutex);
+      sync_mutex_unlock(&terminal_fixture.server.mutex);
       terminal_fixture.locked = false;
-      check_equal(cmeta_thread_join(&terminal_fixture.thread), SALTS_OK);
-      cmeta_thread_destroy(&terminal_fixture.thread);
+      check_equal(sync_thread_join(&terminal_fixture.thread), SALTS_OK);
+      sync_thread_destroy(&terminal_fixture.thread);
       terminal_fixture.thread_started = false;
       check_equal(terminal_fixture.status, SALTS_OK);
       check_null(terminal_fixture.handle.impl);

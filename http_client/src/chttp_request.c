@@ -1,6 +1,6 @@
 #include "chttp_internal.h"
 
-#include <vstr.h>
+#include <core/vstr.h>
 
 #include <limits.h>
 #include <stdio.h>

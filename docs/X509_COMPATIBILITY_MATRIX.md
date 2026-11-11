@@ -1,5 +1,11 @@
 # CHttp X.509 compatibility matrix
 
+The results below describe the earlier immutable monolithic composition. The
+split-SDK migration preserves these runtime cases and their fixed fixtures in
+`http_client/tests`; they now run unconditionally with `BUILD_TESTS`. New SDK
+qualification is pending and must not inherit these historical pass claims.
+See [the migration record](SPLIT_SDK_MIGRATION.md).
+
 This matrix describes evidence through CHttp's real HTTPS client and server
 APIs. Primitive support or a CNet-only handshake is not promoted to a CHttp
 claim. CHttp remains provider-neutral and links no OpenSSL, BoringSSL, or
@@ -9,7 +15,7 @@ GmSSL API directly; TLS and certificate validation belong to CNet.
 | --- | --- | --- |
 | RSA-2048/3072 leaf, RSA issuer, SHA-256 signature | **verified** | `chttp_tls_test` performs HTTPS requests through the real client/server path. The exact-source matrix adds RSA-3072 server authentication while the baseline covers middleware, sessions, connection reuse, peer certificate identity and required RSA-2048 mTLS. |
 | P-256 client or server identity, ECDSA/SHA-256 | **verified** | The baseline requires a P-256 mTLS client identity; the exact-source matrix additionally completes server-authenticated HTTPS with the CNet P-256 fixture. |
-| P-384 issuer, P-256 server leaf, ECDSA/SHA-384 | **verified on the exact-source Linux gate** | The opt-in `CHTTP_P384_SHA384_ACCEPTANCE_TESTS` case completes a real HTTPS request and rejects wrong CA, wrong DNS name, expired leaf and tampered certificate signature before middleware dispatch. |
+| P-384 issuer, P-256 server leaf, ECDSA/SHA-384 | **verified on the exact-source Linux gate** | The preserved P-384/SHA-384 case completes a real HTTPS request and rejects wrong CA, wrong DNS name, expired leaf and tampered certificate signature before middleware dispatch. |
 | Hostname and trust-anchor mismatch | **verified** | Both failures are exercised against a running HTTPS server; the middleware count remains unchanged. |
 | Expired leaf and invalid certificate signature | **verified for the P-384/P-256 profile** | Fixed independently parseable fixtures reach the TLS handshake but never HTTP middleware. |
 | TLS 1.2/1.3, negotiated cipher and signature-scheme reporting | **not yet verified in CHttp** | CNet owns negotiation; the CHttp test does not currently expose or record the negotiated tuple. |

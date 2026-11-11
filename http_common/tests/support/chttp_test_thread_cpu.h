@@ -3,11 +3,11 @@
 
 /* Include first: the strict-C11 Linux build needs POSIX thread CPU clocks.
  * Benchmark/test-only platform adapter. Salts has no public CPU-time query;
- * never inspect the representation of its opaque cmeta_thread_t. */
+ * never inspect the representation of its opaque sync_thread_t. */
 #if defined(__linux__) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
-#include <salts/thread.h>
+#include <threads/threads.h>
 #include <stdint.h>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -60,7 +60,7 @@ static inline int chttp_test_thread_cpu_capture(chttp_test_thread_cpu *cpu) {
 #else
   return SALTS_ENOTSUP;
 #endif
-  cpu->token = cmeta_thread_current_token();
+  cpu->token = sync_thread_current_token();
   return SALTS_OK;
 }
 

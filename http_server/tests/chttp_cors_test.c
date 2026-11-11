@@ -1,6 +1,6 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
-#include <salts/clock.h>
+#include <core/clock.h>
 #include "tinytest.h"
 
 #include <stdio.h>
@@ -255,8 +255,8 @@ spec("CHTTP CORS") {
               .target = "/", .method = test.method, .headers = test.headers, .header_count = test.header_count,
               .protocol = (chttp_protocol)protocol, .on_complete = cors_complete, .user = &result};
           check_equal(chttp_async_client_submit(&client, &options, &request), SALTS_OK);
-          const uint64_t deadline = cmeta_monotonic_ms() + CORS_TEST_TIMEOUT_MS;
-          while (!result.done && cmeta_monotonic_ms() < deadline) {
+          const uint64_t deadline = monotonic_ms() + CORS_TEST_TIMEOUT_MS;
+          while (!result.done && monotonic_ms() < deadline) {
             size_t completions = 0;
             check_equal(chttp_async_client_poll(&client, 10u, &completions), SALTS_OK);
           }

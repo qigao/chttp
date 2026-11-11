@@ -4,7 +4,7 @@
 #include "chttp_response_owner.h"
 #include <http_client/response_scope.h>
 
-#include <salts/clock.h>
+#include <core/clock.h>
 
 #include <limits.h>
 #include <stdbool.h>
@@ -59,7 +59,7 @@ static uint64_t chttp_requests_deadline_after(uint64_t now_ms, uint32_t timeout_
 }
 
 static uint32_t chttp_requests_poll_wait(uint64_t deadline_at_ms) {
-  const uint64_t now_ms = cmeta_monotonic_ms();
+  const uint64_t now_ms = monotonic_ms();
   const uint64_t remaining = deadline_at_ms > now_ms ? deadline_at_ms - now_ms : 0u;
   return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
 }
@@ -194,7 +194,7 @@ static int chttp_requests_perform(chttp_client *client, chttp_method method,
                                             .tls = options->tls,
                                             .protocol = options->protocol};
   if (options->timeout_ms != 0u)
-    deadline_at_ms = chttp_requests_deadline_after(cmeta_monotonic_ms(), options->timeout_ms);
+    deadline_at_ms = chttp_requests_deadline_after(monotonic_ms(), options->timeout_ms);
   if (destinations != NULL) {
     const char *uri = NULL;
     status = chttp_destination_select(destinations, &request_options, out_destination, &uri);

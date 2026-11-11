@@ -1,10 +1,10 @@
 #include "chttp_test_thread_cpu.h"
-#include <salts/clock.h>
+#include <core/clock.h>
 #include <stdatomic.h>
 #include "tinytest.h"
 
 static chttp_test_thread_cpu measured;
-static cmeta_thread_t worker;
+static sync_thread_t worker;
 static bool worker_started;
 static int worker_status;
 static uint64_t worker_cpu_ns;
@@ -21,11 +21,11 @@ static void cpu_work(void *unused) {
   if (worker_status == SALTS_OK)
     worker_status = chttp_test_thread_cpu_read(&cpu, &before);
   after = before;
-  const uint64_t deadline = cmeta_monotonic_ms() + 2000u;
+  const uint64_t deadline = monotonic_ms() + 2000u;
   while (worker_status == SALTS_OK && after - before < 100000000u) {
     for (size_t i = 0u; i < 65536u; ++i) value = value * 1664525u + 1013904223u;
     worker_status = chttp_test_thread_cpu_read(&cpu, &after);
-    if (after < before || cmeta_monotonic_ms() >= deadline) {
+    if (after < before || monotonic_ms() >= deadline) {
       worker_status = SALTS_ETIMEDOUT;
       break;
     }
@@ -35,7 +35,7 @@ static void cpu_work(void *unused) {
   published_cpu = cpu;
   atomic_store_explicit(&worker_ready, 1, memory_order_release);
   while (!atomic_load_explicit(&worker_release, memory_order_acquire))
-    cmeta_sleep_ms(1u);
+    sleep_ms(1u);
   const int release_status = chttp_test_thread_cpu_release(&cpu);
   if (worker_status == SALTS_OK) worker_status = release_status;
 }
@@ -53,8 +53,8 @@ spec("Thread CPU measurement") {
   after_each() {
     atomic_store_explicit(&worker_release, 1, memory_order_release);
     if (worker_started) {
-      check_equal(cmeta_thread_join(&worker), SALTS_OK);
-      cmeta_thread_destroy(&worker);
+      check_equal(sync_thread_join(&worker), SALTS_OK);
+      sync_thread_destroy(&worker);
     }
     check_equal(chttp_test_thread_cpu_release(&measured), SALTS_OK);
   }
@@ -73,18 +73,18 @@ spec("Thread CPU measurement") {
     uint64_t before, after;
     check_equal(chttp_test_thread_cpu_capture(&measured), SALTS_OK);
     check_equal(chttp_test_thread_cpu_read(&measured, &before), SALTS_OK);
-    check_equal(cmeta_thread_create(&worker, cpu_work, NULL), SALTS_OK);
+    check_equal(sync_thread_create(&worker, cpu_work, NULL), SALTS_OK);
     worker_started = true;
-    cmeta_sleep_ms(200u);
+    sleep_ms(200u);
     while (!atomic_load_explicit(&worker_ready, memory_order_acquire))
-      cmeta_sleep_ms(1u);
+      sleep_ms(1u);
     uint64_t other_cpu = 0u;
     check_equal(chttp_test_thread_cpu_read(&published_cpu, &other_cpu), SALTS_OK);
     check(other_cpu >= worker_cpu_ns);
     check(published_cpu.token != measured.token);
     atomic_store_explicit(&worker_release, 1, memory_order_release);
-    check_equal(cmeta_thread_join(&worker), SALTS_OK);
-    cmeta_thread_destroy(&worker);
+    check_equal(sync_thread_join(&worker), SALTS_OK);
+    sync_thread_destroy(&worker);
     worker_started = false;
     check_equal(chttp_test_thread_cpu_read(&measured, &after), SALTS_OK);
     check_equal(worker_status, SALTS_OK);

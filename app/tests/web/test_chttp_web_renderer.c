@@ -2,8 +2,8 @@
 #include "tinytest.h"
 
 #include <cmeta/struct.h>
-#include <cmeta_cmeta_data.h>
-#include <vstr.h>
+#include <cmeta/core_data.h>
+#include <core/vstr.h>
 
 #include <stddef.h>
 #include <stdlib.h>

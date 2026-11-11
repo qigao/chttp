@@ -1,8 +1,8 @@
 #include <chttp_app/web.h>
 
-#include <cmeta_crypto.h>
-#include <platform.h>
-#include <salts/error_codes.h>
+#include "chttp_digest.h"
+#include <core/platform.h>
+#include <core/error_codes.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -78,9 +78,9 @@ static chttp_web_status chttp_web_csrf_write(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0, 0u,
         "CSRF session and output are required");
 
-  status = cmeta_secure_random(random, sizeof(random));
+  status = secure_random(random, sizeof(random));
   if (status != SALTS_OK) {
-    cmeta_crypto_clear(random, sizeof(random));
+    chttp_crypto_clear(random, sizeof(random));
     return chttp_web_session_status(
         error, status, "secure random generation failed");
   }
@@ -89,10 +89,10 @@ static chttp_web_status chttp_web_csrf_write(
     token[i * 2u + 1u] = hex[random[i] & 0x0fu];
   }
   token[CHTTP_WEB_CSRF_TOKEN_BYTES] = '\0';
-  cmeta_crypto_clear(random, sizeof(random));
+  chttp_crypto_clear(random, sizeof(random));
 
   status = chttp_session_set(session, CHTTP_WEB_CSRF_SESSION_KEY, token);
-  cmeta_crypto_clear(token, sizeof(token));
+  chttp_crypto_clear(token, sizeof(token));
   if (status != SALTS_OK)
     return chttp_web_session_status(
         error, status, "CHTTP session rejected the CSRF token");
@@ -169,7 +169,7 @@ chttp_web_status chttp_web_csrf_validate_token(
         "CSRF token is missing or malformed");
   {
     int equal = 0;
-    if (cmeta_crypto_equal(expected, token, CHTTP_WEB_CSRF_TOKEN_BYTES, &equal) != SALTS_OK ||
+    if (chttp_crypto_equal(expected, token, CHTTP_WEB_CSRF_TOKEN_BYTES, &equal) != SALTS_OK ||
         !equal)
       return chttp_web_session_fail(
           error, CHTTP_WEB_CSRF, 0, 0u,
@@ -413,7 +413,7 @@ chttp_web_status chttp_web_flash_push(
   next[total] = '\0';
 
   status = chttp_session_set(session, CHTTP_WEB_FLASH_SESSION_KEY, next);
-  cmeta_crypto_clear(next, sizeof(next));
+  chttp_crypto_clear(next, sizeof(next));
   return chttp_web_session_status(
       error, status, "CHTTP session rejected flash state");
 }

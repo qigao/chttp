@@ -3,7 +3,7 @@
 #include "internal.h"
 #include "ui_model_internal.h"
 
-#include <cmeta_cmeta_data.h>
+#include <cmeta/core_data.h>
 
 #include <stddef.h>
 #include <stdint.h>

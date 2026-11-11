@@ -147,18 +147,9 @@ Clang Release 全量 **94/94** 通过（`build/rc2-clang-full.log`），MSVC Rel
 `ci-sdk-release-user`，configure 显式指定 `-DBUILD_TESTING=ON -DBUILD_TESTS=ON`，
 确保测试与 IDL fixture 都在当前 build graph 中。
 
-复现时先用 `cmake/ci/restore-native-sdks.ps1 -Rid windows-x64 -Local` 恢复包，
-核对实际解析版本，再将 `SALTS_ROOT` / `SALTS_UTILS_ROOT` 指向对应 rc.2 SDK。
-在 `VsDevCmd.bat -arch=x64 -host_arch=x64` 环境中运行：
-
-```text
-cmake --preset win-clang-release-user
-cmake --build --preset win-clang-release-user --parallel 4
-ctest --preset win-clang-release-user --output-on-failure
-```
-
-macOS preset 已随发布包切换到 AppleClang；本地未执行 macOS/Linux/移动端运行、
-rc.2 Debug/ASan 或 TSan，不能沿用此前 rc.1 的 sanitizer 结果作为本轮证据。
+当前拆分 SDK 的依赖版本、构建入口和未解决缺口见 [构建指南](../cmake/BUILD.md)
+及 [迁移记录](../docs/SPLIT_SDK_MIGRATION.md)。以上 rc.2 数据保留为历史证据，
+不代表新 SDK 已通过验证。正式回归通过当前 user preset 和 CTest 执行。
 
 ## WS 的 Manager 接纳与退休
 

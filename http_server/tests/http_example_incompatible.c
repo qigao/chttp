@@ -1,5 +1,5 @@
 #include "http_example_incompatible_native.h"
-#include <salts/error_codes.h>
+#include <core/error_codes.h>
 
 /* A real 32-bit provider whose operation ID matches the 64-bit host contract. */
 int databind_11_HttpExample_10_Calculator_3_Add(

@@ -23,20 +23,20 @@ target_include_directories(chttp_app PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(chttp_app
-  PUBLIC CHttp::Server Salts::CMeta Salts::DataBindPlugin Salts::CFlow
-  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core Salts::CSerde
+  PUBLIC CHttp::Server CMeta::CMeta Salts::DataBindPlugin CMeta::CFlow
+  PRIVATE Salts::JinjaCMeta Salts::DataBind Salts::Core Salts::CSerde chttp_digest
   INTERFACE
     $<LINK_ONLY:Salts::JinjaCMeta>
     $<LINK_ONLY:Salts::DataBind>)
 install(TARGETS chttp_app EXPORT ChttpTargets)
 install(DIRECTORY include/chttp_app DESTINATION include)
 
-if(BUILD_EXAMPLES OR (BUILD_TESTS AND BUILD_TESTING))
+if(BUILD_EXAMPLES OR BUILD_TESTS)
   add_subdirectory(examples)
 endif()
-if(BUILD_TESTS AND BUILD_TESTING)
+if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
-if(BUILD_BENCHMARKS)
+if(BUILD_BENCHMARK)
   add_subdirectory(benchmarks)
 endif()

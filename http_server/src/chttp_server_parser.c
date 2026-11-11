@@ -2,7 +2,7 @@
 
 #include <llhttp.h>
 #include <uri_parser.h>
-#include <vstr.h>
+#include <core/vstr.h>
 
 #include <stdbool.h>
 #include <stdint.h>

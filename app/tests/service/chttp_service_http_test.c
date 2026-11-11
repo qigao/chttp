@@ -1,15 +1,15 @@
 #include <chttp_app/service.h>
 
 #include <http_client/http.h>
-#include <cmeta_cmeta_fixed_width.h>
+#include <cmeta/core_fixed_width.h>
 #include "chttp_service.http.h"
 #include "chttp_service_plugin.http.h"
 #include "chttp_service_plugin.service_native.h"
 #include "chttp_service_plugin_native.h"
 #include "tinytest.h"
 
-#include <salts/clock.h>
-#include <salts/thread.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -839,7 +839,7 @@ static bool DATA_BIND_NATIVE_CALL chttp_service_test_blocking_invoke(
   if (gate == NULL) return false;
   atomic_store_explicit(&gate->started, 1, memory_order_release);
   while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
   return chttp_service_test_invoke(
       NULL, return_storage, params, param_count);
 }
@@ -850,7 +850,7 @@ static void chttp_service_executor_gate_run(void *user) {
   if (gate == NULL) return;
   atomic_store_explicit(&gate->started, 1, memory_order_release);
   while (atomic_load_explicit(&gate->release, memory_order_acquire) == 0)
-    cmeta_thread_yield();
+    sync_thread_yield();
 }
 
 static void chttp_service_executor_noop(void *user) {
@@ -1496,10 +1496,10 @@ spec("CHttp::App generated HTTP MethodPlan") {
     check_equal(
         cflow_executor_try_post_task(&executor, &gate_task),
         CFLOW_ADMISSION_ACCEPTED);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&gate.started, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(&gate.started, memory_order_acquire), 1);
     check_equal(
@@ -1562,7 +1562,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     cflow_executor executor = {0};
     chttp_service_executor_gate invoke_gate;
     chttp_service_request_thread_args request_args;
-    cmeta_thread_t request_thread = {0};
+    sync_thread_t request_thread = {0};
     uint64_t deadline;
     uint16_t port = 0u;
 
@@ -1622,15 +1622,15 @@ spec("CHttp::App generated HTTP MethodPlan") {
                  "tcp://127.0.0.1:%u", (unsigned int)port),
         0);
     check_equal(
-        cmeta_thread_create(
+        sync_thread_create(
             &request_thread, chttp_service_request_thread, &request_args),
         SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(
                &invoke_gate.started, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(&invoke_gate.started, memory_order_acquire), 1);
 
@@ -1643,8 +1643,8 @@ spec("CHttp::App generated HTTP MethodPlan") {
     check_not_null(service.impl);
 
     atomic_store_explicit(&invoke_gate.release, 1, memory_order_release);
-    check_equal(cmeta_thread_join(&request_thread), SALTS_OK);
-    cmeta_thread_destroy(&request_thread);
+    check_equal(sync_thread_join(&request_thread), SALTS_OK);
+    sync_thread_destroy(&request_thread);
     check_equal(
         atomic_load_explicit(&request_args.completed, memory_order_acquire), 1);
     check_equal(request_args.status, SALTS_OK);
@@ -1837,7 +1837,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     chttp_service_request_thread_args plugin_request;
     cflow_executor_stats executor_stats = {0};
     size_t executor_pending_baseline = 0u;
-    cmeta_thread_t plugin_request_thread = {0};
+    sync_thread_t plugin_request_thread = {0};
     uint64_t deadline;
     bool quiescent = true;
     uint16_t port = 0u;
@@ -1971,10 +1971,10 @@ spec("CHttp::App generated HTTP MethodPlan") {
     check_equal(
         cflow_executor_try_post_task(&executor, &plugin_gate_task),
         CFLOW_ADMISSION_ACCEPTED);
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     while (atomic_load_explicit(&plugin_gate.started, memory_order_acquire) == 0 &&
-           cmeta_monotonic_ms() < deadline)
-      cmeta_thread_yield();
+           monotonic_ms() < deadline)
+      sync_thread_yield();
     check_equal(
         atomic_load_explicit(&plugin_gate.started, memory_order_acquire), 1);
     check_true(cflow_executor_get_stats(&executor, &executor_stats));
@@ -1989,17 +1989,17 @@ spec("CHttp::App generated HTTP MethodPlan") {
                  "tcp://127.0.0.1:%u", (unsigned int)port),
         0);
     check_equal(
-        cmeta_thread_create(
+        sync_thread_create(
             &plugin_request_thread, chttp_service_request_thread,
             &plugin_request),
         SALTS_OK);
 
-    deadline = cmeta_monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
+    deadline = monotonic_ms() + CHTTP_SERVICE_TEST_TIMEOUT_MS;
     do {
       check_true(cflow_executor_get_stats(&executor, &executor_stats));
       if (executor_stats.pending > executor_pending_baseline) break;
-      cmeta_thread_yield();
-    } while (cmeta_monotonic_ms() < deadline);
+      sync_thread_yield();
+    } while (monotonic_ms() < deadline);
     check_true(executor_stats.pending > executor_pending_baseline);
 
     /*
@@ -2018,8 +2018,8 @@ spec("CHttp::App generated HTTP MethodPlan") {
         CMETA_PLUGIN_BUSY);
 
     atomic_store_explicit(&plugin_gate.release, 1, memory_order_release);
-    check_equal(cmeta_thread_join(&plugin_request_thread), SALTS_OK);
-    cmeta_thread_destroy(&plugin_request_thread);
+    check_equal(sync_thread_join(&plugin_request_thread), SALTS_OK);
+    sync_thread_destroy(&plugin_request_thread);
     check_equal(plugin_request.status, SALTS_OK);
     check_equal(plugin_request.http_status, 201u);
     check_true(cflow_executor_wait_idle(&executor));

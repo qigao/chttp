@@ -6,7 +6,7 @@
 #include <s3/s3_object.h>
 #include <s3/s3_signer.h>
 
-#include <tstr.h>
+#include <core/tstr.h>
 #include <xml_parser/xml_parser.h>
 
 #include <stddef.h>
@@ -94,9 +94,9 @@ int s3_response_parse_service_error(s3_response *response, size_t max_xml_bytes,
 
 int s3_xml_parse_root(const void *body, size_t body_size, size_t max_xml_bytes,
                       size_t max_xml_nodes, const char *expected_root,
-                      salts_xml_document *out_document, salts_xml_node *out_root);
-int s3_xml_node_name_equal(salts_xml_node node, const char *expected);
-salts_xml_node s3_xml_child(salts_xml_node parent, const char *name);
-int s3_xml_text_dup(salts_xml_node node, char **out_text);
+                      xml_document *out_document, xml_node *out_root);
+int s3_xml_node_name_equal(xml_node node, const char *expected);
+xml_node s3_xml_child(xml_node parent, const char *name);
+int s3_xml_text_dup(xml_node node, char **out_text);
 
 #endif /* S3_INTERNAL_H */

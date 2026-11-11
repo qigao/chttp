@@ -1,7 +1,7 @@
 #include <openapi/generator.h>
 #include <tree_sitter/api.h>
 #include <json_parser.h>
-#include <cyaml/cyaml_json_adapter.h>
+#include <cyaml_json_adapter.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
