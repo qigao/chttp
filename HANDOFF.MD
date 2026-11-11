@@ -1,5 +1,14 @@
 # Split SDK migration handoff
 
+- Post-merge review is recorded in `docs/ISSUE_PR_REVIEW.md` against master
+  5098dc8. PR heads #233/#234/#236 are already ancestors of master; old cache
+  and candidate ServiceHost drafts must not be merged as current SDK changes.
+- Base string reuse keeps JWT issuer/audience ownership private and optional.
+  `tstr_dup(NULL)` returns an empty string, so guard optional copies explicitly
+  and pair them with `tstr_free`. Borrowed `vstr` comparisons preserve exact
+  claim case and ASCII-insensitive header/scheme matching. Full local build
+  and 103/103 CTests pass (`build/migration-base-strings-full-ctest.log`).
+
 - The existing working tree contained the shared-presets migration. It was
   preserved and extended; see `docs/SPLIT_SDK_MIGRATION.md` for dependency
   ownership, the explicit eight-profile matrix and rollback.

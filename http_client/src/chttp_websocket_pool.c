@@ -7,6 +7,7 @@
 
 #include <cnet/websocket.h>
 #include <core/clock.h>
+#include <core/vstr.h>
 #include <uri_parser.h>
 
 #include <limits.h>
@@ -140,17 +141,8 @@ static bool chttp_websocket_pool_connection_matches(const chttp_websocket_pool_i
 }
 
 static bool chttp_websocket_pool_ascii_equal(const char *left, const char *right) {
-  unsigned char a;
-  unsigned char b;
-  if (left == NULL || right == NULL) return false;
-  do {
-    a = (unsigned char)*left++;
-    b = (unsigned char)*right++;
-    if (a >= (unsigned char)'A' && a <= (unsigned char)'Z') a += 32u;
-    if (b >= (unsigned char)'A' && b <= (unsigned char)'Z') b += 32u;
-    if (a != b) return false;
-  } while (a != 0u);
-  return true;
+  return left != NULL && right != NULL &&
+         vstr_ieq(vstr_from_cstr(left), vstr_from_cstr(right));
 }
 
 static bool chttp_websocket_pool_header_token(const char *name) {
