@@ -200,6 +200,28 @@ static void recovery_test_security(bool alpn) {
   check_equal(atomic_load_explicit(&recovery_test.requests, memory_order_relaxed), 0);
 }
 
+static void recovery_test_retry_security(bool alpn) {
+  chttp_options options;
+  chttp_retry_options retry = CHTTP_RETRY_OPTIONS_INIT;
+  chttp_response response = {0};
+  chttp_error error = {0};
+  chttp_server_stats stats;
+  recovery_test_tls(CHTTP_HTTP_2, !alpn, alpn);
+  check_equal(chttp_client_init(&recovery_test.blocking, &recovery_test.client_config), SALTS_OK);
+  retry.max_attempts = 3u;
+  retry.retry_body_byte_budget = 6u;
+  retry.application_declares_idempotent = true;
+  options = (chttp_options){.connection_uri = recovery_test.uri, .authority = "recovery.test",
+      .target = "/ok", .timeout_ms = RECOVERY_TEST_TIMEOUT_MS, .tls = &recovery_test.tls,
+      .protocol = CHTTP_HTTP_2, .body = "abc", .body_size = 3u};
+  check_not_equal(chttp_request_retry(&recovery_test.blocking, CHTTP_METHOD_POST,
+      &options, &retry, &response, &error), SALTS_OK);
+  chttp_response_destroy(&response);
+  check_equal(chttp_server_get_stats(&recovery_test.server, &stats), SALTS_OK);
+  check_equal(stats.accepted_connections, UINT64_C(1));
+  check_equal(atomic_load_explicit(&recovery_test.requests, memory_order_relaxed), 0);
+}
+
 static void recovery_test_blocking_deadline(chttp_protocol protocol) {
   chttp_options options = {.connection_uri = recovery_test.uri, .authority = "recovery.test",
       .target = "/ok", .timeout_ms = 50u, .protocol = protocol};
@@ -472,6 +494,12 @@ spec("CHttp explicit connection recovery") {
   }
   it("treats TLS ALPN rejection as permanent without protocol downgrade") {
     recovery_test_security(true);
+  }
+  it("denies logical POST retry after TLS identity rejection despite application permission") {
+    recovery_test_retry_security(false);
+  }
+  it("denies logical POST retry after TLS ALPN rejection despite application permission") {
+    recovery_test_retry_security(true);
   }
   it("fails closed for unknown native errors and TLS diagnoses") {
     chttp_connection_recovery r = {0};

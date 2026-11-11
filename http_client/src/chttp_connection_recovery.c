@@ -17,16 +17,14 @@ int chttp_connection_recovery_validate(const chttp_connection_recovery_options *
   return SALTS_OK;
 }
 
-static cnet_reconnect_failure_kind recovery_classify(void *user,
-    cnet_connection_state state, const cnet_error *error) {
-  chttp_connection_recovery *r = user;
+cnet_reconnect_failure_kind chttp_transport_failure_classify(bool tls,
+    bool transport_connected, cnet_connection_state state, const cnet_error *error) {
   bool transient = false;
   bool refused = false;
-  if (r->permanent || r->stopping) return CNET_RECONNECT_PERMANENT;
   if (error != NULL && (error->status == SALTS_EAUTH ||
       error->tls.reason != CRYPTO_TLS_FAILURE_NONE)) return CNET_RECONNECT_SECURITY;
   if (error == NULL && state == CNET_CONNECTION_CLOSED)
-    return r->tls && !r->transport_connected ? CNET_RECONNECT_PERMANENT : CNET_RECONNECT_TRANSIENT;
+    return tls && !transport_connected ? CNET_RECONNECT_PERMANENT : CNET_RECONNECT_TRANSIENT;
   if (error != NULL) {
     /* Native completion failures may have a generic Salts EIO status. CNet's
      * classifier contract preserves the native error precisely for this
@@ -60,8 +58,15 @@ static cnet_reconnect_failure_kind recovery_classify(void *user,
   }
   /* Before verified TLS CONNECTED, an undiagnosed reset/timeout can be a
    * rejected SNI/identity/handshake. Only a proven TCP refusal is retryable. */
-  if (r->tls && !r->transport_connected && !refused) return CNET_RECONNECT_PERMANENT;
+  if (tls && !transport_connected && !refused) return CNET_RECONNECT_PERMANENT;
   return transient ? CNET_RECONNECT_TRANSIENT : CNET_RECONNECT_PERMANENT;
+}
+
+static cnet_reconnect_failure_kind recovery_classify(void *user,
+    cnet_connection_state state, const cnet_error *error) {
+  chttp_connection_recovery *r = user;
+  if (r->permanent || r->stopping) return CNET_RECONNECT_PERMANENT;
+  return chttp_transport_failure_classify(r->tls, r->transport_connected, state, error);
 }
 
 static void recovery_state(void *user, cnet_connection connection,

@@ -390,6 +390,7 @@ static int chttp_h2_on_begin_headers(void *user, int32_t stream_id) {
   chttp_h2_session *session = (chttp_h2_session *)user;
   chttp_h2_request_state *request = chttp_h2_session_request(session, stream_id);
   if (request == NULL || request->header_block_open) return -1;
+  request->attempt.response_started = true;
   request->header_block_open = true;
   request->regular_header_seen = false;
   request->status_seen = false;
@@ -623,6 +624,12 @@ static int chttp_h2_on_stream_close(void *user, int32_t stream_id, uint32_t erro
        request->response.status_code == 204u || request->response.status_code == 304u ||
        request->content_length == request->response.body_size);
   if (request == NULL || request->completed) return 0;
+  if (error_code == CHTTP_H2_ERR_REFUSED_STREAM && !session->retry_forbidden &&
+      request->failure_status == SALTS_OK &&
+      !request->attempt.response_started) {
+    request->attempt.protocol_not_executed = true;
+    request->attempt.retryable_failure = true;
+  }
   if (error_code == CHTTP_H2_ERR_NO_ERROR && request->final_headers_seen &&
       content_length_matches) {
     status = SALTS_OK;
@@ -656,8 +663,11 @@ static int chttp_h2_on_stream_close(void *user, int32_t stream_id, uint32_t erro
 static void chttp_h2_on_goaway(void *user, uint32_t last_stream_id, uint32_t error_code) {
   chttp_h2_session *session = (chttp_h2_session *)user;
   (void)last_stream_id;
-  (void)error_code;
   if (session == NULL) return;
+  if (error_code != CHTTP_H2_ERR_NO_ERROR) {
+    session->retry_forbidden = true;
+    session->recovery.permanent = true;
+  }
   if (session->state == CHTTP_H2_SESSION_ACTIVE) session->state = CHTTP_H2_SESSION_DRAINING;
   if (session->active_requests == 0u) session->close_after_flush = true;
 }
@@ -783,6 +793,20 @@ static void chttp_h2_cnet_state(void *user, cnet_connection connection, cnet_con
     return;
   }
   if (session->active_requests != 0u) {
+    const cnet_reconnect_failure_kind kind = session->retry_forbidden
+        ? CNET_RECONNECT_PERMANENT : chttp_transport_failure_classify(
+        session->tls, session->state != CHTTP_H2_SESSION_CONNECTING, state, error);
+    for (size_t index = 0u; index < session->request_capacity; ++index) {
+      chttp_h2_request_state *request = session->requests[index];
+      if (request != NULL && !request->completed) {
+        /* A partial frame/header block may contain response bytes that cannot
+         * yet be attributed to a stream. Do not replay on incomplete evidence. */
+        request->attempt.response_started = request->attempt.response_started ||
+            chttp_h2_proto_input_incomplete(session->protocol);
+        request->attempt.retryable_failure = kind == CNET_RECONNECT_TRANSIENT;
+        request->attempt.security_failure = kind == CNET_RECONNECT_SECURITY;
+      }
+    }
     const int failure_status =
         state == CNET_CONNECTION_FAILED && error != NULL ? error->status : SALTS_ECONNRESET;
     const int native_status = error != NULL ? error->native_status : 0;
@@ -868,6 +892,7 @@ static int chttp_h2_recovery_reset(void *user) {
   s->pool_ready = false;
   s->pool_draining = false;
   s->failed = false;
+  s->retry_forbidden = false;
   s->state = CHTTP_H2_SESSION_CONNECTING;
   return SALTS_OK;
 }

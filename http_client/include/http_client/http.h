@@ -403,6 +403,35 @@ int chttp_client_set_socket_options(
     chttp_client *client,
     const cnet_stream_socket_options *options);
 
+/** Explicit logical retry for one blocking memory request. Existing entry points
+ * retain their one-attempt contract. max_attempts includes the initial request;
+ * additional attempts require timeout_ms > 0 and share one absolute deadline.
+ * Inputs are copied once; body_source/body_sink are unsupported (ENOTSUP).
+ * Only transient transport or protocol-not-executed failures before a response
+ * starts are eligible. Method idempotence, the explicit application declaration,
+ * or protocol-not-executed evidence must authorize replay. TLS/security/local
+ * failures and HTTP response statuses never authorize retry.
+ * Byte budget counts the body bytes of all additional attempts. Exhaustion
+ * returns ENOBUFS; deadline exhaustion returns ETIMEDOUT, with the last native
+ * error retained. Attempt exhaustion returns the last attempt error.
+ * Caller owns out_response on success and destroys it with chttp_response_destroy.
+ * Terminal transport drain may continue beyond the result deadline. */
+typedef struct chttp_retry_options {
+  size_t size;
+  uint32_t max_attempts;
+  size_t retry_body_byte_budget;
+  uint32_t initial_backoff_ms;
+  uint32_t maximum_backoff_ms;
+  uint64_t jitter_seed;
+  bool application_declares_idempotent;
+} chttp_retry_options;
+#define CHTTP_RETRY_OPTIONS_INIT \
+  {sizeof(chttp_retry_options), 1u, 0u, 0u, 0u, 0u, false}
+
+int chttp_request_retry(chttp_client *client, chttp_method method,
+    const chttp_options *options, const chttp_retry_options *retry,
+    chttp_response *out_response, chttp_error *out_error);
+
 /**
  * Blocking destination-selected request, with the same policy/identity rules
  * as submit_to(). Selects once; FULL is fail-fast, with no alternate endpoint,

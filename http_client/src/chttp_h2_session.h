@@ -7,6 +7,7 @@
 #include "chttp_internal.h"
 #include "chttp_tls.h"
 #include "chttp_connection_recovery.h"
+#include "chttp_attempt.h"
 
 #include <stdbool.h>
 #include <cnet/client_pool.h>
@@ -24,6 +25,7 @@ typedef enum chttp_h2_session_state {
 typedef struct chttp_h2_session chttp_h2_session;
 
 typedef struct chttp_h2_request_state {
+  chttp_attempt_facts attempt;
   chttp_h2_hpack_header *opening_headers;
   char *opening_header_bytes;
   size_t opening_header_count;
@@ -109,6 +111,7 @@ struct chttp_h2_session {
   size_t pending_output_size;
   chttp_h2_session_state state;
   bool tls;
+  bool retry_forbidden;
   bool receive_armed;
   bool send_active;
   bool close_after_flush;

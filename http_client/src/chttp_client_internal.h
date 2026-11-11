@@ -2,6 +2,7 @@
 #define CHTTP_CLIENT_INTERNAL_H
 
 #include <stdint.h>
+#include "chttp_attempt.h"
 
 #include "chttp_file_sink.h"
 #include "chttp_file_transfer.h"
@@ -26,6 +27,9 @@ int chttp_async_client_submit_timed(chttp_async_client *client,
     const chttp_request_options *options, chttp_file_transfer *source,
     chttp_file_sink_transfer *sink, const cnet_destination_result *destination,
     uint64_t deadline_at_ms, chttp_request *out_request);
+
+int chttp_async_client_attempt_facts(chttp_async_client *client,
+    chttp_request request, chttp_attempt_facts *out);
 
 int chttp_async_client_file_runtime(chttp_async_client *client,
                                     cflow_io_file_runtime **out_runtime);
