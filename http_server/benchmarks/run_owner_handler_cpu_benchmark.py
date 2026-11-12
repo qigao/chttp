@@ -24,6 +24,8 @@ with raw_path.open("x", encoding="utf-8") as raw:
                           "platform": platform.platform(), "processor": platform.processor()}) + "\n")
     for repeat in range(3):
         result = subprocess.run([binary], env=env, capture_output=True, text=True, timeout=180)
+        with raw_path.with_suffix(".stderr").open("a", encoding="utf-8") as diagnostics:
+            diagnostics.write(f"REPEAT {repeat+1}\n" + result.stderr)
         raw.write(result.stdout)
         raw.flush()
         if result.returncode:

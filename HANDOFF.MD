@@ -1,5 +1,27 @@
 # Split SDK migration handoff
 
+- Deferred CPU failure root: temporary Server tracing reproduced HTTP 503 with
+  one worker-admission rejection, not a lost successful response. The benchmark
+  received all 150 response bytes but waited for an ok body. Source/data show
+  ordinary Base threadpool_try_submit maps Disruptor publisher CAS contention
+  to ENOBUFS; observed queued=1/active=0/capacity=16. Formal Base four-producer
+  bounded-outstanding regression fails expected OK/got -4027 and passes with
+  its internal claim/copy/publish monitor fix: qigao/salts-base PR #15.
+  CHttp keeps released SDK 0.1.4 until a corrected SDK is published/restored.
+- Benchmark request diagnostics now distinguish EOF/receive/send failure and
+  immediately reject non-200 status; worker rejection includes status and pool
+  occupancy, and each repeat retains stderr beside raw JSONL. The old SDK's
+  formal 128-request gate still fails as expected, now reporting HTTP 503
+  directly (`migration-deferred-status-report-ctest.log`), without timeout
+  widening, retry or inline fallback. No CHttp runtime change was needed.
+- Investigation used a separate temporary branch and the existing CTest entry.
+  Traces/data: migration-deferred-close-trace-ctest.log,
+  migration-deferred-http-status-ctest.log and
+  migration-deferred-admission-trace-ctest.log. The diagnostic branch and Server
+  tracing code are removed; a local build/deferred-close-investigation.patch
+  preserves the non-product trace for audit. No temporary validation project,
+  SDK substitution or source dependency fallback was introduced.
+
 - Handler CPU benchmark migration: clock() did not provide the intended Windows
   CPU measurement. Reuse chttp_test_thread_cpu for separate handler-owner,
   client and bounded application-worker totals; exclude listener/main explicitly.

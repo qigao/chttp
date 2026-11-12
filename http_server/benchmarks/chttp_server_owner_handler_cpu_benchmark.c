@@ -383,6 +383,10 @@ static int owner_cpu_handler(void *user,
   status = threadpool_try_submit(
       route->pool, owner_cpu_deferred_job_run, job);
   if (status != SALTS_OK) {
+    threadpool_stats_t rejected = {0};
+    threadpool_get_stats(route->pool, &rejected);
+    fprintf(stderr, "benchmark worker admission failed: status=%d queued=%lld active=%lld capacity=%zu\n",
+        status, (long long)rejected.queued_tasks, (long long)rejected.active_tasks, rejected.queue_capacity);
     atomic_fetch_add_explicit(
         route->deferred_errors, 1u, memory_order_relaxed);
     owner_cpu_deferred_job_release(job);
@@ -479,14 +483,17 @@ static int owner_cpu_request(owner_cpu_socket socket_value, const char *target,
   size_t used = 0u;
   int request_size;
   uint64_t started;
-  if (target == NULL || out_ns == NULL) return -1;
+  if (target == NULL || out_ns == NULL) return SALTS_EINVAL;
   request_size = snprintf(
       (char *)request, sizeof(request),
       "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n",
       target);
-  if (request_size <= 0 || (size_t)request_size >= sizeof(request)) return -1;
+  if (request_size <= 0 || (size_t)request_size >= sizeof(request)) return SALTS_EMSGSIZE;
   started = hrtime();
-  if (owner_cpu_send_all(socket_value, request, (size_t)request_size) != 0) return -1;
+  if (owner_cpu_send_all(socket_value, request, (size_t)request_size) != 0) {
+    fprintf(stderr, "benchmark request send failed\n");
+    return SALTS_EIO;
+  }
   while (used < sizeof(response) - 1u) {
     int got = recv(socket_value, (char *)response + used,
                    (int)(sizeof(response) - 1u - used), 0);
@@ -494,16 +501,23 @@ static int owner_cpu_request(owner_cpu_socket socket_value, const char *target,
 #if !defined(_WIN32)
       if (got < 0 && errno == EINTR) continue;
 #endif
-      return -1;
+      fprintf(stderr, "benchmark response %s after %zu bytes\n", got == 0 ? "EOF" : "receive error", used);
+      return got == 0 ? SALTS_ECONNRESET : SALTS_EIO;
     }
     used += (size_t)got;
     response[used] = '\0';
+    /* This fixed Server fixture must send HTTP/1.1 200. Reject an explicit
+     * admission error immediately, rather than waiting for an absent ok body. */
+    if (used >= 13u && memcmp(response, "HTTP/1.1 200 ", sizeof("HTTP/1.1 200 ") - 1u) != 0) {
+      fprintf(stderr, "benchmark unexpected HTTP status: %.3s\n", response + 9u);
+      return SALTS_EPROTO;
+    }
     if (strstr((const char *)response, "\r\n\r\nok") != NULL) {
       *out_ns = hrtime() - started;
-      return 0;
+      return SALTS_OK;
     }
   }
-  return -1;
+  return SALTS_EMSGSIZE;
 }
 
 static void owner_cpu_snapshot(chttp_server_impl *impl, size_t owner_count,
@@ -565,8 +579,8 @@ static void owner_cpu_client_main(void *user) {
   if (status == SALTS_OK) { stage = "cpu-start"; status = chttp_test_thread_cpu_read(&cpu, &before); }
   for (size_t i = 0u; i < client->requests && status == SALTS_OK; ++i) {
     stage = "request";
-    if (owner_cpu_request(client->socket_value, client->target, &client->latencies[i]) != 0) {
-      status = SALTS_EIO;
+    status = owner_cpu_request(client->socket_value, client->target, &client->latencies[i]);
+    if (status != SALTS_OK) {
 #if defined(_WIN32)
       native_error = WSAGetLastError();
 #else

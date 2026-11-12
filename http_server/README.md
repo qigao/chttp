@@ -741,3 +741,11 @@ Native CI builds the full benchmark graph and retains raw CTest artifacts.
 Shared-runner/sanitizer results qualify behavior, not representative performance.
 A production worker/LF decision and admission-contention profiling remain separate
 #215 acceptance. Removing the benchmark does not change runtime APIs or defaults.
+
+Current qualification is tracked by draft #286 and upstream SaltsBase #15.
+The gate exposes ordinary-pool false-full admission under producer contention in
+Base 0.1.4. Unexpected HTTP status fails immediately and per-repeat stderr is
+retained beside JSONL. Keep the gate red against the affected released SDK; do
+not replace the executor, retry a rejected request or consume an unqualified
+source SDK to hide the dependency defect. The corrected release must be restored
+through the normal version/manifest path before CHttp acceptance is claimed.
