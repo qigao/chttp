@@ -59,3 +59,11 @@ Tests include mixed HTTP GET / JSON-RPC POST on one Server; generated native suc
 Formal protocol tests retain private engine access; public server applications link `CHttp::App`, while standalone RPC clients link `CHttp::Client`.
 
 The following are **not** provided: automatic settlement retry/replay, dynamic schema interpretation in the hot path, streaming JSON-RPC, HTTP/3 or a second CNet runtime. Exact cancellation, plugin generation and sanitizer checks remain explicit release gates.
+
+The module-owned `crpc_server_test` also runs an explicit HTTP/2 request with
+430 state values, 810 history values and 64 rows of 54 binary action values.
+The real CSerde reader checks every position and the client validates all
+64 deterministic count-of-bits results. Explicit 32 KiB request limits admit
+the payload; an 8 KiB RPC encoding limit returns `SALTS_EMSGSIZE` at
+`rpc-prepare` without another handler call. This is protocol-engine coverage,
+not generated structured RPC egress or a trained-model/downstream acceptance.
