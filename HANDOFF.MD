@@ -38,6 +38,17 @@
   Full build and focused Application/UI runtime tests passed after that fix
   (`migration-application-static-metadata-*`, `migration-application-static-ui-*`).
 
+- Public Application examples now share canonical Service/Controller/Interceptor
+  declarations and use real ACE Interface dependency injection. Compile-only
+  coverage missed that the C++ example did not flush its listener URL to a pipe;
+  the new formal HTTP test timed out before obtaining that URL
+  (`migration-application-examples-red-ctest.log`). Flush after publishing the
+  bound port. Module-owned CTest entries run both actual public programs, check
+  the injected answer, Interceptor header/rejection, request isolation, 404 and
+  checked shutdown; startup/shutdown timeouts fail and clean up the child without
+  retry. Full published-SDK Windows build, 111/111 CTest and install pass
+  (`migration-application-examples-full-ctest.log`).
+
 - Socket policy audit: HTTP async/blocking Client, Server accepted streams and
   standalone WebSocket already forward CNet options. H2 WebSocket Pool omitted
   both validation and application of `config.client.socket_options`; apply it

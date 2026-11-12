@@ -152,6 +152,16 @@ server application. Old public `<chttp_app/service.h>` and
 existing manual Web programs are retained under `tests/web/fixtures` solely
 for protocol/security regression coverage.
 
+The public C11/C++17 examples share
+[canonical declarations](examples/application_contract.h): AnswerService provides
+the ExampleAnswer Interface, GreetingController receives that dependency from
+ACE, and a separate DispatchPolicy Bean supplies an Interceptor. `/answer`
+returns the injected value as JSON; `/reject` demonstrates an explicit 403 and
+does not represent authentication. `X-Example-Interceptor: ACE` makes chain
+entry observable, including on unmatched routes. Press Enter for checked scoped
+or RAII shutdown. The module's formal CTest entries start both actual programs,
+exercise requests and verify successful process shutdown under `BUILD_TESTS`.
+
 Rendering remains synchronous and non-reentrant. An injected rendering Service
 must serialize access or own independent renderers for concurrent workers.
 The remaining Web sections describe reusable request/render/security primitives;
