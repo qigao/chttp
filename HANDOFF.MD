@@ -7,7 +7,14 @@
   to ENOBUFS; observed queued=1/active=0/capacity=16. Formal Base four-producer
   bounded-outstanding regression fails expected OK/got -4027 and passes with
   its internal claim/copy/publish monitor fix: qigao/salts-base PR #15.
-  CHttp keeps released SDK 0.1.4 until a corrected SDK is published/restored.
+  Base 0.1.6 releases that fix. CMeta and Utils bind producer dependencies
+  exactly, so the matching composition is Base/CMeta 0.1.6 and Utils 0.1.3.
+  Changing only Base fails fresh configure before generation
+  (`migration-base-016-fresh.log`); preserve that evidence and exact checks.
+  Restore original published SDKs into version-specific roots, update only
+  the selected dependency fields in .env, and freshly configure the complete
+  graph with BUILD_TESTS=ON and BUILD_BENCHMARK=ON. Do not edit installed
+  Config.cmake files to bypass their dependency versions.
 - Benchmark request diagnostics now distinguish EOF/receive/send failure and
   immediately reject non-200 status; worker rejection includes status and pool
   occupancy, and each repeat retains stderr beside raw JSONL. The old SDK's
@@ -31,8 +38,9 @@
   (`migration-handler-cpu-final-measurements.log`). Preserve its partial raw data.
   Added boundary diagnostics then passed all 90 points
   (`migration-handler-cpu-boundary-ctest.log`), but that alone does not identify
-  or fix the earlier failure. Keep qualification draft until investigated;
-  do not claim a performance gain or close #215 based on this rerun.
+  or fix the earlier failure. That rerun was insufficient for acceptance;
+  the later Base admission diagnosis above identifies the actual failure.
+  Do not claim a performance gain or close #215 based on a passing rerun.
   First CI 43166936938 found the same client-completion boundary in both
   Windows profiles (deferred/4 owners/zero work), while macOS passed. Capture
   client phase/status/native error rather than infer a pool or transport fault.
