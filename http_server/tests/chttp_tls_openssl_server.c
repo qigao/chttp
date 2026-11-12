@@ -5,6 +5,9 @@
  */
 #include <http_server/http.h>
 #include "chttp_server_engine.h"
+#include "chttp_server_runtime.h"
+#include <core/clock.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +15,35 @@
 enum { CHTTP_TLS_INTEROP_HANDSHAKE_MS = 7000u };
 static const char kRoute[] = "/interop";
 static const char kResponse[] = "{\"mTLS\":true}";
+
+/* Control-thread observation of the real CNet verifier outcome. This never
+ * accepts an arbitrary EOF/reset as evidence of certificate rejection. */
+static int report_tls_rejections(chttp_server *owner, uint64_t expected) {
+  chttp_server_impl *server = owner->impl;
+  const uint64_t started = monotonic_ms();
+  sync_mutex_lock(&server->mutex);
+  while (server->tls_failure_count < expected) {
+    const uint64_t elapsed = monotonic_ms() - started;
+    if (elapsed >= CHTTP_TLS_INTEROP_HANDSHAKE_MS) {
+      sync_mutex_unlock(&server->mutex);
+      fputs("TLS verifier terminal observation timed out\n", stderr);
+      return SALTS_ETIMEDOUT;
+    }
+    const int status = sync_cond_timedwait(&server->changed, &server->mutex,
+        (CHTTP_TLS_INTEROP_HANDSHAKE_MS - elapsed) * UINT64_C(1000000));
+    if (status != 0 && status != -ETIMEDOUT) {
+      sync_mutex_unlock(&server->mutex);
+      return SALTS_EIO;
+    }
+  }
+  const uint64_t count = server->tls_failure_count, requests = server->stats.requests;
+  const int status = server->tls_failure_status, reason = (int)server->tls_failure.reason;
+  sync_mutex_unlock(&server->mutex);
+  printf("CHTTP_TLS_REJECTIONS=%llu %d %d %llu\n",
+      (unsigned long long)count, status, reason, (unsigned long long)requests);
+  fflush(stdout);
+  return SALTS_OK;
+}
 
 static native_io_backend_kind network_kind(void) {
 #if defined(_WIN32)
@@ -100,7 +132,13 @@ int main(int argc, char **argv) {
     goto end;
   printf("CHTTP_TLS_INTEROP_PORT=%u\n", (unsigned int)port);
   fflush(stdout);
-  (void)getchar(); /* test harness owns explicit shutdown */
+  char command[96];
+  while (fgets(command, sizeof(command), stdin) != NULL) {
+    unsigned long long expected = 0u;
+    if (strcmp(command, "\n") == 0) break; /* explicit harness shutdown */
+    if (sscanf(command, "TLS_REJECTIONS %llu", &expected) != 1 ||
+        report_tls_rejections(&server, (uint64_t)expected) != SALTS_OK) goto end;
+  }
 
   result = EXIT_SUCCESS;
 end:

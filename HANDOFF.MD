@@ -1,5 +1,25 @@
 # Split SDK migration handoff
 
+- OpenSSL negative mTLS qualification must use actual local TLS terminal
+  evidence, not require the word "alert" in peer output. CI 43211623347 MSVC
+  rejected the wrong-CA connection with `read:errno=113` and no HTTP response,
+  so the old text assertion failed (`build/ci-43211623347-msvc.log`). Server now
+  retains only an owned numeric failure snapshot/count under its existing stats
+  mutex when CNet reports FAILED with a non-NONE TLS diagnostic. The existing
+  OpenSSL fixture waits on that event and verifies one new failure, nonzero TLS
+  status/reason, nonzero client exit and no extra HTTP request for each missing
+  certificate/wrong CA/wrong EKU case. An arbitrary transport reset cannot pass.
+  Provider HANDSHAKE or CHAIN_SIGNATURE categories must not be guessed into a
+  finer certificate diagnosis; the first overly-specific local assertions are
+  preserved in `migration-finish-prs-tls-{evidence-headers,local-category}-ctest.log`.
+  Correct local TLS-stage qualification passes in
+  `migration-finish-prs-tls-terminal-ctest.log`. No TLS verifier, security policy,
+  public ABI, timeout, retry or fallback was changed.
+
+- The intermittent H1 asset timeout remains open as
+  https://github.com/qigao/chttp/issues/290; later green runs are not evidence
+  of its root cause or resolution. Preserve the failure-boundary diagnostics.
+
 - Private generated direct HTTP mounts now use the Application-owned pool for
   bind/validate/invoke/serialize as one task. Share the existing MethodPlan
   evaluator through an internal output adapter, retaining the engine's existing

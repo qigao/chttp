@@ -208,7 +208,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_program(CHTTP_TEST_OPENSSL NAMES openssl REQUIRED)
 add_executable(chttp_tls_openssl_server chttp_tls_openssl_server.c)
 target_link_libraries(chttp_tls_openssl_server PRIVATE CHttp::Server)
-target_include_directories(chttp_tls_openssl_server PRIVATE ${PROJECT_SOURCE_DIR}/http_server/src)
+target_include_directories(chttp_tls_openssl_server PRIVATE
+  ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_common/http)
 set_target_properties(chttp_tls_openssl_server PROPERTIES FOLDER "http_server/tests")
 add_test(NAME chttp_tls_openssl_test COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/verify_tls_openssl.py
