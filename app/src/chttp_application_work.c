@@ -181,6 +181,7 @@ static void publish(work_item *item, int business_status) {
   item->outcome.publication_status = status;
   if (status != SALTS_OK && status != SALTS_ENOENT && status != SALTS_EALREADY &&
       impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = status;
+  sync_cond_broadcast(&impl->settled);
   sync_mutex_unlock(&impl->mutex);
 }
 int chttp_application_work_reject(const chttp_application_work_exchange *exchange,
@@ -270,6 +271,7 @@ static void join_completion(work_item *item, int business_done, int transport_st
   sync_mutex_lock(&impl->mutex);
   impl->accepting = 0;
   if (impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = SALTS_EPROTO;
+  sync_cond_broadcast(&impl->settled);
   /* Retain the live record, rather than fabricate completion or run user code
    * on the owner. Control-plane close reports the unsettled invariant failure. */
   sync_mutex_unlock(&impl->mutex);
@@ -340,7 +342,8 @@ int chttp_application_work_submit(chttp_application_work *owner,
     const int detached = chttp_server_response_unobserve(response, &item->terminal);
     if (detached == SALTS_OK) { release_work(item); return status; }
     sync_mutex_lock(&impl->mutex); impl->accepting = 0;
-    impl->stats.publication_status = SALTS_EPROTO; sync_mutex_unlock(&impl->mutex);
+    impl->stats.publication_status = SALTS_EPROTO;
+    sync_cond_broadcast(&impl->settled); sync_mutex_unlock(&impl->mutex);
     return SALTS_EPROTO;
   }
   item->task = *task;
@@ -381,6 +384,12 @@ static int wait_work(work_impl *impl, uint32_t timeout_ms) {
   const uint64_t start = monotonic_ms();
   sync_mutex_lock(&impl->mutex);
   while (impl->stats.pending) {
+    /* A known publication failure must not turn an infinite drain into a hang.
+     * Return its original error while retaining every still-live record. */
+    if (impl->stats.publication_status != SALTS_OK) {
+      const int status = impl->stats.publication_status;
+      sync_mutex_unlock(&impl->mutex); return status;
+    }
     const uint64_t elapsed = monotonic_ms() - start;
     if (timeout_ms && elapsed >= timeout_ms) {
       sync_mutex_unlock(&impl->mutex); return SALTS_ETIMEDOUT;

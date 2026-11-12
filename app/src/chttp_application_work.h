@@ -69,6 +69,8 @@ int chttp_application_work_reject(const chttp_application_work_exchange *, unsig
     const char *, const void *, size_t);
 int chttp_application_work_is_current(const chttp_application_work *);
 int chttp_application_work_get_stats(chttp_application_work *, chttp_application_work_stats *);
+/* A known publication failure ends a pending wait immediately; live records
+ * remain owned. A successful wait only establishes quiescence, not wire success. */
 int chttp_application_work_wait(chttp_application_work *, uint32_t timeout_ms);
 /* Stop admission, drain accepted work, then destroy the owned worker pool.
  * Finite timeout and same-executor close retain ownership on failure.

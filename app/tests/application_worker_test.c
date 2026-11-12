@@ -412,6 +412,40 @@ spec("Application internal worker handoff") {
     check_equal(fixture.outcome.publication_status, SALTS_OK);
     check_equal(fixture.outcome.transport_status, SALTS_OK);
   }
+  it("reports publication failure without waiting for a blocked completion observer") {
+    fixture.hold_completion = 1;
+    fixture.http.max_response_body_bytes = 1u;
+    fixture.http.max_buffered_response_body_bytes = 1u;
+    start(1u, 8192u);
+    call_result call = {.protocol = CHTTP_HTTP_2}; perform(&call);
+    check_not_equal(call.status, SALTS_OK);
+    check_not_equal(call.status, SALTS_ETIMEDOUT);
+    sync_mutex_lock(&fixture.mutex);
+    const uint64_t started = monotonic_ms();
+    while (!fixture.completion_count && monotonic_ms() - started < 5000u)
+      sync_cond_timedwait(&fixture.changed, &fixture.mutex, UINT64_C(100000000));
+    const int observed = fixture.completion_count;
+    sync_mutex_unlock(&fixture.mutex);
+    check_equal(observed, 1);
+    check_equal(chttp_application_work_close(&fixture.work, 0u), SALTS_EMSGSIZE);
+    check_not_equal(fixture.work.impl, NULL);
+    check_equal(fixture.finalized, 0);
+    check_equal(fixture.outcome.business_status, SALTS_OK);
+    check_equal(fixture.outcome.publication_status, SALTS_EMSGSIZE);
+    check_not_equal(fixture.outcome.transport_status, SALTS_OK);
+    release_worker();
+    chttp_application_work_stats stats = {0};
+    const uint64_t drained = monotonic_ms();
+    do {
+      check_equal(chttp_application_work_get_stats(&fixture.work, &stats), SALTS_OK);
+      if (!stats.pending) break;
+      sync_thread_yield();
+    } while (monotonic_ms() - drained < 5000u);
+    check_equal(stats.pending, 0u); check_equal(stats.retained_bytes, 0u);
+    check_equal(fixture.finalized, 1);
+    check_equal(chttp_application_work_close(&fixture.work, 5000u), SALTS_EMSGSIZE);
+    check_equal(fixture.work.impl, NULL);
+  }
   group("business completion is separate from response transport") {
       it("waits for H2 flow-control release while other work uses the same worker") {
         const chttp_protocol protocol = CHTTP_HTTP_2;

@@ -10,7 +10,7 @@
   its worker. The private Application prototype resolves real ACE Controller
   receivers and retains the graph until worker observers settle. Its private
   mounts cannot mix owner-affine legacy callbacks. No public mode is exposed.
-  The worker suite covers 20 cases including two workers/two owners; Application
+  The worker suite covers 21 cases including two workers/two owners; Application
   tests cover injected Service execution and finite-close graph retention. Full
   native-release-user build, 116/116 CTests and install pass; logs are
   `build/migration-application-work-{late-build,late-ctest,full-ctest,install}.log`.
@@ -30,6 +30,13 @@
   Replace that inference with deterministic H2 flow-window backpressure; keep
   H1's actual send/deadline/observer tests. Do not equate local send completion
   with peer application consumption or widen timing assertions to hide it.
+- Worker drain checks known publication errors before waiting, including a zero
+  (infinite) deadline, and preserves the original error and live ownership. An
+  oversized reply rejected by the real engine while its completion observer is
+  held verifies fail-fast close, retained payload and later complete cleanup:
+  `migration-application-worker-failfast-{build,ctest}.log`. Publication failure
+  must signal waiters; only signaling final slot release can otherwise strand
+  a waiter behind a completion-publication invariant failure.
 
 - Deferred CPU failure root: temporary Server tracing reproduced HTTP 503 with
   one worker-admission rejection, not a lost successful response. The benchmark
