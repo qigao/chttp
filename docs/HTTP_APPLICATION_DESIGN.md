@@ -95,6 +95,17 @@ The selected CMeta 0.1.6 worker provider wraps the SaltsBase thread pool; its
 [implementation](https://github.com/qigao/cmeta/blob/v0.1.6/cflow/src/executor.c)
 is the scheduler reuse point. These facts do not establish the proposed mode.
 
+### Internal implementation status
+
+The private `app/src/chttp_application_work.h` bridge now owns a bounded CFlow
+worker pool, deep-copied buffered request state, a copied response draft and
+accepted-task finalization. It is not installed or selected by Application.
+`chttp_application_worker_test` verifies real H1/H2 owner-to-worker dispatch,
+transient snapshot isolation, overload, same-pool close rejection and late
+completion after protocol deadlines. Session/stream/WS adaptation, the public
+Invocation migration and response-terminal observers remain required before
+switching the application programming model. No runtime feature switch was added.
+
 ### Decision and alternatives
 
 The baseline is that application-supplied Controller actions, generated native

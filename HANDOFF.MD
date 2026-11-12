@@ -1,5 +1,14 @@
 # Split SDK migration handoff
 
+- Worker migration foundation is private: Application still uses its published
+  dispatch model until the complete Invocation/Session/stream/WS migration.
+  Deep-copy parser-backed headers, params, JWT strings/times, peer and body before
+  a queued worker can outlive the callback. After H1 deadline/H2 reset, keep this
+  storage until the real worker/finalizer settles; stale deferred publication
+  cannot release it early. Existing-suite worker tests cover 11 cases. Full
+  native-release-user build, 116/116 CTests and install pass; logs are
+  `build/migration-application-work-{late-build,late-ctest,full-ctest,install}.log`.
+
 - Deferred CPU failure root: temporary Server tracing reproduced HTTP 503 with
   one worker-admission rejection, not a lost successful response. The benchmark
   received all 150 response bytes but waited for an ok body. Source/data show

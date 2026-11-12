@@ -1,0 +1,50 @@
+#ifndef CHTTP_APPLICATION_WORK_H
+#define CHTTP_APPLICATION_WORK_H
+/* Private migration bridge. Not an installed Application execution mode.
+ * Buffered, Session-free requests only; the public model is switched only after
+ * Session/stream/WS and full response-terminal adapters pass their own tests. */
+#include <http_server/http.h>
+
+typedef struct chttp_application_work { void *impl; } chttp_application_work;
+typedef struct chttp_application_work_reply chttp_application_work_reply;
+typedef int (*chttp_application_work_fn)(void *, const chttp_server_request_view *,
+    chttp_application_work_reply *);
+typedef struct chttp_application_work_task {
+  chttp_application_work_fn run;
+  void (*finalize)(void *);
+  void *user;
+} chttp_application_work_task;
+typedef struct chttp_application_work_config {
+  size_t workers;
+  size_t capacity;
+  size_t retained_bytes;
+  size_t reply_bytes;
+} chttp_application_work_config;
+typedef struct chttp_application_work_stats {
+  size_t pending;
+  size_t retained_bytes;
+  /* Lifetime telemetry saturates; capacity/byte accounting never saturates. */
+  uint64_t accepted;
+  uint64_t rejected;
+  uint64_t completed;
+  uint64_t cancelled;
+  int publication_status;
+} chttp_application_work_stats;
+
+int chttp_application_work_init(chttp_application_work *, const chttp_application_work_config *);
+/* Transactional until response_defer succeeds. Rejection invokes no callback.
+ * Accepted work owns its snapshot and borrows task.user through finalize.
+ * Metadata (operation) remains borrowed from the live Application graph. */
+int chttp_application_work_submit(chttp_application_work *, const chttp_server_request_view *,
+    chttp_server_response *, const chttp_application_work_task *);
+/* Worker-only copied response draft. No engine builder crosses the queue. */
+int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
+    const char *, const void *, size_t);
+int chttp_application_work_get_stats(chttp_application_work *, chttp_application_work_stats *);
+int chttp_application_work_wait(chttp_application_work *, uint32_t timeout_ms);
+/* Stop admission, drain accepted work, then destroy the owned worker pool.
+ * Finite timeout and same-executor close retain ownership on failure.
+ * Destroy is control-plane only: caller first quiesces submitters/observers,
+ * including owner callbacks that can enter submit, before successful close. */
+int chttp_application_work_close(chttp_application_work *, uint32_t timeout_ms);
+#endif
