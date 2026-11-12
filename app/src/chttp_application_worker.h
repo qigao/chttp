@@ -7,6 +7,17 @@
  * temporary private mounting surface when public Invocation admission is ready. */
 #include <chttp_app/application.h>
 #include "chttp_application_work.h"
+#include "../../http_common/http/chttp_method_hooks.h"
+
+/* Private method scope. Mount copies descriptor rows; callback code/contexts
+ * borrow canonical ACE graph lifetime. Call DTO/Session views are read-only. */
+typedef struct chttp_application_method_interceptor {
+  const char *component_id;
+  const cmeta_data_desc *receiver;
+  chttp_method_chain_before_fn before;
+  chttp_method_chain_after_fn after;
+  chttp_method_chain_error_fn on_error;
+} chttp_application_method_interceptor;
 
 typedef struct chttp_application_worker_binding {
   const char *component_id;
@@ -29,12 +40,14 @@ int chttp_application_worker_mount(chttp_application *, const chttp_application_
  * executor. Plugin resolves under a mount-owned lease; registry/code stay live
  * through close. Legacy borrowed-executor dispatch remains outside this slice. */
 int chttp_application_worker_mount_http(chttp_application *, const char *,
-    const cmeta_data_desc *, const chttp_http_method *);
+    const cmeta_data_desc *, const chttp_http_method *,
+    const chttp_application_method_interceptor *, size_t);
 /* Private synchronous generated RPC envelope; batch methods run sequentially
  * within one worker invocation. Plugin-backed executions retain their provider
- * context and mount lease. No per-method worker hook facade is published. */
+ * context and mount lease. Hooks apply per bound method, including notifications. */
 int chttp_application_worker_mount_rpc(chttp_application *, const char *,
-    const cmeta_data_desc *, const chttp_rpc_method *);
+    const cmeta_data_desc *, const chttp_rpc_method *,
+    const chttp_application_method_interceptor *, size_t);
 int chttp_application_worker_current(const chttp_application *);
 int chttp_application_worker_stats(chttp_application *, chttp_application_work_stats *);
 #endif

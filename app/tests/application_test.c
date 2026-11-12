@@ -241,12 +241,18 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
   chttp_server_stats before_close = {0};
   const int stats_status = chttp_application_stats(&fixture.app, &before_close);
   const int closed = chttp_application_close(&fixture.app, 5000u);
-  if (closed != SALTS_OK)
+  if (closed != SALTS_OK) {
     fprintf(stderr, "Application close failed: protocol=%d target=%s close=%d request=%d stats=%d active=%zu requests=%llu responses=%llu protocol_errors=%llu handler_errors=%llu terminal=%d\n",
         (int)protocol, target, closed, status, stats_status, before_close.active_connections,
         (unsigned long long)before_close.requests, (unsigned long long)before_close.responses,
         (unsigned long long)before_close.protocol_errors, (unsigned long long)before_close.handler_errors,
         before_close.terminal_status);
+    chttp_server_stats after_close = {0};
+    const int after_status = chttp_application_stats(&fixture.app, &after_close);
+    fprintf(stderr, "Application after close: owned=%d stats=%d running=%d stopping=%d active=%zu terminal=%d\n",
+        fixture.app.impl != NULL, after_status, after_close.running, after_close.stopping,
+        after_close.active_connections, after_close.terminal_status);
+  }
   return closed != SALTS_OK ? closed : status;
 }
 

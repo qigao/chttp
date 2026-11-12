@@ -29,6 +29,8 @@ typedef struct chttp_service_method_record {
   cflow_executor *executor;
   chttp_application_work *workers;
   cflow_plan cflow_plan;
+  chttp_method_chain_hook hooks[CHTTP_METHOD_MAX_HOOKS];
+  size_t hook_count;
 
   cmeta_plugin_lease plugin_lease;
   cmeta_plugin_cleanup_lease plugin_owner;
@@ -1597,6 +1599,34 @@ static int chttp_service_worker_output(void *context, unsigned int code,
   (void)buffer;
   return chttp_application_work_respond(context, code, type, body, size);
 }
+typedef struct chttp_service_method_call {
+  chttp_service_invocation *invocation;
+  DataBindBindingProvider *provider;
+  DataBindBindingPlanDiagnostic *diagnostic;
+  cflow_result flow_result;
+  DataBindBindingCallFrame flow_frame;
+  void *flow_params[3];
+  size_t flow_param_bytes[3];
+} chttp_service_method_call;
+static cmeta_status chttp_service_method_invoke(void *user,
+    const chttp_method_call *call, chttp_method_result *result) {
+  chttp_service_method_call *context = user;
+  chttp_service_invocation *invocation = context->invocation;
+  chttp_service_method_record *record = invocation->record;
+  if (result->rejected) return CMETA_CALLBACK_ERROR;
+  result->invoked = true; result->output = call->input;
+  if (record->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) {
+    if (!chttp_service_cflow_evaluate(invocation, &context->flow_result, &context->flow_frame,
+            context->flow_params, context->flow_param_bytes))
+      result->status = DATA_BIND_ERR_RUNTIME;
+    else result->output = &context->flow_frame;
+  } else if (!record->execution->invoke(record->execution->context, &result->native_status,
+          invocation->params, record->param_count)) result->status = DATA_BIND_ERR_RUNTIME;
+  if (result->status == DATA_BIND_OK)
+    result->status = data_bind_binding_plan_write_outcome(record->binding, context->provider,
+        result->output, result->native_status, &result->outcome, context->diagnostic);
+  return chttp_method_result_status(result);
+}
 static int chttp_service_http_execute(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
@@ -1609,14 +1639,9 @@ static int chttp_service_http_execute(
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
   const DataBindBindingPlan *binding;
   DataBindStatus bind_status;
-  int native_status = 0;
   int http_status = 500;
   int result;
-  cflow_result flow_result = {0};
-  DataBindBindingCallFrame flow_frame;
-  const DataBindBindingCallFrame *output_frame = &invocation.frame;
-  void *flow_params[3];
-  size_t flow_param_bytes[3];
+  chttp_service_method_call method = {.invocation = &invocation, .provider = &provider, .diagnostic = &diagnostic};
 
   if (record == NULL || record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
@@ -1657,20 +1682,23 @@ static int chttp_service_http_execute(
     goto cleanup;
   }
 
-  if (record->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) {
-    if (!chttp_service_cflow_evaluate(&invocation, &flow_result, &flow_frame,
-            flow_params, flow_param_bytes))
-      bind_status = DATA_BIND_ERR_RUNTIME;
-    else output_frame = &flow_frame;
-  } else if (!record->execution->invoke(
-          record->execution->context, &native_status,
-          invocation.params, record->param_count))
+  chttp_method_result business = CHTTP_METHOD_RESULT_INIT;
+  chttp_server_request_view hook_request = *request;
+  hook_request.session = NULL;
+  const chttp_method_call call = {.http = &hook_request, .session = request->session,
+      .operation = record->native_binding->function,
+      .input = &invocation.frame, .result = &business};
+  const chttp_method_chain chain = {&method, chttp_service_method_invoke, record->hooks, record->hook_count};
+  const cmeta_status intercepted = chttp_method_chain_invoke(&chain, &call, &business);
+  if (business.rejected) {
+    result = output->write(output->context, 403u, "text/plain", "Forbidden", 9u, NULL);
+    goto cleanup;
+  }
+  bind_status = business.status;
+  outcome = business.outcome;
+  if (intercepted != CMETA_OK && bind_status == DATA_BIND_OK &&
+      outcome.kind == DATA_BIND_BINDING_OUTCOME_NONE)
     bind_status = DATA_BIND_ERR_RUNTIME;
-
-  if (bind_status == DATA_BIND_OK)
-    bind_status = data_bind_binding_plan_write_outcome(
-        binding, &provider, output_frame, native_status,
-        &outcome, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
     result = output->write(
@@ -1709,7 +1737,7 @@ static int chttp_service_http_execute(
 
 cleanup:
   chttp_service_http_release_output(&provider_context);
-  cflow_result_destroy(&flow_result);
+  cflow_result_destroy(&method.flow_result);
   chttp_service_invocation_release(&invocation);
   return result;
 }
@@ -1827,6 +1855,8 @@ static int chttp_method_runtime_mount_http_impl(
        mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN) ||
       mount->middleware_count != 0u)) return SALTS_ENOTSUP;
   if (workers && mount->executor) return SALTS_EINVAL;
+  if (!chttp_method_hooks_valid(mount->hooks, mount->hook_count)) return SALTS_EINVAL;
+  if (!workers && mount->hook_count) return SALTS_ENOTSUP;
   plugin_mode =
       mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
   if (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
@@ -1881,6 +1911,8 @@ static int chttp_method_runtime_mount_http_impl(
   record->execution_mode = mount->execution_mode;
   record->executor = mount->executor;
   record->workers = workers;
+  record->hook_count = mount->hook_count;
+  if (mount->hook_count) memcpy(record->hooks, mount->hooks, mount->hook_count * sizeof(*mount->hooks));
 
   if (plugin_mode) {
     status = chttp_service_plugin_resolve(

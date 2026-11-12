@@ -6,6 +6,8 @@
 #include "chttp_service_cflow.http.h"
 #include "chttp_service_cflow.service_native.h"
 #include "chttp_service_cflow_native.h"
+#include "chttp_service_cflow_unsupported.service_native.h"
+#include "chttp_service_cflow_unsupported_native.h"
 #include <core/clock.h>
 #include <threads/threads.h>
 #include <stdatomic.h>
@@ -28,6 +30,15 @@ static struct {
   chttp_protocol protocol;
   bool block;
   bool flow_failure;
+  bool invoke_failure, hook_failure, typed_method;
+  int native_status;
+  uint32_t reject_left;
+  chttp_application_method_interceptor method_hooks[2];
+  size_t method_hook_count;
+  _Atomic int method_before, method_after, method_errors, method_invalid, notifications;
+  int trace[64];
+  size_t trace_count;
+  int last_native, last_kind, last_status, last_invoked, last_rejected;
   int destroyed, request_status;
   unsigned int response_status;
   char uri[64];
@@ -74,6 +85,8 @@ static bool DATA_BIND_NATIVE_CALL invoke(void *context, void *result, void *cons
   atomic_store_explicit(&fixture.entered, 1, memory_order_release);
   if (fixture.block)
     while (!atomic_load_explicit(&fixture.release, memory_order_acquire)) sync_thread_yield();
+  if (fixture.invoke_failure) return false;
+  if (fixture.native_status) { *(int *)result = fixture.native_status; return true; }
   return databind_8_CFlowGen_4_Calc_3_Add__databind_execution()->invoke(NULL, result, params, count);
 }
 static bool flow_invoke(const cmeta_callable *self, void *result, const void *const *args) {
@@ -94,6 +107,131 @@ static void setup_worker_flow(void) {
   check_true(cflow_function_typed_adapter_projection_valid(&fixture.projection));
   fixture.method.dispatch = CHTTP_DISPATCH_CFLOW;
   fixture.method.execution = NULL; fixture.method.projection = &fixture.projection;
+}
+static void method_trace(int event) {
+  if (fixture.trace_count < sizeof(fixture.trace) / sizeof(fixture.trace[0]))
+    fixture.trace[fixture.trace_count++] = event;
+  else atomic_fetch_add(&fixture.method_invalid, 1);
+}
+static bool method_valid(void *self, const chttp_method_call *call) {
+  return self && ((BindingController *)self)->marker == 42 &&
+      chttp_application_worker_current(&fixture.app) && call && call->http && !call->http->session &&
+      cmeta_function_desc_equal(call->operation, fixture.binding.function) && call->input &&
+      call->input->param_count == (fixture.typed_method ? 3u : 2u) &&
+      call->input->params[0] && call->input->params[1] &&
+      (!call->rpc_method || strcmp(call->rpc_method, "Calc.Add") == 0) &&
+      (!fixture.config.http.session_capacity || (call->session && !chttp_session_get(call->session, "n")));
+}
+static cmeta_status method_before(void *self, const chttp_method_call *call, bool *proceed, int index) {
+  method_trace(index);
+  atomic_fetch_add(&fixture.method_before, 1);
+  if (!method_valid(self, call)) {
+    atomic_fetch_add(&fixture.method_invalid, 1); return CMETA_TYPE_MISMATCH;
+  }
+  if (index == 1 && call->notification) atomic_fetch_add(&fixture.notifications, 1);
+  if (index == 2) {
+    if (fixture.hook_failure) return CMETA_TYPE_MISMATCH;
+    const AddRequest_t *input = call->input->params[0];
+    if (fixture.reject_left && input->left == fixture.reject_left)
+      return chttp_method_call_reject(call, proceed);
+  }
+  return CMETA_OK;
+}
+static cmeta_status method_before0(void *self, const chttp_method_call *call, bool *proceed) {
+  return method_before(self, call, proceed, 1);
+}
+static cmeta_status method_before1(void *self, const chttp_method_call *call, bool *proceed) {
+  return method_before(self, call, proceed, 2);
+}
+static void method_after(void *self, const chttp_method_call *call, const chttp_method_result *result, int event) {
+  method_trace(event); atomic_fetch_add(&fixture.method_after, 1);
+  if (!method_valid(self, call) || !result->invoked || result->rejected || result->status != DATA_BIND_OK ||
+      result->outcome.kind != DATA_BIND_BINDING_OUTCOME_SUCCESS || !result->output) {
+    atomic_fetch_add(&fixture.method_invalid, 1); return;
+  }
+  if (fixture.typed_method) { atomic_fetch_add(&fixture.method_invalid, 1); return; }
+  const AddRequest_t *input = call->input->params[0];
+  const AddResponse_t *output = result->output->params[1];
+  if (output->sum != input->left + input->right) atomic_fetch_add(&fixture.method_invalid, 1);
+}
+static void method_after0(void *self, const chttp_method_call *call, const chttp_method_result *result) {
+  method_after(self, call, result, 4);
+}
+static void method_after1(void *self, const chttp_method_call *call, const chttp_method_result *result) {
+  method_after(self, call, result, 3);
+}
+static void method_error(void *self, const chttp_method_call *call, cmeta_status status, int event) {
+  method_trace(event); atomic_fetch_add(&fixture.method_errors, 1);
+  if (!method_valid(self, call) || status == CMETA_OK) atomic_fetch_add(&fixture.method_invalid, 1);
+  fixture.last_native = call->result->native_status;
+  fixture.last_kind = (int)call->result->outcome.kind;
+  fixture.last_status = (int)call->result->status;
+  fixture.last_invoked = call->result->invoked;
+  fixture.last_rejected = call->result->rejected;
+  if (fixture.typed_method) {
+    const databind_7_FlowBad_4_Calc_7_Failing__error *error = call->input->params[2];
+    if (!error || error->kind != databind_7_FlowBad_4_Calc_7_Failing__ERROR_1 ||
+        error->payload.error_1.code != 77u) atomic_fetch_add(&fixture.method_invalid, 1);
+  }
+}
+static void method_error0(void *self, const chttp_method_call *call, cmeta_status status) {
+  method_error(self, call, status, 6);
+}
+static void method_error1(void *self, const chttp_method_call *call, cmeta_status status) {
+  method_error(self, call, status, 5);
+}
+static void setup_method_hooks(void) {
+  fixture.method_hooks[0] = (chttp_application_method_interceptor){"BindingComponent",
+      cmeta_reflected_data(BindingController), method_before0, method_after0, method_error0};
+  fixture.method_hooks[1] = (chttp_application_method_interceptor){"BindingComponent",
+      cmeta_reflected_data(BindingController), method_before1, method_after1, method_error1};
+  fixture.method_hook_count = 2u;
+}
+static bool DATA_BIND_NATIVE_CALL typed_invoke(void *context, void *result,
+    void *const *params, size_t count) {
+  if (!context || ((BindingController *)context)->marker != 42 || count != 3u ||
+      !chttp_application_worker_current(&fixture.app)) return false;
+  atomic_fetch_add(&fixture.worker_calls, 1);
+  databind_7_FlowBad_4_Calc_7_Failing__error *error = params[2];
+  if (databind_7_FlowBad_4_Calc_7_Failing__error_select(error,
+          databind_7_FlowBad_4_Calc_7_Failing__ERROR_1) != DATA_BIND_OK) return false;
+  error->payload.error_1.code = 77u;
+  *(int *)result = 0;
+  return true;
+}
+static void setup_typed_method(void) {
+  fixture.typed_method = true;
+  data_bind_http_method_plan_free(fixture.plan); fixture.plan = NULL;
+  data_bind_free(fixture.contract); fixture.contract = NULL;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+  check_equal(FlowBad_codec_create(&fixture.contract, &error), DATA_BIND_OK);
+  check_equal(databind_7_FlowBad_4_Calc_7_Failing__databind_native_binding(
+      &fixture.request, &fixture.response, &fixture.binding, &error), DATA_BIND_OK);
+  static const DataBindHttpFieldProjection fields[] = {
+      {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS, "value", DATA_BIND_HTTP_PATH, "value", 0u},
+      {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS, "value", DATA_BIND_HTTP_RESPONSE_BODY, "value", 0u}};
+  static const DataBindHttpErrorMapping errors[] = {{sizeof(DataBindHttpErrorMapping), "Fault", 409}};
+  DataBindHttpProjectionConfig http = DATA_BIND_HTTP_PROJECTION_CONFIG_INIT;
+  http.method = "GET"; http.route = "/typed/{value}";
+  http.fields = fields; http.field_count = 2u; http.errors = errors; http.error_count = 1u;
+  check_equal(data_bind_http_method_plan_compile_service(fixture.contract, "Calc", "Failing", &http,
+      &fixture.binding, &fixture.plan, &diagnostic), DATA_BIND_OK);
+  static const DataBindRpcFieldProjection rpc_fields[] = {
+      {sizeof(DataBindRpcFieldProjection), DATA_BIND_BINDING_INGRESS, "value", "value", 0u},
+      {sizeof(DataBindRpcFieldProjection), DATA_BIND_BINDING_EGRESS, "value", "value", 0u}};
+  static const DataBindRpcErrorMapping rpc_errors[] = {{sizeof(DataBindRpcErrorMapping), "Fault", -32077}};
+  DataBindRpcProjectionConfig rpc = DATA_BIND_RPC_PROJECTION_CONFIG_INIT;
+  rpc.wire_method = "Calc.Add"; rpc.fields = rpc_fields; rpc.field_count = 2u;
+  rpc.errors = rpc_errors; rpc.error_count = 1u;
+  check_equal(data_bind_rpc_method_plan_compile_service(fixture.contract, "Calc", "Failing", &rpc,
+      &fixture.binding, &fixture.rpc_plan, &diagnostic), DATA_BIND_OK);
+  fixture.execution = *databind_7_FlowBad_4_Calc_7_Failing__databind_execution();
+  fixture.execution.invoke = typed_invoke;
+  fixture.method.plan = fixture.plan;
+  fixture.rpc_method = (chttp_rpc_method){.path = "/rpc", .plan = fixture.rpc_plan,
+      .binding = &fixture.binding, .execution = &fixture.execution};
+  fixture.config.rpc.method_capacity = 1u;
 }
 static int request(const char *target, unsigned int *code) {
   chttp_client client = {0}; chttp_response response = {0}; chttp_error error = {0};
@@ -131,9 +269,11 @@ static int start_worker(void) {
   const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
   if (status == SALTS_OK) status = chttp_application_worker_prepare(&fixture.app, &limits);
   if (status == SALTS_OK) status = chttp_application_worker_mount_http(&fixture.app,
-      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.method);
+      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.method,
+      fixture.method_hooks, fixture.method_hook_count);
   if (status == SALTS_OK && fixture.rpc_plan) status = chttp_application_worker_mount_rpc(&fixture.app,
-      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.rpc_method);
+      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.rpc_method,
+      fixture.method_hooks, fixture.method_hook_count);
   if (status == SALTS_OK) status = chttp_application_start(&fixture.app);
   uint16_t port = 0u;
   if (status == SALTS_OK) status = chttp_application_port(&fixture.app, &port);
@@ -226,11 +366,18 @@ static void exercise_rpc(chttp_protocol protocol) {
   check_equal(fixture.destroyed, 1); check_equal(atomic_load(&fixture.entered), 1);
   check_equal(atomic_load(&fixture.before_calls), 2); check_equal(atomic_load(&fixture.after_calls), 2);
 }
+static void check_trace(const int *expected, size_t count) {
+  check_equal(fixture.trace_count, count);
+  check_equal(fixture.trace, expected, count * sizeof(*expected));
+}
 spec("Application generated MethodPlan bindings") {
   before_each() {
     memset(&fixture, 0, sizeof(fixture));
     atomic_init(&fixture.entered, 0); atomic_init(&fixture.release, 0);
     atomic_init(&fixture.worker_calls, 0);
+    atomic_init(&fixture.method_before, 0); atomic_init(&fixture.method_after, 0);
+    atomic_init(&fixture.method_errors, 0); atomic_init(&fixture.method_invalid, 0);
+    atomic_init(&fixture.notifications, 0);
     atomic_init(&fixture.before_calls, 0); atomic_init(&fixture.after_calls, 0);
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
@@ -268,6 +415,7 @@ spec("Application generated MethodPlan bindings") {
     atomic_store_explicit(&fixture.release, 1, memory_order_release);
     if (fixture.thread_live) { sync_thread_join(&fixture.thread); fixture.thread_live = false; }
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    check_equal(atomic_load(&fixture.method_invalid), 0);
     if (fixture.executor_live) {
       check_true(cflow_executor_wait_idle(&fixture.executor));
       cflow_executor_destroy(&fixture.executor);
@@ -286,6 +434,23 @@ spec("Application generated MethodPlan bindings") {
   }
   group("private Application-owned worker generated HTTP") {
     for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+      it("unwinds unsupported structured typed-error staging before cleanup on protocol %d", protocol) {
+        setup_method_hooks(); setup_typed_method(); fixture.protocol = (chttp_protocol)protocol;
+        check_equal(start_worker(), SALTS_OK);
+        unsigned int code = 0u;
+        check_equal(request("/typed/7", &code), SALTS_OK); check_equal(code, 500u);
+        chttp_response response = {0};
+        check_equal(raw_rpc("{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[7],\"id\":1}", &response), SALTS_OK);
+        json_value_t *root = json_parse(response.body, response.body_size);
+        check_not_null(root);
+        check_equal(json_number(json_object_get(json_object_get(root, "error"), "code")), -32603.0);
+        json_free(root); chttp_response_destroy(&response);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.method_errors), 4); check_equal(atomic_load(&fixture.method_after), 0);
+        check_equal(fixture.last_kind, (int)DATA_BIND_BINDING_OUTCOME_NONE);
+        check_equal(fixture.last_native, 0); check_not_equal(fixture.last_status, (int)DATA_BIND_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 2);
+      }
       it("retains native binding behavior on the owned worker for protocol %d", protocol) {
         fixture.protocol = (chttp_protocol)protocol;
         check_equal(start_worker(), SALTS_OK);
@@ -299,6 +464,7 @@ spec("Application generated MethodPlan bindings") {
     }
     for (int flow = 0; flow <= 1; ++flow) {
       it("holds the generated receiver until canceled direct/CFlow method exits (CFlow=%d)", flow) {
+        setup_method_hooks();
         if (flow) setup_worker_flow();
         fixture.protocol = CHTTP_HTTP_2; fixture.block = true;
         fixture.config.deadlines.handler_ms = 100u;
@@ -312,11 +478,14 @@ spec("Application generated MethodPlan bindings") {
         check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
         check_not_equal(fixture.request_status, SALTS_OK);
         check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
+        check_equal(atomic_load(&fixture.method_before), 2);
+        check_equal(atomic_load(&fixture.method_after), 0); check_equal(atomic_load(&fixture.method_errors), 0);
         check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
         check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroyed, 0);
         atomic_store_explicit(&fixture.release, 1, memory_order_release);
         check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
         check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+        check_equal(atomic_load(&fixture.method_after), 2); check_equal(atomic_load(&fixture.method_errors), 0);
       }
       }
   }
@@ -333,12 +502,14 @@ spec("Application generated MethodPlan bindings") {
         check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
       }
       it("returns 500 on failed CFlow evaluation and drains for protocol %d", protocol) {
+        setup_method_hooks();
         setup_worker_flow(); fixture.protocol = (chttp_protocol)protocol; fixture.flow_failure = true;
         check_equal(start_worker(), SALTS_OK);
         unsigned int code = 0u;
         check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 500u);
         check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
         check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+        check_equal(atomic_load(&fixture.method_errors), 2); check_equal(atomic_load(&fixture.method_after), 0);
       }
       it("cleans failed output serialization before the next CFlow call for protocol %d", protocol) {
         setup_worker_flow(); fixture.protocol = (chttp_protocol)protocol;
@@ -360,14 +531,14 @@ spec("Application generated MethodPlan bindings") {
       check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
       fixture.projection.output_type = &cmeta_type_int;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method), SALTS_EINVAL);
+          cmeta_reflected_data(BindingController), &fixture.method, NULL, 0u), SALTS_EINVAL);
       fixture.projection.output_type = fixture.response.data->storage_type;
       fixture.method.executor = &fixture.executor;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method), SALTS_ENOTSUP);
+          cmeta_reflected_data(BindingController), &fixture.method, NULL, 0u), SALTS_ENOTSUP);
       fixture.method.executor = NULL;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method), SALTS_OK);
+          cmeta_reflected_data(BindingController), &fixture.method, NULL, 0u), SALTS_OK);
       check_equal(chttp_application_start(&fixture.app), SALTS_OK);
       uint16_t port = 0u;
       check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
@@ -378,8 +549,139 @@ spec("Application generated MethodPlan bindings") {
       check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
     }
   }
+  group("private generated method Interceptors") {
+    it("exposes a const detached Session without handing method hooks its mutable request handle") {
+      setup_method_hooks();
+      fixture.config.http.session_capacity = 2u; fixture.config.http.session_entry_capacity = 2u;
+      fixture.config.http.max_session_key_bytes = 8u; fixture.config.http.max_session_value_bytes = 8u;
+      fixture.config.http.session_idle_timeout_ms = 60000u;
+      fixture.config.http.session_cookie_name = "method_sid";
+      check_equal(start_worker(), SALTS_OK);
+      unsigned int code = 0u;
+      check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(atomic_load(&fixture.method_after), 2); check_equal(atomic_load(&fixture.method_invalid), 0);
+    }
+    it("prevalidates every canonical Bean hook and copies descriptors before publishing") {
+      setup_method_hooks();
+      fixture.controller.http_methods = NULL; fixture.controller.http_method_count = 0u;
+      fixture.method.executor = NULL;
+      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+      const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
+      check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+      fixture.method_hooks[1].component_id = "missing";
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 2u), SALTS_ENOENT);
+      setup_method_hooks();
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 17u), SALTS_EINVAL);
+      fixture.method_hooks[1].before = NULL; fixture.method_hooks[1].after = NULL;
+      fixture.method_hooks[1].on_error = NULL;
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 2u), SALTS_EINVAL);
+      setup_method_hooks();
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 2u), SALTS_OK);
+      memset(fixture.method_hooks, 0, sizeof(fixture.method_hooks));
+      check_equal(chttp_application_start(&fixture.app), SALTS_OK);
+      uint16_t port = 0u;
+      check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
+      snprintf(fixture.uri, sizeof(fixture.uri), "tcp://127.0.0.1:%u", (unsigned)port);
+      unsigned int code = 0u;
+      check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      const int trace[] = {1,2,3,4}; check_trace(trace, 4u);
+    }
+    for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+      for (int flow = 0; flow <= 1; ++flow) {
+        it("unwinds live direct/CFlow output on workers (protocol=%d CFlow=%d)", protocol, flow) {
+          setup_method_hooks(); if (flow) setup_worker_flow();
+          fixture.protocol = (chttp_protocol)protocol;
+          check_equal(start_worker(), SALTS_OK);
+          unsigned int code = 0u;
+          check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+          check_equal(request("/generated-cflow/0?right=4", &code), SALTS_OK); check_equal(code, 422u);
+          check_equal(request("/generated-cflow/3", &code), SALTS_OK); check_equal(code, 400u);
+          check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+          const int trace[] = {1, 2, 3, 4}; check_trace(trace, 4u);
+          check_equal(atomic_load(&fixture.method_before), 2); check_equal(atomic_load(&fixture.method_after), 2);
+          check_equal(atomic_load(&fixture.method_errors), 0); check_equal(atomic_load(&fixture.worker_calls), 1);
+        }
+      }
+      it("rejects a bound method before native effects and unwinds entered errors on protocol %d", protocol) {
+        setup_method_hooks(); fixture.reject_left = 9u; fixture.protocol = (chttp_protocol)protocol;
+        check_equal(start_worker(), SALTS_OK);
+        unsigned int code = 0u;
+        check_equal(request("/generated-cflow/9?right=4", &code), SALTS_OK); check_equal(code, 403u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        const int trace[] = {1, 2, 5, 6}; check_trace(trace, 4u);
+        check_equal(atomic_load(&fixture.worker_calls), 0); check_equal(fixture.last_invoked, 0);
+        check_equal(fixture.last_rejected, 1); check_equal(atomic_load(&fixture.method_after), 0);
+      }
+      for (int cause = 0; cause < 3; ++cause) {
+        it("distinguishes native/bridge/hook failure (protocol=%d cause=%d)", protocol, cause) {
+          setup_method_hooks(); fixture.protocol = (chttp_protocol)protocol;
+          fixture.native_status = cause == 0 ? 17 : 0;
+          fixture.invoke_failure = cause == 1; fixture.hook_failure = cause == 2;
+          check_equal(start_worker(), SALTS_OK);
+          unsigned int code = 0u;
+          check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 500u);
+          check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+          const int trace[] = {1, 2, 5, 6}; check_trace(trace, 4u);
+          check_equal(atomic_load(&fixture.method_errors), 2); check_equal(atomic_load(&fixture.method_after), 0);
+          check_equal(fixture.last_invoked, cause == 2 ? 0 : 1);
+          check_equal(fixture.last_native, cause == 0 ? 17 : 0);
+          check_equal(fixture.last_kind, cause == 0 ? (int)DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS : 0);
+          if (cause == 1) check_equal(fixture.last_status, (int)DATA_BIND_ERR_RUNTIME);
+        }
+      }
+      it("reports output staging failure before a later successful call on protocol %d", protocol) {
+        setup_method_hooks(); fixture.protocol = (chttp_protocol)protocol;
+        fixture.config.bindings.max_response_body_bytes = 1u;
+        check_equal(start_worker(), SALTS_OK);
+        unsigned int code = 0u;
+        check_equal(request("/generated-cflow/3?right=44", &code), SALTS_OK); check_equal(code, 500u);
+        check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        const int trace[] = {1, 2, 5, 6, 1, 2, 3, 4}; check_trace(trace, 8u);
+        check_equal(atomic_load(&fixture.method_errors), 2); check_equal(atomic_load(&fixture.method_after), 2);
+      }
+      it("isolates each RPC batch method, rejected notification and invalid params on protocol %d", protocol) {
+        setup_rpc(); setup_method_hooks(); fixture.reject_left = 9u; fixture.protocol = (chttp_protocol)protocol;
+        fixture.config.rpc.max_batch_items = 5u;
+        fixture.controller.rpc_methods = NULL; fixture.controller.rpc_method_count = 0u;
+        fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+        check_equal(start_worker(), SALTS_OK);
+        const char batch[] = "[{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[3,4],\"id\":1},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[5,6]},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[9,4],\"id\":2},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Unknown\",\"id\":3},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[0,4],\"id\":4}]";
+        chttp_response response = {0};
+        check_equal(raw_rpc(batch, &response), SALTS_OK); check_equal(response.status_code, 200u);
+        json_value_t *root = json_parse(response.body, response.body_size);
+        check_not_null(root); check_equal(json_array_size(root), 4u);
+        check_equal(json_number(json_object_get(json_array_get(root, 0u), "result")), 7.0);
+        check_equal(json_number(json_object_get(json_object_get(json_array_get(root, 1u), "error"), "code")), -32003.0);
+        check_equal(json_number(json_object_get(json_object_get(json_array_get(root, 2u), "error"), "code")), -32601.0);
+        check_equal(json_number(json_object_get(json_object_get(json_array_get(root, 3u), "error"), "code")), -32602.0);
+        json_free(root); chttp_response_destroy(&response);
+        const char notifications[] = "[{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[9,4]},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[3,4]}]";
+        check_equal(raw_rpc(notifications, &response), SALTS_OK); check_equal(response.status_code, 204u);
+        check_equal(response.body_size, 0u); check_null(chttp_response_header(&response, "Content-Type"));
+        chttp_response_destroy(&response);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        const int trace[] = {1,2,3,4, 1,2,3,4, 1,2,5,6, 1,2,5,6, 1,2,3,4}; check_trace(trace, 20u);
+        check_equal(atomic_load(&fixture.method_before), 10); check_equal(atomic_load(&fixture.method_after), 6);
+        check_equal(atomic_load(&fixture.method_errors), 4); check_equal(atomic_load(&fixture.notifications), 3);
+        check_equal(atomic_load(&fixture.worker_calls), 3);
+      }
+    }
+  }
   group("private worker RPC envelope") {
     it("retains the RPC registry and receiver while a canceled native method still runs") {
+      setup_method_hooks();
       setup_rpc(); fixture.protocol = CHTTP_HTTP_2; fixture.block = true;
       fixture.controller.rpc_methods = NULL; fixture.controller.rpc_method_count = 0u;
       fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
@@ -394,11 +696,13 @@ spec("Application generated MethodPlan bindings") {
       check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
       check_not_equal(fixture.request_status, SALTS_OK);
       check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
+      check_equal(atomic_load(&fixture.method_after), 0); check_equal(atomic_load(&fixture.method_errors), 0);
       check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
       check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroyed, 0);
       atomic_store_explicit(&fixture.release, 1, memory_order_release);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
       check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+      check_equal(atomic_load(&fixture.method_after), 2); check_equal(atomic_load(&fixture.method_errors), 0);
     }
     for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
       it("executes typed RPC and generated HTTP on the same owned pool for protocol %d", protocol) {
