@@ -2,6 +2,7 @@ add_subdirectory(service)
 add_subdirectory(web)
 
 add_executable(chttp_application_test application_test.c)
+target_include_directories(chttp_application_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(chttp_application_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)
 set_target_properties(chttp_application_test PROPERTIES FOLDER "app/tests")
 add_test(NAME chttp_application_test COMMAND chttp_application_test)
@@ -20,3 +21,10 @@ add_test(NAME chttp_application_cpp_example_http
     "$<TARGET_FILE:chttp_application_cpp_example>")
 set_tests_properties(chttp_application_c_example_http chttp_application_cpp_example_http
   PROPERTIES TIMEOUT 60)
+
+add_executable(chttp_application_worker_test application_worker_test.c)
+target_include_directories(chttp_application_worker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(chttp_application_worker_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)
+set_target_properties(chttp_application_worker_test PROPERTIES FOLDER "app/tests")
+add_test(NAME chttp_application_worker_test COMMAND chttp_application_worker_test)
+set_tests_properties(chttp_application_worker_test PROPERTIES TIMEOUT 90)

@@ -23,6 +23,7 @@ void chttp_h2_server_connection_cancel_file_sources(chttp_h2_server_connection *
 int chttp_h2_server_connection_receive(chttp_h2_server_connection *h2, const void *data,
                                        size_t size);
 int chttp_h2_server_connection_flush(chttp_h2_server_connection *h2);
+void chttp_h2_server_connection_sent(chttp_h2_server_connection *h2);
 int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2);
 void chttp_h2_server_connection_deadlines(chttp_h2_server_connection *h2);
 bool chttp_h2_server_connection_has_deferred(const chttp_h2_server_connection *h2);

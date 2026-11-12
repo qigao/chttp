@@ -690,7 +690,9 @@ static void chttp_h2_tls_server_send(void *user, cnet_connection connection, siz
     return;
   server->send_active = 0;
   server->status = chttp_h2_tls_server_flush(server);
-  if (server->status == SALTS_OK && server->response_submitted &&
+  /* flush may have admitted the response behind a previous SETTINGS send.
+   * Empty encoder output does not mean that new native send has completed. */
+  if (server->status == SALTS_OK && !server->send_active && server->response_submitted &&
       !chttp_h2_proto_want_write(server->protocol))
     server->status = cnet_close(&server->network, connection);
 }

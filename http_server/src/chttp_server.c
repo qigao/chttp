@@ -368,6 +368,7 @@ int chttp_server_request_state_init(chttp_server_request_state *state, chttp_ser
     chttp_server_request_state_destroy(state);
     return status;
   }
+  state->response_builder.request_state = state;
   state->response_builder.server = server;
   status = chttp_server_response_builder_init(&state->response_builder, &server->config);
   if (status != SALTS_OK) {
@@ -448,6 +449,7 @@ int chttp_server_request_admit(chttp_server_request_state *state,
 
 void chttp_server_request_state_reset(chttp_server_request_state *state) {
   if (state == NULL) return;
+  chttp_server_request_terminal_notify(state, SALTS_ECANCELED);
   chttp_server_request_body_close(state, SALTS_ECANCELED);
   chttp_server_request_admission_clear(state);
   state->deadline_ms = 0;
@@ -464,6 +466,7 @@ void chttp_server_request_state_reset(chttp_server_request_state *state) {
 
 void chttp_server_request_state_destroy(chttp_server_request_state *state) {
   if (state == NULL) return;
+  chttp_server_request_terminal_notify(state, SALTS_ECANCELED);
   chttp_server_request_body_close(state, SALTS_ECANCELED);
   chttp_jwt_request_state_reset(state);
   chttp_server_response_builder_destroy(&state->response_builder);
@@ -736,6 +739,7 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
   } else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
     const chttp_server_deferred_state deferred_state = chttp_server_deferred_token_state(
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire));
+    chttp_server_request_terminal_notify(&connection->request_state, SALTS_ECONNRESET);
     chttp_server_websocket_transport_closed(connection);
     connection->active = false;
     chttp_server_manager_retire(connection->owner, connection);
@@ -1120,6 +1124,12 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
       connection->websocket_peer.phase == CHTTP_SERVER_WEBSOCKET_NONE &&
       connection->wire_protocol != CHTTP_SERVER_WIRE_HTTP_2)
     chttp_server_connection_release_outbound(connection);
+  if (status == SALTS_OK && !connection->response_streaming) {
+    if (connection->wire_protocol == CHTTP_SERVER_WIRE_HTTP_2)
+      chttp_h2_server_connection_sent(connection->h2);
+    else if (resume_deferred || resume_retained)
+      chttp_server_request_terminal_notify(&connection->request_state, SALTS_OK);
+  }
   if (status == SALTS_OK && (resume_deferred || resume_retained) &&
       !connection->close_after_write)
     status = chttp_server_h1_input_resume(connection);
