@@ -720,8 +720,16 @@ void chttp_server_request_enrich(const chttp_server_connection *connection,
 static void chttp_server_on_state(void *user, cnet_connection handle, cnet_connection_state state,
                                   const cnet_error *error) {
   chttp_server_connection *connection = (chttp_server_connection *)user;
-  (void)error;
   if (!chttp_server_connection_matches(connection, handle)) return;
+  if (state == CNET_CONNECTION_FAILED && error && error->tls.reason != CRYPTO_TLS_FAILURE_NONE) {
+    chttp_server_impl *server = connection->server;
+    sync_mutex_lock(&server->mutex);
+    if (server->tls_failure_count != UINT64_MAX) ++server->tls_failure_count;
+    server->tls_failure_status = error->status;
+    server->tls_failure = error->tls;
+    sync_cond_broadcast(&server->changed);
+    sync_mutex_unlock(&server->mutex);
+  }
   if (state == CNET_CONNECTION_CONNECTED) {
     int status = chttp_server_select_tls_protocol(connection);
     connection->peer_certificate_sha256[0] = '\0';

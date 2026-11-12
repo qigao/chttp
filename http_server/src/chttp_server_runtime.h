@@ -459,6 +459,11 @@ struct chttp_server_impl {
   sync_thread_t thread;
   sync_thread_t listener_thread;
   chttp_server_stats stats;
+  /* Owned numeric TLS failure evidence; protected by mutex like stats. Never
+   * retain credential/provider pointers or infer verification from socket EOF. */
+  uint64_t tls_failure_count;
+  int tls_failure_status;
+  crypto_tls_diagnostic tls_failure;
   chttp_server_websocket_profile *websocket_profile;
   size_t started_owner_count;
   size_t startup_reported_count;
