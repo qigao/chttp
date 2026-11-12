@@ -51,6 +51,33 @@
   BUILD_BENCHMARK is ON. The existing preset's benchmark-only full build and
   all three formal benchmark CTests passed, 42.52s.
 
+
+- Independent TLS qualification must observe handshake messages: default Python
+  group selection is not proof of HelloRetryRequest, and select() on a process
+  pipe is not portable to Windows. The Server-owned OpenSSL CTest selects groups
+  explicitly and checks the RFC HRR random and outbound dummy CCS records.
+  A bounded reader queue handles startup; checked process shutdown retains logs.
+  Current published SDKs pass all four TLS 1.3 profiles, mandatory-client-cert
+  negatives and verified-leaf pin/forged-header rejection. Full native-release-user
+  build and 112/112 CTests passed (`migration-tls-openssl-final-full-ctest.log`).
+  Independent OpenSSL 3.x is a host test executable, not a product TLS library;
+  no old source SDK/port stack or qualification feature switch is restored.
+  First CI 43162608036 failed before configure on Linux because PowerShell
+  Get-Command returned both /usr/bin/openssl and /bin/openssl. Select the first
+  PATH application with -TotalCount 1; do not concatenate discovery results.
+  The original failures remain recorded and are not retried unchanged.
+
+- Issue/PR disposition is recorded in `docs/ISSUE_PR_REVIEW.md`, refreshed
+  after the 2026-11-12 triage against master a615444. Closed historical SDK and
+  ServiceHost stacks are not current implementation or acceptance evidence.
+- Base string reuse keeps JWT issuer/audience ownership private and optional.
+  `tstr_dup(NULL)` returns an empty string, so guard optional copies explicitly
+  and pair them with `tstr_free`. Borrowed `vstr` comparisons preserve exact
+  claim case and ASCII-insensitive header/scheme matching. Updated master
+  a615444 qualification passes full native-release-user build, 111/111 CTests
+  and install (`build/migration-base-strings-current-*.log`). Earlier 103/103
+  and 104/104 evidence remains historical; cross-platform qualification belongs
+  to the updated PR head CI.
 - Application policy ownership: the public init contract promised copied policy
   values, while Security/CORS/asset middleware still borrowed caller structures.
   Reusing those structures after init changed nosniff, CORS admission and asset

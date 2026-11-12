@@ -744,8 +744,35 @@ A production worker/LF decision and admission-contention profiling remain separa
 
 Current qualification is tracked by draft #286 and upstream SaltsBase #15.
 The gate exposes ordinary-pool false-full admission under producer contention in
-Base 0.1.4. Unexpected HTTP status fails immediately and per-repeat stderr is
-retained beside JSONL. Keep the gate red against the affected released SDK; do
-not replace the executor, retry a rejected request or consume an unqualified
-source SDK to hide the dependency defect. The corrected release must be restored
-through the normal version/manifest path before CHttp acceptance is claimed.
+Base 0.1.4. The fix is released in Base 0.1.6; its matching composition uses
+CMeta 0.1.6 and Utils 0.1.3 because their SDK dependencies are exact. Restore
+the original published SDKs through the normal version/manifest path. Unexpected
+HTTP status still fails immediately and per-repeat stderr is retained beside
+JSONL; do not replace the executor, retry rejected requests or substitute source
+SDKs to hide dependency failures. Historical failing runs remain recorded.
+
+## Independent TLS interoperability tests
+
+Native `BUILD_TESTS` requires Python and an independent OpenSSL 3.x command-line
+tool (`openssl` on PATH, or the CMake-discovered `CHTTP_TEST_OPENSSL` executable).
+The existing native CI selects the runner's OpenSSL tool explicitly; no OpenSSL
+library is added to CHttp. Published CNet/Crypto remains the product TLS provider.
+
+`chttp_tls_openssl_test` is a module-owned CTest using an internal Server fixture
+and fresh ephemeral ECDSA credentials. It checks TLS 1.3 P-256 and X25519-first
+HelloRetryRequest, each with/without outbound dummy CCS, using actual OpenSSL
+handshake message records. It verifies CA/hostname and mandatory client auth,
+checks the CNet-verified leaf fingerprint against an application pin, rejects
+missing/incorrect-CA/incorrect-EKU certificates before HTTP, and rejects a trusted
+but unpinned certificate despite a forged `X-Forwarded-Client-Cert` header.
+A final authorized request checks listener reuse after those rejections.
+
+Run through the configured user preset:
+
+```sh
+ctest --preset native-release-user --output-on-failure -R chttp_tls_openssl_test
+```
+
+This qualifies the HTTP/1.1 TLS engine against an independent client. It does not
+establish H2/mTLS deployment, real downstream application behavior, Android device
+execution or a production release. The fixture's registration API remains private.

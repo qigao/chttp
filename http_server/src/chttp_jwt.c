@@ -1,6 +1,8 @@
 #include <http_server/http.h>
 
 #include <cjwt/cjwt.h>
+#include <core/tstr.h>
+#include <core/vstr.h>
 #include "chttp_digest.h"
 
 #include "chttp_jwt_internal.h"
@@ -20,33 +22,13 @@ typedef struct chttp_jwt_bearer_validator_impl {
   size_t key_size;
   int64_t clock_skew_seconds;
   int allow_missing_exp;
-  char *expected_issuer;
-  char *expected_audience;
+  tstr expected_issuer;
+  tstr expected_audience;
 } chttp_jwt_bearer_validator_impl;
 
-static char *chttp_jwt_string_copy(const char *value) {
-  const size_t size = value == NULL ? 0u : strlen(value);
-  char *copy;
-  if (value == NULL) return NULL;
-  if (size == SIZE_MAX) return NULL;
-  copy = (char *)malloc(size + 1u);
-  if (copy != NULL) memcpy(copy, value, size + 1u);
-  return copy;
-}
-
 static int chttp_jwt_ascii_equal_ci(const char *left, const char *right) {
-  size_t index = 0u;
-  if (left == NULL || right == NULL) return 0;
-  while (left[index] != '\0' && right[index] != '\0') {
-    unsigned char left_char = (unsigned char)left[index];
-    unsigned char right_char = (unsigned char)right[index];
-    if (left_char >= 'A' && left_char <= 'Z') left_char = (unsigned char)(left_char + ('a' - 'A'));
-    if (right_char >= 'A' && right_char <= 'Z')
-      right_char = (unsigned char)(right_char + ('a' - 'A'));
-    if (left_char != right_char) return 0;
-    ++index;
-  }
-  return left[index] == right[index];
+  return left != NULL && right != NULL &&
+         vstr_ieq(vstr_from_cstr(left), vstr_from_cstr(right));
 }
 
 static const char *chttp_jwt_bearer_token(const chttp_server_request_view *request) {
@@ -66,16 +48,9 @@ static const char *chttp_jwt_bearer_token(const chttp_server_request_view *reque
   if (authorization_size <= CHTTP_JWT_BEARER_SCHEME_SIZE ||
       authorization[CHTTP_JWT_BEARER_SCHEME_SIZE] != ' ')
     return NULL;
-  for (index = 0u; index < CHTTP_JWT_BEARER_SCHEME_SIZE; ++index) {
-    const unsigned char value = (unsigned char)authorization[index];
-    const unsigned char expected = (unsigned char)"Bearer"[index];
-    const unsigned char lower =
-        value >= 'A' && value <= 'Z' ? (unsigned char)(value + ('a' - 'A')) : value;
-    const unsigned char expected_lower = expected >= 'A' && expected <= 'Z'
-                                             ? (unsigned char)(expected + ('a' - 'A'))
-                                             : expected;
-    if (lower != expected_lower) return NULL;
-  }
+  if (!vstr_ieq(vstr_from_buf(authorization, CHTTP_JWT_BEARER_SCHEME_SIZE),
+                vstr_from_buf("Bearer", CHTTP_JWT_BEARER_SCHEME_SIZE)))
+    return NULL;
   index = CHTTP_JWT_BEARER_SCHEME_SIZE;
   while (index < authorization_size && authorization[index] == ' ') ++index;
   return index == authorization_size ? NULL : authorization + index;
@@ -85,11 +60,12 @@ static int chttp_jwt_claims_match(const chttp_jwt_bearer_validator_impl *validat
                                   const cjwt_t *jwt) {
   int index;
   if (validator->expected_issuer != NULL &&
-      (jwt->iss == NULL || strcmp(jwt->iss, validator->expected_issuer) != 0))
+      (jwt->iss == NULL || !vstr_eq(vstr_from_cstr(jwt->iss), tstr_to_v(validator->expected_issuer))))
     return 0;
   if (validator->expected_audience == NULL) return 1;
   for (index = 0; index < jwt->aud.count; ++index)
-    if (jwt->aud.names[index] != NULL && strcmp(jwt->aud.names[index], validator->expected_audience) == 0)
+    if (jwt->aud.names[index] != NULL &&
+        vstr_eq(vstr_from_cstr(jwt->aud.names[index]), tstr_to_v(validator->expected_audience)))
       return 1;
   return 0;
 }
@@ -130,14 +106,16 @@ int chttp_jwt_bearer_validator_init(chttp_jwt_bearer_validator *validator,
   impl->key_size = options->key_size;
   impl->clock_skew_seconds = options->clock_skew_seconds;
   impl->allow_missing_exp = options->allow_missing_exp != 0;
-  impl->expected_issuer = chttp_jwt_string_copy(options->expected_issuer);
-  impl->expected_audience = chttp_jwt_string_copy(options->expected_audience);
+  /* NULL disables a restriction; tstr_dup(NULL) would instead create an empty string. */
+  impl->expected_issuer = options->expected_issuer != NULL ? tstr_dup(options->expected_issuer) : NULL;
+  impl->expected_audience =
+      options->expected_audience != NULL ? tstr_dup(options->expected_audience) : NULL;
   if (impl->key == NULL || (options->expected_issuer != NULL && impl->expected_issuer == NULL) ||
       (options->expected_audience != NULL && impl->expected_audience == NULL)) {
     if (impl->key != NULL) chttp_crypto_clear(impl->key, impl->key_size);
     free(impl->key);
-    free(impl->expected_issuer);
-    free(impl->expected_audience);
+    tstr_free(impl->expected_issuer);
+    tstr_free(impl->expected_audience);
     free(impl);
     return SALTS_ENOMEM;
   }
@@ -153,8 +131,8 @@ int chttp_jwt_bearer_validator_destroy(chttp_jwt_bearer_validator *validator) {
   if (impl != NULL) {
     chttp_crypto_clear(impl->key, impl->key_size);
     free(impl->key);
-    free(impl->expected_issuer);
-    free(impl->expected_audience);
+    tstr_free(impl->expected_issuer);
+    tstr_free(impl->expected_audience);
     free(impl);
   }
   validator->impl = NULL;
