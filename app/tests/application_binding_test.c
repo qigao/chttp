@@ -1,5 +1,6 @@
 #include <chttp_app/app.h>
 #include <http_client/http.h>
+#include <http_client/rpc_service.h>
 #include <cmeta/data_reflect.h>
 #include "chttp_service_cflow.http.h"
 #include "chttp_service_cflow.service_native.h"
@@ -28,6 +29,7 @@ static struct {
   chttp_client_config client;
   DataBind *contract;
   DataBindHttpMethodPlan *plan;
+  DataBindRpcMethodPlan *rpc_plan;
   DataBindNativeTypeBinding request, response;
   DataBindServiceNativeBinding binding;
   DataBindNativeExecution execution;
@@ -35,6 +37,9 @@ static struct {
   salts_configurator_provider_binding provider;
   salts_configurator_deployment deployment;
   chttp_http_method method;
+  chttp_rpc_method rpc_method;
+  chttp_interceptor hook;
+  _Atomic int before_calls, after_calls;
   chttp_controller controller;
   chttp_application_config config;
 } fixture;
@@ -91,10 +96,82 @@ static int start(chttp_dispatch dispatch) {
   if (status == SALTS_OK) snprintf(fixture.uri, sizeof(fixture.uri), "tcp://127.0.0.1:%u", (unsigned)port);
   return status;
 }
+
+static cmeta_status rpc_before(void *self, const chttp_exchange *exchange, bool *proceed) {
+  BindingController *controller = self;
+  (void)proceed;
+  if (controller->marker != 42) return CMETA_TYPE_MISMATCH;
+  if (strcmp(exchange->request->path, "/rpc") == 0) {
+    if (exchange->operation != NULL) return CMETA_TYPE_MISMATCH;
+  } else if (!cmeta_function_desc_valid(exchange->operation)) return CMETA_TYPE_MISMATCH;
+  atomic_fetch_add(&fixture.before_calls, 1);
+  return CMETA_OK;
+}
+static void rpc_after(void *self, const chttp_exchange *exchange, const chttp_exchange_result *result) {
+  (void)self; (void)exchange; (void)result;
+  atomic_fetch_add(&fixture.after_calls, 1);
+}
+static void setup_rpc(void) {
+  static const DataBindRpcFieldProjection fields[] = {
+      {sizeof(DataBindRpcFieldProjection), DATA_BIND_BINDING_INGRESS, "left", "left", 0u},
+      {sizeof(DataBindRpcFieldProjection), DATA_BIND_BINDING_INGRESS, "right", "right", 1u},
+      {sizeof(DataBindRpcFieldProjection), DATA_BIND_BINDING_EGRESS, "sum", "sum", 0u}};
+  DataBindRpcProjectionConfig projection = DATA_BIND_RPC_PROJECTION_CONFIG_INIT;
+  DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+  projection.wire_method = "Calc.Add";
+  projection.fields = fields; projection.field_count = sizeof(fields) / sizeof(fields[0]);
+  check_equal(data_bind_rpc_method_plan_compile_service(fixture.contract, "Calc", "Add",
+      &projection, &fixture.binding, &fixture.rpc_plan, &diagnostic), DATA_BIND_OK);
+  fixture.rpc_method = (chttp_rpc_method){.path = "/rpc", .plan = fixture.rpc_plan,
+      .binding = &fixture.binding, .execution = &fixture.execution};
+  fixture.controller.rpc_methods = &fixture.rpc_method; fixture.controller.rpc_method_count = 1u;
+  fixture.config.rpc.method_capacity = 1u;
+  fixture.hook = (chttp_interceptor){"BindingComponent", cmeta_reflected_data(BindingController),
+      rpc_before, rpc_after, NULL};
+  fixture.config.interceptors = &fixture.hook; fixture.config.interceptor_count = 1u;
+}
+static int rpc_request(chttp_protocol protocol, chttp_client_rpc_outcome_kind *kind, uint32_t *sum) {
+  chttp_client client = {0};
+  int status = chttp_client_init(&client, &fixture.client);
+  if (status != SALTS_OK) return status;
+  AddRequest_t input = {.left = 3u, .right = 4u};
+  AddResponse_t output = {0};
+  unsigned char workspace[4096];
+  DataBindNativeOptions native = DATA_BIND_NATIVE_OPTIONS_INIT;
+  native.workspace = workspace; native.workspace_bytes = sizeof(workspace);
+  native.max_depth = 16u; native.max_items = 64u; native.max_owned_bytes = 1024u;
+  chttp_client_rpc_call_options options = CHTTP_CLIENT_RPC_CALL_OPTIONS_INIT;
+  options.connection_uri = fixture.uri; options.authority = "test"; options.target = "/rpc";
+  options.protocol = protocol; options.request_id = 1u; options.deadline_ms = 5000u;
+  options.method_plan = fixture.rpc_plan; options.native_binding = &fixture.binding;
+  options.native_options = &native;
+  options.request = &input; options.request_bytes = sizeof(input);
+  options.response = &output; options.response_bytes = sizeof(output);
+  chttp_client_rpc_outcome outcome = CHTTP_CLIENT_RPC_OUTCOME_INIT;
+  crpc_error error = {0};
+  status = chttp_client_rpc_call(&client, &options, &outcome, &error);
+  *kind = outcome.kind; *sum = output.sum;
+  const int closed = chttp_client_destroy(&client, 5000u);
+  return closed != SALTS_OK ? closed : status;
+}
+static void exercise_rpc(chttp_protocol protocol) {
+  setup_rpc();
+  check_equal(start(CHTTP_DISPATCH_INLINE), SALTS_OK);
+  chttp_client_rpc_outcome_kind kind = CHTTP_CLIENT_RPC_NONE;
+  uint32_t sum = 0u;
+  check_equal(rpc_request(protocol, &kind, &sum), SALTS_OK);
+  check_equal(kind, CHTTP_CLIENT_RPC_SUCCESS); check_equal(sum, (uint32_t)7u);
+  unsigned int code = 0u;
+  check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+  check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+  check_equal(fixture.destroyed, 1); check_equal(atomic_load(&fixture.entered), 1);
+  check_equal(atomic_load(&fixture.before_calls), 2); check_equal(atomic_load(&fixture.after_calls), 2);
+}
 spec("Application generated MethodPlan bindings") {
   before_each() {
     memset(&fixture, 0, sizeof(fixture));
     atomic_init(&fixture.entered, 0); atomic_init(&fixture.release, 0);
+    atomic_init(&fixture.before_calls, 0); atomic_init(&fixture.after_calls, 0);
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
     check_equal(CFlowGen_codec_create(&fixture.contract, &error), DATA_BIND_OK);
@@ -135,6 +212,7 @@ spec("Application generated MethodPlan bindings") {
       check_true(cflow_executor_wait_idle(&fixture.executor));
       cflow_executor_destroy(&fixture.executor);
     }
+    data_bind_rpc_method_plan_free(fixture.rpc_plan);
     data_bind_http_method_plan_free(fixture.plan); data_bind_free(fixture.contract);
   }
   it("binds canonical native execution to the ACE Controller and retains validation errors") {
@@ -178,5 +256,11 @@ spec("Application generated MethodPlan bindings") {
     sync_thread_join(&fixture.thread); fixture.thread_live = false;
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     check_null(fixture.app.impl); check_equal(fixture.destroyed, 1);
+  }
+  it("shares an ACE Controller and HTTP Interceptors between typed H1 RPC and HTTP bindings") {
+    exercise_rpc(CHTTP_HTTP_1_1);
+  }
+  it("binds typed H2 RPC to the ACE Controller and drains it with the same Application") {
+    exercise_rpc(CHTTP_HTTP_2);
   }
 }

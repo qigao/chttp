@@ -23,6 +23,12 @@ private. No compatibility header, fallback implementation or versioned API is ad
 - Typed ACE Interceptor chains wrap dispatch in before/after/error order. Bean
   objects and immutable metadata survive every request and deferred finalizer.
   Dispatch hooks do not claim to observe eventual transport delivery.
+  Browser security headers and CORS protocol preflight run before this chain;
+  static assets and SPA fallback run inside it, before terminal route dispatch.
+  An Interceptor rejection cannot publish file-response work or expose bytes.
+  Asset configuration remains borrowed until close; existing file owners retain
+  their completion and drain obligations. Asset-only dispatch has no reflected
+  Controller operation and supplies NULL operation metadata to hooks.
 - Close stops admission, drains real I/O and deferred work, destroys the server
   and MethodPlan records, then stops the component graph. Timeout/failure retains
   live ownership for explicit close; it never zeros a live runtime.

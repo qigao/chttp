@@ -285,10 +285,12 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   APP_CONFIGURE(config->admission, chttp_server_set_admission(&app->server, config->admission, config->admission_context));
   APP_CONFIGURE(config->security, chttp_web_security_use(&app->server, config->security));
   APP_CONFIGURE(config->cors, chttp_server_use_cors(&app->server, config->cors));
+  /* Assets may terminate dispatch, so global application policy must wrap them. */
+  status = chttp_server_use(&app->server, application_intercept, app);
+  if (status != SALTS_OK) goto failed;
   APP_CONFIGURE(config->assets, chttp_web_assets_use(&app->server, config->assets));
 #undef APP_CONFIGURE
-  status = chttp_server_use(&app->server, application_intercept, app);
-  if (status == SALTS_OK) status = application_bind(app, config);
+  status = application_bind(app, config);
   if (status == SALTS_OK) return SALTS_OK;
 failed: {
     const int close_status = chttp_application_close(owner, 0u);

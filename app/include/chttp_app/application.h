@@ -70,7 +70,9 @@ CMETA_INTERCEPTOR_TYPE(chttp_dispatch_chain, chttp_exchange, chttp_exchange_resu
 
 /** Each hook context is another explicitly selected ACE Bean. Hook code and
  * metadata are borrowed through complete Application shutdown. Global hooks
- * execute in declaration order and unwind in reverse, using ACE semantics. */
+ * execute in declaration order and unwind in reverse, using ACE semantics.
+ * They wrap static assets/SPA fallback as well as Controller dispatch, after
+ * security headers and CORS preflight. Asset-only operation metadata is NULL. */
 typedef struct chttp_interceptor {
   const char *component_id;
   const cmeta_data_desc *receiver;

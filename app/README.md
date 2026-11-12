@@ -105,6 +105,11 @@ preserves the protocol engine's HTTP 500 behavior. Hooks surround dispatch;
 they do not indicate response-write or deferred completion. Generated RPC
 batch operations are below this HTTP dispatch boundary.
 
+Global hooks also wrap static assets and SPA fallback: rejecting a request
+prevents file-response publication. Asset-only requests carry NULL operation
+metadata. Security headers and CORS preflight precede the application chain;
+CORS-handled preflight and earlier JWT/admission rejection do not enter it.
+
 For generated IDL, populate Controller `http_methods` / `rpc_methods` with
 immutable DataBind MethodPlan/native bindings. Native execution descriptors
 are copied and their context bound to the Controller before admission.

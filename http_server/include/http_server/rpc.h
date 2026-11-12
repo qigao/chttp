@@ -83,8 +83,9 @@ int crpc_server_response_error(crpc_server_response *response, int64_t code, con
  * Optional JSON-RPC registry attached to an existing chttp_server.
  * Configuration is pre-start, bounded, and shares the HTTP listener, routes,
  * middleware, fixed connection Owners and stop/destroy lifecycle. No second
- * transport runtime is created. Generated-plan mounting belongs to
- * <http_server/rpc_service.h> on the same HTTP Server owner.
+ * transport runtime is created. Applications declare generated RPC operations
+ * on a Controller through <chttp_app/application.h>; mounting stays internal
+ * to the same HTTP Server owner.
  */
 typedef struct chttp_server_rpc_config {
   size_t size;

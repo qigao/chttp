@@ -1,5 +1,18 @@
 # Split SDK migration handoff
 
+- Application policy ordering: a static asset/SPA middleware can complete the
+  response without calling next. Registering it before the ACE Interceptor
+  bypassed global application authorization. Four real H1/H2 regressions show
+  rejected assets returning 200 and hooks never entering before the fix
+  (`migration-application-assets-red-ctest.log`). Register Interceptors after
+  security/CORS but before assets, so rejection publishes no file response;
+  successful dispatch still unwinds hooks and rejection keeps security headers.
+  Asset-only requests have NULL operation metadata. Focused asset tests and
+  published-SDK full build, 109/109 CTest and install pass
+  (`migration-application-policy-rpc-full-ctest.log`). The same formal App binding
+  suite now proves typed H1/H2 RPC and HTTP share one ACE Controller, preserve
+  operation metadata boundaries, enter/unwind Interceptors and destroy once.
+
 - Reflected Application migration: route engine `user` now points to an action
   binding record, while body-open/body-close callbacks require the ACE-owned
   Controller receiver. Forward both callbacks through explicit adapters; passing

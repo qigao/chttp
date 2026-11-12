@@ -28,6 +28,11 @@ static struct {
   chttp_controller controller;
   chttp_action actions[4];
   chttp_interceptor hooks[2];
+  chttp_web_asset_mount assets;
+  chttp_web_security_policy security;
+  char *asset_root;
+  bool reject_assets;
+  size_t response_size;
   int creates, destroys, calls, opened, closed, body_bytes, body_status;
   int destruction[4], trace[32];
   size_t trace_count;
@@ -136,8 +141,10 @@ static void trace(int value) {
 static cmeta_status before(void *self, const chttp_exchange *exchange, bool *proceed) {
   const int hook = *(int *)self;
   trace(hook == 2 ? 1 : 2);
-  if (!cmeta_function_desc_valid(exchange->operation)) return CMETA_TYPE_MISMATCH;
-  if (hook == 3 && strcmp(exchange->request->path, "/reject") == 0) {
+  if (fixture.config.assets != NULL) {
+    if (exchange->operation != NULL) return CMETA_TYPE_MISMATCH;
+  } else if (!cmeta_function_desc_valid(exchange->operation)) return CMETA_TYPE_MISMATCH;
+  if (hook == 3 && (fixture.reject_assets || strcmp(exchange->request->path, "/reject") == 0)) {
     if (chttp_exchange_reject(exchange, 403u, NULL, NULL, 0u) != SALTS_OK) return CMETA_CALLBACK_ERROR;
     *proceed = false;
   }
@@ -166,11 +173,35 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
   status = upload ? chttp_post(&fixture.client, &options, &response, &error) :
       chttp_get(&fixture.client, &options, &response, &error);
   *http_status = response.status_code;
+  fixture.response_size = response.body_size;
+  if (status == SALTS_OK && fixture.config.security != NULL) {
+    const char *value = chttp_response_header(&response, "X-Content-Type-Options");
+    if (value == NULL || strcmp(value, "nosniff") != 0) status = SALTS_EPROTO;
+  }
   if (status == SALTS_OK && response.status_code == 200u &&
       (response.body_size != 2u || memcmp(response.body, "42", 2u) != 0)) status = SALTS_EPROTO;
   chttp_response_destroy(&response);
   const int closed = chttp_application_close(&fixture.app, 5000u);
   return closed != SALTS_OK ? closed : status;
+}
+
+static void setup_assets(bool reject) {
+  fixture.asset_root = tt_make_temp_dir("chttp-application-assets-");
+  check_not_null(fixture.asset_root);
+  char path[1024];
+  const int size = snprintf(path, sizeof(path), "%s/answer.txt", fixture.asset_root);
+  check_true(size > 0 && (size_t)size < sizeof(path));
+  check_equal(tt_write_file(path, "42", 2u), 0);
+  fixture.assets = (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
+  fixture.assets.url_prefix = "/assets";
+  fixture.assets.filesystem_root = fixture.asset_root;
+  fixture.assets.max_relative_path_bytes = 256u;
+  fixture.assets.spa_url_prefix = "/app";
+  fixture.assets.spa_fallback_relative_path = "answer.txt";
+  fixture.security = (chttp_web_security_policy)CHTTP_WEB_SECURITY_POLICY_INIT;
+  fixture.security.nosniff = true;
+  fixture.config.assets = &fixture.assets; fixture.config.security = &fixture.security;
+  fixture.reject_assets = reject;
 }
 
 spec("Reflected HTTP Application") {
@@ -211,6 +242,10 @@ spec("Reflected HTTP Application") {
     check_equal(chttp_websocket_client_destroy(&fixture.websocket, 5000u), SALTS_OK);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     check_equal(chttp_client_destroy(&fixture.client, 5000u), SALTS_OK);
+    if (fixture.asset_root != NULL) {
+      check_equal(tt_remove_tree(fixture.asset_root), 0);
+      free(fixture.asset_root); fixture.asset_root = NULL;
+    }
   }
   it("injects a reflected Service into a Controller and serves HTTP/1 through ordered interceptors") {
     unsigned int status = 0u;
@@ -322,5 +357,43 @@ spec("Reflected HTTP Application") {
     check_equal(chttp_application_with(&fixture.app, &fixture.config, scoped_error, &calls, &outcome), SALTS_EALREADY);
     check_equal(calls, 0); check_equal(outcome.operation_status, SALTS_EALREADY);
     check_not_null(fixture.app.impl); check_equal(fixture.destroys, 0);
+  }
+  it("enforces Interceptor rejection before serving an H1 static asset") {
+    setup_assets(true);
+    unsigned int status = 0u;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    check_equal(request(CHTTP_HTTP_1_1, "/assets/answer.txt", &status), SALTS_OK);
+    check_equal(status, 403u); check_equal(fixture.response_size, (size_t)0u);
+    const int expected[] = {1,2,-3,-4};
+    check_equal(fixture.trace_count, (size_t)4u); check_equal(fixture.trace, expected, sizeof(expected));
+    check_equal(fixture.calls, 0); check_equal(fixture.destroys, 4);
+  }
+  it("enforces Interceptor rejection before serving an H2 SPA fallback") {
+    setup_assets(true);
+    unsigned int status = 0u;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    check_equal(request(CHTTP_HTTP_2, "/app/private", &status), SALTS_OK);
+    check_equal(status, 403u); check_equal(fixture.response_size, (size_t)0u);
+    const int expected[] = {1,2,-3,-4};
+    check_equal(fixture.trace_count, (size_t)4u); check_equal(fixture.trace, expected, sizeof(expected));
+  }
+  it("unwinds successful Interceptors around an allowed H1 asset response") {
+    setup_assets(false);
+    unsigned int status = 0u;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    check_equal(request(CHTTP_HTTP_1_1, "/assets/answer.txt", &status), SALTS_OK);
+    check_equal(status, 200u);
+    const int expected[] = {1,2,3,4};
+    check_equal(fixture.trace_count, (size_t)4u); check_equal(fixture.trace, expected, sizeof(expected));
+    check_equal(fixture.calls, 0);
+  }
+  it("unwinds successful Interceptors around an allowed H2 SPA fallback") {
+    setup_assets(false);
+    unsigned int status = 0u;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    check_equal(request(CHTTP_HTTP_2, "/app/private", &status), SALTS_OK);
+    check_equal(status, 200u);
+    const int expected[] = {1,2,3,4};
+    check_equal(fixture.trace_count, (size_t)4u); check_equal(fixture.trace, expected, sizeof(expected));
   }
 }
