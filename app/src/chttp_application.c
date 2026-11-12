@@ -186,10 +186,10 @@ static int application_worker_rpc_dispatch(void *user,
   return chttp_application_work_admission_response(response, status);
 }
 int chttp_application_worker_mount_rpc(chttp_application *owner, const char *component_id,
-    const cmeta_data_desc *data, const chttp_rpc_method *method,
+    const cmeta_data_desc *data, const chttp_rpc_method *method, DataBind *codec,
     const chttp_application_method_interceptor *hooks, size_t hook_count) {
   application_impl *app = owner ? owner->impl : NULL;
-  if (!app || !method || !method->execution || !app->workers.impl) return SALTS_EINVAL;
+  if (!app || !method || !method->execution || !codec || !app->workers.impl) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
   if ((method->plugin_registry == NULL) != !cmeta_plugin_ref_valid(method->plugin_ref))
     return SALTS_EINVAL;
@@ -211,17 +211,17 @@ int chttp_application_worker_mount_rpc(chttp_application *owner, const char *com
   action->execution = *method->execution;
   if (!method->plugin_registry) action->execution.context = receiver;
   const chttp_server_rpc_mount_options mount = {sizeof(mount), method->path, method->plan,
-      method->binding, &action->execution, method->plugin_registry, method->plugin_ref, admitted, hook_count};
+      method->binding, &action->execution, method->plugin_registry, method->plugin_ref, admitted, hook_count, codec};
   status = chttp_server_rpc_mount(&app->server, &mount);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
 }
 
 int chttp_application_worker_mount_http(chttp_application *owner, const char *component_id,
-    const cmeta_data_desc *data, const chttp_http_method *method,
+    const cmeta_data_desc *data, const chttp_http_method *method, DataBind *codec,
     const chttp_application_method_interceptor *hooks, size_t hook_count) {
   application_impl *app = owner ? owner->impl : NULL;
-  if (!app || !method || !app->workers.impl) return SALTS_EINVAL;
+  if (!app || !method || !codec || !app->workers.impl) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
   const bool flow = method->dispatch == CHTTP_DISPATCH_CFLOW;
   const bool plugin = method->dispatch == CHTTP_DISPATCH_PLUGIN;
@@ -254,6 +254,7 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
   mount.method_plan = method->plan; mount.native_binding = method->binding;
   mount.hooks = admitted; mount.hook_count = hook_count;
+  mount.output_codec = codec;
   if (plugin) {
     mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
     mount.plugin_registry = method->plugin_registry; mount.plugin_ref = method->plugin_ref;
@@ -405,7 +406,7 @@ static int application_bind(application_impl *app, const chttp_application_confi
       DataBindNativeExecution *execution = &app->executions[app->execution_count++];
       *execution = *m->execution; execution->context = receiver;
       const chttp_server_rpc_mount_options mount = {sizeof(mount), m->path, m->plan,
-          m->binding, execution, m->plugin_registry, m->plugin_ref, NULL, 0u};
+          m->binding, execution, m->plugin_registry, m->plugin_ref, NULL, 0u, NULL};
       status = chttp_server_rpc_mount(&app->server, &mount);
       if (status != SALTS_OK) return status;
     }

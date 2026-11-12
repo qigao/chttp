@@ -16,11 +16,28 @@
   and rejection have separate facts. Timeout does not unwind a still-running
   method; business success after wire cancellation still unwinds success once.
   Per-method response-terminal observers remain for the public Invocation work.
-- The new throws-Fault regression exposed the existing phase-1 scalar writer
-  boundary: structured typed-error staging fails (HTTP 500 / RPC -32603) and
-  DataBind outcome stays NONE. Preserve that failure and the live error frame;
-  do not claim mapped 409/-32077 after failed serialization or invent success.
-  Bounded structured DTO/error FormatPlan output is a separate remaining slice.
+- Private generated worker mounts now take their matching MethodPlan codec
+  explicitly and compile bounded JSON FormatPlans plus native MessagePlan
+  admission before route publication. Plans own copied schema facts; the codec
+  may be freed before listener start. Required non-nullable record values and
+  structured typed errors are supported. Scalar legacy engine mounts keep
+  their existing behavior. Successful Fault staging maps to HTTP 409 / RPC
+  -32077; failed staging still returns 500 / -32603 with outcome NONE.
+- DataBind's canonical writer rewrites only root keys. Nested field-name
+  rewriting and optional/nullable native state are rejected at mount, rather
+  than inferred or silently omitted. JSON RPC reuses the built-in provider's
+  bounded byte document and reader so uint64 and escaped/embedded-NUL text
+  survive replay into envelopes. Initialize every FormatReader lease with
+  DATA_BIND_FORMAT_READER_INIT before close, including scalar/abort paths.
+  Readers close before backing buffers; FormatPlans free before Plugin leases.
+- Structured-output validation: native-release-user complete graph, 119/119
+  formal CTests and install pass in
+  `migration-worker-structured-{final-build,final-full-ctest,final-install}.log`.
+  The new module-owned output suite passes 25 cases / 1083 assertions across
+  H1/H2 direct/CFlow/real DSO, exact uint64 and escaped/NUL text, typed mappings,
+  exact/one-short capacity, abort/reuse, mixed batches/notifications, failed
+  admission lease rollback and canceled running DSO/Bean drain. No Android
+  device execution or resolution of open #290 is claimed.
 - Native complete graph, CTest 118/118 and install pass in
   `migration-worker-method-hooks-{final-build,full-ctest,install}.log`. The initial
   focused run also recorded the open #290 H1 asset close timeout at

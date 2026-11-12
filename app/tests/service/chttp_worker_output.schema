@@ -1,0 +1,11 @@
+schema Output [version(1)];
+component OutputPlugin { service Probe; }
+message Query { uint32 value; }
+message Child { uint32 number; }
+message Detail { uint64 id; Child child; string note; }
+message Envelope { Detail payload; }
+message Fault { [name(fault_code)] uint32 code; string reason; }
+service Probe {
+  Get: Query -> Envelope;
+  Fail: Query -> Envelope throws Fault;
+}

@@ -269,10 +269,10 @@ static int start_worker(void) {
   const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
   if (status == SALTS_OK) status = chttp_application_worker_prepare(&fixture.app, &limits);
   if (status == SALTS_OK) status = chttp_application_worker_mount_http(&fixture.app,
-      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.method,
+      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.method, fixture.contract,
       fixture.method_hooks, fixture.method_hook_count);
   if (status == SALTS_OK && fixture.rpc_plan) status = chttp_application_worker_mount_rpc(&fixture.app,
-      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.rpc_method,
+      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.rpc_method, fixture.contract,
       fixture.method_hooks, fixture.method_hook_count);
   if (status == SALTS_OK) status = chttp_application_start(&fixture.app);
   uint16_t port = 0u;
@@ -434,21 +434,21 @@ spec("Application generated MethodPlan bindings") {
   }
   group("private Application-owned worker generated HTTP") {
     for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
-      it("unwinds unsupported structured typed-error staging before cleanup on protocol %d", protocol) {
+      it("unwinds structured typed errors with mapped HTTP/RPC responses before cleanup on protocol %d", protocol) {
         setup_method_hooks(); setup_typed_method(); fixture.protocol = (chttp_protocol)protocol;
         check_equal(start_worker(), SALTS_OK);
         unsigned int code = 0u;
-        check_equal(request("/typed/7", &code), SALTS_OK); check_equal(code, 500u);
+        check_equal(request("/typed/7", &code), SALTS_OK); check_equal(code, 409u);
         chttp_response response = {0};
         check_equal(raw_rpc("{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[7],\"id\":1}", &response), SALTS_OK);
         json_value_t *root = json_parse(response.body, response.body_size);
         check_not_null(root);
-        check_equal(json_number(json_object_get(json_object_get(root, "error"), "code")), -32603.0);
+        check_equal(json_number(json_object_get(json_object_get(root, "error"), "code")), -32077.0);
         json_free(root); chttp_response_destroy(&response);
         check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
         check_equal(atomic_load(&fixture.method_errors), 4); check_equal(atomic_load(&fixture.method_after), 0);
-        check_equal(fixture.last_kind, (int)DATA_BIND_BINDING_OUTCOME_NONE);
-        check_equal(fixture.last_native, 0); check_not_equal(fixture.last_status, (int)DATA_BIND_OK);
+        check_equal(fixture.last_kind, (int)DATA_BIND_BINDING_OUTCOME_TYPED_ERROR);
+        check_equal(fixture.last_native, 0); check_equal(fixture.last_status, (int)DATA_BIND_OK);
         check_equal(atomic_load(&fixture.worker_calls), 2);
       }
       it("retains native binding behavior on the owned worker for protocol %d", protocol) {
@@ -531,14 +531,14 @@ spec("Application generated MethodPlan bindings") {
       check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
       fixture.projection.output_type = &cmeta_type_int;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, NULL, 0u), SALTS_EINVAL);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, NULL, 0u), SALTS_EINVAL);
       fixture.projection.output_type = fixture.response.data->storage_type;
       fixture.method.executor = &fixture.executor;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, NULL, 0u), SALTS_ENOTSUP);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, NULL, 0u), SALTS_ENOTSUP);
       fixture.method.executor = NULL;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, NULL, 0u), SALTS_OK);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, NULL, 0u), SALTS_OK);
       check_equal(chttp_application_start(&fixture.app), SALTS_OK);
       uint16_t port = 0u;
       check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
@@ -571,17 +571,17 @@ spec("Application generated MethodPlan bindings") {
       check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
       fixture.method_hooks[1].component_id = "missing";
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 2u), SALTS_ENOENT);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, fixture.method_hooks, 2u), SALTS_ENOENT);
       setup_method_hooks();
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 17u), SALTS_EINVAL);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, fixture.method_hooks, 17u), SALTS_EINVAL);
       fixture.method_hooks[1].before = NULL; fixture.method_hooks[1].after = NULL;
       fixture.method_hooks[1].on_error = NULL;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 2u), SALTS_EINVAL);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, fixture.method_hooks, 2u), SALTS_EINVAL);
       setup_method_hooks();
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
-          cmeta_reflected_data(BindingController), &fixture.method, fixture.method_hooks, 2u), SALTS_OK);
+          cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, fixture.method_hooks, 2u), SALTS_OK);
       memset(fixture.method_hooks, 0, sizeof(fixture.method_hooks));
       check_equal(chttp_application_start(&fixture.app), SALTS_OK);
       uint16_t port = 0u;

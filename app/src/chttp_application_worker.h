@@ -38,15 +38,18 @@ int chttp_application_worker_mount(chttp_application *, const chttp_application_
  * Binding/execution metadata is borrowed through close; receiver is canonical
  * ACE state. CFlow retains producer-owned captures and requires no borrowed
  * executor. Plugin resolves under a mount-owned lease; registry/code stay live
- * through close. Legacy borrowed-executor dispatch remains outside this slice. */
+ * through close. The required codec must match the MethodPlan; it is borrowed
+ * only while mounting and compiling owned output FormatPlans. Legacy
+ * borrowed-executor dispatch remains outside this slice. */
 int chttp_application_worker_mount_http(chttp_application *, const char *,
-    const cmeta_data_desc *, const chttp_http_method *,
+    const cmeta_data_desc *, const chttp_http_method *, DataBind *,
     const chttp_application_method_interceptor *, size_t);
 /* Private synchronous generated RPC envelope; batch methods run sequentially
  * within one worker invocation. Plugin-backed executions retain their provider
- * context and mount lease. Hooks apply per bound method, including notifications. */
+ * context and mount lease. The matching codec is borrowed only at mount.
+ * Hooks apply per bound method, including notifications. */
 int chttp_application_worker_mount_rpc(chttp_application *, const char *,
-    const cmeta_data_desc *, const chttp_rpc_method *,
+    const cmeta_data_desc *, const chttp_rpc_method *, DataBind *,
     const chttp_application_method_interceptor *, size_t);
 int chttp_application_worker_current(const chttp_application *);
 int chttp_application_worker_stats(chttp_application *, chttp_application_work_stats *);

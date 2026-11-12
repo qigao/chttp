@@ -156,12 +156,12 @@ static void prepare(void) {
 }
 static int mount_http(void) {
   return chttp_application_worker_mount_http(&fixture.app, "PluginComponent",
-      cmeta_reflected_data(PluginController), &fixture.http, &fixture.hook, 1u);
+      cmeta_reflected_data(PluginController), &fixture.http, fixture.contract, &fixture.hook, 1u);
 }
 static void start(void) {
   check_equal(mount_http(), SALTS_OK);
   check_equal(chttp_application_worker_mount_rpc(&fixture.app, "PluginComponent",
-      cmeta_reflected_data(PluginController), &fixture.rpc, &fixture.hook, 1u), SALTS_OK);
+      cmeta_reflected_data(PluginController), &fixture.rpc, fixture.contract, &fixture.hook, 1u), SALTS_OK);
   check_equal(cmeta_plugin_registry_release(&fixture.registry, &fixture.discovery), CMETA_PLUGIN_OK);
   check_equal(leases(), 2u);
   check_equal(chttp_application_start(&fixture.app), SALTS_OK);
@@ -317,7 +317,7 @@ spec("Application worker Plugin lifetime") {
     prepare(); stop_provider();
     check_equal(mount_http(), SALTS_EINVAL);
     check_equal(chttp_application_worker_mount_rpc(&fixture.app, "PluginComponent",
-        cmeta_reflected_data(PluginController), &fixture.rpc, NULL, 0u), SALTS_EBUSY);
+        cmeta_reflected_data(PluginController), &fixture.rpc, fixture.contract, NULL, 0u), SALTS_EBUSY);
     check_equal(leases(), 1u); check_equal(fixture.entries, 0);
   }
   for (int rpc = 0; rpc <= 1; ++rpc) {

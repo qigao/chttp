@@ -614,7 +614,7 @@ int chttp_server_rpc_mount(chttp_server *server,
   if (impl == NULL) return SALTS_EINVAL;
   if (mount->size < sizeof(*mount) || !chttp_method_hooks_valid(mount->hooks, mount->hook_count))
     return SALTS_EINVAL;
-  if (mount->hook_count && !impl->dispatch_adapter) return SALTS_ENOTSUP;
+  if ((mount->hook_count || mount->output_codec) && !impl->dispatch_adapter) return SALTS_ENOTSUP;
   if (impl->generated == NULL) {
     status = chttp_server_rpc_generated_init(
         &impl->generated, &impl->generated_config);
