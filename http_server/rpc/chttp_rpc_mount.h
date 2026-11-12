@@ -29,7 +29,7 @@ typedef struct chttp_server_rpc_mount_options {
    * Does not by itself prove that the execution was exported by this DSO. */
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_ref plugin_ref;
-  const chttp_method_chain_hook *hooks;
+  const chttp_method_hook *hooks;
   size_t hook_count;
   DataBind *output_codec; /* Private worker composition; mount-time borrow. */
 } chttp_server_rpc_mount_options;
@@ -59,7 +59,9 @@ int chttp_server_rpc_mount(chttp_server *server,
 typedef int (*chttp_rpc_output_fn)(void *, unsigned int, const char *, const void *, size_t);
 int chttp_server_rpc_set_dispatch_adapter(chttp_server *, chttp_server_handler_fn, void *);
 int chttp_server_rpc_evaluate(chttp_server *, const chttp_server_request_view *,
-    chttp_rpc_output_fn, void *);
+    chttp_rpc_output_fn, void *, const chttp_method_completion_sink *);
+/* Callback-scoped request-owned sink; never retained in the registry. */
+const chttp_method_completion_sink *chttp_server_rpc_response_completion_sink(const crpc_server_response *);
 
 #ifdef __cplusplus
 }

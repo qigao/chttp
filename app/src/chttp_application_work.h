@@ -5,6 +5,7 @@
  * Session/stream/WS and full response-terminal adapters pass their own tests. */
 #include <http_server/http.h>
 #include <cmeta/ace_interceptor.h>
+#include "../../http_common/http/chttp_method_hooks.h"
 
 typedef struct chttp_application_work { void *impl; } chttp_application_work;
 typedef struct chttp_application_work_reply chttp_application_work_reply;
@@ -19,14 +20,7 @@ CMETA_INTERCEPTOR_TYPE(chttp_application_work_chain,
 enum { CHTTP_APPLICATION_WORK_MAX_HOOKS = 16 };
 typedef int (*chttp_application_work_fn)(void *, const chttp_server_request_view *,
     chttp_application_work_reply *);
-typedef struct chttp_application_work_outcome {
-  int business_status;
-  int publication_status;
-  int transport_status;
-  /* Separate from wire completion. Successful discard/no Session is also OK. */
-  int session_status;
-  bool rejected;
-} chttp_application_work_outcome;
+typedef chttp_response_outcome chttp_application_work_outcome;
 typedef void (*chttp_application_work_completion_fn)(void *,
     const chttp_server_request_view *, const chttp_application_work_outcome *);
 typedef struct chttp_application_work_task {
@@ -38,6 +32,8 @@ typedef struct chttp_application_work_task {
   const chttp_application_work_chain_hook *hooks;
   size_t hook_count;
   chttp_application_work_completion_fn after_completion;
+  /* Request-owned method records, charged to retained_bytes before defer. */
+  size_t method_capacity;
 } chttp_application_work_task;
 typedef struct chttp_application_work_config {
   size_t workers;
@@ -74,6 +70,7 @@ int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
     const char *, const void *, size_t);
 int chttp_application_work_reject(const chttp_application_work_exchange *, unsigned int,
     const char *, const void *, size_t);
+chttp_method_completion_sink chttp_application_work_method_sink(chttp_application_work_reply *);
 int chttp_application_work_is_current(const chttp_application_work *);
 int chttp_application_work_get_stats(chttp_application_work *, chttp_application_work_stats *);
 /* A known publication failure ends a pending wait immediately; live records

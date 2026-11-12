@@ -31,7 +31,7 @@ typedef struct chttp_service_method_record {
   chttp_application_work *workers;
   cflow_plan cflow_plan;
   chttp_native_json_plans json;
-  chttp_method_chain_hook hooks[CHTTP_METHOD_MAX_HOOKS];
+  chttp_method_hook hooks[CHTTP_METHOD_MAX_HOOKS];
   size_t hook_count;
 
   cmeta_plugin_lease plugin_lease;
@@ -1606,6 +1606,7 @@ static int chttp_service_http_execute_deferred(
 typedef struct chttp_service_output {
   void *context;
   int (*write)(void *, unsigned int, const char *, const void *, size_t, mem_buffer_t *);
+  const chttp_method_completion_sink *completions;
 } chttp_service_output;
 static int chttp_service_engine_output(void *context, unsigned int code,
     const char *type, const void *body, size_t size, mem_buffer_t *buffer) {
@@ -1659,6 +1660,7 @@ static int chttp_service_http_execute(
   DataBindStatus bind_status;
   int http_status = 500;
   int result;
+  chttp_method_completion_record *completion = NULL;
   chttp_service_method_call method = {.invocation = &invocation, .provider = &provider, .diagnostic = &diagnostic};
 
   if (record == NULL || record->owner == NULL ||
@@ -1706,8 +1708,10 @@ static int chttp_service_http_execute(
   const chttp_method_call call = {.http = &hook_request, .session = request->session,
       .operation = record->native_binding->function,
       .input = &invocation.frame, .result = &business};
-  const chttp_method_chain chain = {&method, chttp_service_method_invoke, record->hooks, record->hook_count};
-  const cmeta_status intercepted = chttp_method_chain_invoke(&chain, &call, &business);
+  result = chttp_method_completion_reserve(output->completions, record->hooks, record->hook_count, &completion);
+  if (result != SALTS_OK) goto cleanup;
+  const cmeta_status intercepted = chttp_method_invoke(&method, chttp_service_method_invoke,
+      record->hooks, record->hook_count, &call, &business, completion);
   if (business.rejected) {
     result = output->write(output->context, 403u, "text/plain", "Forbidden", 9u, NULL);
     goto cleanup;
@@ -1757,12 +1761,13 @@ cleanup:
   chttp_service_http_release_output(&provider_context);
   cflow_result_destroy(&method.flow_result);
   chttp_service_invocation_release(&invocation);
-  return result;
+  return chttp_method_response_status(completion, result);
 }
 
 static int chttp_service_http_worker_run(void *user,
     const chttp_server_request_view *request, chttp_application_work_reply *reply) {
-  const chttp_service_output output = {reply, chttp_service_worker_output};
+  const chttp_method_completion_sink sink = chttp_application_work_method_sink(reply);
+  const chttp_service_output output = {reply, chttp_service_worker_output, &sink};
   return chttp_service_http_execute(user, request, &output);
 }
 static void chttp_service_http_worker_finalized(void *user) {
@@ -1779,7 +1784,8 @@ static int chttp_service_http_handler(
     return SALTS_EINVAL;
   if (record->workers) {
     const chttp_application_work_task task = {.run = chttp_service_http_worker_run,
-        .finalize = chttp_service_http_worker_finalized, .user = record};
+        .finalize = chttp_service_http_worker_finalized, .user = record,
+        .method_capacity = chttp_method_hooks_have_completion(record->hooks, record->hook_count) ? 1u : 0u};
     atomic_fetch_add_explicit(&record->deferred_in_flight, 1u, memory_order_acq_rel);
     const int status = chttp_application_work_submit(record->workers, request, response, &task);
     if (status == SALTS_OK) return status;
@@ -1794,7 +1800,7 @@ static int chttp_service_http_handler(
           CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN)
     return chttp_service_http_execute_deferred(
         record, request, response);
-  const chttp_service_output output = {response, chttp_service_engine_output};
+  const chttp_service_output output = {response, chttp_service_engine_output, NULL};
   return chttp_service_http_execute(record, request, &output);
 }
 

@@ -130,7 +130,8 @@ keep provider code pinned through joined close. Private generated-method
 before/after/on_error hooks now surround bound native/Plan execution and outcome
 staging on that same pool, with canonical ACE hook receivers and bounded copied
 metadata. Native status, staging failure and explicit rejection remain distinct.
-Per-method native completion observation still needs migration.
+Per-method completion now retains bounded frozen facts and uses the same joined
+worker notification after the enclosing native response terminal.
 
 Private generated RPC mounts use the same pool for the complete HTTP envelope.
 The Server registry exposes a private scheduler-neutral evaluator/output boundary;
@@ -165,9 +166,12 @@ HTTP/RPC worker execution, provider context, lease rollback, stopped-provider
 admission, output failure/reuse and canceled running methods with finite close.
 `chttp_application_output_test` verifies bounded required record JSON output,
 typed-error mappings, integer/text fidelity, capacity rollback/reuse, mixed RPC
-batches and real DSO drain under canceled running methods.
+batches and real DSO drain under canceled running methods. Method completion
+tests cover entered reverse ordering, completion-only hooks, immutable per-item
+facts, blocked-observer leases and H2 flow-window backpressure while the sole
+worker serves another method.
 Public Session/admission integration, stream/WS adaptation, remaining DTO ingress/
-state/collection representations, per-method completion observation and the public Invocation migration remain required
+state/collection representations and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives
@@ -371,9 +375,42 @@ retain their existing behavior.
 Ingress failures have no entered method chain. RPC invokes a fresh chain for
 each bound batch item, preserving sequential order, method identity and
 notification/error suppression. No second task is posted. Hooks remain borrowed
-from the live graph through drain. This private slice has no per-method native
-completion observer yet; retaining bounded per-item outcomes for the enclosing
-HTTP terminal remains part of the later public Invocation migration.
+from the live graph through drain.
+
+The private completion slice retains per-method numeric outcomes for the
+enclosing HTTP terminal. Application admission reserves one record for HTTP,
+or at most the configured RPC max_batch_items when any RPC method has completion
+hooks. Checked record bytes count against the existing retained-byte budget
+before response defer or business side effects. Exhaustion rejects admission;
+there is no growing observer list, owner callback fallback or new executor queue.
+
+After successful input binding, reserve a record before entering the ACE chain.
+A bounded proxy records entered hook count while the upstream ACE chain remains
+the ordering/error authority. Completion runs entered hooks in reverse order,
+including the rejecting hook; unentered hooks and malformed/unknown/unbound
+methods get no notification. RPC records retain batch order and notification
+identity. Bind/execute/staging, interceptor status, response-adapter status and
+the request's business/publication/Session/transport results stay distinct.
+
+The existing Application join posts one worker notification only after business
+finalization, Session commit/abort and the real native response terminal settle.
+That notification visits method records, then the enclosing task observer, before
+task finalization and record/snapshot release. Native frames, CFlow results and
+RPC parser views are already destroyed: completion exposes immutable numeric
+facts, canonical operation/typed-error names, registry-owned RPC method identity
+and a read-only copied HTTP/Session view only. All borrowed metadata, hook Beans
+and Plugin method leases remain live until the whole notification drains.
+Cancellation is not completion and cannot observe a still-running method. A
+finite close timeout retains all ownership, including a blocked completion
+observer. Multiple workers may execute different invocation notifications
+concurrently; a single invocation has one business writer and one later reader,
+ordered through the existing executor/join synchronization.
+
+Reusing the bounded invocation join avoids a per-method task/queue and keeps
+transport settlement authoritative. Retaining DTOs until wire completion would
+pin native frames and managed values unnecessarily; replaying business hooks
+would duplicate side effects. Neither is part of this callback contract. This
+remains an internal migration and introduces no installed API or public mode.
 
 Use distinct stages with immutable, explicit outcomes:
 

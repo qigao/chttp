@@ -1,5 +1,36 @@
 # Split SDK migration handoff
 
+- Private generated HTTP/RPC after_completion now joins the existing App
+  business/Session/native-terminal notification. Admission reserves one HTTP
+  record or RPC max_batch_items records and charges checked bytes before defer.
+  A bounded proxy tracks entered hooks while the SDK ACE chain owns ordering;
+  completion visits entered hooks backward, RPC methods in batch order, on the
+  same worker pool. Invalid ingress/unknown methods have no entered notification.
+- Completion retains frozen method/native/binding/interceptor/response-adapter
+  facts separately from request business/publication/Session/transport status.
+  DTO/frame/Plan results and RPC parser views are already destroyed. Only
+  callback-borrowed copied HTTP/const Session views and pinned canonical metadata
+  are exposed. Canceled running business and blocked observers retain records,
+  Beans and real DSO leases through finite close; no additional task per method,
+  unbounded list, owner execution fallback or installed ABI was introduced.
+- RPC's per-call method record is a stack copy. Its copied hook array must never
+  escape into completion storage: borrow the immutable registered hook array
+  explicitly, and finalize response-adapter status after native lifetime restore.
+  Keep shared inline helpers valid C++17 as well as C11 (explicit void* cast;
+  ordinary aggregate initialization instead of C compound literals).
+- Validation: native-release-user complete graph, 119/119 formal CTests and
+  install pass in `migration-worker-method-terminal-{final-build,final-full-ctest,final-install}.log`.
+  Output/completion suite: 46 cases / 2039 assertions, including H1/H2 direct/
+  CFlow/real DSO, completion-only hooks, reverse entered ordering/rejection,
+  batch/notification identity, ingress suppression, native/staging failure,
+  cancellation, blocked-observer lease retention and 1 MiB H2 window backpressure
+  while the sole worker serves another method. Worker suite also proves charged
+  completion reservation and arithmetic-overflow rejection before business/defer.
+  Cross-platform qualification remains the feature PR's CI responsibility;
+  Android device execution and resolution of open #290 are not claimed.
+  Final shared-header guards also pass the complete build, all nine Application
+  CTests and install in `migration-worker-method-terminal-qualified-{build,ctest,install}.log`.
+
 - Private generated HTTP/RPC method hooks now reuse one scheduler-neutral ACE
   chain. Application resolves canonical Bean contexts before publication and
   copies at most 16 rows into immutable method records. Bind first; enter before
@@ -15,7 +46,8 @@
   while suppressing response items. Native status, invocation/staging failure
   and rejection have separate facts. Timeout does not unwind a still-running
   method; business success after wire cancellation still unwinds success once.
-  Per-method response-terminal observers remain for the public Invocation work.
+  Per-method response-terminal observers now use the bounded private join above;
+  the public Invocation replacement remains separate work.
 - Private generated worker mounts now take their matching MethodPlan codec
   explicitly and compile bounded JSON FormatPlans plus native MessagePlan
   admission before route publication. Plans own copied schema facts; the codec

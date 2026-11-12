@@ -33,6 +33,8 @@ struct work_item {
   chttp_server_response_terminal terminal;
   chttp_application_work_outcome outcome;
   size_t bytes;
+  size_t storage_bytes, method_capacity, method_count;
+  chttp_method_completion_record *methods;
   unsigned char *storage;
   chttp_server_request_view request;
   chttp_jwt_claims_view jwt;
@@ -165,12 +167,23 @@ int chttp_application_work_respond(chttp_application_work_reply *reply, unsigned
   const int status = add_string(&bytes, type);
   if (status != SALTS_OK) return status;
   if (bytes > item->owner->config.reply_bytes) return SALTS_EMSGSIZE;
-  unsigned char *out = item->storage + item->bytes - item->owner->config.reply_bytes;
+  unsigned char *out = item->storage + item->storage_bytes - item->owner->config.reply_bytes;
   reply->content_type = copy_string(&out, type);
   if (size) memcpy(out, body, size);
   reply->body = size ? out : NULL; reply->size = size;
   reply->status = code; reply->sealed = 1;
   return SALTS_OK;
+}
+static int reserve_method(void *context, chttp_method_completion_record **out) {
+  work_item *item = context;
+  if (!item || !cflow_executor_is_current(&item->owner->executor)) return SALTS_EINVAL;
+  if (item->method_count == item->method_capacity) return SALTS_ENOBUFS;
+  *out = &item->methods[item->method_count++];
+  **out = (chttp_method_completion_record){0};
+  return SALTS_OK;
+}
+chttp_method_completion_sink chttp_application_work_method_sink(chttp_application_work_reply *reply) {
+  return (chttp_method_completion_sink){reply ? reply->item : NULL, reserve_method};
 }
 static void publish(work_item *item, int business_status) {
   chttp_application_work_reply *draft = &item->reply;
@@ -246,6 +259,7 @@ static void release_work(void *arg) {
   work_impl *impl = item->owner;
   if (item->task.finalize) item->task.finalize(item->task.user);
   chttp_session_work_release(item->session);
+  free(item->methods);
   free(item->storage);
   sync_mutex_lock(&impl->mutex);
   impl->stats.retained_bytes -= item->bytes;
@@ -256,6 +270,17 @@ static void release_work(void *arg) {
 }
 static void notify_completion(void *arg) {
   work_item *item = arg;
+  chttp_server_request_view request = item->request;
+  request.session = NULL;
+  for (size_t i = 0u; i < item->method_count; ++i) {
+    const chttp_method_completion_record *record = &item->methods[i];
+    const chttp_method_completion completion = {&request, item->request.session,
+        record->terminal, item->outcome};
+    for (size_t j = record->entered; j != 0u; --j) {
+      const chttp_method_hook *hook = &record->hooks[j - 1u];
+      if (hook->after_completion) hook->after_completion(hook->context, &completion);
+    }
+  }
   if (item->task.after_completion)
     item->task.after_completion(item->task.user, &item->request, &item->outcome);
   work_impl *impl = item->owner;
@@ -382,6 +407,9 @@ int chttp_application_work_submit(chttp_application_work *owner,
   if (status != SALTS_OK) return status;
   status = add_bytes(&bytes, impl->config.reply_bytes);
   if (status != SALTS_OK) return status;
+  const size_t storage_bytes = bytes;
+  status = add_array(&bytes, task->method_capacity, sizeof(chttp_method_completion_record));
+  if (status != SALTS_OK) return status;
   work_item *item = NULL;
   sync_mutex_lock(&impl->mutex);
   if (!impl->accepting) status = SALTS_ESHUTDOWN;
@@ -394,12 +422,17 @@ int chttp_application_work_submit(chttp_application_work *owner,
   }
   if (status == SALTS_OK) {
     item->busy = 1; item->owner = impl; item->bytes = bytes; item->session_bytes = session_bytes;
+    item->storage_bytes = storage_bytes; item->method_capacity = task->method_capacity;
     ++impl->stats.pending; impl->stats.retained_bytes += bytes;
   } else count_event(&impl->stats.rejected);
   sync_mutex_unlock(&impl->mutex);
   if (status != SALTS_OK) return status;
-  item->storage = malloc(bytes);
+  item->storage = malloc(storage_bytes);
   if (!item->storage) { release_work(item); return SALTS_ENOMEM; }
+  if (task->method_capacity) {
+    item->methods = calloc(task->method_capacity, sizeof(*item->methods));
+    if (!item->methods) { release_work(item); return SALTS_ENOMEM; }
+  }
   if (request->session) {
     status = chttp_session_work_prepare(item->storage, session_bytes, request->session,
         session_committed, item, &item->session);

@@ -18,6 +18,8 @@ static struct {
   thrd_t client_thread, second_thread;
   int second_started;
   size_t workers, owners;
+  size_t method_capacity;
+  int admission_status;
   const void *worker_tokens[2];
   int thread_started, held, release, entered, finalized, calls;
   int snapshot_ok, fail, no_reply, oversized, close_from_worker;
@@ -157,8 +159,10 @@ static int route(void *user, const chttp_server_request_view *original, chttp_se
       {&fixture.hook_ids[1], before_hook, after_hook, error_hook}};
   const chttp_application_work_task task = {.run = business, .finalize = finalized, .user = user,
       .after_completion = completed,
-      .hooks = fixture.with_hooks ? hooks : NULL, .hook_count = fixture.with_hooks ? 2u : 0u};
+      .hooks = fixture.with_hooks ? hooks : NULL, .hook_count = fixture.with_hooks ? 2u : 0u,
+      .method_capacity = fixture.method_capacity};
   const int status = chttp_application_work_submit(&fixture.work, &request, response, &task);
+  fixture.admission_status = status;
   memset(target, '!', sizeof(target)-1u); memset(path, '!', sizeof(path)-1u);
   memset(body, '!', 3u); memset(name, '!', sizeof(name)-1u); memset(value, '!', sizeof(value)-1u);
   memset(id, '!', sizeof(id)-1u); memset(number, '!', sizeof(number)-1u);
@@ -286,6 +290,26 @@ spec("Application internal worker handoff") {
     call_result call = {0}; perform(&call);
     check_equal(call.status, SALTS_OK); check_equal(call.code, 503u);
     check_equal(fixture.calls, 0); check_equal(fixture.finalized, 0);
+  }
+  it("charges method completion reservation before accepting business work") {
+    fixture.method_capacity = 4096u / sizeof(chttp_method_completion_record) + 1u;
+    start(2u, 4096u); call_result call = {0}; perform(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 503u);
+    sync_mutex_lock(&fixture.mutex); const int status = fixture.admission_status; sync_mutex_unlock(&fixture.mutex);
+    check_equal(status, SALTS_ENOBUFS); check_equal(fixture.calls, 0); check_equal(fixture.finalized, 0);
+    chttp_application_work_stats stats = {0};
+    check_equal(chttp_application_work_get_stats(&fixture.work, &stats), SALTS_OK);
+    check_equal(stats.pending, 0u); check_equal(stats.retained_bytes, 0u); check_equal(stats.rejected, 1u);
+  }
+  it("rejects method reservation arithmetic overflow before response defer") {
+    fixture.method_capacity = SIZE_MAX / sizeof(chttp_method_completion_record) + 1u;
+    start(2u, 4096u); call_result call = {0}; perform(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 500u);
+    sync_mutex_lock(&fixture.mutex); const int status = fixture.admission_status; sync_mutex_unlock(&fixture.mutex);
+    check_equal(status, SALTS_ERANGE); check_equal(fixture.calls, 0); check_equal(fixture.finalized, 0);
+    chttp_application_work_stats stats = {0};
+    check_equal(chttp_application_work_get_stats(&fixture.work, &stats), SALTS_OK);
+    check_equal(stats.pending, 0u); check_equal(stats.retained_bytes, 0u);
   }
   it("retains a timed-out close until the blocked worker actually settles") {
     fixture.held = 1; start(1u, 8192u);
