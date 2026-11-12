@@ -130,6 +130,92 @@ spec("chttp jwt") {
     }
   }
 
+  group("validator string ownership and matching") {
+    static chttp_server_request_state state;
+    static chttp_jwt_bearer_validator validator;
+    static char *token;
+
+    before_each() {
+      state = (chttp_server_request_state){0};
+      validator = (chttp_jwt_bearer_validator){0};
+      token = NULL;
+    }
+    after_each() {
+      chttp_jwt_request_state_reset(&state);
+      check_equal(chttp_jwt_bearer_validator_destroy(&validator), SALTS_OK);
+      chttp_jwt_token_destroy(token);
+    }
+
+    it("owns issuer and audience independently of the options and compares exact case") {
+      char issuer[] = "Issuer.Example";
+      char audience[] = "Api.Example";
+      const chttp_jwt_bearer_validator_options options = {
+          .size = sizeof(options), .key = valid_key, .key_size = sizeof(valid_key) - 1u,
+          .expected_issuer = issuer, .expected_audience = audience};
+      chttp_jwt_claims claims = {
+          .issuer = "Issuer.Example", .audience = "Api.Example", .expires_at = INT64_C(300)};
+      check_equal(chttp_jwt_bearer_validator_init(&validator, &options), SALTS_OK);
+      memset(issuer, 'x', sizeof(issuer) - 1u);
+      memset(audience, 'y', sizeof(audience) - 1u);
+      check_equal(chttp_jwt_test_validate_at(&claims, &validator, &state, INT64_C(200)), SALTS_OK);
+      chttp_jwt_request_state_reset(&state);
+      claims.issuer = "issuer.example";
+      check_equal(chttp_jwt_test_validate_at(&claims, &validator, &state, INT64_C(200)), SALTS_EPERM);
+      claims.issuer = "Issuer.Example";
+      claims.audience = "api.example";
+      check_equal(chttp_jwt_test_validate_at(&claims, &validator, &state, INT64_C(200)), SALTS_EPERM);
+    }
+
+    it("keeps each absent optional restriction disabled") {
+      const chttp_jwt_claims claims = {
+          .issuer = "issuer", .audience = "audience", .expires_at = INT64_C(300)};
+      for (unsigned int mask = 0u; mask < 4u; ++mask) {
+        const chttp_jwt_bearer_validator_options options = {
+            .size = sizeof(options), .key = valid_key, .key_size = sizeof(valid_key) - 1u,
+            .expected_issuer = (mask & 1u) != 0u ? "issuer" : NULL,
+            .expected_audience = (mask & 2u) != 0u ? "audience" : NULL};
+        check_equal(chttp_jwt_bearer_validator_init(&validator, &options), SALTS_OK);
+        check_equal(chttp_jwt_test_validate_at(&claims, &validator, &state, INT64_C(200)), SALTS_OK);
+        chttp_jwt_request_state_reset(&state);
+        check_equal(chttp_jwt_bearer_validator_destroy(&validator), SALTS_OK);
+      }
+    }
+
+    it("accepts ASCII case variants but rejects duplicate or malformed Authorization") {
+      const chttp_jwt_claims claims = {.expires_at = INT64_C(300)};
+      const chttp_jwt_bearer_validator_options options = {
+          .size = sizeof(options), .key = valid_key, .key_size = sizeof(valid_key) - 1u};
+      char authorization[512];
+      chttp_header headers[2] = {{0}};
+      chttp_server_request_view request = {.headers = headers, .header_count = 1u};
+      check_equal(chttp_jwt_bearer_validator_init(&validator, &options), SALTS_OK);
+      check_equal(chttp_jwt_hs256_token_create(&claims, valid_key, sizeof(valid_key) - 1u, &token),
+                  SALTS_OK);
+      check_equal(chttp_jwt_bearer_header(token, authorization, sizeof(authorization), &headers[0]),
+                  SALTS_OK);
+      headers[0].name = "aUtHoRiZaTiOn";
+      memcpy(authorization, "bEaReR", 6u);
+      check_equal(chttp_jwt_bearer_request_validate_at(&state, &request, &validator, INT64_C(200)),
+                  SALTS_OK);
+      chttp_jwt_request_state_reset(&state);
+      headers[1] = (chttp_header){"AUTHORIZATION", authorization};
+      request.header_count = 2u;
+      check_equal(chttp_jwt_bearer_request_validate_at(&state, &request, &validator, INT64_C(200)),
+                  SALTS_EPERM);
+      request.header_count = 1u;
+      authorization[6] = '\t';
+      check_equal(chttp_jwt_bearer_request_validate_at(&state, &request, &validator, INT64_C(200)),
+                  SALTS_EPERM);
+      authorization[6] = ' ';
+      authorization[1] = (char)0xe9;
+      check_equal(chttp_jwt_bearer_request_validate_at(&state, &request, &validator, INT64_C(200)),
+                  SALTS_EPERM);
+      headers[0].value = "Bearer ";
+      check_equal(chttp_jwt_bearer_request_validate_at(&state, &request, &validator, INT64_C(200)),
+                  SALTS_EPERM);
+    }
+  }
+
   group("HS256 client token") {
     it("creates a token and formats an Authorization Bearer header") {
       const chttp_jwt_claims claims = {
