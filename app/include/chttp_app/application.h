@@ -149,7 +149,10 @@ typedef struct chttp_binding_limits {
 
 /** All provider/Controller/Interceptor metadata remains borrowed until close
  * settles. Construction config_value is borrowed only by ACE create().
- * Limits and policy values are copied. Objects are owned by the ACE graph,
+ * Limits and Security/CORS/asset policy structures are copied during init.
+ * Their strings, arrays and callback contexts remain borrowed until close;
+ * caller policy structures may be reused after init. JWT validator/admission
+ * contexts remain borrowed. Objects are owned by the ACE graph,
  * whose lifetime covers HTTP terminal, streams and deferred task finalizers. */
 typedef struct chttp_application_config {
   chttp_server_config http;

@@ -26,8 +26,10 @@ private. No compatibility header, fallback implementation or versioned API is ad
   Browser security headers and CORS protocol preflight run before this chain;
   static assets and SPA fallback run inside it, before terminal route dispatch.
   An Interceptor rejection cannot publish file-response work or expose bytes.
-  Asset configuration remains borrowed until close; existing file owners retain
-  their completion and drain obligations. Asset-only dispatch has no reflected
+  Application owns fixed-size Security, CORS and asset policy snapshots; their
+  strings, origin arrays and callback contexts remain borrowed until close.
+  Caller policy structures may be reused after init. File owners retain their
+  completion and drain obligations. Asset-only dispatch has no reflected
   Controller operation and supplies NULL operation metadata to hooks.
 - Close stops admission, drains real I/O and deferred work, destroys the server
   and MethodPlan records, then stops the component graph. Timeout/failure retains
@@ -35,6 +37,12 @@ private. No compatibility header, fallback implementation or versioned API is ad
 - C11 with-application execution returns operation and close errors. C++17 offers
   a noncopyable RAII Application with checked close; an unhandled destructor
   cleanup failure is fatal, rather than silently leaking or reporting success.
+
+Policy snapshots are copied on the control thread before activating Beans.
+Sized policy inputs must admit the known structure before copying it. Runtime
+callbacks borrow only Application-owned snapshots, which are immutable until
+HTTP/file completion drains and the Application is freed. No per-request copy,
+new allocation path, capacity policy or background policy mutation is introduced.
 
 Only static dependency construction is required here. Dynamic ServiceHost
 generation publication is an independent future capability, not a placeholder.

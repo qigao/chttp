@@ -25,6 +25,9 @@ typedef struct application_impl {
   size_t execution_count;
   chttp_dispatch_chain_hook hooks[16];
   size_t hook_count;
+  chttp_web_security_policy security;
+  chttp_server_cors_options cors;
+  chttp_web_asset_mount assets;
   int shutdown_status;
 } application_impl;
 
@@ -242,12 +245,18 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
       config->controllers == NULL || config->controller_count == 0u || config->interceptor_count > 16u ||
       (config->interceptor_count != 0u && config->interceptors == NULL)) return SALTS_EINVAL;
   if (owner->impl != NULL) return SALTS_EALREADY;
+  /* Sized policy storage must cover the snapshot before a full structure read. */
+  if ((config->security != NULL && config->security->size < sizeof(*config->security)) ||
+      (config->assets != NULL && config->assets->size < sizeof(*config->assets))) return SALTS_EINVAL;
   if (config->component_count > SIZE_MAX / sizeof(*app->instances) ||
       config->component_count > SIZE_MAX / sizeof(*app->order) ||
       config->dependency_capacity > SIZE_MAX / sizeof(*app->dependencies)) return SALTS_ERANGE;
   app = calloc(1u, sizeof(*app));
   if (app == NULL) return SALTS_ENOMEM;
   owner->impl = app;
+  if (config->security != NULL) app->security = *config->security;
+  if (config->cors != NULL) app->cors = *config->cors;
+  if (config->assets != NULL) app->assets = *config->assets;
   app->component_count = config->component_count;
   app->instances = calloc(config->component_count, sizeof(*app->instances));
   app->order = calloc(config->component_count, sizeof(*app->order));
@@ -283,12 +292,12 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   if (status != SALTS_OK) goto failed;
   APP_CONFIGURE(config->jwt, chttp_server_use_jwt_bearer(&app->server, config->jwt));
   APP_CONFIGURE(config->admission, chttp_server_set_admission(&app->server, config->admission, config->admission_context));
-  APP_CONFIGURE(config->security, chttp_web_security_use(&app->server, config->security));
-  APP_CONFIGURE(config->cors, chttp_server_use_cors(&app->server, config->cors));
+  APP_CONFIGURE(config->security, chttp_web_security_use(&app->server, &app->security));
+  APP_CONFIGURE(config->cors, chttp_server_use_cors(&app->server, &app->cors));
   /* Assets may terminate dispatch, so global application policy must wrap them. */
   status = chttp_server_use(&app->server, application_intercept, app);
   if (status != SALTS_OK) goto failed;
-  APP_CONFIGURE(config->assets, chttp_web_assets_use(&app->server, config->assets));
+  APP_CONFIGURE(config->assets, chttp_web_assets_use(&app->server, &app->assets));
 #undef APP_CONFIGURE
   status = application_bind(app, config);
   if (status == SALTS_OK) return SALTS_OK;

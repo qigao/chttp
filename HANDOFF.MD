@@ -1,5 +1,17 @@
 # Split SDK migration handoff
 
+- Application policy ownership: the public init contract promised copied policy
+  values, while Security/CORS/asset middleware still borrowed caller structures.
+  Reusing those structures after init changed nosniff, CORS admission and asset
+  routing; three real H1/H2 tests reproduce the mismatch without invalid-memory
+  access (`migration-application-policy-copy-red-ctest.log`). Application now
+  snapshots these fixed-size structures before graph activation and registers
+  only its owned copies. Referenced strings/origin arrays/callback contexts remain
+  explicitly borrowed through close. Sized policy storage is admitted before
+  copying; invalid size fails before any Bean factory. Full published-SDK Windows
+  build, 109/109 CTest and install pass
+  (`migration-application-policy-snapshot-full-ctest.log`).
+
 - Application policy ordering: a static asset/SPA middleware can complete the
   response without calling next. Registering it before the ACE Interceptor
   bypassed global application authorization. Four real H1/H2 regressions show
