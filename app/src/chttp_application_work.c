@@ -1,4 +1,5 @@
 #include "chttp_application_work.h"
+#include "../../http_server/src/chttp_server_engine.h"
 #include <cflow/executor.h>
 #include <threads/threads.h>
 #include <core/clock.h>
@@ -21,6 +22,11 @@ struct chttp_application_work_reply {
 struct work_item {
   work_impl *owner;
   int busy;
+  int business_done;
+  int transport_done;
+  int completion_queued;
+  chttp_server_response_terminal terminal;
+  chttp_application_work_outcome outcome;
   size_t bytes;
   unsigned char *storage;
   chttp_server_request_view request;
@@ -29,6 +35,7 @@ struct work_item {
   int64_t times[3];
   chttp_server_deferred deferred;
   chttp_application_work_task task;
+  chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
   chttp_application_work_reply reply;
 };
 struct work_impl {
@@ -171,19 +178,47 @@ static void publish(work_item *item, int business_status) {
   }
   work_impl *impl = item->owner;
   sync_mutex_lock(&impl->mutex);
-  if (status == SALTS_ENOENT || status == SALTS_EALREADY) count_event(&impl->stats.cancelled);
-  else if (status != SALTS_OK && impl->stats.publication_status == SALTS_OK)
-    impl->stats.publication_status = status;
-  count_event(&impl->stats.completed);
+  item->outcome.publication_status = status;
+  if (status != SALTS_OK && status != SALTS_ENOENT && status != SALTS_EALREADY &&
+      impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = status;
   sync_mutex_unlock(&impl->mutex);
+}
+int chttp_application_work_reject(const chttp_application_work_exchange *exchange,
+    unsigned int code, const char *type, const void *body, size_t size) {
+  if (!exchange || !exchange->result || code < 400u || code > 599u) return SALTS_EINVAL;
+  const int status = chttp_application_work_respond(exchange->response, code, type, body, size);
+  if (status == SALTS_OK) { exchange->result->status = SALTS_OK; exchange->result->rejected = true; }
+  return status;
+}
+static cmeta_status invoke_user(void *arg, const chttp_application_work_exchange *exchange,
+    chttp_application_work_result *result) {
+  work_item *item = arg;
+  result->status = item->task.run(item->task.user, exchange->request, exchange->response);
+  if (result->status == SALTS_OK && !item->reply.sealed) result->status = SALTS_EPROTO;
+  return result->status == SALTS_OK ? CMETA_OK : CMETA_CALLBACK_ERROR;
 }
 static void run_work(void *arg) {
   work_item *item = arg;
-  const int status = item->task.run(item->task.user, &item->request, &item->reply);
+  sync_mutex_lock(&item->owner->mutex);
+  const int cancelled = item->transport_done && item->outcome.transport_status != SALTS_OK;
+  sync_mutex_unlock(&item->owner->mutex);
+  if (cancelled) {
+    item->outcome.business_status = SALTS_ECANCELED;
+    publish(item, SALTS_ECANCELED);
+    return;
+  }
+  chttp_application_work_result result = {SALTS_OK, false};
+  const chttp_application_work_exchange exchange = {&item->request, &item->reply, &result};
+  const chttp_application_work_chain chain = {item, invoke_user, item->hooks, item->task.hook_count};
+  const cmeta_status invoked = chttp_application_work_chain_invoke(&chain, &exchange, &result);
+  const int status = result.rejected || invoked == CMETA_OK ? result.status :
+      result.status != SALTS_OK ? result.status : SALTS_EIO;
+  item->outcome.business_status = status; item->outcome.rejected = result.rejected;
   publish(item, status);
 }
 static void cancel_work(void *arg) {
   work_item *item = arg;
+  item->outcome.business_status = SALTS_ECANCELED;
   publish(item, SALTS_ECANCELED);
 }
 static void release_work(void *arg) {
@@ -198,6 +233,50 @@ static void release_work(void *arg) {
   sync_cond_broadcast(&impl->settled);
   sync_mutex_unlock(&impl->mutex);
 }
+static void notify_completion(void *arg) {
+  work_item *item = arg;
+  if (item->task.after_completion)
+    item->task.after_completion(item->task.user, &item->request, &item->outcome);
+  work_impl *impl = item->owner;
+  sync_mutex_lock(&impl->mutex);
+  count_event(&impl->stats.completed);
+  if (item->outcome.transport_status != SALTS_OK) count_event(&impl->stats.cancelled);
+  sync_mutex_unlock(&impl->mutex);
+}
+static void completion_cancelled(void *arg) {
+  /* The pool stays open until every admitted terminal notification settles. */
+  work_item *item = arg;
+  sync_mutex_lock(&item->owner->mutex);
+  if (item->owner->stats.publication_status == SALTS_OK)
+    item->owner->stats.publication_status = SALTS_EPROTO;
+  sync_mutex_unlock(&item->owner->mutex);
+}
+static void join_completion(work_item *item, int business_done, int transport_status) {
+  work_impl *impl = item->owner;
+  int schedule = 0;
+  sync_mutex_lock(&impl->mutex);
+  if (business_done) item->business_done = 1;
+  else { item->transport_done = 1; item->outcome.transport_status = transport_status; }
+  if (item->business_done && item->transport_done && !item->completion_queued) {
+    item->completion_queued = 1; schedule = 1;
+  }
+  sync_mutex_unlock(&impl->mutex);
+  if (!schedule) return;
+  const cflow_executor_task task = {.run = notify_completion, .cancel = completion_cancelled,
+      .finalize = release_work, .user = item};
+  const cflow_admission_status status = cflow_executor_try_post_task(&impl->executor, &task);
+  /* No access to item after successful publication: notification may finish now. */
+  if (status == CFLOW_ADMISSION_ACCEPTED) return;
+  sync_mutex_lock(&impl->mutex);
+  impl->accepting = 0;
+  if (impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = SALTS_EPROTO;
+  /* Retain the live record, rather than fabricate completion or run user code
+   * on the owner. Control-plane close reports the unsettled invariant failure. */
+  sync_mutex_unlock(&impl->mutex);
+}
+static void business_finalized(void *arg) { join_completion(arg, 1, SALTS_OK); }
+static void response_terminal(void *arg, int status) { join_completion(arg, 0, status); }
+
 int chttp_application_work_init(chttp_application_work *owner,
     const chttp_application_work_config *config) {
   if (!owner || !config || !config->workers || !config->capacity ||
@@ -221,6 +300,12 @@ int chttp_application_work_submit(chttp_application_work *owner,
     const chttp_server_request_view *request, chttp_server_response *response,
     const chttp_application_work_task *task) {
   if (!owner || !owner->impl || !response || !task || !task->run) return SALTS_EINVAL;
+  if (task->hook_count > CHTTP_APPLICATION_WORK_MAX_HOOKS ||
+      (task->hook_count && !task->hooks)) return SALTS_EINVAL;
+  for (size_t i = 0u; i < task->hook_count; ++i) {
+    if (!task->hooks[i].before && !task->hooks[i].after && !task->hooks[i].on_error)
+      return SALTS_EINVAL;
+  }
   work_impl *impl = owner->impl;
   size_t bytes;
   int status = snapshot_size(request, &bytes);
@@ -247,11 +332,22 @@ int chttp_application_work_submit(chttp_application_work *owner,
   if (!item->storage) { release_work(item); return SALTS_ENOMEM; }
   snapshot_copy(item, request);
   item->reply.item = item;
-  status = chttp_server_response_defer(response, &item->deferred);
+  item->terminal = (chttp_server_response_terminal){.complete = response_terminal, .user = item};
+  status = chttp_server_response_observe(response, &item->terminal);
   if (status != SALTS_OK) { release_work(item); return status; }
+  status = chttp_server_response_defer(response, &item->deferred);
+  if (status != SALTS_OK) {
+    const int detached = chttp_server_response_unobserve(response, &item->terminal);
+    if (detached == SALTS_OK) { release_work(item); return status; }
+    sync_mutex_lock(&impl->mutex); impl->accepting = 0;
+    impl->stats.publication_status = SALTS_EPROTO; sync_mutex_unlock(&impl->mutex);
+    return SALTS_EPROTO;
+  }
   item->task = *task;
+  if (task->hook_count) memcpy(item->hooks, task->hooks, task->hook_count * sizeof(*task->hooks));
+  item->task.hooks = item->hooks;
   const cflow_executor_task descriptor = {.run = run_work, .cancel = cancel_work,
-      .finalize = release_work, .user = item};
+      .finalize = business_finalized, .user = item};
   sync_mutex_lock(&impl->mutex); count_event(&impl->stats.accepted); sync_mutex_unlock(&impl->mutex);
   const cflow_admission_status admitted = cflow_executor_try_post_task(&impl->executor, &descriptor);
   /* A successful post may run and finalize before the call returns. */
@@ -263,8 +359,15 @@ int chttp_application_work_submit(chttp_application_work *owner,
   if (impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = SALTS_EPROTO;
   sync_mutex_unlock(&impl->mutex);
   item->task.finalize = NULL; /* A rejected descriptor never takes its caller payload. */
-  publish(item, SALTS_EPROTO); release_work(item);
+  item->task.after_completion = NULL;
+  item->outcome.business_status = SALTS_EPROTO;
+  publish(item, SALTS_EPROTO);
+  business_finalized(item);
   return SALTS_EPROTO;
+}
+int chttp_application_work_is_current(const chttp_application_work *owner) {
+  const work_impl *impl = owner ? owner->impl : NULL;
+  return impl && cflow_executor_is_current((cflow_executor *)&impl->executor);
 }
 int chttp_application_work_get_stats(chttp_application_work *owner,
     chttp_application_work_stats *out) {

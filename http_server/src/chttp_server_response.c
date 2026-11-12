@@ -774,3 +774,39 @@ int chttp_server_error_serialize(unsigned int status_code, unsigned char *output
   if (wire_size < 0 || (size_t)wire_size >= sizeof(wire)) return SALTS_EMSGSIZE;
   return chttp_server_output_append(output, output_capacity, inout_size, wire, (size_t)wire_size);
 }
+
+int chttp_server_response_observe(chttp_server_response *response,
+    chttp_server_response_terminal *ticket) {
+  if (!response || !response->impl || !ticket || !ticket->complete || ticket->next)
+    return SALTS_EINVAL;
+  if (ticket->owner) return SALTS_EALREADY;
+  chttp_server_response_builder *builder = response->impl;
+  if (!builder->request_state || !builder->request || builder->source_enabled ||
+      builder->request->method == CHTTP_METHOD_CONNECT) return SALTS_ENOTSUP;
+  if (builder->replied || builder->deferred || builder->request_state->terminal)
+    return SALTS_EALREADY;
+  ticket->stream_id = 0;
+  ticket->owner = builder->request_state;
+  builder->request_state->terminal = ticket;
+  return SALTS_OK;
+}
+int chttp_server_response_unobserve(chttp_server_response *response,
+    chttp_server_response_terminal *ticket) {
+  if (!response || !response->impl || !ticket) return SALTS_EINVAL;
+  chttp_server_response_builder *builder = response->impl;
+  if (builder->replied || builder->deferred) return SALTS_EBUSY;
+  if (!builder->request_state || builder->request_state->terminal != ticket) return SALTS_ENOENT;
+  builder->request_state->terminal = NULL;
+  ticket->owner = NULL;
+  return SALTS_OK;
+}
+void chttp_server_request_terminal_notify(chttp_server_request_state *state, int status) {
+  if (!state || !state->terminal) return;
+  chttp_server_response_terminal *ticket = state->terminal;
+  state->terminal = NULL;
+  void (*complete)(void *, int) = ticket->complete;
+  void *user = ticket->user;
+  ticket->next = NULL; ticket->owner = NULL;
+  /* The callback may hand off its last reference. Never touch ticket again. */
+  complete(user, status);
+}

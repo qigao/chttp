@@ -79,6 +79,13 @@ typedef struct chttp_h2_server_test_deferred {
   int defer_status;
 } chttp_h2_server_test_deferred;
 
+typedef struct chttp_h2_server_test_terminal {
+  chttp_h2_server_test_deferred deferred;
+  chttp_server_response_terminal ticket;
+  atomic_int observed;
+  int status;
+} chttp_h2_server_test_terminal;
+
 typedef struct chttp_h2_server_test_stop {
   chttp_server *server;
   int status;
@@ -565,6 +572,22 @@ static int chttp_h2_server_test_deferred_handler(void *user,
   deferred->defer_status = chttp_server_response_defer(response, &deferred->handle);
   atomic_fetch_add_explicit(&deferred->admitted, 1, memory_order_release);
   return deferred->defer_status;
+}
+
+static void chttp_h2_server_test_terminal_complete(void *user, int status) {
+  chttp_h2_server_test_terminal *probe = user;
+  probe->status = status;
+  atomic_fetch_add_explicit(&probe->observed, 1, memory_order_release);
+}
+
+static int chttp_h2_server_test_terminal_handler(void *user,
+    const chttp_server_request_view *request, chttp_server_response *response) {
+  chttp_h2_server_test_terminal *probe = user;
+  probe->ticket.complete = chttp_h2_server_test_terminal_complete;
+  probe->ticket.user = probe;
+  int status = chttp_server_response_observe(response, &probe->ticket);
+  if (status != SALTS_OK) return status;
+  return chttp_h2_server_test_deferred_handler(&probe->deferred, request, response);
 }
 
 static int chttp_h2_server_test_wait_atomic(atomic_int *value, int expected) {
@@ -1838,6 +1861,82 @@ spec("CHTTP background HTTP/2 server") {
     chttp_h2_server_test_socket_close(socket_value);
     check_equal(chttp_server_stop(&server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("reports peer RST_STREAM NO_ERROR as cancellation exactly once") {
+    static const chttp_h2_hpack_header deferred_headers[] = {
+        {":method", sizeof(":method") - 1u, "GET", sizeof("GET") - 1u},
+        {":scheme", sizeof(":scheme") - 1u, "http", sizeof("http") - 1u},
+        {":path", sizeof(":path") - 1u, "/deferred", sizeof("/deferred") - 1u},
+        {":authority", sizeof(":authority") - 1u, "localhost", sizeof("localhost") - 1u}};
+    static const chttp_h2_hpack_header sibling_headers[] = {
+        {":method", sizeof(":method") - 1u, "GET", sizeof("GET") - 1u},
+        {":scheme", sizeof(":scheme") - 1u, "http", sizeof("http") - 1u},
+        {":path", sizeof(":path") - 1u, "/values/sibling", sizeof("/values/sibling") - 1u},
+        {":authority", sizeof(":authority") - 1u, "localhost", sizeof("localhost") - 1u}};
+    static const chttp_server_deferred_response response = {
+        .size = sizeof(chttp_server_deferred_response),
+        .status_code = 200u,
+        .content_type = "text/plain",
+        .body = "too-late",
+        .body_size = sizeof("too-late") - 1u};
+    chttp_server server = {0};
+    chttp_server_config config = chttp_h2_server_test_config();
+    chttp_h2_server_test_terminal probe = {0};
+    chttp_server_deferred stale = CHTTP_SERVER_DEFERRED_INIT;
+    chttp_h2_server_test_peer peer = {0};
+    chttp_h2_server_test_socket socket_value = CHTTP_H2_SERVER_TEST_INVALID_SOCKET;
+    uint16_t port = 0u;
+
+    atomic_init(&probe.deferred.admitted, 0);
+    atomic_init(&probe.observed, 0);
+    config.session_capacity = 0u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/deferred", chttp_h2_server_test_terminal_handler, &probe),
+        SALTS_OK);
+    check_equal(
+        chttp_server_get(&server, "/values/:value", chttp_h2_server_test_value_handler, NULL),
+        SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    check_equal(chttp_h2_server_test_socket_connect(port, &socket_value), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_init(&peer), SALTS_OK);
+    check_equal(
+        chttp_h2_server_test_peer_submit(&peer, deferred_headers,
+                                         sizeof(deferred_headers) / sizeof(deferred_headers[0])),
+        SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_submit(
+                    &peer, sibling_headers, sizeof(sibling_headers) / sizeof(sibling_headers[0])),
+                SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_send(&peer, socket_value), SALTS_OK);
+    check_equal(chttp_h2_server_test_wait_atomic(&probe.deferred.admitted, 1), SALTS_OK);
+    stale = probe.deferred.handle;
+    check_equal(chttp_h2_proto_submit_rst_stream(peer.protocol, peer.results[0].stream_id,
+                                                 CHTTP_H2_ERR_NO_ERROR),
+                0);
+    check_equal(chttp_h2_server_test_peer_pump(&peer, socket_value, 2u), SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_submit(
+                    &peer, sibling_headers, sizeof(sibling_headers) / sizeof(sibling_headers[0])),
+                SALTS_OK);
+    check_equal(chttp_h2_server_test_peer_pump(&peer, socket_value, 3u), SALTS_OK);
+
+    check_equal(chttp_h2_server_test_wait_atomic(&probe.observed, 1), SALTS_OK);
+    check_equal(probe.status, SALTS_ECANCELED);
+    check_equal(chttp_server_deferred_reply(&stale, &response), SALTS_ENOENT);
+    check_equal(peer.results[0].error_code, CHTTP_H2_ERR_NO_ERROR);
+    check_equal(peer.results[1].error_code, CHTTP_H2_ERR_NO_ERROR);
+    check_equal(peer.results[1].status, 200u);
+    check_equal(peer.results[1].body, "sibling");
+    check_equal(peer.results[2].error_code, CHTTP_H2_ERR_NO_ERROR);
+    check_equal(peer.results[2].status, 200u);
+
+    chttp_h2_server_test_peer_destroy(&peer);
+    chttp_h2_server_test_socket_close(socket_value);
+    check_equal(chttp_server_stop(&server, CHTTP_H2_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(atomic_load_explicit(&probe.observed, memory_order_acquire), 1);
+    check_equal(probe.ticket.owner == NULL, true);
   }
 
   it("quarantines a reset H2 stream while a terminal writer owns its generation") {

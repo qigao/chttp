@@ -5,9 +5,31 @@
   Deep-copy parser-backed headers, params, JWT strings/times, peer and body before
   a queued worker can outlive the callback. After H1 deadline/H2 reset, keep this
   storage until the real worker/finalizer settles; stale deferred publication
-  cannot release it early. Existing-suite worker tests cover 11 cases. Full
+  cannot release it early. The private bridge now joins business finalization
+  with the real native response terminal, then runs completion/finalization on
+  its worker. The private Application prototype resolves real ACE Controller
+  receivers and retains the graph until worker observers settle. Its private
+  mounts cannot mix owner-affine legacy callbacks. No public mode is exposed.
+  The worker suite covers 20 cases including two workers/two owners; Application
+  tests cover injected Service execution and finite-close graph retention. Full
   native-release-user build, 116/116 CTests and install pass; logs are
   `build/migration-application-work-{late-build,late-ctest,full-ctest,install}.log`.
+  The subsequent terminal/ACE implementation also passed 116/116 and install:
+  `build/migration-application-worker-final-{full-ctest,install}.log`; added
+  parallel and RST(NO_ERROR) cases pass their existing CTest entries in
+  `migration-application-worker-parallel-ctest.log` and
+  `migration-application-worker-rst-ctest.log`.
+- H2 protocol stream closure can precede native send completion. Keep terminal
+  tickets in ready/writing batches and settle only the batch NativeIO confirms;
+  connection failure/reset cancels outstanding tickets. RST_STREAM(NO_ERROR)
+  is cancellation despite its zero protocol error. Clear ticket ownership
+  before signaling because a worker may immediately finalize its storage.
+  A paused H1 client body sink does not prove native send remains pending:
+  kernel buffers may accept the whole response. An initial test made that
+  invalid inference and failed (`migration-application-work-completion-fixed-ctest.log`).
+  Replace that inference with deterministic H2 flow-window backpressure; keep
+  H1's actual send/deadline/observer tests. Do not equate local send completion
+  with peer application consumption or widen timing assertions to hide it.
 
 - Deferred CPU failure root: temporary Server tracing reproduced HTTP 503 with
   one worker-admission rejection, not a lost successful response. The benchmark

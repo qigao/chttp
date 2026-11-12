@@ -56,6 +56,8 @@ typedef struct chttp_h2_server_stream {
 } chttp_h2_server_stream;
 
 struct chttp_h2_server_connection {
+  chttp_server_response_terminal *terminal_ready;
+  chttp_server_response_terminal *terminal_writing;
   chttp_server_connection *connection;
   chttp_h2_proto *protocol;
   chttp_h2_proto_config protocol_config;
@@ -66,6 +68,45 @@ struct chttp_h2_server_connection {
   bool drain_ping_sent;
   bool drain_ping_acked;
 };
+
+static void terminal_list_complete(chttp_server_response_terminal **list, int status) {
+  chttp_server_response_terminal *ticket = *list;
+  *list = NULL;
+  while (ticket) {
+    chttp_server_response_terminal *next = ticket->next;
+    void (*complete)(void *, int) = ticket->complete;
+    void *user = ticket->user;
+    ticket->next = NULL; ticket->owner = NULL;
+    complete(user, status);
+    ticket = next;
+  }
+}
+static void terminal_reset_stream(chttp_server_response_terminal **list, int32_t id) {
+  while (*list) {
+    chttp_server_response_terminal *ticket = *list;
+    if (ticket->stream_id == id) {
+      *list = ticket->next;
+      void (*complete)(void *, int) = ticket->complete;
+      void *user = ticket->user;
+      ticket->next = NULL; ticket->owner = NULL;
+      complete(user, SALTS_ECANCELED);
+      return;
+    }
+    list = &ticket->next;
+  }
+}
+static void chttp_h2_server_rst_received(void *user, int32_t stream_id, uint32_t error) {
+  (void)error;
+  chttp_h2_server_connection *h2 = user;
+  /* Includes peer RST_STREAM(NO_ERROR), which is not a successful response send.
+   * The protocol close callback precedes this callback and may have moved the
+   * ticket into either native-send batch. Stream IDs never repeat in a session. */
+  terminal_reset_stream(&h2->terminal_ready, stream_id);
+  terminal_reset_stream(&h2->terminal_writing, stream_id);
+}
+void chttp_h2_server_connection_sent(chttp_h2_server_connection *h2) {
+  if (h2) terminal_list_complete(&h2->terminal_writing, SALTS_OK);
+}
 
 static bool chttp_h2_server_add(size_t left, size_t right, size_t *out) {
   if (out == NULL || left > SIZE_MAX - right) return false;
@@ -1072,8 +1113,17 @@ static int chttp_h2_server_stream_close(void *user, int32_t stream_id, uint32_t 
   chttp_h2_server_connection *h2 = (chttp_h2_server_connection *)user;
   chttp_h2_server_stream *stream = chttp_h2_server_stream_find(h2, stream_id);
   uint_fast64_t token;
-  (void)error_code;
   if (stream == NULL) return 0;
+  if (error_code != 0u) {
+    chttp_server_request_terminal_notify(&stream->request_state,
+        error_code == CHTTP_H2_ERR_CANCEL ? SALTS_ECANCELED : SALTS_EPROTO);
+  } else if (stream->request_state.terminal) {
+    chttp_server_response_terminal *ticket = stream->request_state.terminal;
+    stream->request_state.terminal = NULL;
+    ticket->stream_id = stream_id;
+    ticket->next = h2->terminal_ready;
+    h2->terminal_ready = ticket;
+  }
   (void)chttp_h2_proto_set_stream_user_data(h2->protocol, stream_id, NULL);
   if (h2->active_streams != 0u) --h2->active_streams;
   stream->protocol_closed = true;
@@ -1139,7 +1189,8 @@ int chttp_h2_server_connection_prepare(chttp_h2_server_connection *h2) {
   chttp_h2_proto_callbacks callbacks = {0};
   size_t index;
   if (h2 == NULL || h2->connection == NULL) return SALTS_EINVAL;
-  if (chttp_h2_server_connection_has_deferred(h2)) return SALTS_EBUSY;
+  if (chttp_h2_server_connection_has_deferred(h2) || h2->terminal_ready || h2->terminal_writing)
+    return SALTS_EBUSY;
   chttp_h2_proto_destroy(h2->protocol);
   h2->protocol = NULL;
   h2->active_streams = 0u;
@@ -1156,6 +1207,7 @@ int chttp_h2_server_connection_prepare(chttp_h2_server_connection *h2) {
   callbacks.on_end_headers = chttp_h2_server_end_headers;
   callbacks.on_data = chttp_h2_server_data;
   callbacks.on_stream_close = chttp_h2_server_stream_close;
+  callbacks.on_rst_received = chttp_h2_server_rst_received;
   callbacks.on_ping_ack = chttp_h2_server_ping_ack;
   h2->protocol = chttp_h2_proto_create(CHTTP_H2_PROTO_SERVER, &h2->protocol_config, &callbacks);
   if (h2->protocol != NULL) {
@@ -1168,6 +1220,8 @@ int chttp_h2_server_connection_prepare(chttp_h2_server_connection *h2) {
 void chttp_h2_server_connection_release(chttp_h2_server_connection *h2) {
   size_t index;
   if (h2 == NULL) return;
+  terminal_list_complete(&h2->terminal_ready, SALTS_ECONNRESET);
+  terminal_list_complete(&h2->terminal_writing, SALTS_ECONNRESET);
   chttp_h2_proto_destroy(h2->protocol);
   h2->protocol = NULL;
   h2->active_streams = 0u;
@@ -1389,6 +1443,15 @@ int chttp_h2_server_connection_flush(chttp_h2_server_connection *h2) {
   }
   if (wire_size != 0) memcpy(connection->outbound, wire, (size_t)wire_size);
   connection->outbound_size = (size_t)wire_size;
+  /* proto_send returns all queued encoded bytes, including END_STREAM that
+   * caused successful on_stream_close callbacks before/during this flush.
+   * Move only this batch's tickets: new ready tickets while a send is in flight
+   * must wait for the following flush and cannot complete on the old on_send. */
+  if (wire_size != 0) {
+    if (h2->terminal_writing != NULL) return SALTS_EPROTO;
+    h2->terminal_writing = h2->terminal_ready;
+    h2->terminal_ready = NULL;
+  }
   return SALTS_OK;
 }
 

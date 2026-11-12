@@ -80,7 +80,7 @@ side effect. Explicit ACE providers own other deletion models. These checks
 protect the typed allocation/deletion boundary; callers still supply the correct
 semantic DataDesc identity for T. Borrowed Interface views gain no ownership.
 
-## Proposed worker-dispatched Application (design, not implemented)
+## Worker-dispatched Application (design and private implementation)
 
 This section specifies the next programming model. The implementation above is
 still the current contract: ordinary actions and the HTTP Interceptor chain run
@@ -98,13 +98,28 @@ is the scheduler reuse point. These facts do not establish the proposed mode.
 ### Internal implementation status
 
 The private `app/src/chttp_application_work.h` bridge now owns a bounded CFlow
-worker pool, deep-copied buffered request state, a copied response draft and
-accepted-task finalization. It is not installed or selected by Application.
-`chttp_application_worker_test` verifies real H1/H2 owner-to-worker dispatch,
-transient snapshot isolation, overload, same-pool close rejection and late
-completion after protocol deadlines. Session/stream/WS adaptation, the public
-Invocation migration and response-terminal observers remain required before
-switching the application programming model. No runtime feature switch was added.
+worker pool, deep-copied buffered request state and a copied response draft.
+Private Application bindings resolve Controller receivers from the same ACE
+graph; their methods, injected Service calls and typed Interceptor chain execute
+on workers. The private prototype rejects mixing legacy owner callbacks and
+is neither installed nor selected by the public Application API.
+
+Buffered deferred responses have an owner-side terminal ticket. Business
+finalization and native response completion/reset join before scheduling one
+worker completion observer, retaining snapshots, admission slots and Beans
+through observer finalization. H2 encoder stream closure is not native send
+completion: ready tickets move to the writing batch only when that batch is
+submitted, and settle when NativeIO reports it sent. Peer RST_STREAM(NO_ERROR)
+still means cancellation. Success establishes local native send completion,
+not consumption by the remote application.
+
+`chttp_application_worker_test` covers snapshot isolation, overload, real H1/H2
+deadlines, one/two-worker execution, hook unwinding, finite close and H2 flow
+control. `chttp_application_test` exercises actual ACE-injected Controller/Service
+dispatch and graph retention across a blocked completion observer; the Server
+suite covers the zero-error reset. Session/stream/WS adaptation, generated
+HTTP/RPC worker integration and the public Invocation migration remain required
+before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives
 

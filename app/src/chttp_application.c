@@ -1,5 +1,6 @@
 #include <chttp_app/application.h>
 #include "chttp_method_runtime.h"
+#include "chttp_application_worker.h"
 #include "chttp_web_registration.h"
 #include "../../http_server/src/chttp_server_engine.h"
 #include "../../http_server/rpc/chttp_rpc_mount.h"
@@ -10,10 +11,21 @@
 
 CHTTP_ACTION(chttp_expected_action);
 
+typedef struct application_worker_action {
+  chttp_application_work *work;
+  chttp_application_work_task task;
+} application_worker_action;
+
 typedef struct application_action { const chttp_action *action; void *receiver; } application_action;
 typedef struct application_impl {
   chttp_server server;
   chttp_method_runtime methods;
+  chttp_application_work workers;
+  application_worker_action *worker_actions;
+  size_t worker_action_count;
+  size_t worker_route_capacity;
+  bool worker_prototype_allowed;
+  bool configuration_closed;
   salts_configurator_context graph;
   salts_configurator_instance *instances;
   salts_configurator_dependency *dependencies;
@@ -84,6 +96,59 @@ static int application_receiver(application_impl *app, const char *id,
     return SALTS_OK;
   }
   return SALTS_ENOENT;
+}
+
+int chttp_application_worker_current(const chttp_application *owner) {
+  const application_impl *app = owner ? owner->impl : NULL;
+  return app && chttp_application_work_is_current(&app->workers);
+}
+static int application_worker_dispatch(void *context,
+    const chttp_server_request_view *request, chttp_server_response *response) {
+  application_worker_action *action = context;
+  const int status = chttp_application_work_submit(action->work, request, response, &action->task);
+  if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
+    return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
+  return status;
+}
+int chttp_application_worker_prepare(chttp_application *owner,
+    const chttp_application_work_config *config) {
+  application_impl *app = owner ? owner->impl : NULL;
+  if (!app || !config) return SALTS_EINVAL;
+  if (app->configuration_closed) return SALTS_EBUSY;
+  if (!app->worker_prototype_allowed) return SALTS_ENOTSUP;
+  if (app->workers.impl) return SALTS_EALREADY;
+  if (app->worker_route_capacity > SIZE_MAX / sizeof(*app->worker_actions)) return SALTS_ERANGE;
+  application_worker_action *actions = calloc(app->worker_route_capacity, sizeof(*actions));
+  if (!actions) return SALTS_ENOMEM;
+  const int status = chttp_application_work_init(&app->workers, config);
+  if (status != SALTS_OK) { free(actions); return status; }
+  app->worker_actions = actions;
+  return SALTS_OK;
+}
+int chttp_application_worker_mount(chttp_application *owner,
+    const chttp_application_worker_binding *binding) {
+  application_impl *app = owner ? owner->impl : NULL;
+  if (!app || !binding || !binding->invoke || !binding->path || !app->workers.impl ||
+      binding->hook_count > CHTTP_APPLICATION_WORK_MAX_HOOKS ||
+      (binding->hook_count && !binding->hooks)) return SALTS_EINVAL;
+  if (app->configuration_closed) return SALTS_EBUSY;
+  for (size_t i = 0u; i < binding->hook_count; ++i) {
+    if (!binding->hooks[i].before && !binding->hooks[i].after && !binding->hooks[i].on_error)
+      return SALTS_EINVAL;
+  }
+  if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
+  void *receiver = NULL;
+  int status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
+  if (status != SALTS_OK) return status;
+  application_worker_action *action = &app->worker_actions[app->worker_action_count];
+  *action = (application_worker_action){.work = &app->workers,
+      .task = {.run = binding->invoke, .user = receiver,
+               .after_completion = binding->after_completion,
+               .hooks = binding->hooks, .hook_count = binding->hook_count}};
+  status = chttp_server_route(&app->server, binding->method, binding->path,
+      application_worker_dispatch, action);
+  if (status == SALTS_OK) ++app->worker_action_count;
+  return status;
 }
 
 typedef struct application_dispatch {
@@ -257,6 +322,14 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   if (config->security != NULL) app->security = *config->security;
   if (config->cors != NULL) app->cors = *config->cors;
   if (config->assets != NULL) app->assets = *config->assets;
+  app->worker_route_capacity = config->http.route_capacity;
+  app->worker_prototype_allowed = config->interceptor_count == 0u && !config->admission &&
+      !config->assets && config->http.session_capacity == 0u;
+  for (size_t i = 0u; i < config->controller_count; ++i) {
+    const chttp_controller *controller = &config->controllers[i];
+    if (controller->action_count || controller->http_method_count || controller->rpc_method_count ||
+        controller->websocket_count) app->worker_prototype_allowed = false;
+  }
   app->component_count = config->component_count;
   app->instances = calloc(config->component_count, sizeof(*app->instances));
   app->order = calloc(config->component_count, sizeof(*app->order));
@@ -309,7 +382,9 @@ failed: {
 
 int chttp_application_start(chttp_application *owner) {
   application_impl *app = owner != NULL ? owner->impl : NULL;
-  return app != NULL ? chttp_server_start(&app->server) : SALTS_EINVAL;
+  if (!app) return SALTS_EINVAL;
+  app->configuration_closed = true;
+  return chttp_server_start(&app->server);
 }
 int chttp_application_port(const chttp_application *owner, uint16_t *port) {
   const application_impl *app = owner != NULL ? owner->impl : NULL;
@@ -325,6 +400,7 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
   int status;
   if (owner == NULL) return SALTS_EINVAL;
   if (app == NULL) return SALTS_OK;
+  if (chttp_application_work_is_current(&app->workers)) return SALTS_EBUSY;
   if (app->server.impl != NULL) {
     status = chttp_server_stop(&app->server, timeout_ms);
     if (status != SALTS_OK) {
@@ -342,6 +418,16 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
     status = chttp_server_destroy(&app->server);
     if (status != SALTS_OK) return status;
   }
+  if (app->workers.impl) {
+    const uint64_t elapsed = monotonic_ms() - started;
+    if (timeout_ms != 0u && elapsed >= timeout_ms) return SALTS_ETIMEDOUT;
+    const uint32_t remaining = timeout_ms == 0u ? 0u : (uint32_t)(timeout_ms - elapsed);
+    status = chttp_application_work_close(&app->workers, remaining);
+    if (status != SALTS_OK) {
+      if (app->workers.impl) return status;
+      if (app->shutdown_status == SALTS_OK) app->shutdown_status = status;
+    }
+  }
   status = chttp_method_runtime_destroy(&app->methods);
   if (status != SALTS_OK) return status;
   if (app->graph.state == SALTS_CONFIGURATOR_CONTEXT_ACTIVE) {
@@ -351,6 +437,7 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
   if (app->graph.state == SALTS_CONFIGURATOR_CONTEXT_FAILED && app->graph.instances != NULL)
     return SALTS_EBUSY;
   const int result = app->shutdown_status;
+  free(app->worker_actions);
   free(app->actions); free(app->executions); free(app->dependencies); free(app->instances); free(app->order);
   free(app); owner->impl = NULL;
   return result;

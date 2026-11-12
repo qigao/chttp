@@ -78,6 +78,7 @@ typedef struct chttp_server_route_record {
 #include "chttp_websocket_server_internal.h"
 
 typedef struct chttp_server_response_builder {
+  chttp_server_request_state *request_state;
   chttp_server_impl *server;
   chttp_server_connection *connection;
   chttp_server_deferred_target *deferred_target;
@@ -135,6 +136,7 @@ typedef struct chttp_session_context {
 } chttp_session_context;
 
 struct chttp_server_request_state {
+  chttp_server_response_terminal *terminal;
   chttp_server_impl *server;
   chttp_server_response_builder response_builder;
   chttp_server_response response;
@@ -538,6 +540,7 @@ int chttp_server_error_serialize(unsigned int status_code, unsigned char *output
 
 int chttp_server_request_state_init(chttp_server_request_state *state, chttp_server_impl *server);
 void chttp_server_request_state_reset(chttp_server_request_state *state);
+void chttp_server_request_terminal_notify(chttp_server_request_state *, int);
 void chttp_server_request_state_destroy(chttp_server_request_state *state);
 int chttp_server_request_admit(chttp_server_request_state *state,
                                const chttp_server_request_view *request, chttp_method route_method);

@@ -1,4 +1,7 @@
 #include <chttp_app/app.h>
+#include "chttp_application_worker.h"
+#include <threads/threads.h>
+#include <core/clock.h>
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include "tinytest.h"
@@ -38,11 +41,18 @@ static struct {
   bool reject_assets;
   size_t response_size;
   int creates, destroys, calls, opened, closed, body_bytes, body_status;
+  int worker_method, worker_service, worker_completed, worker_close_status, destroyed_during_work;
+  sync_mutex_t worker_mutex;
+  sync_cond_t worker_changed;
+  int hold_worker_completion, worker_completion_entered, release_worker_completion;
   int destruction[4], trace[32];
   size_t trace_count;
 } fixture;
 
-static int counter_value(void *self) { return *(int *)self; }
+static int counter_value(void *self) {
+  if (chttp_application_worker_current(&fixture.app)) ++fixture.worker_service;
+  return *(int *)self;
+}
 CMETA_IMPLEMENTS(TestCounter, counter_impl, 0u, .value = counter_value);
 static cmeta_status counter_project(void *context, const cmeta_object_ref *object,
     const cmeta_interface_desc *expected, cmeta_interface_projection *out) {
@@ -90,6 +100,31 @@ static cmeta_status bean_create(void *context, const cmeta_data_desc *data,
   return status == CMETA_OK && state->fail ? CMETA_CALLBACK_ERROR : status;
 }
 
+static int worker_hello(void *self, const chttp_server_request_view *request,
+    chttp_application_work_reply *reply) {
+  (void)request;
+  TestController *controller = self;
+  fixture.worker_method = chttp_application_worker_current(&fixture.app);
+  fixture.worker_close_status = chttp_application_close(&fixture.app, 1u);
+  fixture.destroyed_during_work = fixture.destroys;
+  char value[32];
+  const int size = snprintf(value, sizeof(value), "%d", TestCounter_value(&controller->counter));
+  return size < 0 || (size_t)size >= sizeof(value) ? SALTS_ERANGE :
+      chttp_application_work_respond(reply, 200u, "text/plain", value, (size_t)size);
+}
+static void worker_completed(void *self, const chttp_server_request_view *request,
+    const chttp_application_work_outcome *outcome) {
+  (void)self; (void)request;
+  if (chttp_application_worker_current(&fixture.app) && fixture.destroys == 0 &&
+      outcome->business_status == SALTS_OK && outcome->transport_status == SALTS_OK)
+    ++fixture.worker_completed;
+  sync_mutex_lock(&fixture.worker_mutex);
+  fixture.worker_completion_entered = 1;
+  sync_cond_broadcast(&fixture.worker_changed);
+  while (fixture.hold_worker_completion && !fixture.release_worker_completion)
+    sync_cond_wait(&fixture.worker_changed, &fixture.worker_mutex);
+  sync_mutex_unlock(&fixture.worker_mutex);
+}
 CHTTP_ACTION(hello);
 int hello(void *self, const chttp_exchange *exchange) {
   TestController *controller = self;
@@ -218,6 +253,7 @@ static void setup_assets(bool reject) {
 spec("Reflected HTTP Application") {
   before_each() {
     memset(&fixture, 0, sizeof(fixture));
+    sync_mutex_init(&fixture.worker_mutex); sync_cond_init(&fixture.worker_changed);
     fixture.config = chttp_application_config_default();
     const cmeta_component_desc *components[] = {cmeta_component_meta(TestServiceComponent),
         cmeta_component_meta(TestControllerComponent), cmeta_component_meta(TestHookA), cmeta_component_meta(TestHookB)};
@@ -250,9 +286,12 @@ spec("Reflected HTTP Application") {
     check_equal(chttp_client_init(&fixture.client, &client), SALTS_OK);
   }
   after_each() {
+    sync_mutex_lock(&fixture.worker_mutex); fixture.release_worker_completion = 1;
+    sync_cond_broadcast(&fixture.worker_changed); sync_mutex_unlock(&fixture.worker_mutex);
     check_equal(chttp_websocket_client_destroy(&fixture.websocket, 5000u), SALTS_OK);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     check_equal(chttp_client_destroy(&fixture.client, 5000u), SALTS_OK);
+    sync_cond_destroy(&fixture.worker_changed); sync_mutex_destroy(&fixture.worker_mutex);
     if (fixture.asset_root != NULL) {
       check_equal(tt_remove_tree(fixture.asset_root), 0);
       free(fixture.asset_root); fixture.asset_root = NULL;
@@ -454,4 +493,67 @@ spec("Reflected HTTP Application") {
     check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_EINVAL);
     check_null(fixture.app.impl); check_equal(fixture.creates, 0); check_equal(fixture.destroys, 0);
   }
+  group("private worker Controller migration") {
+    for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+      it("keeps the injected Service and Controller alive through protocol %d completion", protocol) {
+        fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
+        fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+        check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+        const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
+        check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
+        const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
+            .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
+            .path = "/hello", .invoke = worker_hello, .after_completion = worker_completed};
+        check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
+        unsigned int status = 0u;
+        check_equal(request((chttp_protocol)protocol, "/hello", &status), SALTS_OK);
+        check_equal(status, 200u); check_equal(fixture.worker_method, 1);
+        check_equal(fixture.worker_service, 1); check_equal(fixture.worker_completed, 1);
+        check_equal(fixture.worker_close_status, SALTS_EBUSY);
+        check_equal(fixture.destroyed_during_work, 0); check_equal(fixture.destroys, 4);
+      }
+    }
+    it("does not enable a mixed owner/worker prototype on existing public callbacks") {
+      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+      const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
+      check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_ENOTSUP);
+    }
+  }
+
+  it("retains the ACE graph when worker notification makes close exceed its budget") {
+    fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
+    fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+    fixture.hold_worker_completion = 1;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
+    check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
+    const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
+        .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
+        .path = "/hello", .invoke = worker_hello, .after_completion = worker_completed};
+    check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
+    check_equal(chttp_application_start(&fixture.app), SALTS_OK);
+    uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
+    char uri[64]; snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+    const chttp_options options = {.connection_uri = uri, .authority = "worker.test",
+        .target = "/hello", .protocol = CHTTP_HTTP_2, .timeout_ms = 5000u};
+    chttp_response response = {0}; chttp_error error = {0};
+    const int status = chttp_get(&fixture.client, &options, &response, &error);
+    const unsigned int code = response.status_code;
+    chttp_response_destroy(&response);
+    check_equal(status, SALTS_OK); check_equal(code, 200u);
+    sync_mutex_lock(&fixture.worker_mutex);
+    const uint64_t started = monotonic_ms();
+    while (!fixture.worker_completion_entered && monotonic_ms() - started < 5000u)
+      sync_cond_timedwait(&fixture.worker_changed, &fixture.worker_mutex, UINT64_C(100000000));
+    const int entered = fixture.worker_completion_entered;
+    sync_mutex_unlock(&fixture.worker_mutex);
+    check_equal(entered, 1);
+    check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
+    check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroys, 0);
+    sync_mutex_lock(&fixture.worker_mutex); fixture.release_worker_completion = 1;
+    sync_cond_broadcast(&fixture.worker_changed); sync_mutex_unlock(&fixture.worker_mutex);
+    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    check_null(fixture.app.impl); check_equal(fixture.destroys, 4);
+  }
+
 }

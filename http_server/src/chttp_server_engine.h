@@ -6,6 +6,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* Private Application deferred-buffered response observer. The caller owns
+ * address-stable ticket storage until complete returns. Callback runs on the
+ * HTTP owner and must only record/signal, never execute application work.
+ * H2 success follows the CNet send that contains the final END_STREAM bytes,
+ * not the protocol encoder's earlier on_stream_close event. */
+typedef struct chttp_server_response_terminal {
+  void (*complete)(void *, int);
+  void *user;
+  void *owner; /* Noncopyable registration; caller zero-initializes the ticket. */
+  struct chttp_server_response_terminal *next;
+  int32_t stream_id;
+} chttp_server_response_terminal;
+int chttp_server_response_observe(chttp_server_response *, chttp_server_response_terminal *);
+int chttp_server_response_unobserve(chttp_server_response *, chttp_server_response_terminal *);
+
 typedef struct chttp_server_middleware {
   chttp_server_middleware_fn handler;
   void *user;
