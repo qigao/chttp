@@ -38,8 +38,10 @@ static struct {
   bool regenerate_held;
   bool invalidate_held;
   bool invalidate_before_failure;
+  bool occupy_header, override_cookie;
   char cookie[128];
   size_t workers, slots, retained, reply_bytes, large_size, received;
+  size_t header_capacity, header_bytes;
   unsigned char *large_body;
   uint16_t port;
   chttp_application_work_outcome last;
@@ -133,6 +135,14 @@ int invoke(void *self, const chttp_invocation *invocation) {
         principal.authenticated ? principal.subject.size : 9u);
   }
   if (status != SALTS_OK) return status;
+  if (fixture.occupy_header && strcmp(request->path, "/increment") == 0) {
+    status = chttp_invocation_set_header(invocation, "X-Occupy", "reserved");
+    if (status != SALTS_OK) return status;
+  }
+  if (fixture.override_cookie) {
+    status = chttp_invocation_set_header(invocation, "Set-Cookie", "sid=forged; Path=/");
+    if (status != SALTS_OK) return status;
+  }
   if (strcmp(request->path, "/large") == 0)
     return chttp_invocation_respond(invocation, code, "application/octet-stream",
         fixture.large_body, fixture.large_size);
@@ -154,7 +164,8 @@ static void completed(void *self, const chttp_server_request_view *request,
 static void start(void) {
   check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
   const chttp_application_work_config work = {
-      fixture.workers, fixture.slots, fixture.retained, fixture.reply_bytes};
+      fixture.workers, fixture.slots, fixture.retained, fixture.reply_bytes,
+      fixture.header_capacity, fixture.header_bytes};
   check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
   static const char *const paths[] = {"/init", "/init-no-type", "/read", "/read-no-type",
       "/increment", "/hold", "/failure", "/regenerate", "/logout", "/csrf", "/large", "/principal"};
@@ -276,6 +287,27 @@ spec("Application staged worker Sessions") {
     sync_cond_destroy(&fixture.changed); sync_mutex_destroy(&fixture.mutex);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    it("does not commit ordinary Session writes when app headers exhaust cookie capacity on protocol %d", protocol) {
+      fixture.header_capacity = 1u; fixture.header_bytes = 64u; fixture.occupy_header = true;
+      fixture.config.http.max_response_header_count = 2u; start();
+      session_call init = {.target = "/init", .protocol = (chttp_protocol)protocol}; perform(&init);
+      check_equal(init.status, SALTS_OK); check_not_equal(init.next_cookie, ""); await_value(&fixture.completed, 1);
+      session_call failed = {.target = "/increment", .protocol = (chttp_protocol)protocol, .cookie = init.next_cookie}; perform(&failed);
+      check_not_equal(failed.status, SALTS_OK); check_not_equal(failed.status, SALTS_ETIMEDOUT); await_value(&fixture.completed, 2);
+      sync_mutex_lock(&fixture.mutex); const chttp_application_work_outcome outcome = fixture.last; sync_mutex_unlock(&fixture.mutex);
+      check_equal(outcome.business_status, SALTS_OK); check_equal(outcome.session_status, SALTS_ENOBUFS);
+      session_call read = {.target = "/read", .protocol = (chttp_protocol)protocol, .cookie = init.next_cookie}; perform(&read);
+      check_equal(read.status, SALTS_OK); check_equal(read.body, "0");
+    }
+    it("keeps the managed Session cookie authoritative over worker headers on protocol %d", protocol) {
+      fixture.header_capacity = 1u; fixture.header_bytes = 128u; fixture.override_cookie = true; start();
+      session_call init = {.target = "/init", .protocol = (chttp_protocol)protocol}; perform(&init);
+      check_equal(init.status, SALTS_OK); check_not_equal(init.next_cookie, "");
+      check_false(strstr(init.set_cookie, "forged") != NULL);
+      check_true(strstr(init.set_cookie, "HttpOnly") != NULL); check_true(strstr(init.set_cookie, "SameSite=Lax") != NULL);
+      session_call read = {.target = "/read", .protocol = (chttp_protocol)protocol, .cookie = init.next_cookie}; perform(&read);
+      check_equal(read.status, SALTS_OK); check_equal(read.body, "0");
+    }
     it("commits Session data/cookies and discards failed business intents over protocol %d", protocol) {
       start(); session_call init = {.target = "/init", .protocol = (chttp_protocol)protocol}; perform(&init);
       check_equal(init.status, SALTS_OK); check_equal(init.code, 200u); check_equal(init.body, "0");

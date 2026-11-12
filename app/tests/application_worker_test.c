@@ -19,6 +19,7 @@ static struct {
   int second_started;
   size_t workers, owners;
   size_t method_capacity;
+  size_t header_capacity, header_bytes;
   int admission_status;
   const void *worker_tokens[2];
   int thread_started, held, release, entered, finalized, calls;
@@ -176,7 +177,7 @@ static int route(void *user, const chttp_server_request_view *original, chttp_se
 }
 static void start(size_t capacity, size_t bytes) {
   const chttp_application_work_config config = {fixture.workers, capacity, bytes,
-      fixture.large_size ? fixture.large_size + 64u : 256u};
+      fixture.large_size ? fixture.large_size + 64u : 256u, fixture.header_capacity, fixture.header_bytes};
   check_equal(chttp_application_work_init(&fixture.work, &config), SALTS_OK);
   check_equal(chttp_server_init(&fixture.server, &fixture.http), SALTS_OK);
   chttp_server_execution_options execution = CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
@@ -290,6 +291,16 @@ spec("Application internal worker handoff") {
     call_result call = {0}; perform(&call);
     check_equal(call.status, SALTS_OK); check_equal(call.code, 503u);
     check_equal(fixture.calls, 0); check_equal(fixture.finalized, 0);
+  }
+  it("charges extra-header rows and storage before admission or callback effects") {
+    fixture.header_capacity = 1u; fixture.header_bytes = 64u;
+    start(2u, 256u + 2u * sizeof(chttp_header) + fixture.header_bytes);
+    call_result call = {0}; perform(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 503u);
+    check_equal(fixture.calls, 0); check_equal(fixture.finalized, 0);
+    chttp_application_work_stats stats = {0};
+    check_equal(chttp_application_work_get_stats(&fixture.work, &stats), SALTS_OK);
+    check_equal(stats.pending, 0u); check_equal(stats.retained_bytes, 0u); check_equal(stats.rejected, 1u);
   }
   it("charges method completion reservation before accepting business work") {
     fixture.method_capacity = 4096u / sizeof(chttp_method_completion_record) + 1u;
@@ -572,4 +583,18 @@ spec("Application internal worker handoff") {
     check_equal(fixture.wrong_completion_thread, 0);
   }
 
+}
+
+spec("Worker header reservation configuration") {
+  it("rejects incomplete or overflowing header reservations before allocating workers") {
+    const struct { size_t count, bytes; int status; } cases[] = {
+        {0u, 1u, SALTS_EINVAL}, {1u, 0u, SALTS_EINVAL}, {SIZE_MAX, 1u, SALTS_ERANGE},
+        {SIZE_MAX / sizeof(chttp_header), 1u, SALTS_ERANGE}, {1u, SIZE_MAX, SALTS_ERANGE},
+        {1u, 8192u, SALTS_EINVAL}};
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+      const chttp_application_work_config config = {1u, 2u, 8192u, 256u, cases[i].count, cases[i].bytes};
+      chttp_application_work work = {0};
+      check_equal(chttp_application_work_init(&work, &config), cases[i].status); check_null(work.impl);
+    }
+  }
 }

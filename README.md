@@ -27,6 +27,13 @@ match the compiler, architecture, configuration and selected release. Package
 discovery is exact and restricted to those roots; SDK roots are never added to
 `CMAKE_PREFIX_PATH`.
 
+The selected vcpkg profile alone supplies `CMAKE_PREFIX_PATH`, using the existing
+`VCPKG_INSTALLED_DIR`, preset-selected `VCPKG_TARGET_TRIPLET`, and configuration
+subdirectory. First-party packages use explicit required `find_package` calls
+with the release/root inputs above. After changing an SDK, compiler or triplet,
+configure explicitly with `cmake --fresh --preset <user-preset>`; normal configure
+does not clear package caches or select another dependency source.
+
 SaltsUtils 0.1.3 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
 private GmSSL/libecc adapter. HTTP and S3 use internal GmSSL digest helpers.
 Provider provenance and ownership are documented in

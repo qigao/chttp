@@ -1,24 +1,11 @@
 #include "chttp_server_runtime.h"
+#include "../../http_common/http/chttp_response_fields.h"
 #include <core/platform.h>
 #include <core/clock.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static int chttp_server_response_ascii_equal(const char *left, const char *right) {
-  unsigned char a;
-  unsigned char b;
-  if (left == NULL || right == NULL) return 0;
-  do {
-    a = (unsigned char)*left++;
-    b = (unsigned char)*right++;
-    if (a >= (unsigned char)'A' && a <= (unsigned char)'Z') a += 32u;
-    if (b >= (unsigned char)'A' && b <= (unsigned char)'Z') b += 32u;
-    if (a != b) return 0;
-  } while (a != 0u);
-  return 1;
-}
 
 int chttp_server_format_date(time_t value, char output[CHTTP_SERVER_DATE_CAPACITY]) {
   static const char *const weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
@@ -43,32 +30,9 @@ int chttp_server_response_date(const chttp_server_response_builder *builder,
   output[0] = '\0';
   if (builder != NULL) {
     for (size_t index = 0; index < builder->header_count; ++index)
-      if (chttp_server_response_ascii_equal(builder->headers[index].name, "Date")) return SALTS_OK;
+      if (chttp_response_ascii_equal(builder->headers[index].name, "Date")) return SALTS_OK;
   }
   return chttp_server_format_date((time_t)(realtime_ms() / MILLISECONDS_PER_SECOND), output);
-}
-
-static bool chttp_server_response_token(const char *value) {
-  const unsigned char *cursor = (const unsigned char *)value;
-  if (cursor == NULL || *cursor == 0u) return false;
-  for (; *cursor != 0u; ++cursor) {
-    const unsigned char ch = *cursor;
-    if ((ch >= (unsigned char)'0' && ch <= (unsigned char)'9') ||
-        (ch >= (unsigned char)'A' && ch <= (unsigned char)'Z') ||
-        (ch >= (unsigned char)'a' && ch <= (unsigned char)'z'))
-      continue;
-    if (strchr("!#$%&'*+-.^_`|~", (int)ch) == NULL) return false;
-  }
-  return true;
-}
-
-static bool chttp_server_response_value(const char *value) {
-  const unsigned char *cursor = (const unsigned char *)value;
-  if (cursor == NULL) return false;
-  for (; *cursor != 0u; ++cursor) {
-    if ((*cursor < 32u && *cursor != (unsigned char)'\t') || *cursor == 127u) return false;
-  }
-  return true;
 }
 
 static int chttp_server_response_storage_copy(chttp_server_response_builder *builder,
@@ -167,26 +131,15 @@ static int chttp_server_response_set_header_impl(chttp_server_response *response
   char *name_copy = NULL;
   char *value_copy = NULL;
   int status;
-  if (response == NULL || response->impl == NULL || !chttp_server_response_token(name) ||
-      !chttp_server_response_value(value))
-    return SALTS_EINVAL;
-  if (chttp_server_response_ascii_equal(name, "Content-Length") ||
-      chttp_server_response_ascii_equal(name, "Connection") ||
-      chttp_server_response_ascii_equal(name, "Transfer-Encoding") ||
-      chttp_server_response_ascii_equal(name, "Upgrade") ||
-      chttp_server_response_ascii_equal(name, "Sec-WebSocket-Accept") ||
-      chttp_server_response_ascii_equal(name, "Sec-WebSocket-Extensions") ||
-      (!allow_websocket_protocol &&
-       chttp_server_response_ascii_equal(name, "Sec-WebSocket-Protocol")))
-    return SALTS_EPERM;
+  if (response == NULL || response->impl == NULL) return SALTS_EINVAL;
+  chttp_response_field_size measured;
+  status = chttp_response_field_measure(name, value, allow_websocket_protocol, &measured);
+  if (status != SALTS_OK) return status;
   builder = (chttp_server_response_builder *)response->impl;
   if (builder->deferred) return SALTS_EALREADY;
-  name_size = strlen(name);
-  value_size = strlen(value);
-  if (name_size > SIZE_MAX - value_size - 4u) return SALTS_ERANGE;
-  wire_size = name_size + value_size + 4u;
+  name_size = measured.name; value_size = measured.value; wire_size = measured.wire;
   for (index = 0u; index < builder->header_count; ++index) {
-    if (chttp_server_response_ascii_equal(builder->headers[index].name, name)) {
+    if (chttp_response_ascii_equal(builder->headers[index].name, name)) {
       const size_t previous =
           strlen(builder->headers[index].name) + strlen(builder->headers[index].value) + 4u;
       if (builder->header_wire_bytes - previous > builder->header_storage_capacity ||
@@ -227,7 +180,7 @@ int chttp_server_response_append_vary(chttp_server_response *response, const cha
   if (builder->deferred) return SALTS_EALREADY;
   for (size_t index = 0; index < builder->header_count; ++index) {
     chttp_header *header = &builder->headers[index];
-    if (!chttp_server_response_ascii_equal(header->name, "Vary")) continue;
+    if (!chttp_response_ascii_equal(header->name, "Vary")) continue;
     if (strcmp(header->value, "*") == 0) return SALTS_OK;
     const size_t previous = strlen(header->value);
     if (previous > SIZE_MAX - extra - 3u) return SALTS_ERANGE;
@@ -254,7 +207,7 @@ static bool chttp_server_response_subprotocol_offered(const chttp_server_request
   for (header_index = 0u; header_index < request->header_count; ++header_index) {
     const chttp_header *header = &request->headers[header_index];
     const char *cursor;
-    if (!chttp_server_response_ascii_equal(header->name, "Sec-WebSocket-Protocol")) continue;
+    if (!chttp_response_ascii_equal(header->name, "Sec-WebSocket-Protocol")) continue;
     cursor = header->value;
     while (cursor != NULL && *cursor != '\0') {
       const char *end = strchr(cursor, ',');
@@ -279,7 +232,7 @@ int chttp_server_response_select_websocket_subprotocol(chttp_server_response *re
                                                        const char *subprotocol) {
   if (response == NULL || response->impl == NULL || request == NULL ||
       (request->header_count != 0u && request->headers == NULL) ||
-      !chttp_server_response_token(subprotocol))
+      !chttp_response_token(subprotocol))
     return SALTS_EINVAL;
   if (!chttp_server_response_subprotocol_offered(request, subprotocol)) return SALTS_EPROTO;
   return chttp_server_response_set_header_impl(response, "Sec-WebSocket-Protocol", subprotocol,

@@ -274,6 +274,36 @@ renderer needs independent instances or explicit application serialization.
 
 ### Invocation ownership and response staging
 
+The private worker draft adds copied response headers within explicit
+header_capacity/header_bytes limits. Zero limits admit no extra fields; the
+existing Content-Type response property keeps its reserved row and reply-byte
+budget. At admission, checked header-table/arena bytes count against the same
+retained-byte budget before defer or user code. There is no growing allocation,
+lazy expansion or allocation-failure fallback. Content-Type has one authoritative
+row: respond(type) and set_header(Content-Type) update that row in call order.
+Its strings and the body share the existing reply arena. Other fields use the
+bounded header arena and case-insensitive upsert; replacements preserve field
+position/name and consume bounded append-only string storage like the engine.
+
+The worker and Server share the same pure field grammar, reserved transport-name
+policy and checked wire measurement. Invalid fields/CRLF, reserved fields,
+count/byte exhaustion and arithmetic overflow fail before changing the draft.
+Body selection still seals only body/status; entered after hooks may update
+headers before publication finalizes the entire draft. Failed business discards
+all application headers with its partial body. A successful/rejected draft is
+copied by the established deferred submission, which merges original owner
+policy headers and enforces the Server's aggregate limits before publication.
+No engine builder or live Session store is passed to a worker.
+
+The owner still reserves managed Session Cookie storage before committing Session
+state. Its Set-Cookie upsert remains authoritative; the private setter does not
+introduce multiple-cookie append semantics or override that transaction. Header
+capacity failure must leave ordinary Session updates uncommitted. Header/draft
+memory remains owned through business/Session/native terminal and observer drain,
+including cancellation and finite-close failure. One worker writes one invocation;
+owner submission copies immutable fields before returning. This slice leaves
+public headers/defaults and streaming/admission/WS migration unchanged.
+
 The private handwritten Controller binding now adopts the buffered Invocation
 contract before the public swap. Its exact native action is
 `int(void *self, const chttp_invocation *)`; a nominal `chttp.invocation` type

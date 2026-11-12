@@ -40,6 +40,10 @@ typedef struct chttp_application_work_config {
   size_t capacity;
   size_t retained_bytes;
   size_t reply_bytes;
+  /* Extra fields only. Both zero select no extras; Content-Type shares the
+   * reply arena and its reserved metadata row. All bytes count at admission. */
+  size_t header_capacity;
+  size_t header_bytes;
 } chttp_application_work_config;
 typedef struct chttp_application_work_stats {
   size_t pending;
@@ -71,6 +75,7 @@ int chttp_application_work_admission_response(chttp_server_response *, int);
  * A NULL content type preserves the engine's header-free empty reply contract. */
 int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
     const char *, const void *, size_t);
+int chttp_application_work_set_header(chttp_application_work_reply *, const char *, const char *);
 int chttp_application_work_reject(const chttp_application_work_exchange *, unsigned int,
     const char *, const void *, size_t);
 int chttp_application_work_reply_current(const chttp_application_work_reply *);

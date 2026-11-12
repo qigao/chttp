@@ -1,5 +1,6 @@
 #include "chttp_application_work.h"
 #include "../../http_server/src/chttp_server_engine.h"
+#include "../../http_common/http/chttp_response_fields.h"
 #include <cflow/executor.h>
 #include <threads/threads.h>
 #include <core/clock.h>
@@ -14,10 +15,14 @@ typedef struct work_item work_item;
 struct chttp_application_work_reply {
   work_item *item;
   unsigned int status;
-  const char *content_type;
+  chttp_header content_type;
+  chttp_header *headers;
+  char *header_storage;
+  size_t header_count, header_used, header_wire, reply_used;
   const void *body;
   size_t size;
   int sealed;
+  int finalized;
 };
 struct work_item {
   work_impl *owner;
@@ -35,6 +40,7 @@ struct work_item {
   size_t bytes;
   size_t storage_bytes, method_capacity, method_count;
   chttp_method_completion_record *methods;
+  unsigned char *header_block;
   unsigned char *storage;
   chttp_server_request_view request;
   chttp_jwt_claims_view jwt;
@@ -52,6 +58,7 @@ struct work_impl {
   chttp_application_work_config config;
   chttp_application_work_stats stats;
   work_item *items;
+  size_t header_reservation;
   int accepting;
   work_item *waiting_head, *waiting_tail;
 };
@@ -171,18 +178,62 @@ int chttp_application_work_respond(chttp_application_work_reply *reply, unsigned
   if (!reply || !reply->item || code < 200u || code > 599u ||
       (type && !type[0]) || (size && !body))
     return SALTS_EINVAL;
+  if ((code == 204u || code == 205u || code == 304u) && size) return SALTS_EINVAL;
+  if (type) {
+    chttp_response_field_size measured;
+    const int status = chttp_response_field_measure("Content-Type", type, false, &measured);
+    if (status != SALTS_OK) return status;
+  }
   work_item *item = reply->item;
   if (!cflow_executor_is_current(&item->owner->executor)) return SALTS_EINVAL;
-  if (reply->sealed) return SALTS_EALREADY;
+  if (reply->sealed || reply->finalized) return SALTS_EALREADY;
   size_t bytes = size;
   const int status = add_string(&bytes, type);
   if (status != SALTS_OK) return status;
-  if (bytes > item->owner->config.reply_bytes) return SALTS_EMSGSIZE;
-  unsigned char *out = item->storage + item->storage_bytes - item->owner->config.reply_bytes;
-  reply->content_type = copy_string(&out, type);
+  if (bytes > item->owner->config.reply_bytes - reply->reply_used) return SALTS_EMSGSIZE;
+  unsigned char *out = item->storage + item->storage_bytes - item->owner->config.reply_bytes + reply->reply_used;
+  const char *content_type = copy_string(&out, type);
   if (size) memcpy(out, body, size);
+  if (type) reply->headers[0] = (chttp_header){"Content-Type", content_type};
+  reply->reply_used += bytes;
   reply->body = size ? out : NULL; reply->size = size;
   reply->status = code; reply->sealed = 1;
+  return SALTS_OK;
+}
+int chttp_application_work_set_header(chttp_application_work_reply *reply, const char *name, const char *value) {
+  if (!chttp_application_work_reply_current(reply)) return SALTS_EINVAL;
+  chttp_response_field_size measured;
+  const int status = chttp_response_field_measure(name, value, false, &measured);
+  if (status != SALTS_OK) return status;
+  if (reply->finalized) return SALTS_EALREADY;
+  work_item *item = reply->item;
+  const chttp_application_work_config *limits = &item->owner->config;
+  if (chttp_response_ascii_equal(name, "Content-Type")) {
+    const size_t bytes = measured.value + 1u;
+    if (bytes > limits->reply_bytes - reply->reply_used) return SALTS_EMSGSIZE;
+    unsigned char *next = item->storage + item->storage_bytes - limits->reply_bytes + reply->reply_used;
+    const char *copy = copy_string(&next, value);
+    reply->headers[0] = (chttp_header){"Content-Type", copy}; reply->reply_used += bytes;
+    return SALTS_OK;
+  }
+  size_t index = 0u, previous = 0u;
+  for (; index < reply->header_count; ++index) {
+    const chttp_header *field = &reply->headers[index + 1u];
+    if (chttp_response_ascii_equal(field->name, name)) {
+      previous = strlen(field->name) + strlen(field->value) + 4u; break;
+    }
+  }
+  const bool replacing = index < reply->header_count;
+  if ((!replacing && reply->header_count == limits->header_capacity) ||
+      measured.wire > limits->header_bytes - (reply->header_wire - previous)) return SALTS_ENOBUFS;
+  const size_t bytes = measured.value + 1u + (replacing ? 0u : measured.name + 1u);
+  if (bytes > limits->header_bytes - reply->header_used) return SALTS_ENOBUFS;
+  unsigned char *next = (unsigned char *)reply->header_storage + reply->header_used;
+  const char *name_copy = replacing ? reply->headers[index + 1u].name : copy_string(&next, name);
+  const char *value_copy = copy_string(&next, value);
+  reply->headers[index + 1u] = (chttp_header){name_copy, value_copy};
+  reply->header_used += bytes; reply->header_wire = reply->header_wire - previous + measured.wire;
+  if (!replacing) ++reply->header_count;
   return SALTS_OK;
 }
 static int reserve_method(void *context, chttp_method_completion_record **out) {
@@ -199,10 +250,14 @@ chttp_method_completion_sink chttp_application_work_method_sink(chttp_applicatio
 static void publish(work_item *item, int business_status) {
   chttp_application_work_reply *draft = &item->reply;
   const int good = (business_status == SALTS_OK || item->session_stale) && draft->sealed;
+  draft->finalized = 1;
+  const size_t first = draft->headers[0].name ? 0u : 1u;
+  const size_t header_count = good ? draft->header_count + (first == 0u) : 0u;
   chttp_session_work_seal(item->session, business_status == SALTS_OK && draft->sealed);
   const chttp_server_deferred_response response = {sizeof(response),
-      good ? draft->status : 500u, good ? draft->content_type : "text/plain",
-      NULL, 0u, good ? draft->body : "Internal Server Error", good ? draft->size : 21u};
+      good ? draft->status : 500u, good ? NULL : "text/plain",
+      header_count ? draft->headers + first : NULL, header_count,
+      good ? draft->body : "Internal Server Error", good ? draft->size : 21u};
   int status = chttp_server_deferred_reply(&item->deferred, &response);
   if (status != SALTS_OK && item->deferred.impl) {
     const int cancel_status = chttp_server_deferred_cancel(&item->deferred);
@@ -270,6 +325,7 @@ static void release_work(void *arg) {
   work_impl *impl = item->owner;
   if (item->task.finalize) item->task.finalize(item->task.user);
   chttp_session_work_release(item->session);
+  free(item->header_block);
   free(item->methods);
   free(item->storage);
   sync_mutex_lock(&impl->mutex);
@@ -382,12 +438,21 @@ int chttp_application_work_init(chttp_application_work *owner,
       !config->retained_bytes || !config->reply_bytes || config->workers > (size_t)INT_MAX ||
       config->reply_bytes > config->retained_bytes) return SALTS_EINVAL;
   if (owner->impl) return SALTS_EALREADY;
+  if ((!config->header_capacity) != (!config->header_bytes)) return SALTS_EINVAL;
+  size_t header_reservation = 0u;
+  if (config->header_capacity) {
+    if (config->header_capacity == SIZE_MAX) return SALTS_ERANGE;
+    int status = add_array(&header_reservation, config->header_capacity + 1u, sizeof(chttp_header));
+    if (status == SALTS_OK) status = add_bytes(&header_reservation, config->header_bytes);
+    if (status != SALTS_OK) return status;
+    if (header_reservation > config->retained_bytes - config->reply_bytes) return SALTS_EINVAL;
+  }
   if (config->capacity > SIZE_MAX / sizeof(work_item)) return SALTS_ERANGE;
   work_impl *impl = calloc(1u, sizeof(*impl));
   if (!impl) return SALTS_ENOMEM;
   impl->items = calloc(config->capacity, sizeof(*impl->items));
   if (!impl->items) { free(impl); return SALTS_ENOMEM; }
-  impl->config = *config;
+  impl->config = *config; impl->header_reservation = header_reservation;
   if (!cflow_executor_worker_init_with_capacity(&impl->executor, config->workers, config->capacity)) {
     free(impl->items); free(impl); return SALTS_EIO;
   }
@@ -421,6 +486,8 @@ int chttp_application_work_submit(chttp_application_work *owner,
   const size_t storage_bytes = bytes;
   status = add_array(&bytes, task->method_capacity, sizeof(chttp_method_completion_record));
   if (status != SALTS_OK) return status;
+  status = add_bytes(&bytes, impl->header_reservation);
+  if (status != SALTS_OK) return status;
   work_item *item = NULL;
   sync_mutex_lock(&impl->mutex);
   if (!impl->accepting) status = SALTS_ESHUTDOWN;
@@ -440,6 +507,14 @@ int chttp_application_work_submit(chttp_application_work *owner,
   if (status != SALTS_OK) return status;
   item->storage = malloc(storage_bytes);
   if (!item->storage) { release_work(item); return SALTS_ENOMEM; }
+  item->reply.headers = &item->reply.content_type;
+  if (impl->header_reservation) {
+    item->header_block = malloc(impl->header_reservation);
+    if (!item->header_block) { release_work(item); return SALTS_ENOMEM; }
+    item->reply.headers = (chttp_header *)item->header_block;
+    item->reply.headers[0] = (chttp_header){0};
+    item->reply.header_storage = (char *)(item->reply.headers + impl->config.header_capacity + 1u);
+  }
   if (task->method_capacity) {
     item->methods = calloc(task->method_capacity, sizeof(*item->methods));
     if (!item->methods) { release_work(item); return SALTS_ENOMEM; }
