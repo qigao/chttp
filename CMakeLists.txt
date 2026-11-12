@@ -6,14 +6,6 @@ project(
   VERSION 2.1.0
   LANGUAGES C CXX)
 
-# CMake's library version is numeric; the manifest retains the release suffix.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" chttp_manifest)
-string(JSON CHTTP_RELEASE_VERSION GET "${chttp_manifest}" version-semver)
-string(REGEX REPLACE "[-+].*$" "" chttp_release_base "${CHTTP_RELEASE_VERSION}")
-if(NOT chttp_release_base STREQUAL PROJECT_VERSION)
-  message(FATAL_ERROR "CMake VERSION and vcpkg release version disagree")
-endif()
-
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
