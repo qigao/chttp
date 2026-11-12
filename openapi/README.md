@@ -194,4 +194,7 @@ python openapi/tests/conformance.py --document build/Msvc-Release/openapi/exampl
 此检查针对当前生成器的文档子集，不是完整 OpenAPI 3.1 认证：不涵盖尚未实现的 `$ref`、
 组合 schema、security 或参数序列化选项。format 保持 annotation 语义，不执行格式断言。
 正则语法检查由测试中的 JavaScript `RegExp`（无 flags）执行，生成器自身仍只保存 pattern 文本。
+校验器通过完整的临时 JSON 文件传递正则，关闭 Node 的标准输入，不等待管道 EOF。
+正式回归包含空列表、超过 Windows 命令行长度的 Unicode/转义输入，以及批次末尾的非法正则。
+每个子进程仍有 30 秒超时；失败和超时直接向上报告，不重试。
 测试区分规范错误与无解约束：例如 minimum 大于 maximum 仍是合法 schema，只是没有满足它的数值。

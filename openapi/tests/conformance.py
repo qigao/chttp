@@ -51,6 +51,16 @@ def run(command, **kwargs):
                           encoding="utf-8", timeout=PROCESS_TIMEOUT, **kwargs)
 
 
+def check_patterns(values, node):
+    # The checker consumes a complete file, independent of subprocess-pipe EOF.
+    # Keep input out of argv as --document can supply more than Windows permits.
+    with tempfile.TemporaryDirectory(prefix="openapi-patterns-") as directory:
+        path = Path(directory) / "patterns.json"
+        path.write_text(json.dumps(values), encoding="utf-8")
+        run([node, "-e", "const fs=require('fs'); for(const p of JSON.parse(fs.readFileSync(process.argv[1],'utf8'))) new RegExp(p);",
+             str(path)], stdin=subprocess.DEVNULL)
+
+
 def schemas(node):
     if isinstance(node, dict):
         for key, value in node.items():
@@ -112,8 +122,7 @@ def check_document(document, node):
         # Python regex syntax is not the ECMA-262 dialect used by OpenAPI.
         Draft202012Validator.check_schema(schema, format_checker=None)
         all_patterns.extend(patterns(schema))
-    run([node, "-e", "const fs=require('fs'); for(const p of JSON.parse(fs.readFileSync(0,'utf8'))) new RegExp(p);"],
-        input=json.dumps(all_patterns))
+    check_patterns(all_patterns, node)
     return len(all_schemas), len(all_patterns)
 
 
@@ -153,6 +162,17 @@ def suite(generator, plugin, node):
         yaml_document = yaml.safe_load(run(command + ["--format", "yaml", str(path)]).stdout)
         require(document == yaml_document, "JSON/YAML semantic mismatch")
         count, regex_count = check_document(document, node)
+        # Exercise complete file consumption, including Unicode/escapes and a
+        # malformed final pattern beyond Windows' command-line input limit.
+        many_patterns = [r"(?<word>猫狗\\\w+)"] * 2048
+        check_patterns([], node)
+        check_patterns(many_patterns, node)
+        try:
+            check_patterns(many_patterns + ["["], node)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            raise ValueError("invalid final pattern escaped batch checking")
         for index, media in enumerate(media_types):
             operation = document["paths"][f"/media{index}"]["post"]
             require(list(operation["requestBody"]["content"]) == [media], "request media key changed")

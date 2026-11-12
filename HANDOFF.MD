@@ -645,3 +645,17 @@
   (migration-env-direct-release-build.log and migration-env-direct-packages-install.log).
   Verification used an isolated full-repository worktree to preserve unrelated
   local manifest/version-check deletions. Logs are retained in the main build/.
+
+- CI 43270230864 / Windows MSVC job 131365235518 built successfully and passed
+  119/120 tests. generator_conformance timed out after 30 seconds in the Node
+  ECMA-262 checker using fs.readFileSync(0), with no generator/schema error.
+  The original test passed locally in 1.45 seconds, so the log alone does not
+  establish whether Node startup or stdin handling stalled. The checker now
+  consumes a closed temporary JSON file with stdin disabled, removing its pipe
+  EOF dependency without changing the 30-second deadline, dialect or checks.
+  Formal conformance includes an empty list, Unicode/escaped patterns beyond
+  Windows argv capacity, and rejection of a malformed last pattern in that batch.
+  native-release-user full build and generator/generator_conformance passed 2/2
+  (migration-conformance-file-input-ctest.log). Original failure excerpt is kept
+  at build/ci-43270230864-msvc-conformance-failure.log and in the linked CI job;
+  the failed job was not rerun. Hosted MSVC qualification requires the new CI.
