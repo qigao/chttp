@@ -14,10 +14,10 @@ plugins and CFlow execution; SaltsUtils supplies DataBind, IDL and Jinja.
 
 | Release input | CMake package | SDK root | Responsibility |
 | --- | --- | --- | --- |
-| `SALTS_BASE_VERSION=0.1.4` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
-| `CMETA_VERSION=0.1.4` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
+| `SALTS_BASE_VERSION=0.1.6` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
+| `CMETA_VERSION=0.1.6` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
 | `SALTS_CORE_VERSION=0.1.4` | `SaltsCore` | `SALTS_CORE_ROOT` | CNet and Crypto |
-| `SALTS_UTILS_VERSION=0.1.1` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
+| `SALTS_UTILS_VERSION=0.1.3` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
 | `VCPKG_CACHE_VERSION=0.1.3` | preinstalled vcpkg profile | `VCPKG_INSTALLED_DIR` | Third-party packages and compiler contract |
 
 Versions come from the parent environment or a locally loaded `.env`, without
@@ -27,7 +27,7 @@ match the compiler, architecture, configuration and selected release. Package
 discovery is exact and restricted to those roots; SDK roots are never added to
 `CMAKE_PREFIX_PATH`.
 
-SaltsUtils 0.1.1 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
+SaltsUtils 0.1.3 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
 private GmSSL/libecc adapter. HTTP and S3 use internal GmSSL digest helpers.
 Provider provenance and ownership are documented in
 [`vendor/cjwt/crypto/README.md`](vendor/cjwt/crypto/README.md).

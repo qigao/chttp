@@ -703,6 +703,54 @@ cmake --build --preset win-release-user --target crpc_server_example
 按程序输出的端口访问 `/file` 或发送 Range / If-None-Match。文件内容和路径绑定必须在传输期间
 保持不变。默认元数据 ETag 是弱标签；需要 `If-Range` 时由应用提供可靠的强 ETag。
 
+## Inline/deferred CPU benchmark (#215)
+
+Enable the existing `BUILD_BENCHMARK` option when configuring the selected user
+preset, build the complete graph, then run its formal CTest entry:
+
+```sh
+ctest --preset native-release-user --output-on-failure -R '^chttp_server_owner_handler_cpu_benchmark$'
+```
+
+The driver retains three repetitions (90 measurement rows) for nominal CPU
+budgets 0/50 us/250 us/1 ms/5 ms and 1/2/4 owners. Each repetition calibrates
+one iteration count per budget, reused by both modes and all owner counts.
+Eight fixed connections alternate fast/slow requests; the gate checks actual
+balanced owner leases and route isolation. Raw JSONL, host/compiler and source
+revision metadata go to `build/<preset>/benchmarks/`; dirty trees are marked.
+Nominal/calibrated work, latency and throughput are measurements, not guarantees.
+
+Deferred execution uses the published Base threadpool: one worker per owner,
+16 queue entries and 16 preallocated job slots. Owners claim slots, submit
+without waiting for queue space, then release-publish a deferred handle. Workers
+acquire that publication and never borrow request views. Slot/queue saturation
+returns 503 and increments errors, without inline fallback. Workers release slots
+after terminal submission. Clients finish before Server stop; the pool drains
+and joins before Server storage and captured thread handles are destroyed.
+
+CPU reuses the formal cross-platform thread user+kernel helper. Owners are
+captured during warmup, workers are primed before measurement, and both remain
+alive through the final sample. Clients sample themselves. Separate owner,
+client and worker totals are reported; `cpu_ns_per_op` sums only these participant
+sets, excluding any separate listener/main thread. Windows may quantize short
+samples to zero; no wall-clock substitution or positive-CPU assertion is used.
+
+The gate requires complete samples, identical per-repetition A/B work and zero
+admission/terminal errors. It imposes no machine-dependent speed threshold.
+Native CI builds the full benchmark graph and retains raw CTest artifacts.
+Shared-runner/sanitizer results qualify behavior, not representative performance.
+A production worker/LF decision and admission-contention profiling remain separate
+#215 acceptance. Removing the benchmark does not change runtime APIs or defaults.
+
+Current qualification is tracked by draft #286 and upstream SaltsBase #15.
+The gate exposes ordinary-pool false-full admission under producer contention in
+Base 0.1.4. The fix is released in Base 0.1.6; its matching composition uses
+CMeta 0.1.6 and Utils 0.1.3 because their SDK dependencies are exact. Restore
+the original published SDKs through the normal version/manifest path. Unexpected
+HTTP status still fails immediately and per-repeat stderr is retained beside
+JSONL; do not replace the executor, retry rejected requests or substitute source
+SDKs to hide dependency failures. Historical failing runs remain recorded.
+
 ## Independent TLS interoperability tests
 
 Native `BUILD_TESTS` requires Python and an independent OpenSSL 3.x command-line

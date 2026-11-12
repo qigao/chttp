@@ -115,7 +115,8 @@ target_link_libraries(
 
 target_include_directories(
   chttp_server_owner_handler_cpu_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
+  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support
+          ${PROJECT_SOURCE_DIR}/http_common/http
           ${PROJECT_SOURCE_DIR}/http_common/rpc
           ${PROJECT_SOURCE_DIR}/http_server/src
           ${PROJECT_SOURCE_DIR}/http_server/rpc)
@@ -151,3 +152,12 @@ set_target_properties(
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME chttp_server_owner_handler_cpu_benchmark
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_owner_handler_cpu_benchmark.py
+    $<TARGET_FILE:chttp_server_owner_handler_cpu_benchmark>
+    ${CMAKE_BINARY_DIR}/benchmarks ${PROJECT_SOURCE_DIR}
+    "${CMAKE_C_COMPILER_ID}-${CMAKE_C_COMPILER_VERSION}/${CMAKE_BUILD_TYPE}")
+set_tests_properties(chttp_server_owner_handler_cpu_benchmark PROPERTIES
+  LABELS benchmark RUN_SERIAL TRUE TIMEOUT 600)

@@ -164,6 +164,8 @@ jobs:
       run: |
         $options = @('--preset', $env:CI_PRESET)
         if ('${{ matrix.test }}' -eq 'true') {
+          $options += '-DBUILD_BENCHMARK=ON'
+
           $options += "-DCHTTP_TEST_OPENSSL=$env:CHTTP_TEST_OPENSSL"
         }
         if ('${{ matrix.test }}' -eq 'false') {
@@ -217,6 +219,7 @@ jobs:
           build/${{ matrix.preset }}/CMakeCache.txt
           build/${{ matrix.preset }}/ctest.xml
           build/${{ matrix.preset }}/Testing/Temporary
+          build/${{ matrix.preset }}/benchmarks
           build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
         if-no-files-found: warn
   result:

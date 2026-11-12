@@ -1,5 +1,57 @@
 # Split SDK migration handoff
 
+- Deferred CPU failure root: temporary Server tracing reproduced HTTP 503 with
+  one worker-admission rejection, not a lost successful response. The benchmark
+  received all 150 response bytes but waited for an ok body. Source/data show
+  ordinary Base threadpool_try_submit maps Disruptor publisher CAS contention
+  to ENOBUFS; observed queued=1/active=0/capacity=16. Formal Base four-producer
+  bounded-outstanding regression fails expected OK/got -4027 and passes with
+  its internal claim/copy/publish monitor fix: qigao/salts-base PR #15.
+  Base 0.1.6 releases that fix. CMeta and Utils bind producer dependencies
+  exactly, so the matching composition is Base/CMeta 0.1.6 and Utils 0.1.3.
+  Changing only Base fails fresh configure before generation
+  (`migration-base-016-fresh.log`); preserve that evidence and exact checks.
+  Restore original published SDKs into version-specific roots, update only
+  the selected dependency fields in .env, and freshly configure the complete
+  graph with BUILD_TESTS=ON and BUILD_BENCHMARK=ON. Do not edit installed
+  Config.cmake files to bypass their dependency versions.
+- Benchmark request diagnostics now distinguish EOF/receive/send failure and
+  immediately reject non-200 status; worker rejection includes status and pool
+  occupancy, and each repeat retains stderr beside raw JSONL. The old SDK's
+  formal 128-request gate still fails as expected, now reporting HTTP 503
+  directly (`migration-deferred-status-report-ctest.log`), without timeout
+  widening, retry or inline fallback. No CHttp runtime change was needed.
+- Investigation used a separate temporary branch and the existing CTest entry.
+  Traces/data: migration-deferred-close-trace-ctest.log,
+  migration-deferred-http-status-ctest.log and
+  migration-deferred-admission-trace-ctest.log. The diagnostic branch and Server
+  tracing code are removed; a local build/deferred-close-investigation.patch
+  preserves the non-product trace for audit. No temporary validation project,
+  SDK substitution or source dependency fallback was introduced.
+
+- Handler CPU benchmark migration: clock() did not provide the intended Windows
+  CPU measurement. Reuse chttp_test_thread_cpu for separate handler-owner,
+  client and bounded application-worker totals; exclude listener/main explicitly.
+  Keep measured threads alive and reuse one calibration across A/B cases.
+  Initial port passed three repetitions; calibrated revision 36791e8 failed on
+  repetition 2, deferred/4 owners/1 ms without a detailed boundary diagnostic
+  (`migration-handler-cpu-final-measurements.log`). Preserve its partial raw data.
+  Added boundary diagnostics then passed all 90 points
+  (`migration-handler-cpu-boundary-ctest.log`), but that alone does not identify
+  or fix the earlier failure. That rerun was insufficient for acceptance;
+  the later Base admission diagnosis above identifies the actual failure.
+  Do not claim a performance gain or close #215 based on a passing rerun.
+  First CI 43166936938 found the same client-completion boundary in both
+  Windows profiles (deferred/4 owners/zero work), while macOS passed. Capture
+  client phase/status/native error rather than infer a pool or transport fault.
+  A local two-CPU process-affinity run passed all 90 points; it is diagnostic
+  evidence, not proof of a fix. Linux failed before execution because the older
+  WS benchmark included its POSIX CPU helper after the engine header. Move the
+  helper first; benchmark-only builds also need enable_testing() when
+  BUILD_BENCHMARK is ON. The existing preset's benchmark-only full build and
+  all three formal benchmark CTests passed, 42.52s.
+
+
 - Independent TLS qualification must observe handshake messages: default Python
   group selection is not proof of HelloRetryRequest, and select() on a process
   pipe is not portable to Windows. The Server-owned OpenSSL CTest selects groups
