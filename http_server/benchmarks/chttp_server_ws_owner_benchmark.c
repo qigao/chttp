@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 #include "chttp_test_thread_cpu.h"
 #include "chttp_server_runtime.h"
 #include "chttp_tls_test_material.h"

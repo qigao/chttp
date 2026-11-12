@@ -1,8 +1,9 @@
+#include "../../src/chttp_server_engine.h"
 /* #243: genuine owned native field teardown through Server-scoped DataBind.
  * No test-only RPC runtime: HTTP Server owns the bounded call slot and
  * DataBind restores the entire request after partial ingress or completion. */
 #include <http_client/http.h>
-#include <http_server/rpc_service.h>
+#include "../../rpc/chttp_rpc_mount.h"
 #include <cmeta/core_fixed_width.h>
 #include "chttp_rpc_service.rpc.h"
 #include "tinytest.h"

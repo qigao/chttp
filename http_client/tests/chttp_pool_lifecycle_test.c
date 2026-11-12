@@ -1,3 +1,4 @@
+#include "../../http_server/src/chttp_server_engine.h"
 /* Compile the production Owner unit to exercise its callback boundary. The
  * fixture uses real Manager/CNet transports and controls observer delivery or
  * external NativeIO completion progress; no test hook enters the library. */

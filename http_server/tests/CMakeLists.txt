@@ -1,3 +1,4 @@
+add_subdirectory(fixtures/legacy_application)
 add_executable(chttp_server_example_test chttp_server_example_test.c)
 target_link_libraries(chttp_server_example_test PRIVATE
   http_example_app CHttp::Client Salts::TinyTest llhttp::llhttp_static)
@@ -5,7 +6,7 @@ target_include_directories(chttp_server_example_test PRIVATE
   ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
   ${PROJECT_SOURCE_DIR}/http_server/src)
 target_compile_definitions(chttp_server_example_test PRIVATE
-  HTTP_EXAMPLE_TEST_FILE="${PROJECT_SOURCE_DIR}/http_server/examples/http_example.schema"
+  HTTP_EXAMPLE_TEST_FILE="${PROJECT_SOURCE_DIR}/http_server/tests/fixtures/legacy_application/http_example.schema"
   HTTP_EXAMPLE_PLUGIN_PATH="$<TARGET_FILE:http_example_contract_plugin>"
   HTTP_EXAMPLE_BAD_PLUGIN_PATH="$<TARGET_FILE:http_example_incompatible_plugin>")
 add_dependencies(chttp_server_example_test http_example_contract_plugin http_example_incompatible_plugin)

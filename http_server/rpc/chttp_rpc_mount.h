@@ -1,5 +1,5 @@
-#ifndef HTTP_SERVER_RPC_SERVICE_H
-#define HTTP_SERVER_RPC_SERVICE_H
+#ifndef CHTTP_RPC_MOUNT_H
+#define CHTTP_RPC_MOUNT_H
 
 #include <http_server/rpc.h>
 #include <data_bind_method_plan.h>

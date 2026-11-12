@@ -1,4 +1,5 @@
-#include <chttp_app/web.h>
+#include <chttp_app/app.h>
+#include <cmeta/data_reflect.h>
 
 #include <json_parser.h>
 #include <openapi/ui_model.h>
@@ -300,8 +301,53 @@ static int validate_render_bundle(ui_app *app) {
     return 1;
 }
 
+typedef struct UiController {
+    int file_count;
+    ui_app *app;
+    const char *const *paths;
+    chttp_server_file_options *files;
+} UiController;
+cmeta_reflect_data(UiController, "openapi.UiController", cmeta_field(int, file_count));
+cmeta_component_configured_empty(UiComponent, cmeta_reflected_data(UiController));
+static void ui_destroy(void *context, void *object) { (void)context; free(object); }
+static const cmeta_object_lifecycle ui_lifecycle = {
+    sizeof(cmeta_object_lifecycle), NULL, NULL, NULL, ui_destroy};
+static cmeta_status ui_create(void *context, const cmeta_data_desc *data,
+    const void *config, const salts_configurator_dependency *deps, size_t count,
+    cmeta_object_ref *out) {
+    (void)context; (void)data; (void)deps;
+    if (count != 0u || config == NULL) return CMETA_INVALID_ARGUMENT;
+    UiController *self = malloc(sizeof(*self));
+    if (self == NULL) return CMETA_OUT_OF_MEMORY;
+    *self = *(const UiController *)config;
+    cmeta_status status = cmeta_object_borrow(out, self, cmeta_reflected_data(UiController), NULL);
+    if (status == CMETA_OK) status = cmeta_object_take(out, &ui_lifecycle);
+    if (status != CMETA_OK) { (void)cmeta_object_release(out); free(self); }
+    return status;
+}
+CHTTP_ACTION(ui_docs);
+int ui_docs(void *self, const chttp_exchange *exchange) {
+    return serve_docs(((UiController *)self)->app, exchange->request, exchange->response);
+}
+CHTTP_ACTION(ui_list);
+int ui_list(void *self, const chttp_exchange *exchange) {
+    return serve_operation_list(((UiController *)self)->app, exchange->request, exchange->response);
+}
+CHTTP_ACTION(ui_detail);
+int ui_detail(void *self, const chttp_exchange *exchange) {
+    return serve_operation_detail(((UiController *)self)->app, exchange->request, exchange->response);
+}
+CHTTP_ACTION(ui_file);
+int ui_file(void *self, const chttp_exchange *exchange) {
+    UiController *controller = self;
+    for (int i = 0; i < controller->file_count; ++i)
+        if (strcmp(exchange->request->path, controller->paths[i]) == 0)
+            return serve_file(&controller->files[i], exchange->request, exchange->response);
+    return SALTS_EINVAL;
+}
+
 int main(int argc, char **argv) {
-    chttp_server server = {0};
+    chttp_application server = {0};
     ui_app app = {0};
     oa_ui_model *model = NULL;
     json_value_t *root = NULL;
@@ -424,7 +470,7 @@ int main(int argc, char **argv) {
     config.network.read_timeout_ms = UI_TIMEOUT_MS;
     config.network.write_timeout_ms = UI_TIMEOUT_MS;
     config.route_capacity = UI_CONNECTIONS;
-    config.middleware_capacity = 1u;
+    config.middleware_capacity = 2u;
     config.max_route_middleware_count = 1u;
     config.max_route_param_count = 1u;
     config.max_route_param_bytes = UI_PATH_BYTES;
@@ -486,25 +532,30 @@ int main(int argc, char **argv) {
         (chttp_web_security_policy)CHTTP_WEB_SECURITY_POLICY_INIT;
     security.nosniff = true;
 
-    status = chttp_server_init(&server, &config);
-    if (status == SALTS_OK)
-        status = chttp_web_security_use(&server, &security);
-    if (status == SALTS_OK)
-        status = chttp_server_get(&server, "/docs", serve_docs, &app);
-    if (status == SALTS_OK)
-        status = chttp_server_get(&server, "/docs/", serve_docs, &app);
-    if (status == SALTS_OK)
-        status = chttp_server_get(
-            &server, "/docs/operations", serve_operation_list, &app);
-    if (status == SALTS_OK)
-        status = chttp_server_get(
-            &server, "/docs/operations/:key", serve_operation_detail, &app);
-    for (size_t i = 0u; status == SALTS_OK && i < UI_STATIC_ROUTES; ++i)
-        status = chttp_server_get(&server, routes[i], serve_file, &options[i]);
-
-    if (status == SALTS_OK) status = chttp_server_start(&server);
+    UiController instance = {UI_STATIC_ROUTES, &app, routes, options};
+    const salts_configurator_provider_binding provider = {
+        sizeof(provider), SALTS_CONFIGURATOR_PROVIDER_BINDING_ABI_VERSION,
+        cmeta_component_meta(UiComponent), NULL, NULL, ui_create, NULL, NULL};
+    const salts_configurator_deployment deployment = {
+        &provider, cmeta_reflected_data(UiController), &instance};
+    const chttp_action actions[] = {
+        CHTTP_GET("/docs", ui_docs), CHTTP_GET("/docs/", ui_docs),
+        CHTTP_GET("/docs/operations", ui_list),
+        CHTTP_GET("/docs/operations/:key", ui_detail),
+        CHTTP_GET("/docs/style.css", ui_file), CHTTP_GET("/docs/htmx.js", ui_file),
+        CHTTP_GET("/docs/tryit.js", ui_file), CHTTP_GET("/openapi.json", ui_file)};
+    const chttp_controller controller = {.component_id = "UiComponent",
+        .receiver = cmeta_reflected_data(UiController), .actions = actions,
+        .action_count = sizeof(actions) / sizeof(actions[0])};
+    chttp_application_config application = chttp_application_config_default();
+    application.http = config;
+    application.components = &deployment; application.component_count = 1u;
+    application.controllers = &controller; application.controller_count = 1u;
+    application.security = &security;
+    status = chttp_application_init(&server, &application);
+    if (status == SALTS_OK) status = chttp_application_start(&server);
     uint16_t bound_port = 0u;
-    if (status == SALTS_OK) status = chttp_server_port(&server, &bound_port);
+    if (status == SALTS_OK) status = chttp_application_port(&server, &bound_port);
     if (status == SALTS_OK) {
         printf("OpenAPI UI: http://127.0.0.1:%u/docs\nPress Enter to stop.\n",
                (unsigned)bound_port);
@@ -514,11 +565,12 @@ int main(int argc, char **argv) {
 
 cleanup:
     if (server.impl) {
-        const int stopped = chttp_server_stop(&server, UI_TIMEOUT_MS);
-        if (status == SALTS_OK) status = stopped;
-        if (stopped == SALTS_OK) {
-            const int destroyed = chttp_server_destroy(&server);
-            if (status == SALTS_OK) status = destroyed;
+        const int closed = chttp_application_close(&server, 0u);
+        if (status == SALTS_OK) status = closed;
+        /* Borrowed render data cannot be released while an owner remains live. */
+        if (server.impl) {
+            fprintf(stderr, "OpenAPI UI owner cleanup failed: %d\n", closed);
+            return EXIT_FAILURE;
         }
     }
 

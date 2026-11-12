@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 /* Compile the production WS unit with isolated symbols to inject allocation
  * failures without adding hooks to the public library. Protocol engines and
  * server lifecycle remain real. */

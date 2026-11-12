@@ -1,3 +1,4 @@
+add_subdirectory(fixtures)
 add_executable(chttp_web_renderer_test test_chttp_web_renderer.c)
 target_link_libraries(chttp_web_renderer_test PRIVATE CHttp::App Salts::Core Salts::TinyTest)
 set_target_properties(chttp_web_renderer_test PROPERTIES

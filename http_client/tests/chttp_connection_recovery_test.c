@@ -1,3 +1,4 @@
+#include "../../http_server/src/chttp_server_engine.h"
 /* Keep lifecycle and attempt assertions on the real production Owner code,
  * with the same source-unit method as chttp_pool_lifecycle_test. */
 #include "../src/chttp_connection_recovery.c"

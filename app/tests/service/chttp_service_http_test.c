@@ -1,4 +1,5 @@
-#include <chttp_app/service.h>
+#include "../../../http_server/src/chttp_server_engine.h"
+#include "../../src/chttp_method_runtime.h"
 
 #include <http_client/http.h>
 #include <cmeta/core_fixed_width.h>
@@ -943,21 +944,21 @@ spec("CHttp::App generated HTTP MethodPlan") {
     DataBindServiceNativeBinding unknown_result_native = {0};
     DataBindNativeExecution unknown_result_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-    chttp_service_http_mount unknown_result_mount =
-        CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount unknown_result_mount =
+        CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     cmeta_param_desc unborrowed_request_params[2];
     cmeta_function_desc unborrowed_request_function = {0};
     cmeta_function_abi_desc unborrowed_request_abi = {0};
     DataBindServiceNativeBinding unborrowed_request_native = {0};
     DataBindNativeExecution unborrowed_request_execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
-    chttp_service_http_mount unborrowed_request_mount =
-        CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service_http_mount mismatch = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount unborrowed_request_mount =
+        CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount mismatch = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount invalid = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     DataBindNativeExecution execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindNativeExecution other_execution =
@@ -1092,7 +1093,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     service_config.native_max_depth = 16u;
     service_config.native_max_items = 64u;
     service_config.native_max_owned_bytes = 1024u;
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
 
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
@@ -1100,19 +1101,19 @@ spec("CHttp::App generated HTTP MethodPlan") {
     mismatch.native_binding = &native;
     mismatch.execution = &other_execution;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mismatch), SALTS_EINVAL);
+        chttp_method_runtime_mount_http(&service, &server, &mismatch), SALTS_EINVAL);
 
     invalid.method_plan = method_plan;
     invalid.native_binding = &native;
     invalid.execution = &invalid_execution;
     check_equal(
-        chttp_service_mount_http(&service, &server, &invalid), SALTS_EINVAL);
+        chttp_method_runtime_mount_http(&service, &server, &invalid), SALTS_EINVAL);
 
     unknown_result_mount.method_plan = unknown_result_plan;
     unknown_result_mount.native_binding = &unknown_result_native;
     unknown_result_mount.execution = &unknown_result_execution;
     check_equal(
-        chttp_service_mount_http(
+        chttp_method_runtime_mount_http(
             &service, &server, &unknown_result_mount),
         SALTS_ENOTSUP);
 
@@ -1120,7 +1121,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     unborrowed_request_mount.native_binding = &unborrowed_request_native;
     unborrowed_request_mount.execution = &unborrowed_request_execution;
     check_equal(
-        chttp_service_mount_http(
+        chttp_method_runtime_mount_http(
             &service, &server, &unborrowed_request_mount),
         SALTS_ENOTSUP);
 
@@ -1128,7 +1129,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     mount.native_binding = &native;
     mount.execution = &execution;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+        chttp_method_runtime_mount_http(&service, &server, &mount), SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1241,7 +1242,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
     data_bind_http_method_plan_free(unborrowed_request_plan);
     data_bind_http_method_plan_free(unknown_result_plan);
     data_bind_http_method_plan_free(method_plan);
@@ -1269,9 +1270,9 @@ spec("CHttp::App generated HTTP MethodPlan") {
     DataBindNativeExecution execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindHttpMethodPlan *method_plan = NULL;
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -1307,14 +1308,14 @@ spec("CHttp::App generated HTTP MethodPlan") {
     service_config.native_max_depth = 16u;
     service_config.native_max_items = 64u;
     service_config.native_max_owned_bytes = 1024u;
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
     mount.execution = &execution;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+        chttp_method_runtime_mount_http(&service, &server, &mount), SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1355,7 +1356,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
 
     /*
      * Service teardown after the failed request must not touch DataBind's
@@ -1395,10 +1396,10 @@ spec("CHttp::App generated HTTP MethodPlan") {
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     const DataBindHttpProjectionConfig *projection;
     DataBindHttpMethodPlan *method_plan = NULL;
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount invalid = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -1443,24 +1444,24 @@ spec("CHttp::App generated HTTP MethodPlan") {
 
     check_true(cflow_executor_worker_init_with_capacity(
         &executor, 1u, 1u));
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     invalid.method_plan = method_plan;
     invalid.native_binding = &native;
     invalid.execution = &execution;
-    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    invalid.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT;
     check_equal(
-        chttp_service_mount_http(&service, &server, &invalid),
+        chttp_method_runtime_mount_http(&service, &server, &invalid),
         SALTS_EINVAL);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
     mount.execution = &execution;
-    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT;
     mount.executor = &executor;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+        chttp_method_runtime_mount_http(&service, &server, &mount), SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1526,7 +1527,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         SALTS_OK);
     check_true(cflow_executor_wait_idle(&executor));
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
@@ -1553,9 +1554,9 @@ spec("CHttp::App generated HTTP MethodPlan") {
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     const DataBindHttpProjectionConfig *projection;
     DataBindHttpMethodPlan *method_plan = NULL;
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -1598,16 +1599,16 @@ spec("CHttp::App generated HTTP MethodPlan") {
 
     check_true(cflow_executor_worker_init_with_capacity(
         &executor, 1u, 2u));
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
     mount.execution = &execution;
-    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT;
     mount.executor = &executor;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+        chttp_method_runtime_mount_http(&service, &server, &mount), SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1639,7 +1640,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
      * Destroy must therefore fail atomically without releasing any method
      * storage or provider lifetime.
      */
-    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_EBUSY);
     check_not_null(service.impl);
 
     atomic_store_explicit(&invoke_gate.release, 1, memory_order_release);
@@ -1655,7 +1656,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
 
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
@@ -1685,9 +1686,9 @@ spec("CHttp::App generated HTTP MethodPlan") {
     DataBindNativeExecution execution =
         (DataBindNativeExecution)DATA_BIND_NATIVE_EXECUTION_INIT;
     DataBindHttpMethodPlan *method_plan = NULL;
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -1728,14 +1729,14 @@ spec("CHttp::App generated HTTP MethodPlan") {
     service_config.native_max_depth = 16u;
     service_config.native_max_items = 64u;
     service_config.native_max_owned_bytes = 1024u;
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
     mount.execution = &execution;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount), SALTS_OK);
+        chttp_method_runtime_mount_http(&service, &server, &mount), SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
     check_equal(chttp_server_port(&server, &port), SALTS_OK);
@@ -1796,7 +1797,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         chttp_server_stop(&server, CHTTP_SERVICE_TEST_TIMEOUT_MS),
         SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);
   }
@@ -1821,10 +1822,10 @@ spec("CHttp::App generated HTTP MethodPlan") {
     cmeta_plugin_lease rejected_lease = {0};
     const cmeta_plugin_manifest *rejected_manifest = NULL;
     cflow_executor executor = {0};
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount invalid = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -1886,16 +1887,16 @@ spec("CHttp::App generated HTTP MethodPlan") {
 
     check_true(cflow_executor_worker_init_with_capacity(
         &executor, 1u, 2u));
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     invalid.method_plan = method_plan;
-    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+    invalid.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
     invalid.executor = &executor;
     invalid.plugin_ref = plugin_ref;
     invalid.plugin_export_id = "CHttpPlugin.Calc.Add";
     check_equal(
-        chttp_service_mount_http(&service, &server, &invalid),
+        chttp_method_runtime_mount_http(&service, &server, &invalid),
         SALTS_EINVAL);
 
     /* Failed resolution must release its acquired lease and leave the only
@@ -1903,7 +1904,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
     invalid.plugin_registry = &registry;
     invalid.plugin_export_id = "CHttpPlugin.Calc.Missing";
     check_equal(
-        chttp_service_mount_http(&service, &server, &invalid),
+        chttp_method_runtime_mount_http(&service, &server, &invalid),
         SALTS_EINVAL);
     check_equal(
         cmeta_plugin_registry_get_lifecycle(
@@ -1912,13 +1913,13 @@ spec("CHttp::App generated HTTP MethodPlan") {
     check_equal(lifecycle.active_leases, (size_t)0u);
 
     mount.method_plan = method_plan;
-    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
     mount.executor = &executor;
     mount.plugin_registry = &registry;
     mount.plugin_ref = plugin_ref;
     mount.plugin_export_id = "CHttpPlugin.Calc.Add";
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount),
+        chttp_method_runtime_mount_http(&service, &server, &mount),
         SALTS_OK);
 
     check_equal(
@@ -2007,7 +2008,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
      * mount-owned lease. Service destruction must be fail-atomic and unload
      * must remain blocked until task finalization.
      */
-    check_equal(chttp_service_destroy(&service), SALTS_EBUSY);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_EBUSY);
     check_equal(
         cmeta_plugin_registry_get_lifecycle(
             &registry, plugin_ref, &lifecycle),
@@ -2039,7 +2040,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         CMETA_PLUGIN_OK);
     check_equal(lifecycle.active_leases, (size_t)1u);
 
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
     check_equal(
         cmeta_plugin_registry_get_lifecycle(
             &registry, plugin_ref, &lifecycle),
@@ -2082,10 +2083,10 @@ spec("CHttp::App generated HTTP MethodPlan") {
     DataBindHttpMethodPlan *method_plan = NULL;
     cflow_function_typed_adapter_projection projection = {0};
     cflow_executor executor = {0};
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount invalid = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_test_server_config();
@@ -2126,25 +2127,25 @@ spec("CHttp::App generated HTTP MethodPlan") {
 
     check_true(cflow_executor_worker_init_with_capacity(
         &executor, 1u, 2u));
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     invalid.method_plan = method_plan;
     invalid.native_binding = &native;
-    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW;
+    invalid.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW;
     invalid.executor = &executor;
     check_equal(
-        chttp_service_mount_http(&service, &server, &invalid),
+        chttp_method_runtime_mount_http(&service, &server, &invalid),
         SALTS_EINVAL);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
     mount.execution = NULL;
-    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW;
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW;
     mount.executor = &executor;
     mount.cflow_projection = &projection;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount),
+        chttp_method_runtime_mount_http(&service, &server, &mount),
         SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
@@ -2184,7 +2185,7 @@ spec("CHttp::App generated HTTP MethodPlan") {
         SALTS_OK);
     check_true(cflow_executor_wait_idle(&executor));
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
     cflow_executor_destroy(&executor);
     data_bind_http_method_plan_free(method_plan);
     data_bind_free(contract);

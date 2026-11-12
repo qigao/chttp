@@ -1,4 +1,5 @@
-#include <chttp_app/service.h>
+#include "../../../http_server/src/chttp_server_engine.h"
+#include "../../src/chttp_method_runtime.h"
 
 #include <http_client/http.h>
 #include "chttp_service_wasm.http.h"
@@ -161,10 +162,10 @@ spec("CHttp::App generated WASM execution") {
     size_t component_size = 0u;
     databind_chttp_service_wasm_wasm_host wasm_host = {0};
     cflow_executor executor = {0};
-    chttp_service service = {0};
-    chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
-    chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
-    chttp_service_http_mount invalid = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+    chttp_method_runtime service = {0};
+    chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
+    chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+    chttp_method_runtime_http_mount invalid = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
     chttp_server server = {0};
     chttp_server_config server_config =
         chttp_service_wasm_server_config();
@@ -223,24 +224,24 @@ spec("CHttp::App generated WASM execution") {
 
     check_true(cflow_executor_worker_init_with_capacity(
         &executor, 1u, 1u));
-    check_equal(chttp_service_init(&service, &service_config), SALTS_OK);
+    check_equal(chttp_method_runtime_init(&service, &service_config), SALTS_OK);
     check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
 
     invalid.method_plan = method_plan;
     invalid.native_binding = &native;
     invalid.execution = &execution;
-    invalid.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    invalid.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT;
     check_equal(
-        chttp_service_mount_http(&service, &server, &invalid),
+        chttp_method_runtime_mount_http(&service, &server, &invalid),
         SALTS_EINVAL);
 
     mount.method_plan = method_plan;
     mount.native_binding = &native;
     mount.execution = &execution;
-    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT;
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT;
     mount.executor = &executor;
     check_equal(
-        chttp_service_mount_http(&service, &server, &mount),
+        chttp_method_runtime_mount_http(&service, &server, &mount),
         SALTS_OK);
 
     check_equal(chttp_server_start(&server), SALTS_OK);
@@ -330,7 +331,7 @@ spec("CHttp::App generated WASM execution") {
         SALTS_OK);
     check_true(cflow_executor_wait_idle(&executor));
     check_equal(chttp_server_destroy(&server), SALTS_OK);
-    check_equal(chttp_service_destroy(&service), SALTS_OK);
+    check_equal(chttp_method_runtime_destroy(&service), SALTS_OK);
 
     cflow_executor_destroy(&executor);
     databind_chttp_service_wasm_wasm_host_destroy(&wasm_host);

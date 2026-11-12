@@ -1,3 +1,5 @@
+#include "../../../../app/src/chttp_method_runtime.h"
+#include "../../../src/chttp_server_engine.h"
 #include "http_example_app.h"
 #include "http_example.http.h"
 #include "http_example.service_native.h"
@@ -136,7 +138,7 @@ int http_example_close(http_example_app *app) {
     if (status != SALTS_OK) return status;
   }
   if (app->service.impl != NULL) {
-    const int status = chttp_service_destroy(&app->service);
+    const int status = chttp_method_runtime_destroy(&app->service);
     if (status != SALTS_OK) return status;
   }
   if (cflow_executor_valid(&app->executor)) cflow_executor_destroy(&app->executor);
@@ -211,7 +213,7 @@ static int example_prepare(http_example_app *app, const http_example_config *con
   static const chttp_server_cors_options cors = {.origins = origins, .origin_count = 1u,
       .methods = "GET, HEAD, POST", .allowed_headers = "Content-Type, Authorization",
       .exposed_headers = "ETag, Content-Range", .max_age_seconds = 600u};
-  chttp_service_config service_config = CHTTP_SERVICE_CONFIG_INIT;
+  chttp_method_runtime_config service_config = CHTTP_METHOD_RUNTIME_CONFIG_INIT;
   chttp_web_renderer_config render_config = CHTTP_WEB_RENDERER_CONFIG_INIT;
   chttp_web_error web_error = CHTTP_WEB_ERROR_INIT;
   chttp_server_config server_config = example_config();
@@ -234,7 +236,7 @@ static int example_prepare(http_example_app *app, const http_example_config *con
           &render_config, &web_error) != CHTTP_WEB_OK)
     return SALTS_EIO;
   service_config.method_capacity = 1u;
-  status = chttp_service_init(&app->service, &service_config);
+  status = chttp_method_runtime_init(&app->service, &service_config);
   if (status != SALTS_OK) return status;
   server_config.port = config->port;
   /* One existing HTTP Owner owns HTTP middleware, RPC and Plugin execution. */
@@ -256,10 +258,10 @@ static int example_prepare(http_example_app *app, const http_example_config *con
   if (status == SALTS_OK) status = http_example_register_handlers(app);
   if (status != SALTS_OK) return status;
   const chttp_server_middleware policy = {http_example_no_store, NULL};
-  chttp_service_http_mount mount = CHTTP_SERVICE_HTTP_MOUNT_INIT;
+  chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
   mount.method_plan = app->method_plan;
   if (config->plugin_path != NULL) {
-    mount.execution_mode = CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
     mount.executor = &app->executor;
     mount.plugin_registry = &app->plugins;
     mount.plugin_ref = app->plugin_ref;
@@ -270,7 +272,7 @@ static int example_prepare(http_example_app *app, const http_example_config *con
   }
   mount.middleware = &policy;
   mount.middleware_count = 1u;
-  return chttp_service_mount_http(&app->service, server, &mount);
+  return chttp_method_runtime_mount_http(&app->service, server, &mount);
 }
 
 int http_example_configure(http_example_app *app, const http_example_config *config) {

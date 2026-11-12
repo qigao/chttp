@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 #include "chttp_server_runtime.h"
 
 #include <http_server/http.h>

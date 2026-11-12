@@ -1,5 +1,43 @@
 # Split SDK migration handoff
 
+- Application policy ordering: a static asset/SPA middleware can complete the
+  response without calling next. Registering it before the ACE Interceptor
+  bypassed global application authorization. Four real H1/H2 regressions show
+  rejected assets returning 200 and hooks never entering before the fix
+  (`migration-application-assets-red-ctest.log`). Register Interceptors after
+  security/CORS but before assets, so rejection publishes no file response;
+  successful dispatch still unwinds hooks and rejection keeps security headers.
+  Asset-only requests have NULL operation metadata. Focused asset tests and
+  published-SDK full build, 109/109 CTest and install pass
+  (`migration-application-policy-rpc-full-ctest.log`). The same formal App binding
+  suite now proves typed H1/H2 RPC and HTTP share one ACE Controller, preserve
+  operation metadata boundaries, enter/unwind Interceptors and destroy once.
+
+- Reflected Application migration: route engine `user` now points to an action
+  binding record, while body-open/body-close callbacks require the ACE-owned
+  Controller receiver. Forward both callbacks through explicit adapters; passing
+  them through unchanged sends the wrong object. Formal Application tests cover
+  H2 streamed-body open/write/close receiver identity and exactly-once close.
+  Deferred MethodPlan finalizers may still borrow Beans after response terminal;
+  Application close must wait for the runtime's in-flight count before destroying
+  the ACE graph. A real blocked native invocation verifies timeout retains the
+  owner/Beans and later drain destroys them once. Published-SDK Windows full
+  build, 105/105 CTest and install passed (`migration-application-final-*` logs);
+  subsequent C11 scoped-owner cases passed the focused Application CTest
+  (`migration-application-scoped-ctest.log`). No device or final CI claim here.
+- OpenAPI UI was gated entirely by BUILD_EXAMPLES, so the default test graph
+  did not compile its Controller or run its four HTTP regressions. Build its
+  example target whenever BUILD_TESTS is enabled and register those tests in
+  the module's formal suite. The expanded Windows graph passed 109/109 and
+  install (`migration-application-ui-qualified-*`). UI configuration is an
+  explicit configured ACE Component; its native adapters keep user/request/
+  response argument order. CI's MSVC link found that a public DLL data symbol
+  is unsuitable for C11 constant FunctionDecl metadata. Exchange descriptors
+  now use static immutable metadata with CMeta's explicit semantic identity
+  equality across translation units/DLLs, preserving canonical ABI admission.
+  Full build and focused Application/UI runtime tests passed after that fix
+  (`migration-application-static-metadata-*`, `migration-application-static-ui-*`).
+
 - Socket policy audit: HTTP async/blocking Client, Server accepted streams and
   standalone WebSocket already forward CNet options. H2 WebSocket Pool omitted
   both validation and application of `config.client.socket_options`; apply it

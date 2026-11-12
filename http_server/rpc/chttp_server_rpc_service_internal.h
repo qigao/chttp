@@ -1,7 +1,7 @@
 #ifndef CHTTP_SERVER_RPC_SERVICE_INTERNAL_H
 #define CHTTP_SERVER_RPC_SERVICE_INTERNAL_H
 
-#include <http_server/rpc_service.h>
+#include "chttp_rpc_mount.h"
 
 /* Private staged generated adapter. The owning CRPC registry controls it and
  * frees it only after the host HTTP server has drained all callbacks. */
