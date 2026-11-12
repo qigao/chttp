@@ -1,7 +1,7 @@
-add_executable(chttp_application_example application.c)
+add_executable(chttp_application_example application.c application_contract.h)
 target_link_libraries(chttp_application_example PRIVATE CHttp::App)
 set_target_properties(chttp_application_example PROPERTIES FOLDER "app/examples")
 
-add_executable(chttp_application_cpp_example application.cpp)
+add_executable(chttp_application_cpp_example application.cpp application_contract.h)
 target_link_libraries(chttp_application_cpp_example PRIVATE CHttp::App)
 set_target_properties(chttp_application_cpp_example PROPERTIES FOLDER "app/examples")
