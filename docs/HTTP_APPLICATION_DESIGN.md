@@ -123,14 +123,24 @@ post/wait. The method record and canonical ACE receiver remain retained through
 terminal finalization. CFlow/Plugin providers and generated business hook outcome
 mapping still need migration; this slice does not accept them as direct methods.
 
+Private generated RPC mounts use the same pool for the complete HTTP envelope.
+The Server registry exposes a private scheduler-neutral evaluator/output boundary;
+the owner adapter only snapshots and admits work. Existing bounded batch parsing,
+sequential method dispatch, protocol errors and notification suppression remain
+shared with the engine path. Pure notification batches preserve an empty 204
+without adding a Content-Type header. Server registry/frame pools and ACE receivers
+remain live until the worker invocation drains, including after an H2 handler
+deadline. Per-RPC-method business hooks and non-direct providers are still pending.
+
 `chttp_application_worker_test` covers snapshot isolation, overload, real H1/H2
 deadlines, one/two-worker execution, hook unwinding, finite close and H2 flow
 control. `chttp_application_test` exercises actual ACE-injected Controller/Service
 dispatch and graph retention across a blocked completion observer;
 `chttp_application_binding_test` verifies H1/H2 generated success/validation/
-missing-input behavior and a canceled running native method. The Server suite
+missing-input behavior, typed RPC, mixed/notification batches, protocol errors
+and canceled running native methods. The Server suite
 covers the zero-error reset. Session/stream/WS adaptation, remaining generated
-providers/RPC worker integration and the public Invocation migration remain required
+providers/per-method hook integration and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives

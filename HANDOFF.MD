@@ -20,6 +20,21 @@
   https://github.com/qigao/chttp/issues/290; later green runs are not evidence
   of its root cause or resolution. Preserve the failure-boundary diagnostics.
 
+- Private generated RPC envelopes now execute on the same Application-owned
+  worker pool as handwritten/direct HTTP methods. Server composition uses an
+  immutable dispatch adapter and synchronous evaluator/output callback, without
+  depending on App/CFlow scheduling. Batch parsing, bounded aggregation and
+  sequential notification/method behavior share the existing engine evaluator.
+  A NULL response content type is preserved for empty 204 notification replies.
+  H1/H2 typed calls, positional/named mixed batches, unknown methods, parse errors
+  and notification-only batches pass in the Application binding suite:
+  `migration-application-worker-rpc-{build,ctest}.log`. Per-method hooks and
+  remaining providers/Session/stream/WS/public Invocation migration are pending.
+  Complete native graph, 116/116 CTests and install pass in
+  `migration-application-worker-rpc-{full-ctest,install}.log`; the subsequent
+  test-only canceled-running-RPC case passes in
+  `migration-application-worker-rpc-cancel-{build,ctest}.log`.
+
 - Private generated direct HTTP mounts now use the Application-owned pool for
   bind/validate/invoke/serialize as one task. Share the existing MethodPlan
   evaluator through an internal output adapter, retaining the engine's existing

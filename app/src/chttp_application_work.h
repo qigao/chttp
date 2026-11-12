@@ -62,7 +62,8 @@ int chttp_application_work_init(chttp_application_work *, const chttp_applicatio
  * joins the real owner response terminal (success/reset/close). */
 int chttp_application_work_submit(chttp_application_work *, const chttp_server_request_view *,
     chttp_server_response *, const chttp_application_work_task *);
-/* Worker-only copied response draft. No engine builder crosses the queue. */
+/* Worker-only copied response draft. No engine builder crosses the queue.
+ * A NULL content type preserves the engine's header-free empty reply contract. */
 int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
     const char *, const void *, size_t);
 int chttp_application_work_reject(const chttp_application_work_exchange *, unsigned int,

@@ -28,5 +28,9 @@ int chttp_application_worker_mount(chttp_application *, const chttp_application_
  * ACE state. Deferred/CFlow/Plugin providers remain outside this private slice. */
 int chttp_application_worker_mount_http(chttp_application *, const char *,
     const cmeta_data_desc *, const chttp_http_method *);
+/* Private synchronous generated RPC envelope; batch methods run sequentially
+ * within one worker invocation. No per-method worker hook facade is published. */
+int chttp_application_worker_mount_rpc(chttp_application *, const char *,
+    const cmeta_data_desc *, const chttp_rpc_method *);
 int chttp_application_worker_current(const chttp_application *);
 #endif
