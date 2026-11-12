@@ -20,6 +20,7 @@ struct chttp_application_work_reply {
   char *header_storage;
   size_t header_count, header_used, header_wire, reply_used;
   const void *body;
+  const char *file_path;
   size_t size;
   int sealed;
   int finalized;
@@ -236,6 +237,18 @@ int chttp_application_work_set_header(chttp_application_work_reply *reply, const
   if (!replacing) ++reply->header_count;
   return SALTS_OK;
 }
+int chttp_application_work_response_file(chttp_application_work_reply *reply, unsigned int code,
+    const char *type, const char *path) {
+  if (!path || !path[0]) return SALTS_EINVAL;
+  size_t bytes = 0u;
+  int status = add_string(&bytes, path);
+  if (status != SALTS_OK) return status;
+  status = chttp_application_work_respond(reply, code, type, path, bytes);
+  if (status == SALTS_OK) {
+    reply->file_path = reply->body; reply->body = NULL; reply->size = 0u;
+  }
+  return status;
+}
 static int reserve_method(void *context, chttp_method_completion_record **out) {
   work_item *item = context;
   if (!item || !cflow_executor_is_current(&item->owner->executor)) return SALTS_EINVAL;
@@ -246,6 +259,14 @@ static int reserve_method(void *context, chttp_method_completion_record **out) {
 }
 chttp_method_completion_sink chttp_application_work_method_sink(chttp_application_work_reply *reply) {
   return (chttp_method_completion_sink){reply ? reply->item : NULL, reserve_method};
+}
+static void file_prepared(void *context, int status) {
+  work_item *item = context;
+  if (status == SALTS_OK) return;
+  /* Normal per-request I/O failure, not a broken executor publication. */
+  sync_mutex_lock(&item->owner->mutex);
+  item->outcome.publication_status = status;
+  sync_mutex_unlock(&item->owner->mutex);
 }
 static void publish(work_item *item, int business_status) {
   chttp_application_work_reply *draft = &item->reply;
@@ -258,7 +279,10 @@ static void publish(work_item *item, int business_status) {
       good ? draft->status : 500u, good ? NULL : "text/plain",
       header_count ? draft->headers + first : NULL, header_count,
       good ? draft->body : "Internal Server Error", good ? draft->size : 21u};
-  int status = chttp_server_deferred_reply(&item->deferred, &response);
+  const chttp_server_deferred_file file = {draft->file_path, draft->status, file_prepared, item};
+  int status = good && draft->file_path ?
+      chttp_server_deferred_response_file(&item->deferred, response.headers, response.header_count, &file) :
+      chttp_server_deferred_reply(&item->deferred, &response);
   if (status != SALTS_OK && item->deferred.impl) {
     const int cancel_status = chttp_server_deferred_cancel(&item->deferred);
     if (cancel_status != SALTS_OK && cancel_status != SALTS_ENOENT && cancel_status != SALTS_EALREADY)
@@ -266,7 +290,8 @@ static void publish(work_item *item, int business_status) {
   }
   work_impl *impl = item->owner;
   sync_mutex_lock(&impl->mutex);
-  item->outcome.publication_status = status;
+  /* The owner may have already recorded file preparation failure after READY. */
+  if (status != SALTS_OK) item->outcome.publication_status = status;
   if (status != SALTS_OK && status != SALTS_ENOENT && status != SALTS_EALREADY &&
       impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = status;
   sync_cond_broadcast(&impl->settled);

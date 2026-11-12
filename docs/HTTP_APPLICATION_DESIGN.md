@@ -605,6 +605,40 @@ quiescent before the relevant executor is destroyed.
 
 ### Session, files, streaming and WebSocket migration requirements
 
+The next private slice stages a raw file response, equivalent to the engine's
+response_file capability rather than conditional serve_file/asset routing.
+The worker copies the selected path and MIME into its existing checked reply
+arena before sealing the response; headers remain mutable through hook unwind.
+An admitted native deferred target borrows that immutable path under the existing
+invocation/native-terminal lease. The native owner opens/registers the file via
+the existing asynchronous file runtime before Session commit and serialization.
+It records preparation errors without rerunning business code or committing
+ordinary Session writes; cancellation before preparation never opens the file.
+Filesystem/open/read failures settle that request, not the worker executor.
+Native file retirement remains owned by the Server file runtime through drain;
+its resource callbacks never borrow a Bean or Invocation frame.
+
+For this private, handwritten binding the decision is
+`chttp_invocation_response_file(invocation, 200u, "application/octet-stream", selected_path)`.
+The selected path/type are copied; invalid scope/path/status/type, checked-size
+overflow, exhausted reply bytes and an already selected body fail explicitly.
+204/205/304 are not file-body statuses. A NULL type preserves the staged MIME;
+after hooks may update it. Success admits a decision, not a successful open:
+after_completion reports owner preparation in publication_status and later
+read/wire termination separately. Application file contents stay immutable
+through that native terminal; no user callback is moved onto the native owner.
+
+H1 must retain its active source-builder reference and parser pause through all
+file chunks and the final native send, including empty/HEAD and WAIT completion.
+H2 uses its established stream-local source and final END_STREAM terminal.
+Neither wire EOF nor cancellation permits early invocation/Bean reclamation;
+finite close keeps ownership until business, Session and native terminals join.
+The alternatives of worker-side engine/file-runtime mutation and buffering an
+entire file in reply_bytes are rejected for owner-affinity and bounded-memory
+reasons. Removing this private slice restores buffered-only staging; no public
+headers/defaults or existing synchronous source contracts change. Conditional
+assets, upload/source/SSE, admission and WebSocket adapters remain separate.
+
 The private Session implementation uses one charged, invocation-owned snapshot
 and staged mutation context, not the native request's live Session context.
 Existing Session accessors operate on that detached context; creation, ID

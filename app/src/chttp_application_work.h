@@ -76,6 +76,8 @@ int chttp_application_work_admission_response(chttp_server_response *, int);
 int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
     const char *, const void *, size_t);
 int chttp_application_work_set_header(chttp_application_work_reply *, const char *, const char *);
+int chttp_application_work_response_file(chttp_application_work_reply *, unsigned int,
+    const char *, const char *);
 int chttp_application_work_reject(const chttp_application_work_exchange *, unsigned int,
     const char *, const void *, size_t);
 int chttp_application_work_reply_current(const chttp_application_work_reply *);

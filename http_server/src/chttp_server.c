@@ -28,6 +28,7 @@ static int chttp_server_on_body_open(void *user, const chttp_server_request_view
 static void chttp_server_on_body_close(void *user, chttp_body_sink *sink, int status);
 static int chttp_server_response_stream_next(chttp_server_connection *connection);
 static void chttp_server_h1_file_ready(void *user);
+static int chttp_server_h1_deferred_complete(chttp_server_connection *);
 bool chttp_server_should_stop(chttp_server_impl *server);
 
 size_t chttp_server_owner_lease_count(const chttp_server_owner_lane *owner) {
@@ -517,6 +518,7 @@ int chttp_server_connection_init(chttp_server_impl *server,
   status = chttp_server_response_builder_init(&connection->deferred_builder, &server->config);
   if (status != SALTS_OK) return status;
   connection->deferred_response.impl = &connection->deferred_builder;
+  connection->deferred_builder.connection = connection;
   atomic_init(&connection->deferred_token,
               chttp_server_deferred_token(0u, CHTTP_SERVER_DEFERRED_IDLE));
   connection->deferred_target =
@@ -755,6 +757,7 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     connection->writing = false;
     connection->close_after_write = false;
     connection->response_streaming = false;
+    connection->stream_builder = NULL;
     connection->response_source_chunked = false;
     connection->response_close_after_stream = false;
     connection->deferred_response_writing = false;
@@ -958,10 +961,24 @@ static void chttp_server_on_receive(void *user, cnet_connection handle,
   (void)chttp_server_send_pending(connection);
 }
 
+static void chttp_server_response_stream_start(chttp_server_connection *connection,
+    chttp_server_response_builder *builder, const chttp_server_request_view *request) {
+  connection->stream_builder = builder;
+  connection->response_streaming = true;
+  connection->response_source_chunked = !builder->body_source.content_length_known &&
+      request->http_major == 1u && request->http_minor == 1u;
+  connection->response_close_after_stream = !request->protocol_keep_alive ||
+      (!builder->body_source.content_length_known && !connection->response_source_chunked);
+  if (builder->file_transfer)
+    chttp_file_transfer_set_ready(builder->file_transfer, chttp_server_h1_file_ready, connection);
+}
+
 static int chttp_server_response_stream_finish(chttp_server_connection *connection, int status) {
-  chttp_server_response_builder *builder = &connection->request_state.response_builder;
+  chttp_server_response_builder *builder = connection->stream_builder;
+  if (builder == NULL) return SALTS_EPROTO;
   chttp_server_response_builder_close_source(builder, status);
   connection->response_streaming = false;
+  connection->stream_builder = NULL;
   if (status == SALTS_OK) connection->close_after_write = connection->response_close_after_stream;
   return status;
 }
@@ -981,7 +998,8 @@ static int chttp_server_response_stream_next(chttp_server_connection *connection
       connection, connection->server->config.stream_chunk_bytes +
                       CHTTP_SERVER_CHUNK_PREFIX_RESERVE + CHTTP_SERVER_CHUNK_TRAILER_BYTES);
   if (status != SALTS_OK) return chttp_server_response_stream_finish(connection, status);
-  builder = &connection->request_state.response_builder;
+  builder = connection->stream_builder;
+  if (builder == NULL) return SALTS_EPROTO;
   if (!builder->source_enabled || builder->body_source.read == NULL)
     return chttp_server_response_stream_finish(connection, SALTS_EPROTO);
   source = &builder->body_source;
@@ -1058,9 +1076,11 @@ static void chttp_server_h1_file_ready(void *user) {
   if (connection == NULL || !connection->active || !connection->response_streaming ||
       connection->writing || connection->outbound_size != 0u)
     return;
-  builder = &connection->request_state.response_builder;
+  builder = connection->stream_builder;
+  if (builder == NULL) { chttp_server_connection_close(connection); return; }
   if (builder->file_transfer == NULL || !chttp_file_transfer_ready(builder->file_transfer)) return;
   status = chttp_server_response_stream_next(connection);
+  if (status == SALTS_OK) status = chttp_server_h1_deferred_complete(connection);
   if (status != SALTS_OK) {
     chttp_server_connection_close(connection);
     return;
@@ -1091,6 +1111,14 @@ static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
   return status;
 }
 
+static int chttp_server_h1_deferred_complete(chttp_server_connection *connection) {
+  if (!connection->deferred_response_writing || connection->response_streaming ||
+      connection->writing || connection->outbound_size != 0u) return SALTS_OK;
+  connection->deferred_response_writing = false;
+  chttp_server_request_terminal_notify(&connection->request_state, SALTS_OK);
+  return connection->close_after_write ? SALTS_OK : chttp_server_h1_input_resume(connection);
+}
+
 static void chttp_server_on_send(void *user, cnet_connection handle, size_t size) {
   chttp_server_connection *connection = (chttp_server_connection *)user;
   const bool resume_deferred = connection != NULL && connection->deferred_response_writing;
@@ -1117,7 +1145,6 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
   connection->outbound_size = 0u;
   connection->retained_response_sg = false;
   connection->retained_response_sg_body_size = 0u;
-  connection->deferred_response_writing = false;
   connection->retained_response_paused = false;
   if (resume_retained)
     chttp_server_response_builder_release_retained_body(
@@ -1132,14 +1159,16 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
       connection->websocket_peer.phase == CHTTP_SERVER_WEBSOCKET_NONE &&
       connection->wire_protocol != CHTTP_SERVER_WIRE_HTTP_2)
     chttp_server_connection_release_outbound(connection);
-  if (status == SALTS_OK && !connection->response_streaming) {
+  if (status == SALTS_OK && !connection->response_streaming && connection->outbound_size == 0u) {
     if (connection->wire_protocol == CHTTP_SERVER_WIRE_HTTP_2)
       chttp_h2_server_connection_sent(connection->h2);
-    else if (resume_deferred || resume_retained)
+    else if (resume_retained)
       chttp_server_request_terminal_notify(&connection->request_state, SALTS_OK);
   }
-  if (status == SALTS_OK && (resume_deferred || resume_retained) &&
-      !connection->close_after_write)
+  if (status == SALTS_OK && resume_deferred)
+    status = chttp_server_h1_deferred_complete(connection);
+  if (status == SALTS_OK && resume_retained && !connection->response_streaming &&
+      connection->outbound_size == 0u && !connection->close_after_write)
     status = chttp_server_h1_input_resume(connection);
   if (status != SALTS_OK) {
     chttp_server_connection_close(connection);
@@ -1352,15 +1381,7 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
   if (status == SALTS_OK) {
     chttp_server_stats_response(connection->server);
     if (builder->source_enabled && request->method != CHTTP_METHOD_HEAD) {
-      connection->response_streaming = true;
-      connection->response_source_chunked = !builder->body_source.content_length_known &&
-                                            request->http_major == 1u && request->http_minor == 1u;
-      connection->response_close_after_stream =
-          !request->protocol_keep_alive ||
-          (!builder->body_source.content_length_known && !connection->response_source_chunked);
-      if (builder->file_transfer != NULL)
-        chttp_file_transfer_set_ready(builder->file_transfer, chttp_server_h1_file_ready,
-                                      connection);
+      chttp_server_response_stream_start(connection, builder, request);
     } else {
       if (builder->source_enabled) chttp_server_response_builder_close_source(builder, SALTS_OK);
       if (!request->protocol_keep_alive) connection->close_after_write = true;
@@ -1448,6 +1469,7 @@ static void chttp_server_connection_activate(
   connection->writing = false;
   connection->close_after_write = false;
   connection->response_streaming = false;
+  connection->stream_builder = NULL;
   connection->response_source_chunked = false;
   connection->response_close_after_stream = false;
   connection->deferred_disconnected = false;
@@ -1627,8 +1649,10 @@ static int chttp_server_deferred_progress(
           memory_order_release);
       continue;
     }
-    status = chttp_session_request_finish_deferred(&connection->request_state,
-        &connection->deferred_response);
+    status = chttp_server_deferred_file_prepare(&connection->deferred_target);
+    if (status == SALTS_OK)
+      status = chttp_session_request_finish_deferred(&connection->request_state,
+          &connection->deferred_response);
     if (status == SALTS_OK)
       status = chttp_server_connection_reserve_outbound(
           connection, connection->outbound_size + server->max_response_wire_bytes);
@@ -1649,8 +1673,12 @@ static int chttp_server_deferred_progress(
       chttp_server_connection_close(connection);
       continue;
     }
-    if (!connection->deferred_target.request.protocol_keep_alive)
-      connection->close_after_write = true;
+    if (builder->source_enabled && connection->deferred_target.request.method != CHTTP_METHOD_HEAD) {
+      chttp_server_response_stream_start(connection, builder, &connection->deferred_target.request);
+    } else {
+      if (builder->source_enabled) chttp_server_response_builder_close_source(builder, SALTS_OK);
+      if (!connection->deferred_target.request.protocol_keep_alive) connection->close_after_write = true;
+    }
     connection->deferred_response_writing = true;
     chttp_server_stats_response(server);
     atomic_store_explicit(

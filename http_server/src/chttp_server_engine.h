@@ -37,6 +37,18 @@ void chttp_session_work_release(chttp_session_work *);
 int chttp_server_response_defer_worker(chttp_server_response *, chttp_server_deferred *,
     chttp_session_work *);
 
+/* Private file decision. Path borrows the retained Invocation through the real
+ * native terminal. prepared runs on the owner only if preparation is attempted;
+ * it records status, never application work. No native resource crosses threads. */
+typedef struct chttp_server_deferred_file {
+  const char *path;
+  unsigned int status_code;
+  void (*prepared)(void *, int);
+  void *user;
+} chttp_server_deferred_file;
+int chttp_server_deferred_response_file(chttp_server_deferred *, const chttp_header *, size_t,
+    const chttp_server_deferred_file *);
+
 typedef struct chttp_server_middleware {
   chttp_server_middleware_fn handler;
   void *user;

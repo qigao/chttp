@@ -659,3 +659,30 @@
   (migration-conformance-file-input-ctest.log). Original failure excerpt is kept
   at build/ci-43270230864-msvc-conformance-failure.log and in the linked CI job;
   the failed job was not rerun. Hosted MSVC qualification requires the new CI.
+
+- Private worker file responses now copy path/MIME into the existing reply
+  arena and publish a borrowed decision under the retained native-terminal
+  lease. The native owner prepares the file with the existing asynchronous
+  file runtime before Session commit. Preparation errors remain per-request
+  publication outcomes; later read/wire failures use the native terminal.
+  No entire-file buffering, worker-side native mutation or second I/O runtime.
+  Raw response_file is covered; conditional serve_file/assets, admission and
+  generic upload/source/SSE/WebSocket adapters remain separate migration work.
+- Deferred builders previously lacked their connection binding, and H1/H2
+  source callbacks selected only the ordinary builder. Formal file regressions
+  exposed both assumptions. Each owner now holds its actual active source
+  builder. H1 keeps its parser paused and terminal lease until EOF plus the
+  last native send, including WAIT/empty/HEAD; H2 keeps its existing final
+  END_STREAM terminal. Header publication is shared with buffered replies.
+- Native close drains admitted requests. The first new finite-close test
+  incorrectly expected an immediate successful close while H2 flow control
+  was blocked (migration-worker-file-final-ctest.log: other 119 tests passed).
+  Corrected formal tests verify timeout with live ownership, then drain after
+  client progress. A separate client-sink cancellation verifies error terminal,
+  file-I/O drain and Bean destruction. Missing-file and full Cookie capacity
+  leave ordinary Session writes uncommitted; same-Session business can progress
+  while a 1 MiB file response is flow-controlled with a 512-byte reply budget.
+  After these test fixes and target validation, full native-release-user build,
+  affected Invocation/Session suites (2/2) and install passed:
+  migration-worker-file-drain-{build,ctest,install}.log. Earlier failed logs
+  remain preserved. The PR's full matrix is the cross-platform qualification.
