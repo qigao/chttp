@@ -11,6 +11,15 @@
   (`migration-handler-cpu-boundary-ctest.log`), but that alone does not identify
   or fix the earlier failure. Keep qualification draft until investigated;
   do not claim a performance gain or close #215 based on this rerun.
+  First CI 43166936938 found the same client-completion boundary in both
+  Windows profiles (deferred/4 owners/zero work), while macOS passed. Capture
+  client phase/status/native error rather than infer a pool or transport fault.
+  A local two-CPU process-affinity run passed all 90 points; it is diagnostic
+  evidence, not proof of a fix. Linux failed before execution because the older
+  WS benchmark included its POSIX CPU helper after the engine header. Move the
+  helper first; benchmark-only builds also need enable_testing() when
+  BUILD_BENCHMARK is ON. The existing preset's benchmark-only full build and
+  all three formal benchmark CTests passed, 42.52s.
 
 - Application policy ownership: the public init contract promised copied policy
   values, while Security/CORS/asset middleware still borrowed caller structures.

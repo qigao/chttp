@@ -27,7 +27,7 @@ if(MSVC)
   add_compile_options(/experimental:c11atomics)
 endif()
 
-if(BUILD_TESTS)
+if(BUILD_TESTS OR BUILD_BENCHMARK)
   enable_testing()
 endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

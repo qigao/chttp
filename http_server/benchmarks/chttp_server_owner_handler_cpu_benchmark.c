@@ -557,18 +557,31 @@ static void owner_cpu_client_main(void *user) {
   owner_cpu_client *client = user;
   chttp_test_thread_cpu cpu = {0};
   uint64_t before = 0u, after = 0u;
+  const char *stage = "cpu-capture";
+  int native_error = 0;
   int status = chttp_test_thread_cpu_capture(&cpu);
   atomic_fetch_add_explicit(&client->barrier->ready, 1, memory_order_acq_rel);
   while (!atomic_load_explicit(&client->barrier->start, memory_order_acquire)) sync_thread_yield();
-  if (status == SALTS_OK) status = chttp_test_thread_cpu_read(&cpu, &before);
-  for (size_t i = 0u; i < client->requests && status == SALTS_OK; ++i)
-    if (owner_cpu_request(client->socket_value, client->target, &client->latencies[i]) != 0)
+  if (status == SALTS_OK) { stage = "cpu-start"; status = chttp_test_thread_cpu_read(&cpu, &before); }
+  for (size_t i = 0u; i < client->requests && status == SALTS_OK; ++i) {
+    stage = "request";
+    if (owner_cpu_request(client->socket_value, client->target, &client->latencies[i]) != 0) {
       status = SALTS_EIO;
-  if (status == SALTS_OK) status = chttp_test_thread_cpu_read(&cpu, &after);
+#if defined(_WIN32)
+      native_error = WSAGetLastError();
+#else
+      native_error = errno;
+#endif
+    }
+  }
+  if (status == SALTS_OK) { stage = "cpu-finish"; status = chttp_test_thread_cpu_read(&cpu, &after); }
   if (status == SALTS_OK && after < before) status = SALTS_ERANGE;
   client->cpu_ns = status == SALTS_OK ? after - before : 0u;
   int released = chttp_test_thread_cpu_release(&cpu);
   if (status == SALTS_OK) status = released;
+  if (status != SALTS_OK)
+    fprintf(stderr, "client %s failed stage=%s status=%d native=%d cpu_before=%llu cpu_after=%llu\n",
+        client->target, stage, status, native_error, (unsigned long long)before, (unsigned long long)after);
   atomic_store_explicit(&client->status, status, memory_order_release);
 }
 
@@ -840,7 +853,11 @@ cleanup:
     }
   }
   if (server.impl != NULL) {
-    if (chttp_server_stop(&server, OWNER_CPU_TIMEOUT_MS) != SALTS_OK) result = 1;
+    int status = chttp_server_stop(&server, OWNER_CPU_TIMEOUT_MS);
+    if (status != SALTS_OK) {
+      fprintf(stderr, "server stop failed: %d\n", status);
+      result = 1;
+    }
   }
   if (pool != NULL) {
     const int shutdown_status = threadpool_shutdown_with_policy(
@@ -849,11 +866,20 @@ cleanup:
         shutdown_status == SALTS_OK
             ? threadpool_wait_status(pool)
             : shutdown_status;
-    if (result == 0 && wait_status != SALTS_OK) result = 1;
+    if (wait_status != SALTS_OK) {
+      fprintf(stderr, "worker drain failed: %d\n", wait_status);
+      result = 1;
+    }
     threadpool_destroy(pool);
     pool = NULL;
   }
-  if (server.impl != NULL && chttp_server_destroy(&server) != SALTS_OK) result = 1;
+  if (server.impl != NULL) {
+    int status = chttp_server_destroy(&server);
+    if (status != SALTS_OK) {
+      fprintf(stderr, "server destroy failed: %d\n", status);
+      result = 1;
+    }
+  }
   for (index = 0u; index < owner_clocks.count; ++index)
     if (chttp_test_thread_cpu_release(&owner_clocks.threads[index]) != SALTS_OK) result = 1;
   for (index = 0u; index < OWNER_CPU_MAX_OWNERS; ++index)
