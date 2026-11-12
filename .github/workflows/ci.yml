@@ -148,6 +148,9 @@ jobs:
     - name: Configure the complete CHttp graph
       run: |
         $options = @('--preset', $env:CI_PRESET)
+        if ('${{ matrix.test }}' -eq 'true') {
+          $options += '-DBUILD_BENCHMARK=ON'
+        }
         if ('${{ matrix.test }}' -eq 'false') {
           $options += @("-DSaltsUtils_IDLC_EXECUTABLE=$env:HOST_SALTS_UTILS_ROOT/bin/salts-idlc",
             "-DSaltsUtils_IDLC_HOST_SALTS_BASE_ROOT=$env:HOST_SALTS_BASE_ROOT",
@@ -199,6 +202,7 @@ jobs:
           build/${{ matrix.preset }}/CMakeCache.txt
           build/${{ matrix.preset }}/ctest.xml
           build/${{ matrix.preset }}/Testing/Temporary
+          build/${{ matrix.preset }}/benchmarks
           build/${{ matrix.preset }}/CMakeFiles/CMakeConfigureLog.yaml
         if-no-files-found: warn
   result:
