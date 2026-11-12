@@ -303,6 +303,9 @@ spec("Application worker Plugin lifetime") {
       check_not_equal(fixture.request_status, SALTS_OK); check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
       check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
       check_not_null(fixture.app.impl); check_equal(fixture.destroyed, 0); check_equal(leases(), 2u);
+      chttp_server_stats stopped = {0};
+      check_equal(chttp_application_stats(&fixture.app, &stopped), SALTS_OK);
+      check_equal(stopped.terminal_status, SALTS_OK);
       check_equal(cmeta_plugin_registry_unload(&fixture.registry, fixture.ref), CMETA_PLUGIN_BUSY);
       sync_mutex_lock(&fixture.mutex); fixture.release = true;
       sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);

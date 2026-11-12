@@ -1,5 +1,18 @@
 # Split SDK migration handoff
 
+- CI 43231727490 LLVM-MinGW failed Session finite-close at
+  application_session_worker_test.c:468: the second 5000-ms close returned
+  ETIMEDOUT while the entire case took about 1028 ms. Original log:
+  `build/ci-43231727490-mingw.log`. Application had a stop-observation race:
+  server_stop can return a caller wait timeout and then Server can publish a
+  normal terminal before the subsequent stats query. Do not latch that caller
+  wait timeout as a permanent shutdown error. Retain ownership and return the
+  timeout; a later explicit close still drains normally. Preserve real nonzero
+  Server terminal/join failures. Session and Plugin finite-close regressions
+  also assert the Server operational terminal is OK after the wait timeout.
+  Complete native build, all eight Application CTests and install pass in
+  `migration-worker-plugin-close-race-{build,ctest,install}.log`.
+
 - Private worker HTTP Plugin mounts now resolve the existing catalog/export at
   mount with the method record's existing registry lease. Plugin-backed RPC
   mounts retain their producer execution context instead of overwriting it with
@@ -13,7 +26,7 @@
   the host. Its business function calls that probe, so thread identity and
   barriers observe actual loaded DSO code, not a host replacement. Set/clear
   the borrowed probe only before start/after joined close. The App Plugin suite
-  passes 10 cases/413 assertions: H1/H2 HTTP/RPC, context preservation, 400/422/
+  passes 10 cases/417 assertions: H1/H2 HTTP/RPC, context preservation, 400/422/
   500, serialization failure/reuse, failed resolution rollback, stopped-provider
   rejection, and real H2 cancellation of held HTTP/RPC with finite-close lease
   and Bean retention. Logs: `migration-worker-plugin-rpc-lifecycle-{build,ctest}.log`.

@@ -508,6 +508,11 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
       chttp_server_stats stats = {0};
       if (chttp_server_get_stats(&app->server, &stats) != SALTS_OK || stats.running || stats.stopping)
         return status;
+      /* Stop may exhaust this caller's budget just before the owner publishes
+       * normal completion. That wait timeout retains ownership for a later
+       * close; it is not an operational terminal to latch across calls. */
+      if (status == SALTS_ETIMEDOUT && stats.terminal_status == SALTS_OK)
+        return status;
       if (app->shutdown_status == SALTS_OK) app->shutdown_status = status;
     }
   }
