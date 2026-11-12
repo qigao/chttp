@@ -24,7 +24,7 @@ typedef struct chttp_rpc_service_method_record {
   const DataBindNativeExecution *execution;
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_lease plugin_lease;
-  chttp_method_chain_hook hooks[CHTTP_METHOD_MAX_HOOKS];
+  chttp_method_hook hooks[CHTTP_METHOD_MAX_HOOKS];
   size_t hook_count;
   chttp_native_json_plans json;
 
@@ -708,7 +708,8 @@ static int chttp_rpc_service_handler_call(
     chttp_rpc_service_call_slot *slot,
     DataBindBindingCallLifetime *lifetime,
     const crpc_server_request_view *request,
-    crpc_server_response *response) {
+    crpc_server_response *response, const chttp_method_hook *hooks,
+    chttp_method_completion_record **out_completion) {
   chttp_rpc_service_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
   DataBindBindingOutcome outcome = DATA_BIND_BINDING_OUTCOME_INIT;
@@ -720,6 +721,7 @@ static int chttp_rpc_service_handler_call(
   int native_status = 0;
   int code = 0;
   int result;
+  chttp_method_completion_record *completion = NULL;
 
   if (record == NULL || slot == NULL || lifetime == NULL ||
       record->owner == NULL ||
@@ -766,8 +768,15 @@ static int chttp_rpc_service_handler_call(
         .input = &record->frame, .rpc_method = request->method, .rpc_id = request->request_id,
         .notification = request->notification != 0, .result = &business};
     chttp_rpc_method_call context = {record, &provider, &diagnostic};
-    const chttp_method_chain chain = {&context, chttp_rpc_method_invoke, record->hooks, record->hook_count};
-    const cmeta_status intercepted = chttp_method_chain_invoke(&chain, &call, &business);
+    result = chttp_method_completion_reserve(chttp_server_rpc_response_completion_sink(response),
+        hooks, record->hook_count, &completion);
+    *out_completion = completion;
+    if (result != SALTS_OK) {
+      crpc_server_request_param_close(&provider_context.param_reader);
+      return result;
+    }
+    const cmeta_status intercepted = chttp_method_invoke(&context, chttp_rpc_method_invoke,
+        hooks, record->hook_count, &call, &business, completion);
     status = business.status; native_status = business.native_status;
     outcome = business.outcome; rejected = business.rejected;
     if (intercepted != CMETA_OK && status == DATA_BIND_OK &&
@@ -847,6 +856,7 @@ static int chttp_rpc_service_handler(
       DATA_BIND_BINDING_CALL_LIFETIME_INIT;
   DataBindBindingPlanDiagnostic cleanup =
       DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+  chttp_method_completion_record *completion = NULL;
   size_t cursor;
   int status;
   if (registered == NULL || registered->owner == NULL)
@@ -877,7 +887,7 @@ static int chttp_rpc_service_handler(
   call.frame.param_bytes = call.param_bytes;
   call.frame.param_count = call.param_count;
   status = chttp_rpc_service_handler_call(
-      &call, slot, &lifetime, request, response);
+      &call, slot, &lifetime, request, response, registered->hooks, &completion);
   /* The response encoder runs synchronously. Restore native objects before
    * returning the leased slot, even on native error or failed egress. */
   if (data_bind_binding_call_is_live(&lifetime)) {
@@ -887,7 +897,7 @@ static int chttp_rpc_service_handler(
       status = SALTS_EPROTO;
   }
   chttp_rpc_service_slot_release(slot);
-  return status;
+  return chttp_method_response_status(completion, status);
 }
 
 static int chttp_rpc_service_plan_supported(

@@ -120,7 +120,7 @@ typedef struct chttp_method_runtime_http_mount {
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_ref plugin_ref;
   const char *plugin_export_id;
-  const chttp_method_chain_hook *hooks;
+  const chttp_method_hook *hooks;
   size_t hook_count;
   DataBind *output_codec; /* Private worker mount only; borrowed during mount. */
 } chttp_method_runtime_http_mount;

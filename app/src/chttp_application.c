@@ -25,6 +25,7 @@ typedef struct application_impl {
   chttp_binding_limits worker_binding_limits;
   chttp_server_rpc_config worker_rpc_config;
   bool worker_rpc_ready;
+  size_t worker_rpc_completion_capacity;
   application_worker_action *worker_actions;
   size_t worker_action_count;
   size_t worker_route_capacity;
@@ -103,14 +104,14 @@ static int application_receiver(application_impl *app, const char *id,
 }
 
 static int application_method_hooks(application_impl *app,
-    const chttp_application_method_interceptor *hooks, size_t count, chttp_method_chain_hook *out) {
+    const chttp_application_method_interceptor *hooks, size_t count, chttp_method_hook *out) {
   if (count > CHTTP_METHOD_MAX_HOOKS || (count && !hooks)) return SALTS_EINVAL;
   for (size_t i = 0u; i < count; ++i) {
-    if (!hooks[i].before && !hooks[i].after && !hooks[i].on_error) return SALTS_EINVAL;
+    if (!hooks[i].before && !hooks[i].after && !hooks[i].on_error && !hooks[i].after_completion) return SALTS_EINVAL;
     void *receiver = NULL;
     const int status = application_receiver(app, hooks[i].component_id, hooks[i].receiver, &receiver);
     if (status != SALTS_OK) return status;
-    out[i] = (chttp_method_chain_hook){receiver, hooks[i].before, hooks[i].after, hooks[i].on_error};
+    out[i] = (chttp_method_hook){receiver, hooks[i].before, hooks[i].after, hooks[i].on_error, hooks[i].after_completion};
   }
   return SALTS_OK;
 }
@@ -176,12 +177,14 @@ static int application_worker_rpc_output(void *user, unsigned int code, const ch
 static int application_worker_rpc_run(void *user, const chttp_server_request_view *request,
     chttp_application_work_reply *reply) {
   application_impl *app = user;
-  return chttp_server_rpc_evaluate(&app->server, request, application_worker_rpc_output, reply);
+  const chttp_method_completion_sink sink = chttp_application_work_method_sink(reply);
+  return chttp_server_rpc_evaluate(&app->server, request, application_worker_rpc_output, reply, &sink);
 }
 static int application_worker_rpc_dispatch(void *user,
     const chttp_server_request_view *request, chttp_server_response *response) {
   application_impl *app = user;
-  const chttp_application_work_task task = {.run = application_worker_rpc_run, .user = app};
+  const chttp_application_work_task task = {.run = application_worker_rpc_run, .user = app,
+      .method_capacity = app->worker_rpc_completion_capacity};
   const int status = chttp_application_work_submit(&app->workers, request, response, &task);
   return chttp_application_work_admission_response(response, status);
 }
@@ -197,7 +200,7 @@ int chttp_application_worker_mount_rpc(chttp_application *owner, const char *com
   void *receiver = NULL;
   int status = application_receiver(app, component_id, data, &receiver);
   if (status != SALTS_OK) return status;
-  chttp_method_chain_hook admitted[CHTTP_METHOD_MAX_HOOKS];
+  chttp_method_hook admitted[CHTTP_METHOD_MAX_HOOKS];
   status = application_method_hooks(app, hooks, hook_count, admitted);
   if (status != SALTS_OK) return status;
   if (!app->worker_rpc_ready) {
@@ -213,7 +216,11 @@ int chttp_application_worker_mount_rpc(chttp_application *owner, const char *com
   const chttp_server_rpc_mount_options mount = {sizeof(mount), method->path, method->plan,
       method->binding, &action->execution, method->plugin_registry, method->plugin_ref, admitted, hook_count, codec};
   status = chttp_server_rpc_mount(&app->server, &mount);
-  if (status == SALTS_OK) ++app->worker_action_count;
+  if (status == SALTS_OK) {
+    ++app->worker_action_count;
+    if (chttp_method_hooks_have_completion(admitted, hook_count))
+      app->worker_rpc_completion_capacity = app->worker_rpc_config.max_batch_items;
+  }
   return status;
 }
 
@@ -238,7 +245,7 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   void *receiver = NULL;
   int status = application_receiver(app, component_id, data, &receiver);
   if (status != SALTS_OK) return status;
-  chttp_method_chain_hook admitted[CHTTP_METHOD_MAX_HOOKS];
+  chttp_method_hook admitted[CHTTP_METHOD_MAX_HOOKS];
   status = application_method_hooks(app, hooks, hook_count, admitted);
   if (status != SALTS_OK) return status;
   if (!app->methods.impl) {

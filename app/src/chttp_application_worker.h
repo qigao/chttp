@@ -17,6 +17,7 @@ typedef struct chttp_application_method_interceptor {
   chttp_method_chain_before_fn before;
   chttp_method_chain_after_fn after;
   chttp_method_chain_error_fn on_error;
+  chttp_method_completion_fn after_completion;
 } chttp_application_method_interceptor;
 
 typedef struct chttp_application_worker_binding {

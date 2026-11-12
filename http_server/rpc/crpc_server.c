@@ -65,6 +65,7 @@ typedef struct crpc_server_response_context {
   bool notification;
   bool completed;
   crpc_encoded_request encoded;
+  const chttp_method_completion_sink *completions;
 } crpc_server_response_context;
 
 typedef struct crpc_server_dispatch_result {
@@ -255,6 +256,7 @@ static bool crpc_server_method_name_valid(const json_value_t *method, size_t max
 static int crpc_server_dispatch_object(crpc_server_impl *server,
                                        const chttp_server_request_view *http_request,
                                        const json_value_t *object, size_t response_body_limit,
+                                       const chttp_method_completion_sink *completions,
                                        crpc_server_dispatch_result *out) {
   json_value_t *version;
   json_value_t *method;
@@ -318,7 +320,8 @@ static int crpc_server_dispatch_object(crpc_server_impl *server,
                                                     .server = server,
                                                     .response_body_limit = response_body_limit,
                                                     .request_id = request_id,
-                                                    .notification = notification};
+                                                    .notification = notification,
+                                                    .completions = completions};
   params_selection = (crpc_server_params_selection_context){
       .magic = CRPC_SERVER_PARAMS_MAGIC,
       .params = params_count == 1u ? params : NULL,
@@ -357,7 +360,8 @@ static int crpc_server_dispatch_object(crpc_server_impl *server,
 
 static int crpc_server_batch(crpc_server_impl *server,
                              const chttp_server_request_view *http_request,
-                             const json_value_t *array, crpc_server_dispatch_result *out) {
+                             const json_value_t *array, const chttp_method_completion_sink *completions,
+                             crpc_server_dispatch_result *out) {
   crpc_encoded_request *responses;
   crpc_server_dispatch_result item_result;
   const size_t item_count = json_array_size(array);
@@ -380,7 +384,7 @@ static int crpc_server_batch(crpc_server_impl *server,
   if (responses == NULL) return SALTS_ENOMEM;
   for (index = 0u; index < item_count; ++index) {
     const int item_status = crpc_server_dispatch_object(
-        server, http_request, json_array_get(array, index), item_response_limit, &item_result);
+        server, http_request, json_array_get(array, index), item_response_limit, completions, &item_result);
     if (item_status != SALTS_OK) {
       if (status == SALTS_OK) status = item_status;
       crpc_encoded_request_destroy(&item_result.encoded);
@@ -412,7 +416,8 @@ static int crpc_server_batch(crpc_server_impl *server,
 }
 
 static int crpc_server_evaluate(crpc_server_impl *server,
-    const chttp_server_request_view *request, chttp_rpc_output_fn write, void *output) {
+    const chttp_server_request_view *request, chttp_rpc_output_fn write, void *output,
+    const chttp_method_completion_sink *completions) {
   crpc_server_dispatch_result result = {0};
   json_value_t *root = NULL;
   int status;
@@ -431,10 +436,10 @@ static int crpc_server_evaluate(crpc_server_impl *server,
       status = crpc_server_protocol_error(server, server->response_body_limit, true, 0u,
                                           CRPC_PARSE_ERROR, "Parse error", &result);
     else if (json_type(root) == JSON_ARRAY)
-      status = crpc_server_batch(server, request, root, &result);
+      status = crpc_server_batch(server, request, root, completions, &result);
     else
       status =
-          crpc_server_dispatch_object(server, request, root, server->response_body_limit, &result);
+          crpc_server_dispatch_object(server, request, root, server->response_body_limit, completions, &result);
   }
   if (status == SALTS_OK)
     status = result.emit ? write(output, 200u, "application/json",
@@ -455,7 +460,7 @@ static int crpc_server_route_handler(void *user, const chttp_server_request_view
   if (!server) return SALTS_EINVAL;
   if (server->dispatch_adapter)
     return server->dispatch_adapter(server->dispatch_user, request, response);
-  return crpc_server_evaluate(server, request, crpc_server_engine_output, response);
+  return crpc_server_evaluate(server, request, crpc_server_engine_output, response, NULL);
 }
 int chttp_server_rpc_set_dispatch_adapter(chttp_server *server,
     chttp_server_handler_fn adapter, void *user) {
@@ -468,10 +473,14 @@ int chttp_server_rpc_set_dispatch_adapter(chttp_server *server,
   return SALTS_OK;
 }
 int chttp_server_rpc_evaluate(chttp_server *server, const chttp_server_request_view *request,
-    chttp_rpc_output_fn write, void *user) {
+    chttp_rpc_output_fn write, void *user, const chttp_method_completion_sink *completions) {
   chttp_server_impl *host = server ? server->impl : NULL;
   if (!host || !host->rpc_owner) return SALTS_EINVAL;
-  return crpc_server_evaluate(host->rpc_owner, request, write, user);
+  return crpc_server_evaluate(host->rpc_owner, request, write, user, completions);
+}
+const chttp_method_completion_sink *chttp_server_rpc_response_completion_sink(const crpc_server_response *response) {
+  const crpc_server_response_context *context = response ? response->impl : NULL;
+  return context && context->magic == CRPC_SERVER_RESPONSE_MAGIC ? context->completions : NULL;
 }
 
 /* Share one bounded registry constructor between legacy CRPC and attached HTTP.

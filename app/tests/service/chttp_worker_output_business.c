@@ -1,13 +1,15 @@
 #include "chttp_worker_output.service_native.h"
 #include "chttp_worker_output_native.h"
 #include "chttp_service_plugin_probe.h"
+#include "chttp_worker_output_support.h"
 #include <string.h>
 
 static int output_text(tstr *slot, uint32_t value) {
   static const char escaped[] = {'a', '"', '\\', '\n', '\0', 'z'};
   char long_text[256];
   memset(long_text, 'x', sizeof(long_text));
-  tstr text = value == 0u ? tstr_new() : value == 2u ? tstr_dup_len(long_text, sizeof(long_text)) :
+  tstr text = value == 4u ? tstr_repeat("x", CHTTP_WORKER_OUTPUT_LARGE_NOTE_BYTES) :
+      value == 0u ? tstr_new() : value == 2u ? tstr_dup_len(long_text, sizeof(long_text)) :
       tstr_dup_len(escaped, sizeof(escaped));
   if (!text) return -1;
   tstr_free(*slot); *slot = text;
