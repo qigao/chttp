@@ -1,3 +1,7 @@
+add_library(chttp_service_plugin_probe SHARED chttp_service_plugin_probe.c)
+set_target_properties(chttp_service_plugin_probe PROPERTIES
+  WINDOWS_EXPORT_ALL_SYMBOLS ON FOLDER "app/tests/service")
+
 salts_idl_target(
   TARGET chttp_service_http_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service.schema"
@@ -25,6 +29,8 @@ salts_idl_target(
 # NATIVE fixture so its exact generated execution descriptor is link-complete.
 target_sources(chttp_service_plugin_fixture_native PRIVATE
   chttp_service_plugin_business.c)
+target_link_libraries(chttp_service_plugin_fixture_native PRIVATE chttp_service_plugin_probe)
+target_link_libraries(chttp_service_plugin_fixture_plugin PRIVATE chttp_service_plugin_probe)
 
 salts_idl_target(
   TARGET chttp_service_cflow_fixture
@@ -94,6 +100,19 @@ target_include_directories(chttp_application_binding_test PRIVATE
 add_dependencies(chttp_application_binding_test chttp_service_cflow_fixture_idl_codegen)
 set_target_properties(chttp_application_binding_test PROPERTIES FOLDER "app/tests")
 add_test(NAME chttp_application_binding_test COMMAND chttp_application_binding_test)
+
+add_executable(chttp_application_plugin_test chttp_application_plugin_test.c)
+target_link_libraries(chttp_application_plugin_test PRIVATE
+  CHttp::App CHttp::Client chttp_service_plugin_fixture_native chttp_service_plugin_probe
+  Salts::TinyTest Salts::JsonParser)
+target_include_directories(chttp_application_plugin_test PRIVATE
+  "${chttp_service_plugin_fixture_GENERATED_DIR}" "${PROJECT_SOURCE_DIR}/app/src")
+target_compile_definitions(chttp_application_plugin_test PRIVATE
+  GENERATED_CHTTP_SERVICE_PLUGIN_PATH="$<TARGET_FILE:chttp_service_plugin_fixture_plugin>")
+add_dependencies(chttp_application_plugin_test chttp_service_plugin_fixture_plugin)
+set_target_properties(chttp_application_plugin_test PROPERTIES FOLDER "app/tests/service")
+add_test(NAME chttp_application_plugin_test COMMAND chttp_application_plugin_test)
+set_tests_properties(chttp_application_plugin_test PROPERTIES TIMEOUT 90)
 
 set_target_properties(chttp_service_generated_cflow_http_test PROPERTIES
   FOLDER "app/tests/service"

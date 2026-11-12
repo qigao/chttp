@@ -465,6 +465,9 @@ spec("Application staged worker Sessions") {
     check_not_equal(first_call.status, SALTS_OK); check_not_equal(first_call.status, SALTS_ETIMEDOUT);
     check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
     check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroyed, 0);
+    chttp_server_stats stopped = {0};
+    check_equal(chttp_application_stats(&fixture.app, &stopped), SALTS_OK);
+    check_equal(stopped.terminal_status, SALTS_OK);
     release(); check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     check_null(fixture.app.impl); check_equal(fixture.destroyed, 1);
   }

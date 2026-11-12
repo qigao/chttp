@@ -1823,7 +1823,8 @@ static int chttp_method_runtime_mount_http_impl(
 
   if (workers && (!workers->impl ||
       (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
-       mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) ||
+       mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW &&
+       mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN) ||
       mount->middleware_count != 0u)) return SALTS_ENOTSUP;
   if (workers && mount->executor) return SALTS_EINVAL;
   plugin_mode =
@@ -1837,8 +1838,7 @@ static int chttp_method_runtime_mount_http_impl(
   if (plugin_mode) {
     if (mount->native_binding != NULL || mount->execution != NULL ||
         mount->cflow_projection != NULL ||
-        mount->executor == NULL ||
-        !cflow_executor_valid(mount->executor) ||
+        (!workers && (mount->executor == NULL || !cflow_executor_valid(mount->executor))) ||
         mount->plugin_registry == NULL ||
         !cmeta_plugin_ref_valid(mount->plugin_ref) ||
         mount->plugin_export_id == NULL ||

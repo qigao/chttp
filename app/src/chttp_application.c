@@ -178,7 +178,8 @@ int chttp_application_worker_mount_rpc(chttp_application *owner, const char *com
   application_impl *app = owner ? owner->impl : NULL;
   if (!app || !method || !method->execution || !app->workers.impl) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
-  if (method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref)) return SALTS_ENOTSUP;
+  if ((method->plugin_registry == NULL) != !cmeta_plugin_ref_valid(method->plugin_ref))
+    return SALTS_EINVAL;
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
   int status = application_receiver(app, component_id, data, &receiver);
@@ -191,9 +192,10 @@ int chttp_application_worker_mount_rpc(chttp_application *owner, const char *com
     app->worker_rpc_ready = true;
   }
   application_worker_action *action = &app->worker_actions[app->worker_action_count];
-  action->execution = *method->execution; action->execution.context = receiver;
+  action->execution = *method->execution;
+  if (!method->plugin_registry) action->execution.context = receiver;
   const chttp_server_rpc_mount_options mount = {sizeof(mount), method->path, method->plan,
-      method->binding, &action->execution, NULL, {0}};
+      method->binding, &action->execution, method->plugin_registry, method->plugin_ref};
   status = chttp_server_rpc_mount(&app->server, &mount);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
@@ -205,10 +207,16 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   if (!app || !method || !app->workers.impl) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
   const bool flow = method->dispatch == CHTTP_DISPATCH_CFLOW;
-  if ((!flow && method->dispatch != CHTTP_DISPATCH_INLINE) || method->executor ||
-      (flow ? (!method->projection || method->execution) : (!method->execution || method->projection)) ||
-      method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref) ||
-      method->plugin_export_id) return SALTS_ENOTSUP;
+  const bool plugin = method->dispatch == CHTTP_DISPATCH_PLUGIN;
+  if ((!flow && !plugin && method->dispatch != CHTTP_DISPATCH_INLINE) || method->executor)
+    return SALTS_ENOTSUP;
+  if (plugin) {
+    if (method->binding || method->execution || method->projection || !method->plugin_registry ||
+        !cmeta_plugin_ref_valid(method->plugin_ref) || !method->plugin_export_id ||
+        !method->plugin_export_id[0]) return SALTS_EINVAL;
+  } else if ((flow ? (!method->projection || method->execution) : (!method->execution || method->projection)) ||
+      method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref) || method->plugin_export_id)
+    return SALTS_ENOTSUP;
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
   int status = application_receiver(app, component_id, data, &receiver);
@@ -225,7 +233,11 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   application_worker_action *action = &app->worker_actions[app->worker_action_count];
   chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
   mount.method_plan = method->plan; mount.native_binding = method->binding;
-  if (flow) {
+  if (plugin) {
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
+    mount.plugin_registry = method->plugin_registry; mount.plugin_ref = method->plugin_ref;
+    mount.plugin_export_id = method->plugin_export_id;
+  } else if (flow) {
     mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW;
     mount.cflow_projection = method->projection;
   } else {
@@ -495,6 +507,11 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
     if (status != SALTS_OK) {
       chttp_server_stats stats = {0};
       if (chttp_server_get_stats(&app->server, &stats) != SALTS_OK || stats.running || stats.stopping)
+        return status;
+      /* Stop may exhaust this caller's budget just before the owner publishes
+       * normal completion. That wait timeout retains ownership for a later
+       * close; it is not an operational terminal to latch across calls. */
+      if (status == SALTS_ETIMEDOUT && stats.terminal_status == SALTS_OK)
         return status;
       if (app->shutdown_status == SALTS_OK) app->shutdown_status = status;
     }
