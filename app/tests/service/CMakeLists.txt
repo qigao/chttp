@@ -94,10 +94,13 @@ add_test(NAME chttp_service_generated_cflow_http_test
 
 add_executable(chttp_application_binding_test ../application_binding_test.c)
 target_link_libraries(chttp_application_binding_test PRIVATE
-  CHttp::App CHttp::Client chttp_service_cflow_fixture_native Salts::TinyTest Salts::JsonParser)
+  CHttp::App CHttp::Client chttp_service_cflow_fixture_native chttp_service_cflow_unsupported_fixture_native
+  Salts::TinyTest Salts::JsonParser)
 target_include_directories(chttp_application_binding_test PRIVATE
-  "${chttp_service_cflow_fixture_GENERATED_DIR}" "${PROJECT_SOURCE_DIR}/app/src")
-add_dependencies(chttp_application_binding_test chttp_service_cflow_fixture_idl_codegen)
+  "${chttp_service_cflow_fixture_GENERATED_DIR}" "${chttp_service_cflow_unsupported_fixture_GENERATED_DIR}"
+  "${PROJECT_SOURCE_DIR}/app/src")
+add_dependencies(chttp_application_binding_test
+  chttp_service_cflow_fixture_idl_codegen chttp_service_cflow_unsupported_fixture_idl_codegen)
 set_target_properties(chttp_application_binding_test PROPERTIES FOLDER "app/tests")
 add_test(NAME chttp_application_binding_test COMMAND chttp_application_binding_test)
 

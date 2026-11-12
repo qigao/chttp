@@ -126,8 +126,11 @@ nested scheduling. Owned Plan output remains live through serialization, then
 is destroyed before the input frame. Plugin HTTP mounts resolve catalog/native
 execution under an existing mount-owned lease; Plugin RPC retains the producer's
 execution context and its own mount lease. Both execute on the same pool and
-keep provider code pinned through joined close. Generated business hook outcome
-mapping still needs migration.
+keep provider code pinned through joined close. Private generated-method
+before/after/on_error hooks now surround bound native/Plan execution and outcome
+staging on that same pool, with canonical ACE hook receivers and bounded copied
+metadata. Native status, staging failure and explicit rejection remain distinct.
+Per-method native completion observation still needs migration.
 
 Private generated RPC mounts use the same pool for the complete HTTP envelope.
 The Server registry exposes a private scheduler-neutral evaluator/output boundary;
@@ -136,7 +139,8 @@ sequential method dispatch, protocol errors and notification suppression remain
 shared with the engine path. Pure notification batches preserve an empty 204
 without adding a Content-Type header. Server registry/frame pools and ACE receivers
 remain live until the worker invocation drains, including after an H2 handler
-deadline. Per-RPC-method business hooks are still pending.
+deadline. Per-RPC-method business hooks have independent bound frames and unwind
+within each sequential call, including notifications and rejection.
 
 Private buffered worker bindings now also support detached, bounded Session
 snapshots and owner-side intent commits. Same-Session calls wait in the existing
@@ -159,8 +163,8 @@ and canceled running native methods. The Server suite
 covers the zero-error reset. `chttp_application_plugin_test` exercises real DSO
 HTTP/RPC worker execution, provider context, lease rollback, stopped-provider
 admission, output failure/reuse and canceled running methods with finite close.
-Public Session/admission integration, stream/WS adaptation, generated per-method
-hook integration and the public Invocation migration remain required
+Public Session/admission integration, stream/WS adaptation, structured DTO/error
+output, per-method completion observation and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives
@@ -299,6 +303,39 @@ and lease until the producer's real terminal/finalizer. There is one business
 completion authority even when an external producer participates.
 
 ### Interceptors, RPC and terminal outcomes
+
+The private generated-method business slice uses one scheduler-neutral ACE
+chain shared by HTTP and RPC. Application resolves every hook context from its
+canonical ACE graph and mounts a copied array of at most 16 hooks. Only the
+worker composition admits these hooks; engine mounts cannot silently execute
+them on an owner. After successful input binding, before hooks enter forward;
+native/Plan execution and DataBind outcome staging form the target; successful
+after hooks or entered on_error hooks unwind in reverse before provider/native
+cleanup. Borrowed HTTP snapshots, canonical operation metadata, bound input and
+staged output views live only through that call. The request copy clears its
+mutable Session handle; a separate const Session view permits reads only.
+Method hooks may observe DTOs/results but cannot mutate frames or Session state;
+Session writes belong to the enclosing request transaction, not a batch item.
+CFlow's owned output stays live
+through unwinding. No hook can retain a frame or overwrite a published response.
+
+An explicit before rejection skips the target and maps to HTTP 403 or JSON-RPC
+-32003 (Forbidden); a notification still emits no item. A malformed hook/failed
+callback maps to the existing internal-error path. Native status, typed business
+error and binding/serialization failure enter on_error with separate DataBind
+status/outcome facts; transport cancellation never reruns business on_error.
+The existing phase-1 HTTP/RPC writers still admit scalar output only. A
+structured typed-error payload therefore remains a staging failure (HTTP 500 /
+RPC -32603, DataBind outcome NONE); on_error can inspect the still-live native
+error frame. No mapped typed-error response is claimed after failed staging.
+Bounded structured DTO/error FormatPlan output remains a separate migration
+requirement before the public replacement.
+Ingress failures have no entered method chain. RPC invokes a fresh chain for
+each bound batch item, preserving sequential order, method identity and
+notification/error suppression. No second task is posted. Hooks remain borrowed
+from the live graph through drain. This private slice has no per-method native
+completion observer yet; retaining bounded per-item outcomes for the enclosing
+HTTP terminal remains part of the later public Invocation migration.
 
 Use distinct stages with immutable, explicit outcomes:
 

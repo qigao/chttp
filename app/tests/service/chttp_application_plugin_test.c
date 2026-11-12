@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "tinytest.h"
 
 typedef struct PluginController { int marker; } PluginController;
@@ -44,6 +45,8 @@ static struct {
   sync_thread_t thread;
   int entries, wrong_thread, wrong_context, destroyed, request_status;
   unsigned int response_status;
+  chttp_application_method_interceptor hook;
+  _Atomic int hook_after, hook_errors, hook_invalid;
 } fixture;
 
 static void destroy(void *user, void *object) {
@@ -83,6 +86,26 @@ static bool DATA_BIND_NATIVE_CALL rpc_invoke(void *context, void *result,
     return false;
   }
   return fixture.provider_execution.invoke(fixture.provider_execution.context, result, params, count);
+}
+static cmeta_status method_before(void *self, const chttp_method_call *call, bool *proceed) {
+  (void)proceed;
+  if (!self || ((PluginController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+      !call->http || call->http->session || !call->input || !cmeta_function_desc_valid(call->operation)) {
+    atomic_fetch_add(&fixture.hook_invalid, 1); return CMETA_TYPE_MISMATCH;
+  }
+  return CMETA_OK;
+}
+static void method_after(void *self, const chttp_method_call *call, const chttp_method_result *result) {
+  (void)self; (void)call;
+  if (!chttp_application_worker_current(&fixture.app) || !result->output || !result->invoked ||
+      result->outcome.kind != DATA_BIND_BINDING_OUTCOME_SUCCESS) atomic_fetch_add(&fixture.hook_invalid, 1);
+  atomic_fetch_add(&fixture.hook_after, 1);
+}
+static void method_error(void *self, const chttp_method_call *call, cmeta_status status) {
+  (void)self;
+  if (!chttp_application_worker_current(&fixture.app) || status == CMETA_OK || !call->result->invoked)
+    atomic_fetch_add(&fixture.hook_invalid, 1);
+  atomic_fetch_add(&fixture.hook_errors, 1);
 }
 static size_t leases(void) {
   cmeta_plugin_lifecycle_info info = {0};
@@ -133,12 +156,12 @@ static void prepare(void) {
 }
 static int mount_http(void) {
   return chttp_application_worker_mount_http(&fixture.app, "PluginComponent",
-      cmeta_reflected_data(PluginController), &fixture.http);
+      cmeta_reflected_data(PluginController), &fixture.http, &fixture.hook, 1u);
 }
 static void start(void) {
   check_equal(mount_http(), SALTS_OK);
   check_equal(chttp_application_worker_mount_rpc(&fixture.app, "PluginComponent",
-      cmeta_reflected_data(PluginController), &fixture.rpc), SALTS_OK);
+      cmeta_reflected_data(PluginController), &fixture.rpc, &fixture.hook, 1u), SALTS_OK);
   check_equal(cmeta_plugin_registry_release(&fixture.registry, &fixture.discovery), CMETA_PLUGIN_OK);
   check_equal(leases(), 2u);
   check_equal(chttp_application_start(&fixture.app), SALTS_OK);
@@ -164,6 +187,7 @@ static void wait_for_entry(void) {
 spec("Application worker Plugin lifetime") {
   before_each() {
     memset(&fixture, 0, sizeof(fixture));
+    atomic_init(&fixture.hook_after, 0); atomic_init(&fixture.hook_errors, 0); atomic_init(&fixture.hook_invalid, 0);
     sync_mutex_init(&fixture.mutex); sync_cond_init(&fixture.changed);
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
@@ -212,6 +236,8 @@ spec("Application worker Plugin lifetime") {
     fixture.deployment = (salts_configurator_deployment){&fixture.provider, NULL, NULL};
     fixture.controller = (chttp_controller){.component_id = "PluginComponent",
         .receiver = cmeta_reflected_data(PluginController)};
+    fixture.hook = (chttp_application_method_interceptor){"PluginComponent",
+        cmeta_reflected_data(PluginController), method_before, method_after, method_error};
     fixture.config = chttp_application_config_default();
     fixture.config.bindings.method_capacity = 1u; fixture.config.rpc.method_capacity = 1u;
     fixture.config.components = &fixture.deployment; fixture.config.component_count = 1u;
@@ -229,6 +255,7 @@ spec("Application worker Plugin lifetime") {
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     chttp_service_plugin_probe_set(NULL, NULL);
     check_equal(fixture.wrong_thread, 0); check_equal(fixture.wrong_context, 0);
+    check_equal(atomic_load(&fixture.hook_invalid), 0);
     if (cmeta_plugin_lease_valid(fixture.discovery))
       check_equal(cmeta_plugin_registry_release(&fixture.registry, &fixture.discovery), CMETA_PLUGIN_OK);
     data_bind_rpc_method_plan_free(fixture.rpc_plan);
@@ -256,6 +283,7 @@ spec("Application worker Plugin lifetime") {
       check_equal(rpc_request(), SALTS_OK);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
       check_equal(fixture.entries, 2); check_equal(fixture.destroyed, 1); check_equal(leases(), 0u);
+      check_equal(atomic_load(&fixture.hook_after), 2); check_equal(atomic_load(&fixture.hook_errors), 0);
     }
     it("releases Plugin output after serialization failure for protocol %d", protocol) {
       fixture.protocol = (chttp_protocol)protocol; fixture.config.bindings.max_response_body_bytes = 1u;
@@ -273,6 +301,7 @@ spec("Application worker Plugin lifetime") {
       check_equal(request("/plugin/3?right=4", &code), SALTS_OK); check_equal(code, 500u);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
       check_equal(fixture.entries, 1); check_equal(leases(), 0u);
+      check_equal(atomic_load(&fixture.hook_after), 0); check_equal(atomic_load(&fixture.hook_errors), 1);
     }
   }
   it("rolls back a failed catalog resolution before publishing the route") {
@@ -288,7 +317,7 @@ spec("Application worker Plugin lifetime") {
     prepare(); stop_provider();
     check_equal(mount_http(), SALTS_EINVAL);
     check_equal(chttp_application_worker_mount_rpc(&fixture.app, "PluginComponent",
-        cmeta_reflected_data(PluginController), &fixture.rpc), SALTS_EBUSY);
+        cmeta_reflected_data(PluginController), &fixture.rpc, NULL, 0u), SALTS_EBUSY);
     check_equal(leases(), 1u); check_equal(fixture.entries, 0);
   }
   for (int rpc = 0; rpc <= 1; ++rpc) {
@@ -301,6 +330,7 @@ spec("Application worker Plugin lifetime") {
       wait_for_entry(); stop_provider();
       check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
       check_not_equal(fixture.request_status, SALTS_OK); check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
+      check_equal(atomic_load(&fixture.hook_after), 0); check_equal(atomic_load(&fixture.hook_errors), 0);
       check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
       check_not_null(fixture.app.impl); check_equal(fixture.destroyed, 0); check_equal(leases(), 2u);
       chttp_server_stats stopped = {0};
@@ -311,6 +341,7 @@ spec("Application worker Plugin lifetime") {
       sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
       check_equal(fixture.entries, 1); check_equal(fixture.destroyed, 1); check_equal(leases(), 0u);
+      check_equal(atomic_load(&fixture.hook_after), 1); check_equal(atomic_load(&fixture.hook_errors), 0);
     }
   }
 }

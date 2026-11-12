@@ -1,5 +1,38 @@
 # Split SDK migration handoff
 
+- Private generated HTTP/RPC method hooks now reuse one scheduler-neutral ACE
+  chain. Application resolves canonical Bean contexts before publication and
+  copies at most 16 rows into immutable method records. Bind first; enter before
+  hooks forward, execute native/Plan + DataBind outcome staging, then unwind
+  after/on_error backward before native/provider cleanup. CFlow output remains
+  live through unwinding. Call frames and HTTP/const Session views are borrowed
+  read-only; the request copy exposes no mutable Session handle. Session writes
+  remain with the enclosing request transaction. No reflection lookup, scheduler
+  hop or per-call hook allocation is introduced. Old engine paths reject hook
+  mounts unless an explicit composition adapter owns execution.
+- Explicit rejection maps to HTTP 403 / RPC -32003 and skips the method. Unknown
+  methods/invalid ingress enter no method hooks; notifications execute hooks
+  while suppressing response items. Native status, invocation/staging failure
+  and rejection have separate facts. Timeout does not unwind a still-running
+  method; business success after wire cancellation still unwinds success once.
+  Per-method response-terminal observers remain for the public Invocation work.
+- The new throws-Fault regression exposed the existing phase-1 scalar writer
+  boundary: structured typed-error staging fails (HTTP 500 / RPC -32603) and
+  DataBind outcome stays NONE. Preserve that failure and the live error frame;
+  do not claim mapped 409/-32077 after failed serialization or invent success.
+  Bounded structured DTO/error FormatPlan output is a separate remaining slice.
+- Native complete graph, CTest 118/118 and install pass in
+  `migration-worker-method-hooks-{final-build,full-ctest,install}.log`. The initial
+  focused run also recorded the open #290 H1 asset close timeout at
+  application_test.c:453 (close ETIMEDOUT, pre-close active=1, terminal=OK):
+  `migration-worker-method-hooks-regression-ctest.log`. The test now prints
+  post-close ownership/running/stopping/active/terminal on failure. This feature
+  does not fix #290; later green results do not establish its cause/resolution.
+  Final status-propagation correction also passes full build, all eight
+  Application CTests and install in
+  `migration-worker-method-hooks-status-{build,ctest,install}.log` (binding
+  suite 44 cases/894 assertions; real Plugin suite 10 cases/443 assertions).
+
 - CI 43231727490 LLVM-MinGW failed Session finite-close at
   application_session_worker_test.c:468: the second 5000-ms close returned
   ETIMEDOUT while the entire case took about 1028 ms. Original log:

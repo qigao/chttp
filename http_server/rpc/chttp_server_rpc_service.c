@@ -23,6 +23,8 @@ typedef struct chttp_rpc_service_method_record {
   const DataBindNativeExecution *execution;
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_lease plugin_lease;
+  chttp_method_chain_hook hooks[CHTTP_METHOD_MAX_HOOKS];
+  size_t hook_count;
 
   unsigned char *request_storage;
   size_t request_bytes;
@@ -644,6 +646,24 @@ static cserde_status chttp_rpc_service_encode_native_status(
                            .value.sint = (int64_t)*status});
 }
 
+typedef struct chttp_rpc_method_call {
+  chttp_rpc_service_method_record *record;
+  DataBindBindingProvider *provider;
+  DataBindBindingPlanDiagnostic *diagnostic;
+} chttp_rpc_method_call;
+static cmeta_status chttp_rpc_method_invoke(void *user, const chttp_method_call *call,
+    chttp_method_result *result) {
+  chttp_rpc_method_call *context = user;
+  chttp_rpc_service_method_record *record = context->record;
+  if (result->rejected) return CMETA_CALLBACK_ERROR;
+  result->invoked = true; result->output = call->input;
+  if (!record->execution->invoke(record->execution->context, &result->native_status,
+          record->params, record->param_count)) result->status = DATA_BIND_ERR_RUNTIME;
+  if (result->status == DATA_BIND_OK)
+    result->status = data_bind_binding_plan_write_outcome(record->binding, context->provider,
+        &record->frame, result->native_status, &result->outcome, context->diagnostic);
+  return chttp_method_result_status(result);
+}
 static int chttp_rpc_service_handler_call(
     chttp_rpc_service_method_record *record,
     chttp_rpc_service_call_slot *slot,
@@ -695,18 +715,31 @@ static int chttp_rpc_service_handler_call(
       &record->frame, lifetime, &diagnostic);
   ingress_failed = (status != DATA_BIND_OK);
 
-  if (status == DATA_BIND_OK &&
-      !record->execution->invoke(
-          record->execution->context, &native_status,
-          record->params, record->param_count))
-    status = DATA_BIND_ERR_RUNTIME;
-
-  if (status == DATA_BIND_OK)
-    status = data_bind_binding_plan_write_outcome(
-        record->binding, &provider, &record->frame, native_status,
-        &outcome, &diagnostic);
+  bool rejected = false;
+  if (status == DATA_BIND_OK) {
+    chttp_method_result business = CHTTP_METHOD_RESULT_INIT;
+    chttp_server_request_view hook_request = request->http ? *request->http : (chttp_server_request_view){0};
+    hook_request.session = NULL;
+    const chttp_method_call call = {.http = request->http ? &hook_request : NULL,
+        .session = request->http ? request->http->session : NULL, .operation = record->execution->function,
+        .input = &record->frame, .rpc_method = request->method, .rpc_id = request->request_id,
+        .notification = request->notification != 0, .result = &business};
+    chttp_rpc_method_call context = {record, &provider, &diagnostic};
+    const chttp_method_chain chain = {&context, chttp_rpc_method_invoke, record->hooks, record->hook_count};
+    const cmeta_status intercepted = chttp_method_chain_invoke(&chain, &call, &business);
+    status = business.status; native_status = business.native_status;
+    outcome = business.outcome; rejected = business.rejected;
+    if (intercepted != CMETA_OK && status == DATA_BIND_OK &&
+        outcome.kind == DATA_BIND_BINDING_OUTCOME_NONE)
+      status = DATA_BIND_ERR_RUNTIME;
+  }
 
   crpc_server_request_param_close(&provider_context.param_reader);
+
+  if (rejected) {
+    chttp_rpc_service_release_token_storage(&provider_context);
+    return crpc_server_response_error(response, -32003, "Forbidden", NULL, NULL);
+  }
 
   if (status != DATA_BIND_OK) {
     chttp_rpc_service_release_token_storage(&provider_context);
@@ -940,6 +973,7 @@ int chttp_server_rpc_generated_mount(
   if ((mount->plugin_registry == NULL) !=
       !cmeta_plugin_ref_valid(mount->plugin_ref))
     return SALTS_EINVAL;
+  if (!chttp_method_hooks_valid(mount->hooks, mount->hook_count)) return SALTS_EINVAL;
   if (!chttp_rpc_service_plan_supported(mount->method_plan))
     return SALTS_ENOTSUP;
 
@@ -975,6 +1009,8 @@ int chttp_server_rpc_generated_mount(
       .error_bytes = error_bytes,
       .param_count = param_count,
       .frame = (DataBindBindingCallFrame)DATA_BIND_BINDING_CALL_FRAME_INIT};
+  record->hook_count = mount->hook_count;
+  if (mount->hook_count) memcpy(record->hooks, mount->hooks, mount->hook_count * sizeof(*mount->hooks));
 
   if (mount->plugin_registry != NULL) {
     const cmeta_plugin_manifest *manifest = NULL;
