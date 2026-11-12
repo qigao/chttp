@@ -45,6 +45,7 @@ static struct {
   sync_mutex_t worker_mutex;
   sync_cond_t worker_changed;
   int hold_worker_completion, worker_completion_entered, release_worker_completion;
+  int hold_worker_method, worker_method_entered;
   int destruction[4], trace[32];
   size_t trace_count;
 } fixture;
@@ -107,6 +108,12 @@ static int worker_hello(void *self, const chttp_server_request_view *request,
   fixture.worker_method = chttp_application_worker_current(&fixture.app);
   fixture.worker_close_status = chttp_application_close(&fixture.app, 1u);
   fixture.destroyed_during_work = fixture.destroys;
+  sync_mutex_lock(&fixture.worker_mutex);
+  fixture.worker_method_entered = 1;
+  sync_cond_broadcast(&fixture.worker_changed);
+  while (fixture.hold_worker_method && !fixture.release_worker_completion)
+    sync_cond_wait(&fixture.worker_changed, &fixture.worker_mutex);
+  sync_mutex_unlock(&fixture.worker_mutex);
   char value[32];
   const int size = snprintf(value, sizeof(value), "%d", TestCounter_value(&controller->counter));
   return size < 0 || (size_t)size >= sizeof(value) ? SALTS_ERANGE :
@@ -520,6 +527,39 @@ spec("Reflected HTTP Application") {
     }
   }
 
+  it("keeps Server storage alive while a timed-out worker still owns its deferred handle") {
+    fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
+    fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+    fixture.config.deadlines.handler_ms = 100u;
+    fixture.hold_worker_method = 1;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
+    check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
+    const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
+        .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
+        .path = "/hello", .invoke = worker_hello, .after_completion = worker_completed};
+    check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
+    check_equal(chttp_application_start(&fixture.app), SALTS_OK);
+    uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
+    char uri[64]; snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
+    const chttp_options options = {.connection_uri = uri, .authority = "worker.test",
+        .target = "/hello", .protocol = CHTTP_HTTP_2, .timeout_ms = 5000u};
+    chttp_response response = {0}; chttp_error error = {0};
+    const int status = chttp_get(&fixture.client, &options, &response, &error);
+    chttp_response_destroy(&response);
+    check_not_equal(status, SALTS_OK); check_not_equal(status, SALTS_ETIMEDOUT);
+    sync_mutex_lock(&fixture.worker_mutex);
+    const int entered = fixture.worker_method_entered;
+    sync_mutex_unlock(&fixture.worker_mutex);
+    check_equal(entered, 1);
+    check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
+    check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroys, 0);
+    sync_mutex_lock(&fixture.worker_mutex); fixture.release_worker_completion = 1;
+    sync_cond_broadcast(&fixture.worker_changed); sync_mutex_unlock(&fixture.worker_mutex);
+    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    check_null(fixture.app.impl); check_equal(fixture.destroys, 4);
+    check_equal(fixture.worker_service, 1);
+  }
   it("retains the ACE graph when worker notification makes close exceed its budget") {
     fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
     fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;

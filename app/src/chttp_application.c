@@ -409,14 +409,6 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
         return status;
       if (app->shutdown_status == SALTS_OK) app->shutdown_status = status;
     }
-    /* Accepted DTO task finalizers still borrow Beans after response terminal. */
-    while ((status = chttp_method_runtime_quiescent(&app->methods)) == SALTS_EBUSY) {
-      if (timeout_ms != 0u && monotonic_ms() - started >= timeout_ms) return SALTS_ETIMEDOUT;
-      sleep_ms(1u);
-    }
-    if (status != SALTS_OK) return status;
-    status = chttp_server_destroy(&app->server);
-    if (status != SALTS_OK) return status;
   }
   if (app->workers.impl) {
     const uint64_t elapsed = monotonic_ms() - started;
@@ -427,6 +419,16 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
       if (app->workers.impl) return status;
       if (app->shutdown_status == SALTS_OK) app->shutdown_status = status;
     }
+  }
+  if (app->server.impl != NULL) {
+    /* Accepted DTO task finalizers still borrow Beans after response terminal. */
+    while ((status = chttp_method_runtime_quiescent(&app->methods)) == SALTS_EBUSY) {
+      if (timeout_ms != 0u && monotonic_ms() - started >= timeout_ms) return SALTS_ETIMEDOUT;
+      sleep_ms(1u);
+    }
+    if (status != SALTS_OK) return status;
+    status = chttp_server_destroy(&app->server);
+    if (status != SALTS_OK) return status;
   }
   status = chttp_method_runtime_destroy(&app->methods);
   if (status != SALTS_OK) return status;

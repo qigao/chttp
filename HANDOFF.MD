@@ -1,5 +1,13 @@
 # Split SDK migration handoff
 
+- Application shutdown must drain its owned workers before destroying Server
+  storage. A handler deadline/reset can settle transport while a running method
+  still holds a deferred handle whose target lives in Server storage. Stop the
+  Server, join workers/observers with the remaining budget, then destroy DTO and
+  Server state, and finally release the ACE graph. A held H2 method after its
+  real handler deadline tests finite-close retention and safe late publication:
+  `migration-application-worker-server-lifetime-{build,ctest}.log`.
+
 - H2 TLS client test peer must not close after flushing a new native send from
   a preceding send callback. `proto_want_write == false` only means the encoder
   was drained; require `send_active == false` before closing. Otherwise response
