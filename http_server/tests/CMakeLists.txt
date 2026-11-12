@@ -202,3 +202,15 @@ set_target_properties(chttp_rate_limit_test PROPERTIES FOLDER "http_server/tests
 
 # Generated RPC is a native Server/Client conformance fixture.
 add_subdirectory(rpc_generated)
+
+# Independent TLS provider interoperability belongs to the Server protocol owner.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_program(CHTTP_TEST_OPENSSL NAMES openssl REQUIRED)
+add_executable(chttp_tls_openssl_server chttp_tls_openssl_server.c)
+target_link_libraries(chttp_tls_openssl_server PRIVATE CHttp::Server)
+target_include_directories(chttp_tls_openssl_server PRIVATE ${PROJECT_SOURCE_DIR}/http_server/src)
+set_target_properties(chttp_tls_openssl_server PROPERTIES FOLDER "http_server/tests")
+add_test(NAME chttp_tls_openssl_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/verify_tls_openssl.py
+  $<TARGET_FILE:chttp_tls_openssl_server> ${CHTTP_TEST_OPENSSL})
+set_tests_properties(chttp_tls_openssl_test PROPERTIES TIMEOUT 180)

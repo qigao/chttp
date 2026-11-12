@@ -702,3 +702,29 @@ cmake --build --preset win-release-user --target crpc_server_example
 
 按程序输出的端口访问 `/file` 或发送 Range / If-None-Match。文件内容和路径绑定必须在传输期间
 保持不变。默认元数据 ETag 是弱标签；需要 `If-Range` 时由应用提供可靠的强 ETag。
+
+## Independent TLS interoperability tests
+
+Native `BUILD_TESTS` requires Python and an independent OpenSSL 3.x command-line
+tool (`openssl` on PATH, or the CMake-discovered `CHTTP_TEST_OPENSSL` executable).
+The existing native CI selects the runner's OpenSSL tool explicitly; no OpenSSL
+library is added to CHttp. Published CNet/Crypto remains the product TLS provider.
+
+`chttp_tls_openssl_test` is a module-owned CTest using an internal Server fixture
+and fresh ephemeral ECDSA credentials. It checks TLS 1.3 P-256 and X25519-first
+HelloRetryRequest, each with/without outbound dummy CCS, using actual OpenSSL
+handshake message records. It verifies CA/hostname and mandatory client auth,
+checks the CNet-verified leaf fingerprint against an application pin, rejects
+missing/incorrect-CA/incorrect-EKU certificates before HTTP, and rejects a trusted
+but unpinned certificate despite a forged `X-Forwarded-Client-Cert` header.
+A final authorized request checks listener reuse after those rejections.
+
+Run through the configured user preset:
+
+```sh
+ctest --preset native-release-user --output-on-failure -R chttp_tls_openssl_test
+```
+
+This qualifies the HTTP/1.1 TLS engine against an independent client. It does not
+establish H2/mTLS deployment, real downstream application behavior, Android device
+execution or a production release. The fixture's registration API remains private.

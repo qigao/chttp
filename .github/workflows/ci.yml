@@ -145,9 +145,27 @@ jobs:
       run: |
         python -m pip install -r openapi/tests/requirements-conformance.txt
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Select independent OpenSSL 3 test tool
+      if: matrix.test
+      run: |
+        if ($IsWindows) {
+          $openssl = Join-Path $env:ProgramFiles 'Git/usr/bin/openssl.exe'
+        } elseif ($IsMacOS) {
+          $prefix = brew --prefix openssl@3
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $openssl = Join-Path $prefix 'bin/openssl'
+        } else {
+          $openssl = (Get-Command openssl -CommandType Application -TotalCount 1 -ErrorAction Stop).Source
+        }
+        & $openssl version
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        "CHTTP_TEST_OPENSSL=$openssl" >> $env:GITHUB_ENV
     - name: Configure the complete CHttp graph
       run: |
         $options = @('--preset', $env:CI_PRESET)
+        if ('${{ matrix.test }}' -eq 'true') {
+          $options += "-DCHTTP_TEST_OPENSSL=$env:CHTTP_TEST_OPENSSL"
+        }
         if ('${{ matrix.test }}' -eq 'false') {
           $options += @("-DSaltsUtils_IDLC_EXECUTABLE=$env:HOST_SALTS_UTILS_ROOT/bin/salts-idlc",
             "-DSaltsUtils_IDLC_HOST_SALTS_BASE_ROOT=$env:HOST_SALTS_BASE_ROOT",
