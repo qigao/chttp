@@ -134,8 +134,11 @@ for explicit cleanup. A zero close timeout waits without a deadline; a finite
 timeout retains a live owner when work remains. Close stops ingress, drains
 real I/O and DTO task finalizers, destroys protocol storage, then releases the
 ACE graph. User provider stop/destruction callbacks must terminate themselves;
-the framework cannot preempt them. Metadata and policy objects remain borrowed
-until close settles.
+the framework cannot preempt them. Metadata remains borrowed until close settles.
+Application copies Security, CORS and asset policy structures during init, so a
+configuration builder may reuse those structures after returning. Their referenced
+strings, origin arrays, callback code and contexts remain borrowed and immutable
+until close settles. JWT validators and admission contexts also remain borrowed.
 
 C++17 `chttp::Application` is noncopyable/nonmovable and closes on destruction.
 Call `close()` explicitly to handle errors; an unhandled destructor cleanup

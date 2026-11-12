@@ -30,6 +30,10 @@ static struct {
   chttp_interceptor hooks[2];
   chttp_web_asset_mount assets;
   chttp_web_security_policy security;
+  chttp_server_cors_options cors;
+  chttp_header request_headers[1];
+  size_t request_header_count;
+  const char *expected_origin;
   char *asset_root;
   bool reject_assets;
   size_t response_size;
@@ -169,6 +173,7 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
   const bool upload = strcmp(target, "/upload") == 0;
   const chttp_options options = {.connection_uri = uri, .authority = "application.test",
       .target = target, .protocol = protocol, .timeout_ms = 5000u,
+      .headers = fixture.request_headers, .header_count = fixture.request_header_count,
       .body = upload ? "abc" : NULL, .body_size = upload ? 3u : 0u};
   status = upload ? chttp_post(&fixture.client, &options, &response, &error) :
       chttp_get(&fixture.client, &options, &response, &error);
@@ -177,6 +182,12 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
   if (status == SALTS_OK && fixture.config.security != NULL) {
     const char *value = chttp_response_header(&response, "X-Content-Type-Options");
     if (value == NULL || strcmp(value, "nosniff") != 0) status = SALTS_EPROTO;
+  }
+  if (status == SALTS_OK && fixture.expected_origin != NULL) {
+    const char *origin = chttp_response_header(&response, "Access-Control-Allow-Origin");
+    const char *credentials = chttp_response_header(&response, "Access-Control-Allow-Credentials");
+    if (origin == NULL || strcmp(origin, fixture.expected_origin) != 0 ||
+        credentials == NULL || strcmp(credentials, "true") != 0) status = SALTS_EPROTO;
   }
   if (status == SALTS_OK && response.status_code == 200u &&
       (response.body_size != 2u || memcmp(response.body, "42", 2u) != 0)) status = SALTS_EPROTO;
@@ -395,5 +406,52 @@ spec("Reflected HTTP Application") {
     check_equal(status, 200u);
     const int expected[] = {1,2,3,4};
     check_equal(fixture.trace_count, (size_t)4u); check_equal(fixture.trace, expected, sizeof(expected));
+  }
+  it("snapshots Security policy values before the caller reuses its configuration") {
+    fixture.security = (chttp_web_security_policy)CHTTP_WEB_SECURITY_POLICY_INIT;
+    fixture.security.nosniff = true;
+    fixture.config.security = &fixture.security;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    fixture.security.nosniff = false;
+    unsigned int status = 0u;
+    check_equal(request(CHTTP_HTTP_1_1, "/hello", &status), SALTS_OK);
+    check_equal(status, 200u); check_equal(fixture.destroys, 4);
+  }
+  it("snapshots an H2 asset mount without retaining the caller's mount structure") {
+    setup_assets(false);
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    fixture.assets.url_prefix = "/changed";
+    unsigned int status = 0u;
+    check_equal(request(CHTTP_HTTP_2, "/assets/answer.txt", &status), SALTS_OK);
+    check_equal(status, 200u); check_equal(fixture.destroys, 4);
+  }
+  it("snapshots CORS values while borrowing the original immutable origin array") {
+    static const char *const origins[] = {"https://application.test"};
+    static const char *const replacement[] = {"https://changed.test"};
+    fixture.cors = (chttp_server_cors_options){.origins = origins, .origin_count = 1u,
+        .methods = "GET", .allow_credentials = 1};
+    fixture.config.cors = &fixture.cors;
+    fixture.expected_origin = origins[0];
+    fixture.request_headers[0] = (chttp_header){"Origin", origins[0]};
+    fixture.request_header_count = 1u;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+    fixture.cors.origins = replacement; fixture.cors.allow_credentials = 0;
+    unsigned int status = 0u;
+    check_equal(request(CHTTP_HTTP_2, "/hello", &status), SALTS_OK);
+    check_equal(status, 200u); check_equal(fixture.destroys, 4);
+  }
+  it("rejects an undersized Security policy before creating any Bean") {
+    fixture.security = (chttp_web_security_policy)CHTTP_WEB_SECURITY_POLICY_INIT;
+    fixture.security.size = sizeof(fixture.security) - 1u;
+    fixture.config.security = &fixture.security;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_EINVAL);
+    check_null(fixture.app.impl); check_equal(fixture.creates, 0); check_equal(fixture.destroys, 0);
+  }
+  it("rejects an undersized asset policy before reading or activating the graph") {
+    fixture.assets = (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
+    fixture.assets.size = sizeof(fixture.assets) - 1u;
+    fixture.config.assets = &fixture.assets;
+    check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_EINVAL);
+    check_null(fixture.app.impl); check_equal(fixture.creates, 0); check_equal(fixture.destroys, 0);
   }
 }
