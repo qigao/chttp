@@ -1,5 +1,42 @@
 # Split SDK migration handoff
 
+- Private worker Sessions now use a charged detached snapshot/intent context.
+  Prefix alignment derives from the actual context/header/param union. The
+  selected MSVC C headers do not provide max_align_t (CI 43225024633, preserved
+  in build/ci-43225024633-msvc.log); do not guess an alignment, select a different
+  compiler or add a platform fallback to conceal that compile failure.
+  Never let a live native Session escape to a worker or simply remove the public
+  defer guard. The private defer entry validates and attaches the owned context;
+  the public deferred API keeps rejecting live Sessions. Cookie headers belong
+  to the deferred response builder, not the sealed original builder. Reserve
+  cookie storage and validate the pinned original generation before ordinary
+  store mutations. Reject owner-mutated contexts rather than dropping changes.
+- Same-Session waiters occupy the existing invocation slots, not worker threads.
+  Refresh after the predecessor's business-finalizer/owner-commit join; release
+  the gate before native wire completion so H2 credit stalls cannot block later
+  Session business work. Pins prevent expiry/reuse until gate retirement. Lock
+  order at retirement is worker -> Session; owner commit releases Session before
+  signaling the worker join. Canceled waiters settle without entering user code;
+  stale queued generations return 409 without Set-Cookie or method invocation.
+- Ordinary failed/canceled writes are discarded. Explicit invalidation is a
+  fail-closed security transition: login helpers can invalidate after partial
+  staging, and logout cannot leave authentication active when the response fails.
+  A live owner expires the cookie even on business error; framework retirement
+  performs store-only invalidation cleanup after transport/header failure, under
+  the Session mutex and only for the admitted original generation. Never erase a
+  newer identity or fabricate transport success. This is the existing security
+  helper contract, not a retry/recovery of user business code.
+- Session acceptance uses the formal App/Server suites: H1/H2 cookie flags,
+  CSRF/login/logout, ID/token rotation, FIFO lost-update protection, independent
+  Session progress, stale generations, canceled queued/running work, finite close,
+  bounded bytes/store/header failures and one-worker H2 flow-window backpressure.
+  Native full build, 117/117 CTests and install pass in
+  `migration-worker-session-security-final-{build,full-ctest,install}.log`.
+  The subsequent test-only cookie-failure invalidation case is in
+  `migration-worker-session-cookie-failure-{build,ctest}.log`. The phase stays
+  private; public Invocation/admission, provider/hooks and stream/WS migration
+  still precede the public worker-default switch.
+
 - OpenSSL negative mTLS qualification must use actual local TLS terminal
   evidence, not require the word "alert" in peer output. CI 43211623347 MSVC
   rejected the wrong-CA connection with `read:errno=113` and no HTTP response,

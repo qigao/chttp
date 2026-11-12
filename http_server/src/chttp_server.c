@@ -1627,7 +1627,8 @@ static int chttp_server_deferred_progress(
           memory_order_release);
       continue;
     }
-    status = chttp_session_request_finish(&connection->request_state);
+    status = chttp_session_request_finish_deferred(&connection->request_state,
+        &connection->deferred_response);
     if (status == SALTS_OK)
       status = chttp_server_connection_reserve_outbound(
           connection, connection->outbound_size + server->max_response_wire_bytes);

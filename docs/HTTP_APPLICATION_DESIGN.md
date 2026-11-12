@@ -132,6 +132,17 @@ without adding a Content-Type header. Server registry/frame pools and ACE receiv
 remain live until the worker invocation drains, including after an H2 handler
 deadline. Per-RPC-method business hooks and non-direct providers are still pending.
 
+Private buffered worker bindings now also support detached, bounded Session
+snapshots and owner-side intent commits. Same-Session calls wait in the existing
+invocation pool and refresh in admission order without occupying a worker. The
+gate retires after business finalization joins owner commit/abort, independently
+of wire completion. Ordinary failed/canceled writes are discarded; explicit
+invalidation retains the existing fail-closed security contract, including after
+transport loss, and never clears a newer generation. H1/H2 tests exercise CSRF,
+login/logout, cookie flags, regeneration, capacity failures, stale queues,
+cancellation/drain and H2 flow-window backpressure. The public deferred API still
+rejects live Sessions; no partial public Application mode has been enabled.
+
 `chttp_application_worker_test` covers snapshot isolation, overload, real H1/H2
 deadlines, one/two-worker execution, hook unwinding, finite close and H2 flow
 control. `chttp_application_test` exercises actual ACE-injected Controller/Service
@@ -139,7 +150,7 @@ dispatch and graph retention across a blocked completion observer;
 `chttp_application_binding_test` verifies H1/H2 generated success/validation/
 missing-input behavior, typed RPC, mixed/notification batches, protocol errors
 and canceled running native methods. The Server suite
-covers the zero-error reset. Session/stream/WS adaptation, remaining generated
+covers the zero-error reset. Public Session/admission integration, stream/WS adaptation, remaining generated
 providers/per-method hook integration and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
@@ -373,6 +384,50 @@ forced free or successful close with a live task. External producers must be
 quiescent before the relevant executor is destroyed.
 
 ### Session, files, streaming and WebSocket migration requirements
+
+The private Session implementation uses one charged, invocation-owned snapshot
+and staged mutation context, not the native request's live Session context.
+Existing Session accessors operate on that detached context; creation, ID
+regeneration and invalidation change intents only. The native owner validates
+the pinned original generation, reserves the cookie header, and commits the
+snapshot before response serialization. Business failure/cancellation discards
+ordinary write/regeneration intents. A later wire failure does not undo an
+already committed Session. Explicit invalidation is the security exception:
+the existing sign-in failure/logout contract must fail closed. A live owner
+expires the cookie even for a failed business result; if transport/cookie
+publication has failed, framework retirement reconciles invalidation under the
+store mutex before releasing the pin/gate. It clears only the admitted original
+generation, never a newer identity, and touches no native endpoint. Discarding
+all intents was rejected because it could preserve old authentication after
+the helper explicitly invalidated it. Transport/session errors remain visible;
+this cleanup does not synthesize a successful response or retry user code.
+Original owner-side Session mutations are rejected at handoff, rather than
+silently discarded. A generation invalidated while queued fails before business
+execution with HTTP 409 and no Set-Cookie, so a late stale response cannot replace
+the new generation's cookie. Owner commit/header/store failures retain their
+error and follow the existing deferred H1 close/H2 reset path.
+
+Session record pins prevent expiry/reuse before commit/abort; explicit
+invalidation or regeneration still makes an old generation stale. An existing
+Session's immutable record identity selects a FIFO logical gate within the
+Application's existing J slots. A waiting invocation is not posted to a worker.
+When both predecessor business finalization and owner commit/abort are known,
+the next waiter may run and refresh its snapshot from the authoritative store.
+This releases the gate before transport completion; an H2 flow-control stall
+must not block later same-Session business work. Canceled waiters are removed
+and settled without invoking user code. Completion observers still wait for
+the separate real response terminal, and cannot mutate sealed Session intents.
+
+All queue/gate scheduling uses the existing worker mutex; snapshot/store/pin
+operations use the existing short Session mutex. Neither lock is held across
+user methods, executor publication or native transport.
+During gate retirement, the lock order is worker then Session; native commit
+releases the Session mutex before signaling the worker join.
+No automatic retry, thread-per-Session, external runtime or unbounded waiting
+allocation is added.
+The ordinary public deferred API continues rejecting live Sessions; only the
+private owned worker bridge can attach this staged context. This remains an
+internal migration slice until the complete public replacement is ready.
 
 The worker baseline cannot be implemented by bypassing current unsupported
 cases. In particular, today's response_defer explicitly rejects Session-backed

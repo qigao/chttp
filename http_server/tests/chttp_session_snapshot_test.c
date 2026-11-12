@@ -5,6 +5,7 @@
 #include <http_server/http.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static native_io_backend_kind session_test_backend(void) {
@@ -188,5 +189,118 @@ spec("CHttp session snapshot concurrency contract") {
     chttp_server_request_state_reset(invalidator);
     chttp_server_request_state_reset(reader);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+}
+
+static chttp_server detached_server;
+static void *detached_storage;
+static chttp_session_work *detached_work;
+static int detached_commits, detached_status;
+static void detached_committed(void *user, int status) {
+  (void)user; ++detached_commits; detached_status = status;
+}
+
+spec("CHttp detached Session transaction admission") {
+  before_each() {
+    detached_server = (chttp_server){0}; detached_storage = NULL; detached_work = NULL;
+    detached_commits = 0; detached_status = SALTS_OK;
+    chttp_server_config config = session_test_config();
+    config.session_capacity = 1u;
+    check_equal(chttp_server_init(&detached_server, &config), SALTS_OK);
+  }
+  after_each() {
+    chttp_server_impl *impl = detached_server.impl;
+    if (impl) {
+      for (size_t i = 0u; i < impl->config.network.connection_capacity; ++i)
+        chttp_session_work_detach(&impl->connections[i].request_state, SALTS_ECANCELED);
+    }
+    chttp_session_work_release(detached_work); free(detached_storage);
+    check_equal(chttp_server_destroy(&detached_server), SALTS_OK);
+  }
+  it("does not resurrect an explicitly invalidated generation or reuse its pinned record") {
+    chttp_server_impl *impl = detached_server.impl;
+    chttp_server_request_state *creator = &impl->connections[0].request_state;
+    chttp_server_request_state *stale = &impl->connections[1].request_state;
+    chttp_server_request_state *invalidator = &impl->connections[2].request_state;
+    chttp_server_request_state *fresh = &impl->connections[3].request_state;
+    chttp_header header = {0};
+    chttp_server_request_view request = session_request(NULL, &header);
+    chttp_session_request_begin(creator, &request);
+    check_equal(chttp_session_set(&creator->session, "value", "original"), SALTS_OK);
+    check_equal(chttp_session_request_finish(creator), SALTS_OK);
+    char cookie[128]; snprintf(cookie, sizeof(cookie), "castle_sid=%s", creator->session_context.id);
+    request = session_request(cookie, &header);
+    chttp_session_request_begin(stale, &request);
+    chttp_session_request_begin(invalidator, &request);
+    size_t bytes = 0u;
+    check_equal(chttp_session_work_size(&stale->session, &bytes), SALTS_OK);
+    detached_storage = malloc(bytes); check_true(detached_storage != NULL);
+    check_equal(chttp_session_work_prepare(detached_storage, bytes, &stale->session,
+        detached_committed, NULL, &detached_work), SALTS_OK);
+    check_equal(chttp_session_work_attach(stale, detached_work), SALTS_OK);
+    check_equal(chttp_session_work_begin(detached_work), SALTS_OK);
+    check_equal(chttp_session_set(chttp_session_work_view(detached_work), "value", "resurrect"), SALTS_OK);
+    check_equal(chttp_session_invalidate(&invalidator->session), SALTS_OK);
+    request = session_request(NULL, &header);
+    chttp_session_request_begin(fresh, &request);
+    check_equal(chttp_session_set(&fresh->session, "value", "new"), SALTS_ENOBUFS);
+    chttp_session_work_seal(detached_work, true);
+    check_equal(chttp_session_request_finish_deferred(stale, &stale->response), SALTS_ENOENT);
+    check_equal(detached_commits, 1); check_equal(detached_status, SALTS_ENOENT);
+    check_equal(chttp_session_request_finish_deferred(stale, &stale->response), SALTS_EALREADY);
+    check_equal(detached_commits, 1);
+    check_equal(impl->sessions[0].used, false);
+    chttp_session_work_detach(stale, SALTS_ECANCELED);
+    check_equal(detached_commits, 1);
+    chttp_session_work_release(detached_work);
+    check_equal(chttp_session_set(&fresh->session, "value", "new"), SALTS_OK);
+    check_equal(chttp_session_request_finish(fresh), SALTS_OK);
+    check_equal(chttp_session_get(chttp_session_work_view(detached_work), "value"), "resurrect");
+    check_equal(chttp_session_set(chttp_session_work_view(detached_work), "value", "late"), SALTS_EALREADY);
+  }
+  it("refuses to silently discard Session mutations made on the original owner") {
+    chttp_server_impl *impl = detached_server.impl;
+    chttp_server_request_state *state = &impl->connections[0].request_state;
+    chttp_header header = {0};
+    chttp_server_request_view request = session_request(NULL, &header);
+    chttp_session_request_begin(state, &request);
+    check_equal(chttp_session_set(&state->session, "value", "owner"), SALTS_OK);
+    size_t bytes = 0u;
+    check_equal(chttp_session_work_size(&state->session, &bytes), SALTS_ENOTSUP);
+    check_equal(chttp_session_get(&state->session, "value"), "owner");
+    check_equal(chttp_session_request_finish(state), SALTS_OK);
+  }
+  it("never applies fail-closed retirement invalidation to a newer authenticated generation") {
+    chttp_server_impl *impl = detached_server.impl;
+    chttp_server_request_state *creator = &impl->connections[0].request_state;
+    chttp_server_request_state *stale = &impl->connections[1].request_state;
+    chttp_server_request_state *fresh = &impl->connections[2].request_state;
+    chttp_server_request_state *reader = &impl->connections[3].request_state;
+    chttp_header header = {0};
+    chttp_server_request_view request = session_request(NULL, &header);
+    chttp_session_request_begin(creator, &request);
+    check_equal(chttp_session_set(&creator->session, "value", "old-identity"), SALTS_OK);
+    check_equal(chttp_session_request_finish(creator), SALTS_OK);
+    char cookie[128]; snprintf(cookie, sizeof(cookie), "castle_sid=%s", creator->session_context.id);
+    request = session_request(cookie, &header);
+    chttp_session_request_begin(stale, &request); chttp_session_request_begin(fresh, &request);
+    size_t bytes = 0u; check_equal(chttp_session_work_size(&stale->session, &bytes), SALTS_OK);
+    detached_storage = malloc(bytes); check_true(detached_storage != NULL);
+    check_equal(chttp_session_work_prepare(detached_storage, bytes, &stale->session,
+        detached_committed, NULL, &detached_work), SALTS_OK);
+    check_equal(chttp_session_work_attach(stale, detached_work), SALTS_OK);
+    check_equal(chttp_session_work_begin(detached_work), SALTS_OK);
+    check_equal(chttp_session_invalidate(chttp_session_work_view(detached_work)), SALTS_OK);
+    check_equal(chttp_session_regenerate(&fresh->session), SALTS_OK);
+    check_equal(chttp_session_set(&fresh->session, "value", "new-identity"), SALTS_OK);
+    check_equal(chttp_session_request_finish(fresh), SALTS_OK);
+    snprintf(cookie, sizeof(cookie), "castle_sid=%s", fresh->session_context.id);
+    chttp_session_work_seal(detached_work, true);
+    chttp_session_work_detach(stale, SALTS_ECANCELED);
+    chttp_session_work_release(detached_work);
+    request = session_request(cookie, &header); chttp_session_request_begin(reader, &request);
+    check_equal(chttp_session_get(&reader->session, "value"), "new-identity");
+    check_equal(impl->sessions[0].worker_pins, 0u);
+    check_equal(detached_commits, 1); check_equal(detached_status, SALTS_ECANCELED);
   }
 }

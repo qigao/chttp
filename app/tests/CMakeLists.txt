@@ -28,3 +28,10 @@ target_link_libraries(chttp_application_worker_test PRIVATE CHttp::App CHttp::Cl
 set_target_properties(chttp_application_worker_test PROPERTIES FOLDER "app/tests")
 add_test(NAME chttp_application_worker_test COMMAND chttp_application_worker_test)
 set_tests_properties(chttp_application_worker_test PROPERTIES TIMEOUT 90)
+
+add_executable(chttp_application_session_worker_test application_session_worker_test.c)
+target_include_directories(chttp_application_session_worker_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(chttp_application_session_worker_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)
+set_target_properties(chttp_application_session_worker_test PROPERTIES FOLDER "app/tests")
+add_test(NAME chttp_application_session_worker_test COMMAND chttp_application_session_worker_test)
+set_tests_properties(chttp_application_session_worker_test PROPERTIES TIMEOUT 90)

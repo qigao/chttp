@@ -25,6 +25,11 @@ struct work_item {
   int business_done;
   int transport_done;
   int completion_queued;
+  int session_done, gate_owned, business_waiting, session_stale;
+  size_t session_bytes;
+  chttp_session_work *session;
+  const void *session_key;
+  work_item *wait_next;
   chttp_server_response_terminal terminal;
   chttp_application_work_outcome outcome;
   size_t bytes;
@@ -46,6 +51,7 @@ struct work_impl {
   chttp_application_work_stats stats;
   work_item *items;
   int accepting;
+  work_item *waiting_head, *waiting_tail;
 };
 
 static void count_event(uint64_t *count) { if (*count != UINT64_MAX) ++*count; }
@@ -78,7 +84,7 @@ static int snapshot_size(const chttp_server_request_view *r, size_t *bytes) {
   if (r == NULL || (r->header_count && !r->headers) || (r->param_count && !r->params) ||
       (r->body_size && !r->body)) return SALTS_EINVAL;
   /* No live owner-affine application state is smuggled into the worker. */
-  if (r->session || r->body_streamed || r->body_sink_user) return SALTS_ENOTSUP;
+  if (r->body_streamed || r->body_sink_user) return SALTS_ENOTSUP;
 #define ADD(expr) do { status = (expr); if (status != SALTS_OK) return status; } while (0)
   ADD(add_array(bytes, r->header_count, sizeof(chttp_header)));
   ADD(add_array(bytes, r->param_count, sizeof(chttp_server_param)));
@@ -104,7 +110,7 @@ static int snapshot_size(const chttp_server_request_view *r, size_t *bytes) {
   return SALTS_OK;
 }
 static void snapshot_copy(work_item *item, const chttp_server_request_view *r) {
-  unsigned char *next = item->storage;
+  unsigned char *next = item->storage + item->session_bytes;
   chttp_header *headers = (chttp_header *)next;
   next += r->header_count * sizeof(*headers);
   chttp_server_param *params = (chttp_server_param *)next;
@@ -112,6 +118,7 @@ static void snapshot_copy(work_item *item, const chttp_server_request_view *r) {
   const char **audiences = (const char **)next;
   if (r->jwt_claims) next += r->jwt_claims->audience_count * sizeof(*audiences);
   item->request = *r;
+  item->request.session = chttp_session_work_view(item->session);
   item->request.headers = r->header_count ? headers : NULL;
   item->request.params = r->param_count ? params : NULL;
   item->request.target = copy_string(&next, r->target);
@@ -167,7 +174,8 @@ int chttp_application_work_respond(chttp_application_work_reply *reply, unsigned
 }
 static void publish(work_item *item, int business_status) {
   chttp_application_work_reply *draft = &item->reply;
-  const int good = business_status == SALTS_OK && draft->sealed;
+  const int good = (business_status == SALTS_OK || item->session_stale) && draft->sealed;
+  chttp_session_work_seal(item->session, business_status == SALTS_OK && draft->sealed);
   const chttp_server_deferred_response response = {sizeof(response),
       good ? draft->status : 500u, good ? draft->content_type : "text/plain",
       NULL, 0u, good ? draft->body : "Internal Server Error", good ? draft->size : 21u};
@@ -209,6 +217,16 @@ static void run_work(void *arg) {
     publish(item, SALTS_ECANCELED);
     return;
   }
+  const int begun = chttp_session_work_begin(item->session);
+  if (begun != SALTS_OK) {
+    item->outcome.business_status = begun;
+    if (begun == SALTS_ENOENT) {
+      item->session_stale = 1;
+      (void)chttp_application_work_respond(&item->reply, 409u, "text/plain", "Session changed", 15u);
+    }
+    publish(item, begun);
+    return;
+  }
   chttp_application_work_result result = {SALTS_OK, false};
   const chttp_application_work_exchange exchange = {&item->request, &item->reply, &result};
   const chttp_application_work_chain chain = {item, invoke_user, item->hooks, item->task.hook_count};
@@ -227,6 +245,7 @@ static void release_work(void *arg) {
   work_item *item = arg;
   work_impl *impl = item->owner;
   if (item->task.finalize) item->task.finalize(item->task.user);
+  chttp_session_work_release(item->session);
   free(item->storage);
   sync_mutex_lock(&impl->mutex);
   impl->stats.retained_bytes -= item->bytes;
@@ -253,32 +272,73 @@ static void completion_cancelled(void *arg) {
     item->owner->stats.publication_status = SALTS_EPROTO;
   sync_mutex_unlock(&item->owner->mutex);
 }
-static void join_completion(work_item *item, int business_done, int transport_status) {
-  work_impl *impl = item->owner;
-  int schedule = 0;
-  sync_mutex_lock(&impl->mutex);
-  if (business_done) item->business_done = 1;
-  else { item->transport_done = 1; item->outcome.transport_status = transport_status; }
-  if (item->business_done && item->transport_done && !item->completion_queued) {
-    item->completion_queued = 1; schedule = 1;
-  }
-  sync_mutex_unlock(&impl->mutex);
-  if (!schedule) return;
-  const cflow_executor_task task = {.run = notify_completion, .cancel = completion_cancelled,
-      .finalize = release_work, .user = item};
-  const cflow_admission_status status = cflow_executor_try_post_task(&impl->executor, &task);
-  /* No access to item after successful publication: notification may finish now. */
-  if (status == CFLOW_ADMISSION_ACCEPTED) return;
+static void business_finalized(void *arg);
+static void invariant_failure(work_impl *impl) {
   sync_mutex_lock(&impl->mutex);
   impl->accepting = 0;
   if (impl->stats.publication_status == SALTS_OK) impl->stats.publication_status = SALTS_EPROTO;
   sync_cond_broadcast(&impl->settled);
-  /* Retain the live record, rather than fabricate completion or run user code
-   * on the owner. Control-plane close reports the unsettled invariant failure. */
   sync_mutex_unlock(&impl->mutex);
 }
-static void business_finalized(void *arg) { join_completion(arg, 1, SALTS_OK); }
-static void response_terminal(void *arg, int status) { join_completion(arg, 0, status); }
+static cflow_admission_status post_business(work_item *item) {
+  const cflow_executor_task task = {.run = run_work, .cancel = cancel_work,
+      .finalize = business_finalized, .user = item};
+  return cflow_executor_try_post_task(&item->owner->executor, &task);
+}
+static void unqueue_waiter(work_impl *impl, work_item *item) {
+  work_item **cursor = &impl->waiting_head, *previous = NULL;
+  while (*cursor && *cursor != item) { previous = *cursor; cursor = &(*cursor)->wait_next; }
+  if (*cursor) {
+    *cursor = item->wait_next;
+    if (impl->waiting_tail == item) impl->waiting_tail = previous;
+    item->wait_next = NULL; item->business_waiting = 0;
+    --impl->stats.session_waiting;
+  }
+}
+enum work_event { WORK_BUSINESS_DONE, WORK_TRANSPORT_DONE, WORK_SESSION_DONE };
+static void join_completion(work_item *item, enum work_event event, int status) {
+  work_impl *impl = item->owner;
+  work_item *launch = NULL;
+  int notify = 0;
+  sync_mutex_lock(&impl->mutex);
+  if (event == WORK_BUSINESS_DONE) item->business_done = 1;
+  else if (event == WORK_SESSION_DONE) {
+    item->session_done = 1; item->outcome.session_status = status;
+  } else {
+    item->transport_done = 1; item->outcome.transport_status = status;
+    if (item->business_waiting) {
+      unqueue_waiter(impl, item); launch = item; /* canceled: skip all user code */
+    }
+  }
+  if (item->business_done && item->session_done && item->gate_owned) {
+    /* Lock order is worker -> Session. Owner commits drop the Session mutex
+     * before signaling this join. Retire the pin before another record can
+     * reuse the logical gate identity, and before completion can free storage. */
+    chttp_session_work_release(item->session);
+    item->gate_owned = 0;
+    for (work_item *next = impl->waiting_head; next; next = next->wait_next) {
+      if (next->session_key == item->session_key) {
+        unqueue_waiter(impl, next); next->gate_owned = 1; launch = next; break;
+      }
+    }
+  }
+  if (item->business_done && item->transport_done && (!item->session || item->session_done) &&
+      !item->completion_queued) {
+    item->completion_queued = 1; notify = 1;
+  }
+  sync_mutex_unlock(&impl->mutex);
+  /* Each record has at most one queued stage. The gate adds no executor queue
+   * or worker-blocking wait. Never access a record after successful posting. */
+  if (launch && post_business(launch) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
+  if (!notify) return;
+  const cflow_executor_task task = {.run = notify_completion, .cancel = completion_cancelled,
+      .finalize = release_work, .user = item};
+  if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED)
+    invariant_failure(impl); /* retain unsettled ownership; never inline or drop */
+}
+static void business_finalized(void *arg) { join_completion(arg, WORK_BUSINESS_DONE, SALTS_OK); }
+static void response_terminal(void *arg, int status) { join_completion(arg, WORK_TRANSPORT_DONE, status); }
+static void session_committed(void *arg, int status) { join_completion(arg, WORK_SESSION_DONE, status); }
 
 int chttp_application_work_init(chttp_application_work *owner,
     const chttp_application_work_config *config) {
@@ -313,6 +373,13 @@ int chttp_application_work_submit(chttp_application_work *owner,
   size_t bytes;
   int status = snapshot_size(request, &bytes);
   if (status != SALTS_OK) return status;
+  size_t session_bytes = 0u;
+  if (request->session) {
+    status = chttp_session_work_size(request->session, &session_bytes);
+    if (status != SALTS_OK) return status;
+  }
+  status = add_bytes(&bytes, session_bytes);
+  if (status != SALTS_OK) return status;
   status = add_bytes(&bytes, impl->config.reply_bytes);
   if (status != SALTS_OK) return status;
   work_item *item = NULL;
@@ -326,19 +393,25 @@ int chttp_application_work_submit(chttp_application_work *owner,
     if (!item) status = SALTS_ENOBUFS;
   }
   if (status == SALTS_OK) {
-    item->busy = 1; item->owner = impl; item->bytes = bytes;
+    item->busy = 1; item->owner = impl; item->bytes = bytes; item->session_bytes = session_bytes;
     ++impl->stats.pending; impl->stats.retained_bytes += bytes;
   } else count_event(&impl->stats.rejected);
   sync_mutex_unlock(&impl->mutex);
   if (status != SALTS_OK) return status;
   item->storage = malloc(bytes);
   if (!item->storage) { release_work(item); return SALTS_ENOMEM; }
+  if (request->session) {
+    status = chttp_session_work_prepare(item->storage, session_bytes, request->session,
+        session_committed, item, &item->session);
+    if (status != SALTS_OK) { release_work(item); return status; }
+    item->session_key = chttp_session_work_key(item->session);
+  }
   snapshot_copy(item, request);
   item->reply.item = item;
   item->terminal = (chttp_server_response_terminal){.complete = response_terminal, .user = item};
   status = chttp_server_response_observe(response, &item->terminal);
   if (status != SALTS_OK) { release_work(item); return status; }
-  status = chttp_server_response_defer(response, &item->deferred);
+  status = chttp_server_response_defer_worker(response, &item->deferred, item->session);
   if (status != SALTS_OK) {
     const int detached = chttp_server_response_unobserve(response, &item->terminal);
     if (detached == SALTS_OK) { release_work(item); return status; }
@@ -350,10 +423,24 @@ int chttp_application_work_submit(chttp_application_work *owner,
   item->task = *task;
   if (task->hook_count) memcpy(item->hooks, task->hooks, task->hook_count * sizeof(*task->hooks));
   item->task.hooks = item->hooks;
-  const cflow_executor_task descriptor = {.run = run_work, .cancel = cancel_work,
-      .finalize = business_finalized, .user = item};
-  sync_mutex_lock(&impl->mutex); count_event(&impl->stats.accepted); sync_mutex_unlock(&impl->mutex);
-  const cflow_admission_status admitted = cflow_executor_try_post_task(&impl->executor, &descriptor);
+  sync_mutex_lock(&impl->mutex);
+  count_event(&impl->stats.accepted);
+  if (item->session_key) {
+    for (size_t i = 0u; i < impl->config.capacity; ++i)
+      if (impl->items[i].gate_owned && impl->items[i].session_key == item->session_key) {
+        item->business_waiting = 1; break;
+      }
+    if (item->business_waiting) {
+      if (impl->waiting_tail) impl->waiting_tail->wait_next = item;
+      else impl->waiting_head = item;
+      impl->waiting_tail = item;
+      ++impl->stats.session_waiting;
+    } else item->gate_owned = 1;
+  }
+  const int waiting = item->business_waiting;
+  sync_mutex_unlock(&impl->mutex);
+  if (waiting) return SALTS_OK;
+  const cflow_admission_status admitted = post_business(item);
   /* A successful post may run and finalize before the call returns. */
   if (admitted == CFLOW_ADMISSION_ACCEPTED) return SALTS_OK;
   /* A reserved item has a queue credit. Rejection is an invariant violation,
@@ -372,6 +459,13 @@ int chttp_application_work_submit(chttp_application_work *owner,
 int chttp_application_work_is_current(const chttp_application_work *owner) {
   const work_impl *impl = owner ? owner->impl : NULL;
   return impl && cflow_executor_is_current((cflow_executor *)&impl->executor);
+}
+int chttp_application_work_admission_response(chttp_server_response *response, int status) {
+  if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
+    return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
+  if (status == SALTS_ENOENT)
+    return chttp_server_reply(response, 409u, "text/plain", "Session changed", 15u);
+  return status;
 }
 int chttp_application_work_get_stats(chttp_application_work *owner,
     chttp_application_work_stats *out) {
