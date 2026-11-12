@@ -1,5 +1,25 @@
 # Split SDK migration handoff
 
+- Private generated direct HTTP mounts now use the Application-owned pool for
+  bind/validate/invoke/serialize as one task. Share the existing MethodPlan
+  evaluator through an internal output adapter, retaining the engine's existing
+  buffer publication while the worker copies its draft before native/output
+  cleanup. Do not post another task or wait on the same pool. Hold the method
+  record and ACE receiver until terminal task finalization, not just method
+  return. H1/H2 success, 422, 400 and canceled-running-method tests pass:
+  `migration-application-worker-generated-{build,ctest}.log`. This remains private;
+  generated hook outcome mapping, CFlow/Plugin, RPC and Session/stream/WS paths
+  are not yet switched to the new model.
+  Complete native graph and install pass after adding failure-boundary
+  diagnostics: `migration-application-worker-generated-diagnostic-{full-ctest,install}.log`
+  (116/116). The preceding full run had one existing H1 asset case return
+  ETIMEDOUT (`migration-application-worker-generated-full-ctest.log`,
+  application_test.c:441). The helper previously combined request and close
+  errors without identifying the failing boundary. It now reports request
+  stage/native error and close status/Server counters on failure. Both the
+  diagnostic focused run and full run pass, but the original timeout's cause
+  remains unproven; do not call it fixed or erase its failure record.
+
 - Application shutdown must drain its owned workers before destroying Server
   storage. A handler deadline/reset can settle transport while a running method
   still holds a deferred handle whose target lives in Server storage. Stop the

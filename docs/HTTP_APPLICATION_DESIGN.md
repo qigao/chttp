@@ -113,12 +113,24 @@ submitted, and settle when NativeIO reports it sent. Peer RST_STREAM(NO_ERROR)
 still means cancellation. Success establishes local native send completion,
 not consumption by the remote application.
 
+Generated synchronous direct HTTP methods can also mount on that same private
+pool. The existing MethodPlan evaluator now writes through an internal output
+adapter: the published engine path retains its buffer publication semantics,
+while the worker path copies into the invocation draft before releasing the
+DataBind native frame and serializer buffer. Binding, validation, native method
+execution and output staging all stay on the worker; there is no nested executor
+post/wait. The method record and canonical ACE receiver remain retained through
+terminal finalization. CFlow/Plugin providers and generated business hook outcome
+mapping still need migration; this slice does not accept them as direct methods.
+
 `chttp_application_worker_test` covers snapshot isolation, overload, real H1/H2
 deadlines, one/two-worker execution, hook unwinding, finite close and H2 flow
 control. `chttp_application_test` exercises actual ACE-injected Controller/Service
-dispatch and graph retention across a blocked completion observer; the Server
-suite covers the zero-error reset. Session/stream/WS adaptation, generated
-HTTP/RPC worker integration and the public Invocation migration remain required
+dispatch and graph retention across a blocked completion observer;
+`chttp_application_binding_test` verifies H1/H2 generated success/validation/
+missing-input behavior and a canceled running native method. The Server suite
+covers the zero-error reset. Session/stream/WS adaptation, remaining generated
+providers/RPC worker integration and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives

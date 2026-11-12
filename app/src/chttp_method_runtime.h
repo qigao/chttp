@@ -12,6 +12,7 @@
 #include <cflow/function_projection.h>
 
 #include <stddef.h>
+#include "chttp_application_work.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -171,6 +172,13 @@ int chttp_method_runtime_mount_http(
     chttp_method_runtime *service,
     chttp_server *server,
     const chttp_method_runtime_http_mount *mount);
+
+/* Private migration path: one Application-owned worker invocation performs
+ * binding, synchronous native execution and output staging without a nested
+ * executor hop. Only direct synchronous mounts without owner middleware are
+ * admitted; metadata/runtime/work must outlive response-terminal finalization. */
+int chttp_method_runtime_mount_worker_http(chttp_method_runtime *, chttp_server *,
+    const chttp_method_runtime_http_mount *, chttp_application_work *);
 
 /**
  * Release service-owned bounded scratch/method records.

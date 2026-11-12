@@ -219,6 +219,10 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
       .body = upload ? "abc" : NULL, .body_size = upload ? 3u : 0u};
   status = upload ? chttp_post(&fixture.client, &options, &response, &error) :
       chttp_get(&fixture.client, &options, &response, &error);
+  if (status != SALTS_OK)
+    fprintf(stderr, "Application request failed: protocol=%d target=%s status=%d stage=%s native=%d http=%u bytes=%zu\n",
+        (int)protocol, target, status, error.stage ? error.stage : "unset",
+        error.native_status, response.status_code, response.body_size);
   *http_status = response.status_code;
   fixture.response_size = response.body_size;
   if (status == SALTS_OK && fixture.config.security != NULL) {
@@ -234,7 +238,15 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
   if (status == SALTS_OK && response.status_code == 200u &&
       (response.body_size != 2u || memcmp(response.body, "42", 2u) != 0)) status = SALTS_EPROTO;
   chttp_response_destroy(&response);
+  chttp_server_stats before_close = {0};
+  const int stats_status = chttp_application_stats(&fixture.app, &before_close);
   const int closed = chttp_application_close(&fixture.app, 5000u);
+  if (closed != SALTS_OK)
+    fprintf(stderr, "Application close failed: protocol=%d target=%s close=%d request=%d stats=%d active=%zu requests=%llu responses=%llu protocol_errors=%llu handler_errors=%llu terminal=%d\n",
+        (int)protocol, target, closed, status, stats_status, before_close.active_connections,
+        (unsigned long long)before_close.requests, (unsigned long long)before_close.responses,
+        (unsigned long long)before_close.protocol_errors, (unsigned long long)before_close.handler_errors,
+        before_close.terminal_status);
   return closed != SALTS_OK ? closed : status;
 }
 
