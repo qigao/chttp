@@ -29,7 +29,9 @@ public:
 
 /** Canonical ACE Provider with native C++ object ownership. Factory, DataDesc,
  * Component and Interface metadata must outlive Application. No hidden registry.
- * Factory returns unique_ptr<T> and receives the canonical dependency array.
+ * Factory returns exactly std::unique_ptr<T> and receives the canonical
+ * dependency array. DataDesc must describe T; size/alignment are admitted before
+ * invoking Factory. Custom deleters require an explicit ACE provider lifecycle.
  * Exceptions are translated before returning through ACE's C callbacks. */
 template<class T, class Factory> class Bean final {
   static_assert(std::is_nothrow_destructible_v<T>);
@@ -42,6 +44,9 @@ template<class T, class Factory> class Bean final {
       const void *config, const salts_configurator_dependency *deps, size_t count,
       cmeta_object_ref *out) noexcept {
     auto& bean = *static_cast<Bean*>(context);
+    if (!cmeta_data_desc_valid(bean.data_)) return CMETA_INVALID_ARGUMENT;
+    if (bean.data_->storage_type->size != sizeof(T) ||
+        bean.data_->storage_type->align != alignof(T)) return CMETA_TYPE_MISMATCH;
     try {
       auto object = bean.factory_(config_data, config, deps, count);
       if (!object) return CMETA_OUT_OF_MEMORY;
@@ -56,6 +61,9 @@ template<class T, class Factory> class Bean final {
   }
   salts_configurator_provider_binding binding_;
 public:
+  template<class F = Factory, std::enable_if_t<std::is_same_v<
+      std::invoke_result_t<F&, const cmeta_data_desc*, const void*,
+          const salts_configurator_dependency*, size_t>, std::unique_ptr<T>>, int> = 0>
   Bean(const cmeta_component_desc *component, const cmeta_data_desc *data,
       Factory& factory, const cmeta_object_interface_provider *interfaces = nullptr)
       : factory_(factory), data_(data), binding_{sizeof(binding_),

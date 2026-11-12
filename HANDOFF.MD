@@ -209,3 +209,16 @@
   exact two-attempt assertion. No retry, sleep, production hook or TinyTest
   modification is needed. Windows full build and focused recovery suite pass:
   `build/migration-retry-clock-attempt-observer-ctest.log`.
+
+- Typed C++ Bean admission: ObjectRef cannot infer the allocation size or the
+  native T behind an erased pointer. Bean accepted mismatched reflected native
+  size/alignment and invoked a factory even when DataDesc was missing. Three
+  formal runtime cases reproduce this without invalid reads
+  (`migration-cpp-bean-admission-red-ctest.log`). Validate DataDesc and exact
+  sizeof(T)/alignof(T) before factory side effects. Constructor constraints also
+  require an exact std::unique_ptr<T> value result, preserving the default delete-T
+  lifecycle instead of erasing custom deleter or derived-pointer semantics.
+  Public constructibility assertions cover these type boundaries; normal aligned
+  objects still construct and destroy once. Explicit ACE providers support other
+  deletion models. Full published-SDK Windows build, 109/109 CTest and install
+  passed (`migration-cpp-bean-admission-full-ctest.log`).

@@ -13,6 +13,39 @@ struct CppController {
 };
 cmeta_reflect_data(CppController, "test.CppController", cmeta_field(int, value));
 cmeta_component_empty(CppComponent);
+struct LargerController { int value; char extra[64]; };
+cmeta_reflect_data(LargerController, "test.LargerController", cmeta_field(int, value));
+struct PlainController { int value; char extra[12]; };
+cmeta_reflect_data(PlainController, "test.PlainController", cmeta_field(int, value));
+struct alignas(16) AlignedController {
+  int value = 42;
+  char extra[12]{};
+  ~AlignedController() noexcept { ++destroyed; }
+};
+cmeta_reflect_data(AlignedController, "test.AlignedController", cmeta_field(int, value));
+static_assert(sizeof(PlainController) == sizeof(AlignedController));
+static_assert(alignof(PlainController) != alignof(AlignedController));
+
+template<class T> static void rejects_storage(const cmeta_data_desc *data) {
+  int calls = 0;
+  auto factory = [&calls](const cmeta_data_desc*, const void*,
+      const salts_configurator_dependency*, size_t) { ++calls; return std::make_unique<T>(); };
+  chttp::Bean<T, decltype(factory)> bean(cmeta_component_meta(CppComponent), data, factory);
+  const auto deployment = bean.deployment();
+  chttp_controller controller{};
+  controller.component_id = "CppComponent"; controller.receiver = data;
+  auto config = chttp_application_config_default();
+  config.components = &deployment; config.component_count = 1;
+  config.controllers = &controller; config.controller_count = 1;
+  int initialized;
+  bool retained;
+  {
+    chttp::Application app;
+    initialized = app.initialize(config); retained = app.valid();
+  }
+  check_equal(initialized, SALTS_EINVAL); check_false(retained);
+  check_equal(calls, 0); check_equal(destroyed, 0);
+}
 CHTTP_ACTION(cpp_throw);
 int cpp_throw(void*, const chttp_exchange*) {
   struct Scope { ~Scope() noexcept { ++unwound; } } scope;
@@ -20,6 +53,22 @@ int cpp_throw(void*, const chttp_exchange*) {
 }
 static_assert(!std::is_copy_constructible_v<chttp::Application>);
 static_assert(!std::is_move_constructible_v<chttp::Application>);
+struct CustomDelete { void operator()(CppController*) const noexcept; };
+struct DerivedController : CppController {};
+using ExactFactory = std::unique_ptr<CppController>(*)(const cmeta_data_desc*, const void*,
+    const salts_configurator_dependency*, size_t);
+using CustomFactory = std::unique_ptr<CppController, CustomDelete>(*)(const cmeta_data_desc*, const void*,
+    const salts_configurator_dependency*, size_t);
+using DerivedFactory = std::unique_ptr<DerivedController>(*)(const cmeta_data_desc*, const void*,
+    const salts_configurator_dependency*, size_t);
+static_assert(std::is_constructible_v<chttp::Bean<CppController, ExactFactory>,
+    const cmeta_component_desc*, const cmeta_data_desc*, ExactFactory&>);
+static_assert(!std::is_constructible_v<chttp::Bean<CppController, CustomFactory>,
+    const cmeta_component_desc*, const cmeta_data_desc*, CustomFactory&>,
+    "Bean must not erase a custom deletion contract");
+static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory>,
+    const cmeta_component_desc*, const cmeta_data_desc*, DerivedFactory&>,
+    "Bean must not erase derived-pointer destruction semantics");
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
@@ -87,5 +136,35 @@ spec("Application C++ RAII") {
     chttp::Application app;
     check_equal(app.initialize(config), SALTS_EINVAL);
     check_false(app.valid()); check_equal(count, 1); check_equal(destroyed, 1);
+  }
+  it("rejects a larger reflected storage layout before invoking a typed factory") {
+    rejects_storage<CppController>(cmeta_reflected_data(LargerController));
+  }
+  it("rejects a reflected alignment mismatch even when the storage sizes agree") {
+    rejects_storage<AlignedController>(cmeta_reflected_data(PlainController));
+  }
+  it("rejects missing reflection before creating a native object") {
+    rejects_storage<CppController>(nullptr);
+  }
+  it("retains normal RAII ownership for matching explicitly aligned native storage") {
+    int calls = 0;
+    auto factory = [&calls](const cmeta_data_desc*, const void*,
+        const salts_configurator_dependency*, size_t) {
+      ++calls; return std::make_unique<AlignedController>();
+    };
+    chttp::Bean<AlignedController, decltype(factory)> bean(cmeta_component_meta(CppComponent),
+        cmeta_reflected_data(AlignedController), factory);
+    const auto deployment = bean.deployment();
+    chttp_controller controller{};
+    controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(AlignedController);
+    auto config = chttp_application_config_default();
+    config.components = &deployment; config.component_count = 1;
+    config.controllers = &controller; config.controller_count = 1;
+    int initialized;
+    {
+      chttp::Application app;
+      initialized = app.initialize(config);
+    }
+    check_equal(initialized, SALTS_OK); check_equal(calls, 1); check_equal(destroyed, 1);
   }
 }
