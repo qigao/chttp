@@ -155,7 +155,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $openssl = Join-Path $prefix 'bin/openssl'
         } else {
-          $openssl = (Get-Command openssl -CommandType Application -ErrorAction Stop).Source
+          $openssl = (Get-Command openssl -CommandType Application -TotalCount 1 -ErrorAction Stop).Source
         }
         & $openssl version
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

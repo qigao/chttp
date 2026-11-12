@@ -10,6 +10,10 @@
   build and 112/112 CTests passed (`migration-tls-openssl-final-full-ctest.log`).
   Independent OpenSSL 3.x is a host test executable, not a product TLS library;
   no old source SDK/port stack or qualification feature switch is restored.
+  First CI 43162608036 failed before configure on Linux because PowerShell
+  Get-Command returned both /usr/bin/openssl and /bin/openssl. Select the first
+  PATH application with -TotalCount 1; do not concatenate discovery results.
+  The original failures remain recorded and are not retried unchanged.
 
 - Application policy ownership: the public init contract promised copied policy
   values, while Security/CORS/asset middleware still borrowed caller structures.
