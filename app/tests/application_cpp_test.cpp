@@ -1,9 +1,12 @@
 #include <chttp_app/application.hpp>
+#include "chttp_application_worker.h"
+#include "chttp_invocation.hpp"
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include <tinytest.hpp>
 #include <cstdio>
 #include <stdexcept>
+#include <threads/threads.h>
 
 static int destroyed;
 static int unwound;
@@ -53,6 +56,58 @@ int cpp_throw(void*, const chttp_exchange*) {
 }
 static_assert(!std::is_copy_constructible_v<chttp::Application>);
 static_assert(!std::is_move_constructible_v<chttp::Application>);
+struct InvocationCppContext {
+  chttp_application *app = nullptr;
+  chttp_protocol protocol = CHTTP_HTTP_1_1;
+  const void *control = nullptr;
+  bool fail = false, worker = false, reflected = false, legacy_rejected = false;
+  unsigned int code = 0;
+};
+struct InvocationCppController {
+  InvocationCppContext *call_context;
+  int value = 42;
+  explicit InvocationCppController(InvocationCppContext *value_context) : call_context(value_context) {}
+  ~InvocationCppController() noexcept { ++destroyed; }
+};
+cmeta_reflect_data(InvocationCppController, "test.InvocationCppController", cmeta_field(int, value));
+CHTTP_INVOCATION_ACTION(cpp_invocation);
+int cpp_invocation(void *self, const chttp_invocation *invocation) {
+  auto& controller = *static_cast<InvocationCppController*>(self);
+  auto& context = *controller.call_context;
+  struct Scope { ~Scope() noexcept { ++unwound; } } scope;
+  context.worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.reflected = cmeta_function_desc_equal(chttp_invocation_operation(invocation), FunctionAbi(cpp_invocation)->function);
+  if (context.fail) throw std::runtime_error("Invocation failure");
+  if (!chttp_invocation_request(invocation) || chttp_invocation_request(invocation)->session) return SALTS_EPROTO;
+  return chttp_invocation_respond(invocation, 200u, "text/plain", "42", 2u);
+}
+static_assert(std::is_convertible_v<decltype(&cpp_invocation), chttp_invocation_action_fn>);
+static_assert(!std::is_convertible_v<decltype(&cpp_throw), chttp_invocation_action_fn>, "old Exchange native type must be rejected");
+static int cpp_invocation_body(chttp_application *app, void *user) {
+  auto& context = *static_cast<InvocationCppContext*>(user); context.app = app;
+  const chttp_application_work_config limits{1u, 2u, 8192u, 128u};
+  int status = chttp_application_worker_prepare(app, &limits);
+  if (status != SALTS_OK) return status;
+  chttp_application_worker_binding binding{};
+  binding.component_id = "CppComponent"; binding.receiver = cmeta_reflected_data(InvocationCppController);
+  binding.method = CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_throw);
+  binding.invoke = chttp::detail::invocation_action<cpp_invocation>;
+  context.legacy_rejected = chttp_application_worker_mount(app, &binding) == SALTS_EINVAL;
+  if (!context.legacy_rejected) return SALTS_EPROTO;
+  binding.abi = FunctionAbi(cpp_invocation); status = chttp_application_worker_mount(app, &binding);
+  if (status != SALTS_OK) return status;
+  status = chttp_application_start(app); if (status != SALTS_OK) return status;
+  uint16_t port = 0; status = chttp_application_port(app, &port); if (status != SALTS_OK) return status;
+  chttp_client client{}; chttp_response response{}; chttp_error error{};
+  const chttp_client_config config{chttp_application_config_default().http.network, 1u, 256u, 16u, 4096u, 8192u, 8192u, 4u};
+  status = chttp_client_init(&client, &config); if (status != SALTS_OK) return status;
+  char uri[64]; std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", static_cast<unsigned>(port));
+  chttp_options options{}; options.connection_uri = uri; options.authority = "cpp.test"; options.target = "/cpp";
+  options.protocol = context.protocol; options.timeout_ms = 5000u;
+  status = chttp_get(&client, &options, &response, &error); context.code = response.status_code;
+  chttp_response_destroy(&response); const int closed = chttp_client_destroy(&client, 5000u);
+  return status == SALTS_OK ? closed : status;
+}
 struct CustomDelete { void operator()(CppController*) const noexcept; };
 struct DerivedController : CppController {};
 using ExactFactory = std::unique_ptr<CppController>(*)(const cmeta_data_desc*, const void*,
@@ -72,6 +127,39 @@ static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure <= 1; ++failure) {
+    it("admits a C++17 Invocation and contains action exceptions (protocol=%d failure=%d)", protocol, failure) {
+      InvocationCppContext context; context.protocol = static_cast<chttp_protocol>(protocol);
+      context.fail = failure != 0; context.control = sync_thread_current_token();
+      auto factory = [&context](const cmeta_data_desc*, const void*, const salts_configurator_dependency*, size_t) {
+        return std::make_unique<InvocationCppController>(&context);
+      };
+      chttp::Bean<InvocationCppController, decltype(factory)> bean(cmeta_component_meta(CppComponent),
+          cmeta_reflected_data(InvocationCppController), factory);
+      const auto deployment = bean.deployment();
+      chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
+      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1;
+      config.controllers = &controller; config.controller_count = 1;
+      int operation = SALTS_EIO, closed = SALTS_EIO;
+      {
+        /* The public with-helper starts before its body. This private fixture
+         * mounts before start and still closes the C owner on C++ scope exit. */
+        chttp_application app{};
+        struct Close {
+          chttp_application *owner; int& status;
+          ~Close() noexcept {
+            status = chttp_application_close(owner, 0u);
+            if (owner->impl) std::terminate();
+          }
+        } close{&app, closed};
+        operation = chttp_application_init(&app, &config);
+        if (operation == SALTS_OK) operation = cpp_invocation_body(&app, &context);
+      }
+      check_equal(operation, SALTS_OK); check_equal(closed, SALTS_OK);
+      check_true(context.worker); check_true(context.reflected); check_true(context.legacy_rejected);
+      check_equal(context.code, failure ? 500u : 200u); check_equal(unwound, 1); check_equal(destroyed, 1);
+    }
+  }
   it("contains action exceptions and destroys an ACE-owned native object on scope exit") {
     auto factory = [](const cmeta_data_desc*, const void*,
         const salts_configurator_dependency*, size_t) { return std::make_unique<CppController>(); };

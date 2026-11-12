@@ -7,7 +7,15 @@ target_link_libraries(chttp_application_test PRIVATE CHttp::App CHttp::Client Sa
 set_target_properties(chttp_application_test PROPERTIES FOLDER "app/tests")
 add_test(NAME chttp_application_test COMMAND chttp_application_test)
 
+add_executable(chttp_application_invocation_test application_invocation_test.c)
+target_include_directories(chttp_application_invocation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(chttp_application_invocation_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)
+set_target_properties(chttp_application_invocation_test PROPERTIES FOLDER "app/tests")
+add_test(NAME chttp_application_invocation_test COMMAND chttp_application_invocation_test)
+set_tests_properties(chttp_application_invocation_test PROPERTIES TIMEOUT 90)
+
 add_executable(chttp_application_cpp_test application_cpp_test.cpp)
+target_include_directories(chttp_application_cpp_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(chttp_application_cpp_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)
 set_target_properties(chttp_application_cpp_test PROPERTIES FOLDER "app/tests" CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 add_test(NAME chttp_application_cpp_test COMMAND chttp_application_cpp_test)

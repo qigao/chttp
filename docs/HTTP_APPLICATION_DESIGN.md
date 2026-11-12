@@ -274,6 +274,48 @@ renderer needs independent instances or explicit application serialization.
 
 ### Invocation ownership and response staging
 
+The private handwritten Controller binding now adopts the buffered Invocation
+contract before the public swap. Its exact native action is
+`int(void *self, const chttp_invocation *)`; a nominal `chttp.invocation` type
+identity distinguishes it from the old Exchange even though both native
+arguments use an object-pointer carrier. CMeta admits effects, parameter/result
+ownership, canonical types and ABI before publishing a route. The old Exchange
+descriptor is rejected; no native function-pointer cast or erased invocation is
+used. The callback-only handle describes its real one-pointer borrowed layout,
+not an invented opaque value size. Neither it nor any accessor view may escape
+the callback or be retained by a background task.
+
+Invocation accessors borrow the existing owned request snapshot and detached
+Session intent view. Its request view clears the Session pointer; explicit
+Session access grants only the already-admitted staged request transaction.
+Respond copies into the existing bounded draft. Cancellation queries read the
+existing synchronized native-terminal state and report only observed failed
+terminal, not a guessed deadline or a second cancellation authority. Successful
+business return still requires a sealed response before success hooks unwind.
+Only before hooks can explicitly reject; entered after/error hooks retain the
+existing ACE ordering and one completion/finalization join.
+
+Controller hook descriptors resolve canonical Bean contexts and are copied at
+mount. Thin typed adapters construct a fresh callback-local Invocation over the
+same request/draft/result and reuse the existing worker ACE chain, rather than
+nesting a second chain or creating a task per hook. Completion still borrows the
+settled read-only snapshot/outcome after terminal; it never receives a writable
+Invocation. This adds no per-request allocation, queue, growing state or retention
+protocol. Copied hook rows occupy fixed control-plane metadata per route, with
+the existing route-capacity allocation's checked multiplication.
+The existing slot/retained/reply budgets, Session gate, cancellation and close
+joins remain authoritative. Frame/handle construction is on the worker; owner
+callbacks only perform the established snapshot/admission handoff.
+
+This is an internal replacement of the raw handwritten worker callback, not an
+installed parallel programming model. New headers are not installed; public
+Exchange defaults, streaming/admission/WS adapters and generated DTO native
+contracts are unchanged until their complete public migration. C++17 action
+adapters contain exceptions before returning through C worker frames and preserve
+ordinary RAII unwinding. Callback code, canonical metadata and hook Beans remain
+borrowed through Application drain. Rollback reverts the private binding and its
+formal callers together, without changing stored data or wire behavior.
+
 Application owns a finite set of address-stable invocation records. A record
 contains its slot/generation, immutable request snapshot, canonical operation,
 ACE/provider leases, active-stage deadline, cancellation state, worker-local DTO/frame
@@ -649,7 +691,7 @@ without claiming that moving work alone improves throughput.
 4. Add cooperative await separately once pool-only semantics and drain are proven.
 
 Formal tests belong to app/tests/application_test.c, application_binding_test.c,
-application_cpp_test.cpp and the existing service/web suites; engine terminal
+application_invocation_test.c, application_cpp_test.cpp and the existing service/web suites; engine terminal
 and H1/H2 conformance remains in http_server/tests and http_common/tests.
 Use barriers/events and thread identity, not timing sleeps, to verify:
 

@@ -1,6 +1,7 @@
 #include <chttp_app/application.h>
 #include "chttp_method_runtime.h"
 #include "chttp_application_worker.h"
+#include "chttp_invocation_internal.h"
 #include "chttp_web_registration.h"
 #include "../../http_server/src/chttp_server_engine.h"
 #include "../../http_server/rpc/chttp_rpc_mount.h"
@@ -10,11 +11,18 @@
 #include <string.h>
 
 CHTTP_ACTION(chttp_expected_action);
+CHTTP_INVOCATION_ACTION(chttp_expected_invocation);
 
+typedef struct application_invocation_hook { chttp_invocation_chain_hook hook; } application_invocation_hook;
 typedef struct application_worker_action {
   chttp_application_work *work;
   chttp_application_work_task task;
   DataBindNativeExecution execution;
+  void *receiver;
+  chttp_invocation_action_fn invoke;
+  chttp_application_work_completion_fn completed;
+  application_invocation_hook invocation_hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+  chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
 } application_worker_action;
 
 typedef struct application_action { const chttp_action *action; void *receiver; } application_action;
@@ -129,6 +137,37 @@ static int application_worker_dispatch(void *context,
   const int status = chttp_application_work_submit(action->work, request, response, &action->task);
   return chttp_application_work_admission_response(response, status);
 }
+static int application_invocation_run(void *context, const chttp_server_request_view *request,
+    chttp_application_work_reply *reply) {
+  const application_worker_action *action = context;
+  const chttp_invocation_state state = chttp_invocation_state_make(request, reply, NULL);
+  const chttp_invocation invocation = {&state};
+  return action->invoke(action->receiver, &invocation);
+}
+static cmeta_status application_invocation_before(void *context, const chttp_application_work_exchange *exchange, bool *proceed) {
+  const application_invocation_hook *hook = context;
+  const chttp_invocation_state state = chttp_invocation_state_make(exchange->request, exchange->response, exchange->result);
+  const chttp_invocation invocation = {&state};
+  return hook->hook.before(hook->hook.context, &invocation, proceed);
+}
+static void application_invocation_after(void *context, const chttp_application_work_exchange *exchange,
+    const chttp_application_work_result *result) {
+  const application_invocation_hook *hook = context;
+  const chttp_invocation_state state = chttp_invocation_state_make(exchange->request, exchange->response, NULL);
+  const chttp_invocation invocation = {&state};
+  hook->hook.after(hook->hook.context, &invocation, result);
+}
+static void application_invocation_error(void *context, const chttp_application_work_exchange *exchange, cmeta_status status) {
+  const application_invocation_hook *hook = context;
+  const chttp_invocation_state state = chttp_invocation_state_make(exchange->request, exchange->response, NULL);
+  const chttp_invocation invocation = {&state};
+  hook->hook.on_error(hook->hook.context, &invocation, status);
+}
+static void application_invocation_completed(void *context, const chttp_server_request_view *request,
+    const chttp_application_work_outcome *outcome) {
+  const application_worker_action *action = context;
+  action->completed(action->receiver, request, outcome);
+}
 int chttp_application_worker_prepare(chttp_application *owner,
     const chttp_application_work_config *config) {
   application_impl *app = owner ? owner->impl : NULL;
@@ -151,6 +190,8 @@ int chttp_application_worker_mount(chttp_application *owner,
       binding->hook_count > CHTTP_APPLICATION_WORK_MAX_HOOKS ||
       (binding->hook_count && !binding->hooks)) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
+  if (!cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_invocation), binding->abi))
+    return SALTS_EINVAL;
   for (size_t i = 0u; i < binding->hook_count; ++i) {
     if (!binding->hooks[i].before && !binding->hooks[i].after && !binding->hooks[i].on_error)
       return SALTS_EINVAL;
@@ -161,11 +202,23 @@ int chttp_application_worker_mount(chttp_application *owner,
   if (status != SALTS_OK) return status;
   application_worker_action *action = &app->worker_actions[app->worker_action_count];
   *action = (application_worker_action){.work = &app->workers,
-      .task = {.run = binding->invoke, .user = receiver,
-               .after_completion = binding->after_completion,
-               .hooks = binding->hooks, .hook_count = binding->hook_count}};
-  status = chttp_server_route(&app->server, binding->method, binding->path,
-      application_worker_dispatch, action);
+      .receiver = receiver, .invoke = binding->invoke, .completed = binding->after_completion,
+      .task = {.run = application_invocation_run, .user = action,
+               .after_completion = binding->after_completion ? application_invocation_completed : NULL,
+               .hooks = action->hooks, .hook_count = binding->hook_count}};
+  for (size_t i = 0u; i < binding->hook_count; ++i) {
+    const chttp_invocation_interceptor *source = &binding->hooks[i];
+    void *hook_receiver = NULL;
+    status = application_receiver(app, source->component_id, source->receiver, &hook_receiver);
+    if (status != SALTS_OK) return status;
+    action->invocation_hooks[i].hook = (chttp_invocation_chain_hook){hook_receiver, source->before, source->after, source->on_error};
+    action->hooks[i] = (chttp_application_work_chain_hook){&action->invocation_hooks[i],
+        source->before ? application_invocation_before : NULL, source->after ? application_invocation_after : NULL,
+        source->on_error ? application_invocation_error : NULL};
+  }
+  const chttp_server_route_options route = {.method = binding->method, .path = binding->path,
+      .handler = application_worker_dispatch, .user = action, .operation = binding->abi->function};
+  status = chttp_server_route_with(&app->server, &route);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
 }
