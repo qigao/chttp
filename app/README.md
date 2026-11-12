@@ -144,6 +144,13 @@ error terminates. `chttp::Bean<T, Factory>` owns factory-created objects with
 the C boundary. `CHTTP_CPP_GET` catches action exceptions before returning to
 C and reports a native failure; C callbacks must return normally.
 
+Bean factories must return exactly `std::unique_ptr<T>` by value. A custom
+deleter, pointer-like return or derived-pointer result cannot be erased into
+Bean's `delete T` lifecycle; use an explicit ACE provider lifecycle for those
+cases. The supplied DataDesc must describe T. Bean rejects invalid descriptors
+or storage size/alignment mismatches before invoking the factory. Semantic
+descriptor identity remains the caller's explicit metadata responsibility.
+
 Buildable entry points: [C11](examples/application.c),
 [C++17](examples/application.cpp), and
 [OpenAPI UI](../openapi/examples/ui_server.c). Link only `CHttp::App` for the

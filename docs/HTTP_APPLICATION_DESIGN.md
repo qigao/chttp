@@ -62,3 +62,12 @@ Rollback requires reverting this migration as one change, restoring the old
 public headers and their callers together. It does not change wire formats or
 user data. No release is claimed until the complete implementation and its
 formal validation pass.
+
+## Typed C++ Bean admission
+
+Typed factories transfer exactly std::unique_ptr<T> into delete-T ownership.
+Constructor admission rejects custom/derived pointer result types; create checks
+canonical DataDesc validity and exact native size/alignment before any factory
+side effect. Explicit ACE providers own other deletion models. These checks
+protect the typed allocation/deletion boundary; callers still supply the correct
+semantic DataDesc identity for T. Borrowed Interface views gain no ownership.
