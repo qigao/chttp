@@ -1453,38 +1453,37 @@ static void chttp_service_deferred_direct_run(void *user) {
       invocation, &invocation->frame, native_status);
 }
 
+/* The caller owns result through output serialization, even on failure. */
+static bool chttp_service_cflow_evaluate(chttp_service_invocation *invocation,
+    cflow_result *result, DataBindBindingCallFrame *frame,
+    void **params, size_t *param_bytes) {
+  chttp_service_method_record *record = invocation->record;
+  if (!cflow_plan_eval_array(
+          &record->cflow_plan, invocation->request_storage, 1u, result) ||
+      result->count != 1u || result->data == NULL ||
+      !cmeta_type_equal(result->type, record->cflow_plan.output_type))
+    return false;
+  memcpy(params, invocation->params, sizeof(invocation->params));
+  memcpy(param_bytes, invocation->param_bytes, sizeof(invocation->param_bytes));
+  params[1] = result->data;
+  param_bytes[1] = record->cflow_plan.output_type->size;
+  *frame = invocation->frame;
+  frame->params = params;
+  frame->param_bytes = param_bytes;
+  return true;
+}
 static void chttp_service_deferred_cflow_run(void *user) {
-  chttp_service_invocation *invocation =
-      (chttp_service_invocation *)user;
-  chttp_service_method_record *record;
+  chttp_service_invocation *invocation = user;
   cflow_result result = {0};
   DataBindBindingCallFrame frame;
   void *params[3];
   size_t param_bytes[3];
+  if (invocation == NULL || invocation->record == NULL) return;
 
-  if (invocation == NULL || invocation->record == NULL)
-    return;
-  record = invocation->record;
-
-  if (!cflow_plan_eval_array(
-          &record->cflow_plan, invocation->request_storage, 1u, &result) ||
-      result.count != 1u || result.data == NULL ||
-      !cmeta_type_equal(result.type, record->cflow_plan.output_type)) {
-    cflow_result_destroy(&result);
-    (void)chttp_service_deferred_text_reply(
-        invocation, 500u, "Internal Server Error");
-    return;
-  }
-
-  memcpy(params, invocation->params, sizeof(params));
-  memcpy(param_bytes, invocation->param_bytes, sizeof(param_bytes));
-  params[1] = result.data;
-  param_bytes[1] = record->cflow_plan.output_type->size;
-  frame = invocation->frame;
-  frame.params = params;
-  frame.param_bytes = param_bytes;
-
-  chttp_service_deferred_publish(invocation, &frame, 0);
+  if (chttp_service_cflow_evaluate(invocation, &result, &frame, params, param_bytes))
+    chttp_service_deferred_publish(invocation, &frame, 0);
+  else
+    (void)chttp_service_deferred_text_reply(invocation, 500u, "Internal Server Error");
   cflow_result_destroy(&result);
 }
 
@@ -1613,10 +1612,17 @@ static int chttp_service_http_execute(
   int native_status = 0;
   int http_status = 500;
   int result;
+  cflow_result flow_result = {0};
+  DataBindBindingCallFrame flow_frame;
+  const DataBindBindingCallFrame *output_frame = &invocation.frame;
+  void *flow_params[3];
+  size_t flow_param_bytes[3];
 
   if (record == NULL || record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
-      record->native_binding == NULL || record->execution == NULL ||
+      record->native_binding == NULL ||
+      (record->execution == NULL &&
+       record->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) ||
       request == NULL || output == NULL)
     return SALTS_EINVAL;
 
@@ -1651,14 +1657,19 @@ static int chttp_service_http_execute(
     goto cleanup;
   }
 
-  if (!record->execution->invoke(
+  if (record->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) {
+    if (!chttp_service_cflow_evaluate(&invocation, &flow_result, &flow_frame,
+            flow_params, flow_param_bytes))
+      bind_status = DATA_BIND_ERR_RUNTIME;
+    else output_frame = &flow_frame;
+  } else if (!record->execution->invoke(
           record->execution->context, &native_status,
           invocation.params, record->param_count))
     bind_status = DATA_BIND_ERR_RUNTIME;
 
   if (bind_status == DATA_BIND_OK)
     bind_status = data_bind_binding_plan_write_outcome(
-        binding, &provider, &invocation.frame, native_status,
+        binding, &provider, output_frame, native_status,
         &outcome, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
@@ -1698,6 +1709,7 @@ static int chttp_service_http_execute(
 
 cleanup:
   chttp_service_http_release_output(&provider_context);
+  cflow_result_destroy(&flow_result);
   chttp_service_invocation_release(&invocation);
   return result;
 }
@@ -1810,8 +1822,10 @@ static int chttp_method_runtime_mount_http_impl(
     return SALTS_EINVAL;
 
   if (workers && (!workers->impl ||
-      mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT ||
+      (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
+       mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) ||
       mount->middleware_count != 0u)) return SALTS_ENOTSUP;
+  if (workers && mount->executor) return SALTS_EINVAL;
   plugin_mode =
       mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
   if (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
@@ -1846,8 +1860,8 @@ static int chttp_method_runtime_mount_http_impl(
          mount->cflow_projection != NULL))
       return SALTS_EINVAL;
     if (mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW &&
-        (mount->execution != NULL || mount->executor == NULL ||
-         !cflow_executor_valid(mount->executor) ||
+        (mount->execution != NULL || (!workers &&
+         (mount->executor == NULL || !cflow_executor_valid(mount->executor))) ||
          mount->cflow_projection == NULL))
       return SALTS_EINVAL;
   }

@@ -27,6 +27,7 @@ static struct {
   _Atomic int worker_calls;
   chttp_protocol protocol;
   bool block;
+  bool flow_failure;
   int destroyed, request_status;
   unsigned int response_status;
   char uri[64];
@@ -38,6 +39,7 @@ static struct {
   DataBindServiceNativeBinding binding;
   DataBindNativeExecution execution;
   cflow_function_typed_adapter_projection projection;
+  cmeta_callable flow_adapter;
   salts_configurator_provider_binding provider;
   salts_configurator_deployment deployment;
   chttp_http_method method;
@@ -73,6 +75,25 @@ static bool DATA_BIND_NATIVE_CALL invoke(void *context, void *result, void *cons
   if (fixture.block)
     while (!atomic_load_explicit(&fixture.release, memory_order_acquire)) sync_thread_yield();
   return databind_8_CFlowGen_4_Calc_3_Add__databind_execution()->invoke(NULL, result, params, count);
+}
+static bool flow_invoke(const cmeta_callable *self, void *result, const void *const *args) {
+  (void)self;
+  if (!chttp_application_worker_current(&fixture.app) ||
+      cflow_executor_is_current(&fixture.executor)) return false;
+  atomic_fetch_add_explicit(&fixture.worker_calls, 1, memory_order_relaxed);
+  atomic_store_explicit(&fixture.entered, 1, memory_order_release);
+  if (fixture.block)
+    while (!atomic_load_explicit(&fixture.release, memory_order_acquire)) sync_thread_yield();
+  return !fixture.flow_failure && fixture.flow_adapter.invoke(&fixture.flow_adapter, result, args);
+}
+static void setup_worker_flow(void) {
+  check_equal(databind_8_CFlowGen_4_Calc_3_Add__databind_cflow_projection(&fixture.projection),
+      CFLOW_FUNCTION_PROJECTION_OK);
+  fixture.flow_adapter = fixture.projection.callable;
+  fixture.projection.callable.invoke = flow_invoke;
+  check_true(cflow_function_typed_adapter_projection_valid(&fixture.projection));
+  fixture.method.dispatch = CHTTP_DISPATCH_CFLOW;
+  fixture.method.execution = NULL; fixture.method.projection = &fixture.projection;
 }
 static int request(const char *target, unsigned int *code) {
   chttp_client client = {0}; chttp_response response = {0}; chttp_error error = {0};
@@ -276,22 +297,83 @@ spec("Application generated MethodPlan bindings") {
         check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
       }
     }
-    it("holds the generated receiver until a canceled running method exits") {
-      fixture.protocol = CHTTP_HTTP_2; fixture.block = true;
-      fixture.config.deadlines.handler_ms = 100u;
-      check_equal(start_worker(), SALTS_OK);
-      check_equal(sync_thread_create(&fixture.thread, request_thread, NULL), SALTS_OK);
-      fixture.thread_live = true;
-      const uint64_t started = monotonic_ms();
-      while (!atomic_load_explicit(&fixture.entered, memory_order_acquire) &&
-          monotonic_ms() - started < 5000u) sync_thread_yield();
-      check_equal(atomic_load(&fixture.entered), 1);
-      check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
-      check_not_equal(fixture.request_status, SALTS_OK);
-      check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
-      check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
-      check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroyed, 0);
-      atomic_store_explicit(&fixture.release, 1, memory_order_release);
+    for (int flow = 0; flow <= 1; ++flow) {
+      it("holds the generated receiver until canceled direct/CFlow method exits (CFlow=%d)", flow) {
+        if (flow) setup_worker_flow();
+        fixture.protocol = CHTTP_HTTP_2; fixture.block = true;
+        fixture.config.deadlines.handler_ms = 100u;
+        check_equal(start_worker(), SALTS_OK);
+        check_equal(sync_thread_create(&fixture.thread, request_thread, NULL), SALTS_OK);
+        fixture.thread_live = true;
+        const uint64_t started = monotonic_ms();
+        while (!atomic_load_explicit(&fixture.entered, memory_order_acquire) &&
+            monotonic_ms() - started < 5000u) sync_thread_yield();
+        check_equal(atomic_load(&fixture.entered), 1);
+        check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
+        check_not_equal(fixture.request_status, SALTS_OK);
+        check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
+        check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
+        check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroyed, 0);
+        atomic_store_explicit(&fixture.release, 1, memory_order_release);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+      }
+      }
+  }
+  group("private Application-owned synchronous CFlow provider") {
+    for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+      it("binds/evaluates/serializes on one owned worker for protocol %d", protocol) {
+        setup_worker_flow(); fixture.protocol = (chttp_protocol)protocol;
+        check_equal(start_worker(), SALTS_OK);
+        unsigned int code = 0u;
+        check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+        check_equal(request("/generated-cflow/0?right=4", &code), SALTS_OK); check_equal(code, 422u);
+        check_equal(request("/generated-cflow/3", &code), SALTS_OK); check_equal(code, 400u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+      }
+      it("returns 500 on failed CFlow evaluation and drains for protocol %d", protocol) {
+        setup_worker_flow(); fixture.protocol = (chttp_protocol)protocol; fixture.flow_failure = true;
+        check_equal(start_worker(), SALTS_OK);
+        unsigned int code = 0u;
+        check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 500u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+      }
+      it("cleans failed output serialization before the next CFlow call for protocol %d", protocol) {
+        setup_worker_flow(); fixture.protocol = (chttp_protocol)protocol;
+        fixture.config.bindings.max_response_body_bytes = 1u;
+        check_equal(start_worker(), SALTS_OK);
+        unsigned int code = 0u;
+        check_equal(request("/generated-cflow/3?right=44", &code), SALTS_OK); check_equal(code, 500u);
+        check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 2); check_equal(fixture.destroyed, 1);
+      }
+    }
+    it("rejects an invalid projection before route publication without consuming the slot") {
+      setup_worker_flow();
+      fixture.controller.http_methods = NULL; fixture.controller.http_method_count = 0u;
+      fixture.method.executor = NULL;
+      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+      const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
+      check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+      fixture.projection.output_type = &cmeta_type_int;
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method), SALTS_EINVAL);
+      fixture.projection.output_type = fixture.response.data->storage_type;
+      fixture.method.executor = &fixture.executor;
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method), SALTS_ENOTSUP);
+      fixture.method.executor = NULL;
+      check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
+          cmeta_reflected_data(BindingController), &fixture.method), SALTS_OK);
+      check_equal(chttp_application_start(&fixture.app), SALTS_OK);
+      uint16_t port = 0u;
+      check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
+      snprintf(fixture.uri, sizeof(fixture.uri), "tcp://127.0.0.1:%u", (unsigned)port);
+      unsigned int code = 0u;
+      check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
       check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
     }

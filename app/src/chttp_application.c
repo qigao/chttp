@@ -204,8 +204,10 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   application_impl *app = owner ? owner->impl : NULL;
   if (!app || !method || !app->workers.impl) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
-  if (method->dispatch != CHTTP_DISPATCH_INLINE || !method->execution || method->executor ||
-      method->projection || method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref) ||
+  const bool flow = method->dispatch == CHTTP_DISPATCH_CFLOW;
+  if ((!flow && method->dispatch != CHTTP_DISPATCH_INLINE) || method->executor ||
+      (flow ? (!method->projection || method->execution) : (!method->execution || method->projection)) ||
+      method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref) ||
       method->plugin_export_id) return SALTS_ENOTSUP;
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
@@ -221,11 +223,16 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
     if (status != SALTS_OK) return status;
   }
   application_worker_action *action = &app->worker_actions[app->worker_action_count];
-  action->execution = *method->execution;
-  action->execution.context = receiver;
   chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
   mount.method_plan = method->plan; mount.native_binding = method->binding;
-  mount.execution = &action->execution;
+  if (flow) {
+    mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW;
+    mount.cflow_projection = method->projection;
+  } else {
+    action->execution = *method->execution;
+    action->execution.context = receiver;
+    mount.execution = &action->execution;
+  }
   status = chttp_method_runtime_mount_worker_http(&app->methods, &app->server, &mount, &app->workers);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
