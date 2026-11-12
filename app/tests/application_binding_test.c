@@ -9,6 +9,7 @@
 #include <core/clock.h>
 #include <threads/threads.h>
 #include <stdatomic.h>
+#include <json_parser.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -110,6 +111,8 @@ static int start_worker(void) {
   if (status == SALTS_OK) status = chttp_application_worker_prepare(&fixture.app, &limits);
   if (status == SALTS_OK) status = chttp_application_worker_mount_http(&fixture.app,
       "BindingComponent", cmeta_reflected_data(BindingController), &fixture.method);
+  if (status == SALTS_OK && fixture.rpc_plan) status = chttp_application_worker_mount_rpc(&fixture.app,
+      "BindingComponent", cmeta_reflected_data(BindingController), &fixture.rpc_method);
   if (status == SALTS_OK) status = chttp_application_start(&fixture.app);
   uint16_t port = 0u;
   if (status == SALTS_OK) status = chttp_application_port(&fixture.app, &port);
@@ -173,6 +176,21 @@ static int rpc_request(chttp_protocol protocol, chttp_client_rpc_outcome_kind *k
   *kind = outcome.kind; *sum = output.sum;
   const int closed = chttp_client_destroy(&client, 5000u);
   return closed != SALTS_OK ? closed : status;
+}
+static int raw_rpc(const char *body, chttp_response *response) {
+  chttp_client client = {0}; chttp_error error = {0};
+  int status = chttp_client_init(&client, &fixture.client);
+  if (status != SALTS_OK) return status;
+  const chttp_options options = {.connection_uri = fixture.uri, .authority = "test", .target = "/rpc",
+      .protocol = fixture.protocol, .body = body, .body_size = strlen(body), .timeout_ms = 5000u};
+  status = chttp_post(&client, &options, response, &error);
+  const int closed = chttp_client_destroy(&client, 5000u);
+  return closed == SALTS_OK ? status : closed;
+}
+static void rpc_request_thread(void *unused) {
+  (void)unused;
+  chttp_client_rpc_outcome_kind kind = CHTTP_CLIENT_RPC_NONE; uint32_t sum = 0u;
+  fixture.request_status = rpc_request(fixture.protocol, &kind, &sum);
 }
 static void exercise_rpc(chttp_protocol protocol) {
   setup_rpc();
@@ -276,6 +294,83 @@ spec("Application generated MethodPlan bindings") {
       atomic_store_explicit(&fixture.release, 1, memory_order_release);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
       check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+    }
+  }
+  group("private worker RPC envelope") {
+    it("retains the RPC registry and receiver while a canceled native method still runs") {
+      setup_rpc(); fixture.protocol = CHTTP_HTTP_2; fixture.block = true;
+      fixture.controller.rpc_methods = NULL; fixture.controller.rpc_method_count = 0u;
+      fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+      fixture.config.deadlines.handler_ms = 100u;
+      check_equal(start_worker(), SALTS_OK);
+      check_equal(sync_thread_create(&fixture.thread, rpc_request_thread, NULL), SALTS_OK);
+      fixture.thread_live = true;
+      const uint64_t started = monotonic_ms();
+      while (!atomic_load_explicit(&fixture.entered, memory_order_acquire) &&
+          monotonic_ms() - started < 5000u) sync_thread_yield();
+      check_equal(atomic_load(&fixture.entered), 1);
+      check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
+      check_not_equal(fixture.request_status, SALTS_OK);
+      check_not_equal(fixture.request_status, SALTS_ETIMEDOUT);
+      check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT);
+      check_not_equal(fixture.app.impl, NULL); check_equal(fixture.destroyed, 0);
+      atomic_store_explicit(&fixture.release, 1, memory_order_release);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(atomic_load(&fixture.worker_calls), 1); check_equal(fixture.destroyed, 1);
+    }
+    for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+      it("executes typed RPC and generated HTTP on the same owned pool for protocol %d", protocol) {
+        setup_rpc(); fixture.protocol = (chttp_protocol)protocol;
+        fixture.controller.rpc_methods = NULL; fixture.controller.rpc_method_count = 0u;
+        fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+        check_equal(start_worker(), SALTS_OK);
+        chttp_client_rpc_outcome_kind kind = CHTTP_CLIENT_RPC_NONE; uint32_t sum = 0u;
+        check_equal(rpc_request(fixture.protocol, &kind, &sum), SALTS_OK);
+        check_equal(kind, CHTTP_CLIENT_RPC_SUCCESS); check_equal(sum, (uint32_t)7u);
+        unsigned int code = 0u;
+        check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 2); check_equal(fixture.destroyed, 1);
+      }
+      it("preserves batch results, notifications and protocol errors for protocol %d", protocol) {
+        setup_rpc(); fixture.protocol = (chttp_protocol)protocol;
+        fixture.controller.rpc_methods = NULL; fixture.controller.rpc_method_count = 0u;
+        fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+        check_equal(start_worker(), SALTS_OK);
+        const char batch[] = "[{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[3,4],\"id\":1},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":{\"left\":5,\"right\":6}},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Unknown\",\"id\":2}]";
+        chttp_response response = {0};
+        check_equal(raw_rpc(batch, &response), SALTS_OK); check_equal(response.status_code, 200u);
+        json_value_t *root = json_parse(response.body, response.body_size);
+        check_not_null(root); check_equal(json_type(root), JSON_ARRAY);
+        check_equal(json_array_size(root), 2u);
+        check_equal(json_number(json_object_get(json_array_get(root, 0u), "result")), 7.0);
+        check_equal(json_number(json_object_get(json_array_get(root, 0u), "id")), 1.0);
+        check_equal(json_number(json_object_get(json_object_get(json_array_get(root, 1u), "error"), "code")), -32601.0);
+        json_free(root); chttp_response_destroy(&response);
+        check_equal(raw_rpc("{", &response), SALTS_OK); check_equal(response.status_code, 200u);
+        root = json_parse(response.body, response.body_size);
+        check_not_null(root);
+        check_equal(json_number(json_object_get(json_object_get(root, "error"), "code")), -32700.0);
+        json_free(root); chttp_response_destroy(&response);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 2); check_equal(fixture.destroyed, 1);
+      }
+      it("emits an empty 204 for a notification-only batch on protocol %d", protocol) {
+        setup_rpc(); fixture.protocol = (chttp_protocol)protocol;
+        fixture.controller.rpc_methods = NULL; fixture.controller.rpc_method_count = 0u;
+        fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+        check_equal(start_worker(), SALTS_OK);
+        const char batch[] = "[{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[3,4]},"
+            "{\"jsonrpc\":\"2.0\",\"method\":\"Calc.Add\",\"params\":[5,6]}]";
+        chttp_response response = {0};
+        check_equal(raw_rpc(batch, &response), SALTS_OK); check_equal(response.status_code, 204u);
+        check_equal(response.body_size, 0u); check_null(chttp_response_header(&response, "Content-Type"));
+        chttp_response_destroy(&response);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.worker_calls), 2); check_equal(fixture.destroyed, 1);
+      }
     }
   }
   it("executes deferred bindings and drains native finalizers before Bean destruction") {

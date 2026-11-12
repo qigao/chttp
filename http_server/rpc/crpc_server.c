@@ -51,6 +51,8 @@ typedef struct crpc_server_impl {
   char *method_scratch;
   size_t method_count;
   size_t response_body_limit;
+  chttp_server_handler_fn dispatch_adapter;
+  void *dispatch_user;
   void *generated;
   chttp_server_rpc_generated_config generated_config;
 } crpc_server_impl;
@@ -409,14 +411,13 @@ static int crpc_server_batch(crpc_server_impl *server,
   return status;
 }
 
-static int crpc_server_route_handler(void *user, const chttp_server_request_view *request,
-                                     chttp_server_response *response) {
-  crpc_server_impl *server = (crpc_server_impl *)user;
+static int crpc_server_evaluate(crpc_server_impl *server,
+    const chttp_server_request_view *request, chttp_rpc_output_fn write, void *output) {
   crpc_server_dispatch_result result = {0};
   json_value_t *root = NULL;
   int status;
 
-  if (server == NULL || request == NULL || response == NULL) return SALTS_EINVAL;
+  if (server == NULL || request == NULL || write == NULL) return SALTS_EINVAL;
   if (request->body == NULL || request->body_size == 0u) {
     status = crpc_server_protocol_error(server, server->response_body_limit, true, 0u,
                                         CRPC_PARSE_ERROR, "Parse error", &result);
@@ -436,12 +437,41 @@ static int crpc_server_route_handler(void *user, const chttp_server_request_view
           crpc_server_dispatch_object(server, request, root, server->response_body_limit, &result);
   }
   if (status == SALTS_OK)
-    status = result.emit ? chttp_server_reply(response, 200u, "application/json",
+    status = result.emit ? write(output, 200u, "application/json",
                                               result.encoded.data, result.encoded.size)
-                         : chttp_server_reply(response, 204u, NULL, NULL, 0u);
+                         : write(output, 204u, NULL, NULL, 0u);
   crpc_encoded_request_destroy(&result.encoded);
   json_free(root);
   return status;
+}
+
+static int crpc_server_engine_output(void *user, unsigned int code,
+    const char *type, const void *body, size_t size) {
+  return chttp_server_reply(user, code, type, body, size);
+}
+static int crpc_server_route_handler(void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  crpc_server_impl *server = user;
+  if (!server) return SALTS_EINVAL;
+  if (server->dispatch_adapter)
+    return server->dispatch_adapter(server->dispatch_user, request, response);
+  return crpc_server_evaluate(server, request, crpc_server_engine_output, response);
+}
+int chttp_server_rpc_set_dispatch_adapter(chttp_server *server,
+    chttp_server_handler_fn adapter, void *user) {
+  chttp_server_impl *host = server ? server->impl : NULL;
+  if (!host || !adapter || !host->rpc_owner) return SALTS_EINVAL;
+  if (host->start_called) return SALTS_EBUSY;
+  crpc_server_impl *rpc = host->rpc_owner;
+  if (rpc->method_count || rpc->dispatch_adapter) return SALTS_EALREADY;
+  rpc->dispatch_adapter = adapter; rpc->dispatch_user = user;
+  return SALTS_OK;
+}
+int chttp_server_rpc_evaluate(chttp_server *server, const chttp_server_request_view *request,
+    chttp_rpc_output_fn write, void *user) {
+  chttp_server_impl *host = server ? server->impl : NULL;
+  if (!host || !host->rpc_owner) return SALTS_EINVAL;
+  return crpc_server_evaluate(host->rpc_owner, request, write, user);
 }
 
 /* Share one bounded registry constructor between legacy CRPC and attached HTTP.

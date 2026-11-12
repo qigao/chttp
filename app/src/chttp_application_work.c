@@ -148,7 +148,8 @@ static void snapshot_copy(work_item *item, const chttp_server_request_view *r) {
 }
 int chttp_application_work_respond(chttp_application_work_reply *reply, unsigned int code,
     const char *type, const void *body, size_t size) {
-  if (!reply || !reply->item || code < 200u || code > 599u || !type || (size && !body))
+  if (!reply || !reply->item || code < 200u || code > 599u ||
+      (type && !type[0]) || (size && !body))
     return SALTS_EINVAL;
   work_item *item = reply->item;
   if (!cflow_executor_is_current(&item->owner->executor)) return SALTS_EINVAL;

@@ -46,6 +46,17 @@ typedef struct chttp_server_rpc_mount_options {
 int chttp_server_rpc_mount(chttp_server *server,
                            const chttp_server_rpc_mount_options *mount);
 
+/* Private Application composition boundary. Set the owner-side dispatch adapter
+ * before mounting any methods/listener start. The worker evaluator borrows the
+ * immutable registry and per-call bounded frame pool through return; its writer
+ * must copy/consume the result synchronously. Server destruction requires the
+ * Application's accepted workers to be drained first. No scheduler dependency
+ * or Application type belongs to the Server module. */
+typedef int (*chttp_rpc_output_fn)(void *, unsigned int, const char *, const void *, size_t);
+int chttp_server_rpc_set_dispatch_adapter(chttp_server *, chttp_server_handler_fn, void *);
+int chttp_server_rpc_evaluate(chttp_server *, const chttp_server_request_view *,
+    chttp_rpc_output_fn, void *);
+
 #ifdef __cplusplus
 }
 #endif

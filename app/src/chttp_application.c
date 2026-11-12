@@ -23,6 +23,8 @@ typedef struct application_impl {
   chttp_method_runtime methods;
   chttp_application_work workers;
   chttp_binding_limits worker_binding_limits;
+  chttp_server_rpc_config worker_rpc_config;
+  bool worker_rpc_ready;
   application_worker_action *worker_actions;
   size_t worker_action_count;
   size_t worker_route_capacity;
@@ -149,6 +151,50 @@ int chttp_application_worker_mount(chttp_application *owner,
                .hooks = binding->hooks, .hook_count = binding->hook_count}};
   status = chttp_server_route(&app->server, binding->method, binding->path,
       application_worker_dispatch, action);
+  if (status == SALTS_OK) ++app->worker_action_count;
+  return status;
+}
+
+static int application_worker_rpc_output(void *user, unsigned int code, const char *type,
+    const void *body, size_t size) {
+  return chttp_application_work_respond(user, code, type, body, size);
+}
+static int application_worker_rpc_run(void *user, const chttp_server_request_view *request,
+    chttp_application_work_reply *reply) {
+  application_impl *app = user;
+  return chttp_server_rpc_evaluate(&app->server, request, application_worker_rpc_output, reply);
+}
+static int application_worker_rpc_dispatch(void *user,
+    const chttp_server_request_view *request, chttp_server_response *response) {
+  application_impl *app = user;
+  const chttp_application_work_task task = {.run = application_worker_rpc_run, .user = app};
+  const int status = chttp_application_work_submit(&app->workers, request, response, &task);
+  if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
+    return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
+  return status;
+}
+int chttp_application_worker_mount_rpc(chttp_application *owner, const char *component_id,
+    const cmeta_data_desc *data, const chttp_rpc_method *method) {
+  application_impl *app = owner ? owner->impl : NULL;
+  if (!app || !method || !method->execution || !app->workers.impl) return SALTS_EINVAL;
+  if (app->configuration_closed) return SALTS_EBUSY;
+  if (method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref)) return SALTS_ENOTSUP;
+  if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
+  void *receiver = NULL;
+  int status = application_receiver(app, component_id, data, &receiver);
+  if (status != SALTS_OK) return status;
+  if (!app->worker_rpc_ready) {
+    status = chttp_server_rpc_configure(&app->server, &app->worker_rpc_config);
+    if (status != SALTS_OK) return status;
+    status = chttp_server_rpc_set_dispatch_adapter(&app->server, application_worker_rpc_dispatch, app);
+    if (status != SALTS_OK) return status;
+    app->worker_rpc_ready = true;
+  }
+  application_worker_action *action = &app->worker_actions[app->worker_action_count];
+  action->execution = *method->execution; action->execution.context = receiver;
+  const chttp_server_rpc_mount_options mount = {sizeof(mount), method->path, method->plan,
+      method->binding, &action->execution, NULL, {0}};
+  status = chttp_server_rpc_mount(&app->server, &mount);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
 }
@@ -358,6 +404,7 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   if (config->assets != NULL) app->assets = *config->assets;
   app->worker_route_capacity = config->http.route_capacity;
   app->worker_binding_limits = config->bindings;
+  app->worker_rpc_config = config->rpc;
   app->worker_prototype_allowed = config->interceptor_count == 0u && !config->admission &&
       !config->assets && config->http.session_capacity == 0u;
   for (size_t i = 0u; i < config->controller_count; ++i) {
