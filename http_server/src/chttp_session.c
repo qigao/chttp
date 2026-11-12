@@ -237,7 +237,7 @@ static void chttp_session_expire_locked(chttp_server_impl *server,
   size_t index;
   for (index = 0u; index < server->config.session_capacity; ++index) {
     chttp_session_record *record = &server->sessions[index];
-    if (record->used && record->expires_at_ms <= now_ms)
+    if (record->used && !record->worker_pins && record->expires_at_ms <= now_ms)
       chttp_session_record_clear(server, record);
   }
 }
@@ -384,13 +384,22 @@ static int chttp_session_create(chttp_session_context *context) {
   int status;
   if (context == NULL || context->server == NULL) return SALTS_EINVAL;
 
+  if (context->staged) {
+    context->staged_exists = true;
+    context->created = true;
+    context->invalidated = false;
+    context->dirty = false;
+    chttp_session_snapshot_clear(context);
+    return SALTS_OK;
+  }
   now_ms = monotonic_ms();
   sync_mutex_lock(&context->server->session_mutex);
   chttp_session_expire_locked(context->server, now_ms);
   for (record_index = 0u;
        record_index < context->server->config.session_capacity;
        ++record_index) {
-    if (!context->server->sessions[record_index].used) {
+    if (!context->server->sessions[record_index].used &&
+        !context->server->sessions[record_index].worker_pins) {
       record = &context->server->sessions[record_index];
       break;
     }
@@ -439,7 +448,7 @@ const char *chttp_session_get(const chttp_session *session, const char *key) {
   const chttp_session_context *context =
       chttp_session_context_const_get(session);
   size_t index;
-  if (context == NULL || key == NULL || context->record == NULL ||
+  if (context == NULL || key == NULL || (context->staged ? !context->staged_exists : context->record == NULL) ||
       context->invalidated)
     return NULL;
   for (index = 0u;
@@ -466,7 +475,8 @@ int chttp_session_set(chttp_session *session, const char *key,
   if (key_size > context->server->config.max_session_key_bytes ||
       value_size > context->server->config.max_session_value_bytes)
     return SALTS_EMSGSIZE;
-  if (context->record == NULL) {
+  if (context->sealed) return SALTS_EALREADY;
+  if (context->staged ? !context->staged_exists : context->record == NULL) {
     status = chttp_session_create(context);
     if (status != SALTS_OK) return status;
   }
@@ -494,7 +504,8 @@ int chttp_session_remove(chttp_session *session, const char *key) {
   if (context == NULL || key == NULL || key[0] == '\0' ||
       context->invalidated)
     return SALTS_EINVAL;
-  if (context->record == NULL) return SALTS_ENOENT;
+  if (context->sealed) return SALTS_EALREADY;
+  if (context->staged ? !context->staged_exists : context->record == NULL) return SALTS_ENOENT;
   for (index = 0u;
        index < context->server->config.session_entry_capacity; ++index) {
     chttp_session_entry *entry = &context->snapshot_entries[index];
@@ -512,7 +523,8 @@ int chttp_session_remove(chttp_session *session, const char *key) {
 int chttp_session_clear(chttp_session *session) {
   chttp_session_context *context = chttp_session_context_get(session);
   if (context == NULL || context->invalidated) return SALTS_EINVAL;
-  if (context->record == NULL) return SALTS_OK;
+  if (context->sealed) return SALTS_EALREADY;
+  if (context->staged ? !context->staged_exists : context->record == NULL) return SALTS_OK;
   chttp_session_snapshot_clear(context);
   context->dirty = true;
   return SALTS_OK;
@@ -524,6 +536,13 @@ int chttp_session_regenerate(chttp_session *session) {
   int status;
 
   if (context == NULL || context->invalidated) return SALTS_EINVAL;
+  if (context->sealed) return SALTS_EALREADY;
+  if (context->staged) {
+    context->staged_exists = true;
+    context->staged_regenerate = true;
+    context->created = true;
+    return SALTS_OK;
+  }
   if (context->record == NULL) return chttp_session_create(context);
 
   sync_mutex_lock(&context->server->session_mutex);
@@ -550,6 +569,14 @@ int chttp_session_regenerate(chttp_session *session) {
 int chttp_session_invalidate(chttp_session *session) {
   chttp_session_context *context = chttp_session_context_get(session);
   if (context == NULL) return SALTS_EINVAL;
+  if (context->sealed) return SALTS_EALREADY;
+  if (context->staged) {
+    context->staged_exists = false;
+    context->invalidated = true;
+    context->dirty = false;
+    chttp_session_snapshot_clear(context);
+    return SALTS_OK;
+  }
   if (context->record != NULL) {
     sync_mutex_lock(&context->server->session_mutex);
     if (chttp_session_record_matches(context))
@@ -566,10 +593,8 @@ int chttp_session_invalidate(chttp_session *session) {
   return SALTS_OK;
 }
 
-static int chttp_session_set_cookie(chttp_server_request_state *state,
-                                    const char *id,
-                                    uint32_t max_age_seconds) {
-  chttp_server_impl *server = state->server;
+static int chttp_session_set_cookie(chttp_server_impl *server,
+    chttp_server_response *response, const char *id, uint32_t max_age_seconds) {
   char cookie[CHTTP_SESSION_COOKIE_BYTES];
   int cookie_size =
       snprintf(cookie, sizeof(cookie),
@@ -579,7 +604,7 @@ static int chttp_session_set_cookie(chttp_server_request_state *state,
                server->config.session_cookie_secure ? "; Secure" : "");
   if (cookie_size < 0 || (size_t)cookie_size >= sizeof(cookie))
     return SALTS_EMSGSIZE;
-  return chttp_server_response_set_header(&state->response, "Set-Cookie",
+  return chttp_server_response_set_header(response, "Set-Cookie",
                                           cookie);
 }
 
@@ -609,7 +634,7 @@ int chttp_session_request_finish(chttp_server_request_state *state) {
     return SALTS_OK;
   context = &state->session_context;
   if (context->invalidated)
-    return chttp_session_set_cookie(state, "", 0u);
+    return chttp_session_set_cookie(state->server, &state->response, "", 0u);
   if (context->record == NULL) return SALTS_OK;
 
   sync_mutex_lock(&context->server->session_mutex);
@@ -632,7 +657,7 @@ int chttp_session_request_finish(chttp_server_request_state *state) {
     context->invalidated = true;
     context->created = false;
     context->dirty = false;
-    return chttp_session_set_cookie(state, "", 0u);
+    return chttp_session_set_cookie(state->server, &state->response, "", 0u);
   }
 
   max_age_seconds =
@@ -640,7 +665,7 @@ int chttp_session_request_finish(chttp_server_request_state *state) {
   if (state->server->config.session_idle_timeout_ms % 1000u != 0u)
     ++max_age_seconds;
   if (max_age_seconds == 0u) max_age_seconds = 1u;
-  status = chttp_session_set_cookie(state, id, max_age_seconds);
+  status = chttp_session_set_cookie(state->server, &state->response, id, max_age_seconds);
   if (status != SALTS_OK && context->created)
     chttp_session_discard_created(context);
   else if (status == SALTS_OK) {
@@ -661,4 +686,213 @@ void chttp_session_request_abort(chttp_server_request_state *state) {
   context->record_generation = 0u;
   context->id[0] = '\0';
   context->dirty = false;
+}
+
+struct chttp_session_work {
+  chttp_session_context context;
+  chttp_session view;
+  const chttp_session_context *origin; /* Only compared on owner-side attach. */
+  chttp_session_record *record;
+  uint32_t generation;
+  char original_id[CHTTP_SESSION_ID_TEXT_BYTES + 1u];
+  void (*committed)(void *, int);
+  void *user;
+  bool pinned, begun, commit_allowed, owner_done;
+  int owner_status;
+};
+
+static bool session_work_matches(const chttp_session_work *work) {
+  return work->record && work->record->used && work->record->generation == work->generation &&
+      memcmp(work->record->id, work->original_id, sizeof(work->original_id)) == 0;
+}
+int chttp_session_work_size(const chttp_session *session, size_t *out) {
+  const chttp_session_context *context = chttp_session_context_const_get(session);
+  if (!out || !context || !context->server) return SALTS_EINVAL;
+  if (context->staged || context->dirty || context->created || context->invalidated ||
+      !context->server->config.session_capacity) return SALTS_ENOTSUP;
+  const chttp_server_config *c = &context->server->config;
+  size_t entries, keys, values;
+  if (c->max_session_key_bytes == SIZE_MAX || c->max_session_value_bytes == SIZE_MAX ||
+      !chttp_session_multiply(c->session_entry_capacity, sizeof(chttp_session_entry), &entries) ||
+      !chttp_session_multiply(c->session_entry_capacity, c->max_session_key_bytes + 1u, &keys) ||
+      !chttp_session_multiply(c->session_entry_capacity, c->max_session_value_bytes + 1u, &values))
+    return SALTS_ERANGE;
+  size_t bytes = sizeof(chttp_session_work);
+  if (entries > SIZE_MAX - bytes) return SALTS_ERANGE;
+  bytes += entries;
+  if (keys > SIZE_MAX - bytes) return SALTS_ERANGE;
+  bytes += keys;
+  if (values > SIZE_MAX - bytes) return SALTS_ERANGE;
+  bytes += values;
+  const size_t alignment = _Alignof(max_align_t);
+  if (bytes > SIZE_MAX - (alignment - 1u)) return SALTS_ERANGE;
+  *out = (bytes + alignment - 1u) / alignment * alignment;
+  return SALTS_OK;
+}
+int chttp_session_work_prepare(void *storage, size_t capacity, const chttp_session *session,
+    void (*committed)(void *, int), void *user, chttp_session_work **out) {
+  if (!out || !storage || !committed || (uintptr_t)storage % _Alignof(max_align_t))
+    return SALTS_EINVAL;
+  *out = NULL;
+  size_t bytes;
+  int status = chttp_session_work_size(session, &bytes);
+  if (status != SALTS_OK) return status;
+  if (capacity < bytes) return SALTS_ENOBUFS;
+  const chttp_session_context *origin = session->impl;
+  chttp_server_impl *server = origin->server;
+  chttp_session_work *work = storage;
+  memset(storage, 0, bytes);
+  work->origin = origin; work->committed = committed; work->user = user;
+  work->context.server = server; work->context.staged = true;
+  work->context.presented = origin->presented;
+  work->view.impl = &work->context;
+  unsigned char *next = (unsigned char *)(work + 1);
+  work->context.snapshot_entries = (chttp_session_entry *)next;
+  next += server->config.session_entry_capacity * sizeof(chttp_session_entry);
+  work->context.snapshot_keys = (char *)next;
+  next += server->config.session_entry_capacity * (server->config.max_session_key_bytes + 1u);
+  work->context.snapshot_values = (char *)next;
+  for (size_t i = 0; i < server->config.session_entry_capacity; ++i) {
+    work->context.snapshot_entries[i].key = work->context.snapshot_keys +
+        i * (server->config.max_session_key_bytes + 1u);
+    work->context.snapshot_entries[i].value = work->context.snapshot_values +
+        i * (server->config.max_session_value_bytes + 1u);
+  }
+  sync_mutex_lock(&server->session_mutex);
+  if (origin->record) {
+    if (!chttp_session_record_matches(origin)) status = SALTS_ENOENT;
+    else if (origin->record->worker_pins == SIZE_MAX) status = SALTS_ERANGE;
+    else {
+      work->record = origin->record; work->generation = origin->record_generation;
+      memcpy(work->original_id, origin->id, sizeof(work->original_id));
+      ++work->record->worker_pins; work->pinned = true;
+      chttp_session_snapshot_from_record(&work->context, work->record);
+      work->context.staged_exists = true;
+    }
+  }
+  sync_mutex_unlock(&server->session_mutex);
+  if (status == SALTS_OK) *out = work;
+  return status;
+}
+chttp_session *chttp_session_work_view(chttp_session_work *work) {
+  return work ? &work->view : NULL;
+}
+const void *chttp_session_work_key(const chttp_session_work *work) {
+  return work ? work->record : NULL;
+}
+int chttp_session_work_begin(chttp_session_work *work) {
+  if (!work) return SALTS_OK;
+  if (work->begun || work->context.sealed) return SALTS_EALREADY;
+  chttp_server_impl *server = work->context.server;
+  int status = SALTS_OK;
+  sync_mutex_lock(&server->session_mutex);
+  if (work->owner_done) status = SALTS_ECANCELED;
+  else if (work->record && !session_work_matches(work)) status = SALTS_ENOENT;
+  else {
+    if (work->record) chttp_session_snapshot_from_record(&work->context, work->record);
+    work->context.staged_exists = work->record != NULL;
+    work->begun = true;
+  }
+  sync_mutex_unlock(&server->session_mutex);
+  return status;
+}
+void chttp_session_work_seal(chttp_session_work *work, bool commit) {
+  if (!work) return;
+  work->commit_allowed = commit;
+  work->context.sealed = true;
+}
+void chttp_session_work_release(chttp_session_work *work) {
+  if (!work) return;
+  chttp_server_impl *server = work->context.server;
+  sync_mutex_lock(&server->session_mutex);
+  /* Explicit logout/fail-closed invalidation is irreversible. A dead transport
+   * or failed cookie publication cannot preserve the original authentication.
+   * This reconciles only the admitted generation; never clear a newer identity.
+   * Framework retirement owns this store-only cleanup, after business last use. */
+  if (work->context.sealed && work->context.invalidated && session_work_matches(work))
+    chttp_session_record_clear(server, work->record);
+  if (work->pinned) { --work->record->worker_pins; work->pinned = false; }
+  sync_mutex_unlock(&server->session_mutex);
+  /* The invocation owns storage, including all snapshot buffers. */
+}
+int chttp_session_work_attach(chttp_server_request_state *state, chttp_session_work *work) {
+  if (!work || !state || work->origin != &state->session_context || state->session_work)
+    return SALTS_EINVAL;
+  state->session_work = work;
+  return SALTS_OK;
+}
+static void session_work_owner_done(chttp_session_work *work, int status) {
+  chttp_server_impl *server = work->context.server;
+  sync_mutex_lock(&server->session_mutex);
+  const bool notify = !work->owner_done;
+  if (notify) { work->owner_done = true; work->owner_status = status; }
+  sync_mutex_unlock(&server->session_mutex);
+  if (notify) work->committed(work->user, status);
+}
+void chttp_session_work_detach(chttp_server_request_state *state, int status) {
+  if (!state || !state->session_work) return;
+  chttp_session_work *work = state->session_work;
+  state->session_work = NULL;
+  session_work_owner_done(work, status);
+}
+static int session_work_commit(chttp_session_work *work, chttp_server_response *response) {
+  chttp_session_context *context = &work->context;
+  chttp_server_impl *server = context->server;
+  if (!context->sealed) return SALTS_EPROTO;
+  if (!work->commit_allowed && !context->invalidated) return SALTS_OK;
+  if (!work->begun) return SALTS_EPROTO;
+  char id[CHTTP_SESSION_ID_TEXT_BYTES + 1u] = {0};
+  int status = SALTS_OK;
+  sync_mutex_lock(&server->session_mutex);
+  chttp_session_record *record = work->record;
+  if (record && !session_work_matches(work)) status = SALTS_ENOENT;
+  if (status == SALTS_OK && !context->invalidated && context->staged_exists) {
+    if (!record) {
+      chttp_session_expire_locked(server, monotonic_ms());
+      for (size_t i = 0; i < server->config.session_capacity; ++i)
+        if (!server->sessions[i].used && !server->sessions[i].worker_pins) {
+          record = &server->sessions[i]; break;
+        }
+      if (!record) status = SALTS_ENOBUFS;
+    }
+    if (status == SALTS_OK) {
+      if (!work->record || context->staged_regenerate)
+        status = chttp_session_generate_id_locked(server, id);
+      else memcpy(id, record->id, sizeof(id));
+    }
+  }
+  /* Reserve bounded header storage before changing the authoritative record. */
+  if (status == SALTS_OK && (context->invalidated || context->staged_exists)) {
+    uint32_t max_age = server->config.session_idle_timeout_ms / 1000u;
+    if (server->config.session_idle_timeout_ms % 1000u) ++max_age;
+    if (!max_age) max_age = 1u;
+    status = chttp_session_set_cookie(server, response, context->invalidated ? "" : id,
+        context->invalidated ? 0u : max_age);
+  }
+  if (status == SALTS_OK) {
+    if (context->invalidated) { if (record) chttp_session_record_clear(server, record); }
+    else if (context->staged_exists) {
+      if (!work->record || context->staged_regenerate) {
+        record->generation = chttp_session_generation_next(record->generation);
+        memcpy(record->id, id, sizeof(id));
+      }
+      if (context->dirty || context->created) chttp_session_record_from_snapshot(context, record);
+      record->used = true;
+      record->expires_at_ms = chttp_session_expiry(server, monotonic_ms());
+    }
+  }
+  sync_mutex_unlock(&server->session_mutex);
+  return status;
+}
+int chttp_session_request_finish_deferred(chttp_server_request_state *state,
+    chttp_server_response *response) {
+  if (!state->session_work) return chttp_session_request_finish(state);
+  chttp_session_work *work = state->session_work;
+  sync_mutex_lock(&state->server->session_mutex);
+  const bool settled = work->owner_done;
+  sync_mutex_unlock(&state->server->session_mutex);
+  if (settled) return SALTS_EALREADY;
+  const int status = session_work_commit(work, response);
+  session_work_owner_done(work, status);
+  return status;
 }

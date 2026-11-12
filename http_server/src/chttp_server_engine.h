@@ -21,6 +21,22 @@ typedef struct chttp_server_response_terminal {
 int chttp_server_response_observe(chttp_server_response *, chttp_server_response_terminal *);
 int chttp_server_response_unobserve(chttp_server_response *, chttp_server_response_terminal *);
 
+/* Private detached Session transaction. Storage is caller-owned, max-aligned,
+ * charged to its invocation and retained through owner terminal + worker drain.
+ * The store/record remain Server-owned. The commit callback only records/signals;
+ * it runs on the native owner and may release the logical Session gate. */
+typedef struct chttp_session_work chttp_session_work;
+int chttp_session_work_size(const chttp_session *, size_t *);
+int chttp_session_work_prepare(void *, size_t, const chttp_session *,
+    void (*)(void *, int), void *, chttp_session_work **);
+chttp_session *chttp_session_work_view(chttp_session_work *);
+const void *chttp_session_work_key(const chttp_session_work *);
+int chttp_session_work_begin(chttp_session_work *);
+void chttp_session_work_seal(chttp_session_work *, bool commit);
+void chttp_session_work_release(chttp_session_work *);
+int chttp_server_response_defer_worker(chttp_server_response *, chttp_server_deferred *,
+    chttp_session_work *);
+
 typedef struct chttp_server_middleware {
   chttp_server_middleware_fn handler;
   void *user;

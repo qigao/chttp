@@ -106,13 +106,15 @@ int chttp_application_worker_current(const chttp_application *owner) {
   const application_impl *app = owner ? owner->impl : NULL;
   return app && chttp_application_work_is_current(&app->workers);
 }
+int chttp_application_worker_stats(chttp_application *owner, chttp_application_work_stats *stats) {
+  application_impl *app = owner ? owner->impl : NULL;
+  return app ? chttp_application_work_get_stats(&app->workers, stats) : SALTS_EINVAL;
+}
 static int application_worker_dispatch(void *context,
     const chttp_server_request_view *request, chttp_server_response *response) {
   application_worker_action *action = context;
   const int status = chttp_application_work_submit(action->work, request, response, &action->task);
-  if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
-    return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
-  return status;
+  return chttp_application_work_admission_response(response, status);
 }
 int chttp_application_worker_prepare(chttp_application *owner,
     const chttp_application_work_config *config) {
@@ -169,9 +171,7 @@ static int application_worker_rpc_dispatch(void *user,
   application_impl *app = user;
   const chttp_application_work_task task = {.run = application_worker_rpc_run, .user = app};
   const int status = chttp_application_work_submit(&app->workers, request, response, &task);
-  if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
-    return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
-  return status;
+  return chttp_application_work_admission_response(response, status);
 }
 int chttp_application_worker_mount_rpc(chttp_application *owner, const char *component_id,
     const cmeta_data_desc *data, const chttp_rpc_method *method) {
@@ -406,7 +406,7 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   app->worker_binding_limits = config->bindings;
   app->worker_rpc_config = config->rpc;
   app->worker_prototype_allowed = config->interceptor_count == 0u && !config->admission &&
-      !config->assets && config->http.session_capacity == 0u;
+      !config->assets;
   for (size_t i = 0u; i < config->controller_count; ++i) {
     const chttp_controller *controller = &config->controllers[i];
     if (controller->action_count || controller->http_method_count || controller->rpc_method_count ||

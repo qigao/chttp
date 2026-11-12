@@ -1391,7 +1391,8 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
     }
     if (state != CHTTP_SERVER_DEFERRED_READY) continue;
     stream->request_state.deadline_ms = 0;
-    status = chttp_session_request_finish(&stream->request_state);
+    status = chttp_session_request_finish_deferred(&stream->request_state,
+        &stream->deferred_response);
     atomic_store_explicit(&stream->deferred_token,
                           chttp_server_deferred_token(chttp_server_deferred_token_generation(token),
                                                       CHTTP_SERVER_DEFERRED_IDLE),

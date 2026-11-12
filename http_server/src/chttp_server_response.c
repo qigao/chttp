@@ -359,8 +359,8 @@ int chttp_server_reply_buffer(chttp_server_response *response,
   return SALTS_OK;
 }
 
-int chttp_server_response_defer(chttp_server_response *response,
-                                chttp_server_deferred *out_deferred) {
+static int response_defer(chttp_server_response *response,
+    chttp_server_deferred *out_deferred, chttp_session_work *session_work) {
   chttp_server_response_builder *builder;
   chttp_server_deferred_target *target;
   uint_fast64_t expected_token;
@@ -381,17 +381,23 @@ int chttp_server_response_defer(chttp_server_response *response,
       (target->kind == CHTTP_SERVER_DEFERRED_HTTP_2 &&
        target->connection->wire_protocol != CHTTP_SERVER_WIRE_HTTP_2))
     return SALTS_ENOTSUP;
-  if (builder->request->session != NULL) return SALTS_ENOTSUP;
+  if (builder->request->session != NULL && !session_work) return SALTS_ENOTSUP;
   if (builder->replied || builder->deferred) return SALTS_EALREADY;
   expected_token = atomic_load_explicit(target->token, memory_order_acquire);
   if (chttp_server_deferred_token_state(expected_token) != CHTTP_SERVER_DEFERRED_IDLE)
     return SALTS_EALREADY;
+  if (session_work) {
+    const int status = chttp_session_work_attach(target->request_state, session_work);
+    if (status != SALTS_OK) return status;
+  }
   generation = chttp_server_deferred_token_generation(expected_token) + 1u;
   if (generation == 0u) ++generation;
   writing_token = chttp_server_deferred_token(generation, CHTTP_SERVER_DEFERRED_WRITING);
   if (!atomic_compare_exchange_strong_explicit(target->token, &expected_token, writing_token,
-                                               memory_order_acq_rel, memory_order_acquire))
+                                               memory_order_acq_rel, memory_order_acquire)) {
+    if (session_work) target->request_state->session_work = NULL;
     return SALTS_EALREADY;
+  }
 
   chttp_server_response_builder_reset(target->response_builder);
   target->request = *builder->request;
@@ -415,6 +421,14 @@ int chttp_server_response_defer(chttp_server_response *response,
                         chttp_server_deferred_token(generation, CHTTP_SERVER_DEFERRED_PENDING),
                         memory_order_release);
   return SALTS_OK;
+}
+
+int chttp_server_response_defer(chttp_server_response *response, chttp_server_deferred *out) {
+  return response_defer(response, out, NULL);
+}
+int chttp_server_response_defer_worker(chttp_server_response *response, chttp_server_deferred *out,
+    chttp_session_work *work) {
+  return response_defer(response, out, work);
 }
 
 static void chttp_server_deferred_publish(chttp_server_deferred *deferred,
@@ -801,6 +815,7 @@ int chttp_server_response_unobserve(chttp_server_response *response,
   return SALTS_OK;
 }
 void chttp_server_request_terminal_notify(chttp_server_request_state *state, int status) {
+  chttp_session_work_detach(state, status);
   if (!state || !state->terminal) return;
   chttp_server_response_terminal *ticket = state->terminal;
   state->terminal = NULL;

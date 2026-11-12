@@ -1726,9 +1726,7 @@ static int chttp_service_http_handler(
     const int status = chttp_application_work_submit(record->workers, request, response, &task);
     if (status == SALTS_OK) return status;
     chttp_service_http_worker_finalized(record);
-    if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
-      return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
-    return status;
+    return chttp_application_work_admission_response(response, status);
   }
   if (record->execution_mode ==
           CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT ||

@@ -1,7 +1,7 @@
 #ifndef CHTTP_APPLICATION_WORK_H
 #define CHTTP_APPLICATION_WORK_H
 /* Private migration bridge. Not an installed Application execution mode.
- * Buffered, Session-free requests only; the public model is switched only after
+ * Buffered requests only; Session state is a detached, staged snapshot. The public model switches after
  * Session/stream/WS and full response-terminal adapters pass their own tests. */
 #include <http_server/http.h>
 #include <cmeta/ace_interceptor.h>
@@ -23,6 +23,8 @@ typedef struct chttp_application_work_outcome {
   int business_status;
   int publication_status;
   int transport_status;
+  /* Separate from wire completion. Successful discard/no Session is also OK. */
+  int session_status;
   bool rejected;
 } chttp_application_work_outcome;
 typedef void (*chttp_application_work_completion_fn)(void *,
@@ -46,6 +48,7 @@ typedef struct chttp_application_work_config {
 typedef struct chttp_application_work_stats {
   size_t pending;
   size_t retained_bytes;
+  size_t session_waiting;
   /* Lifetime telemetry saturates; capacity/byte accounting never saturates. */
   uint64_t accepted;
   uint64_t rejected;
@@ -62,6 +65,9 @@ int chttp_application_work_init(chttp_application_work *, const chttp_applicatio
  * joins the real owner response terminal (success/reset/close). */
 int chttp_application_work_submit(chttp_application_work *, const chttp_server_request_view *,
     chttp_server_response *, const chttp_application_work_task *);
+/* Owner-side conversion of rejected admission after caller-owned payload
+ * cleanup: overload/closed -> 503; stale Session generation -> 409. */
+int chttp_application_work_admission_response(chttp_server_response *, int);
 /* Worker-only copied response draft. No engine builder crosses the queue.
  * A NULL content type preserves the engine's header-free empty reply contract. */
 int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,

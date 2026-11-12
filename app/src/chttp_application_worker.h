@@ -2,7 +2,7 @@
 #define CHTTP_APPLICATION_WORKER_H
 /* Internal buffered Controller prototype for the migration in
  * docs/HTTP_APPLICATION_DESIGN.md. Not installed; not an alternate public API.
- * Only empty Controller declarations (no owner callbacks), no Sessions/assets/
+ * Only empty Controller declarations (no owner callbacks), no assets/
  * custom owner admission are admitted. The completed replacement removes this
  * temporary private mounting surface when public Invocation admission is ready. */
 #include <chttp_app/application.h>
@@ -33,4 +33,5 @@ int chttp_application_worker_mount_http(chttp_application *, const char *,
 int chttp_application_worker_mount_rpc(chttp_application *, const char *,
     const cmeta_data_desc *, const chttp_rpc_method *);
 int chttp_application_worker_current(const chttp_application *);
+int chttp_application_worker_stats(chttp_application *, chttp_application_work_stats *);
 #endif

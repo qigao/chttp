@@ -119,6 +119,7 @@ typedef struct chttp_session_record {
   uint64_t expires_at_ms;
   uint32_t generation;
   bool used;
+  size_t worker_pins;
 } chttp_session_record;
 
 typedef struct chttp_session_context {
@@ -133,10 +134,15 @@ typedef struct chttp_session_context {
   bool created;
   bool invalidated;
   bool dirty;
+  bool staged;
+  bool staged_exists;
+  bool staged_regenerate;
+  bool sealed;
 } chttp_session_context;
 
 struct chttp_server_request_state {
   chttp_server_response_terminal *terminal;
+  chttp_session_work *session_work;
   chttp_server_impl *server;
   chttp_server_response_builder response_builder;
   chttp_server_response response;
@@ -595,6 +601,9 @@ void chttp_session_context_destroy(chttp_session_context *context);
 void chttp_session_request_begin(chttp_server_request_state *state,
                                  const chttp_server_request_view *request);
 int chttp_session_request_finish(chttp_server_request_state *state);
+int chttp_session_request_finish_deferred(chttp_server_request_state *, chttp_server_response *);
+int chttp_session_work_attach(chttp_server_request_state *, chttp_session_work *);
+void chttp_session_work_detach(chttp_server_request_state *, int);
 void chttp_session_request_abort(chttp_server_request_state *state);
 
 void chttp_server_stats_connection_open(chttp_server_impl *server);
