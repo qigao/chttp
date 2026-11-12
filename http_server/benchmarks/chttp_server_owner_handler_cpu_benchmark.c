@@ -645,36 +645,36 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
         .num_threads = owner_count,
         .queue_capacity = OWNER_CPU_DEFERRED_QUEUE_CAPACITY};
     pool = threadpool_create_with_config(&pool_config);
-    if (pool == NULL) goto cleanup;
+    if (pool == NULL) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
     slow_route.pool = pool;
     slow_route.jobs = deferred_jobs;
     slow_route.job_count = OWNER_CPU_DEFERRED_JOBS;
     slow_route.deferred_errors = &deferred_errors;
     for (index = 0u; index < worker_count; ++index)
       if (threadpool_try_submit(pool, owner_cpu_prime_worker, &primes[index]) != SALTS_OK)
-        goto cleanup;
+        { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
     const uint64_t prime_deadline = monotonic_ms() + OWNER_CPU_TIMEOUT_MS;
     for (index = 0u; index < worker_count; ++index) {
       while (!atomic_load_explicit(&primes[index].ready, memory_order_acquire)) {
-        if (monotonic_ms() >= prime_deadline) goto cleanup;
+        if (monotonic_ms() >= prime_deadline) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
         sync_thread_yield();
       }
-      if (primes[index].status != SALTS_OK) goto cleanup;
+      if (primes[index].status != SALTS_OK) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
       worker_clocks[index] = primes[index].cpu; /* one retained handle; release primes only */
     }
     atomic_store_explicit(&prime_release, 1, memory_order_release);
-    if (threadpool_wait_status(pool) != SALTS_OK) goto cleanup;
+    if (threadpool_wait_status(pool) != SALTS_OK) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   }
 
-  if (chttp_server_init(&server, &config) != SALTS_OK) goto cleanup;
+  if (chttp_server_init(&server, &config) != SALTS_OK) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   execution.owner_count = owner_count;
-  if (chttp_server_set_execution_options(&server, &execution) != SALTS_OK) goto cleanup;
+  if (chttp_server_set_execution_options(&server, &execution) != SALTS_OK) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   if (chttp_server_get(&server, "/fast", owner_cpu_handler, &fast_route) != SALTS_OK)
-    goto cleanup;
+    { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   if (chttp_server_get(&server, "/slow", owner_cpu_handler, &slow_route) != SALTS_OK)
-    goto cleanup;
-  if (chttp_server_start(&server) != SALTS_OK) goto cleanup;
-  if (chttp_server_port(&server, &port) != SALTS_OK || port == 0u) goto cleanup;
+    { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
+  if (chttp_server_start(&server) != SALTS_OK) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
+  if (chttp_server_port(&server, &port) != SALTS_OK || port == 0u) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   impl = (chttp_server_impl *)server.impl;
 
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
@@ -685,18 +685,18 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
     size_t warmup;
 
     owner_cpu_snapshot(impl, owner_count, before);
-    if (owner_cpu_connect(port, &sockets[index]) != 0) goto cleanup;
+    if (owner_cpu_connect(port, &sockets[index]) != 0) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
     for (warmup = 0u; warmup < OWNER_CPU_WARMUP; ++warmup)
-      if (owner_cpu_request(sockets[index], target, &ignored) != 0) goto cleanup;
-    if (owner_cpu_wait_total(impl, owner_count, index + 1u, leases) != 0) goto cleanup;
-    if (owner_cpu_delta_owner(before, leases, owner_count, &assigned) != 0) goto cleanup;
+      if (owner_cpu_request(sockets[index], target, &ignored) != 0) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
+    if (owner_cpu_wait_total(impl, owner_count, index + 1u, leases) != 0) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
+    if (owner_cpu_delta_owner(before, leases, owner_count, &assigned) != 0) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
     if (slow)
       slow_owner_mask |= 1u << assigned;
     else
       fast_owner_mask |= 1u << assigned;
   }
 
-  if (owner_count > 1u && (slow_owner_mask & fast_owner_mask) != 0u) goto cleanup;
+  if (owner_count > 1u && (slow_owner_mask & fast_owner_mask) != 0u) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
 
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
     clients[index] = (owner_cpu_client){
@@ -707,7 +707,7 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
         .barrier = &barrier};
     atomic_init(&clients[index].status, SALTS_EIO);
     if (sync_thread_create(&threads[index], owner_cpu_client_main, &clients[index]) != SALTS_OK)
-      goto cleanup_threads;
+      { fprintf(stderr, "benchmark thread boundary failed at line %d\n", __LINE__); goto cleanup_threads; }
     thread_started[index] = true;
   }
 
@@ -721,18 +721,18 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   if (owner_clocks.count != owner_count ||
       owner_cpu_read(owner_clocks.threads, owner_count, &owner_before) != SALTS_OK ||
       owner_cpu_read(worker_clocks, worker_count, &worker_before) != SALTS_OK)
-    goto cleanup_threads;
+    { fprintf(stderr, "benchmark thread boundary failed at line %d\n", __LINE__); goto cleanup_threads; }
   started_ns = hrtime();
   atomic_store_explicit(&barrier.start, 1, memory_order_release);
 
   for (index = 0u; index < OWNER_CPU_CONNECTIONS; ++index) {
     size_t sample;
-    if (sync_thread_join(&threads[index]) != SALTS_OK) goto cleanup_threads;
+    if (sync_thread_join(&threads[index]) != SALTS_OK) { fprintf(stderr, "benchmark thread boundary failed at line %d\n", __LINE__); goto cleanup_threads; }
     sync_thread_destroy(&threads[index]);
     thread_started[index] = false;
     if (atomic_load_explicit(&clients[index].status, memory_order_acquire) != SALTS_OK)
-      goto cleanup_threads;
-    if (clients[index].cpu_ns > UINT64_MAX - client_cpu) goto cleanup_threads;
+      { fprintf(stderr, "benchmark thread boundary failed at line %d\n", __LINE__); goto cleanup_threads; }
+    if (clients[index].cpu_ns > UINT64_MAX - client_cpu) { fprintf(stderr, "benchmark thread boundary failed at line %d\n", __LINE__); goto cleanup_threads; }
     client_cpu += clients[index].cpu_ns;
     for (sample = 0u; sample < requests_per_connection; ++sample) {
       if ((index % 2u) == 0u)
@@ -745,16 +745,16 @@ static int owner_cpu_run(size_t owner_count, uint64_t target_work_ns,
   wall_ns = hrtime() - started_ns;
   if (owner_cpu_read(owner_clocks.threads, owner_count, &owner_after) != SALTS_OK ||
       owner_cpu_read(worker_clocks, worker_count, &worker_after) != SALTS_OK ||
-      owner_after < owner_before || worker_after < worker_before) goto cleanup;
+      owner_after < owner_before || worker_after < worker_before) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   const uint64_t owner_cpu = owner_after - owner_before;
   const uint64_t worker_cpu = worker_after - worker_before;
   if (owner_cpu > UINT64_MAX - worker_cpu ||
-      owner_cpu + worker_cpu > UINT64_MAX - client_cpu) goto cleanup;
+      owner_cpu + worker_cpu > UINT64_MAX - client_cpu) { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   if (atomic_load_explicit(&deferred_errors, memory_order_acquire) != 0u)
-    goto cleanup;
+    { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
   if (chttp_server_get_stats(&server, &stats) != SALTS_OK ||
       stats.rejected_connections != 0u)
-    goto cleanup;
+    { fprintf(stderr, "benchmark boundary failed at line %d\n", __LINE__); goto cleanup; }
 
   printf(
       "{\"kind\":\"measurement\","

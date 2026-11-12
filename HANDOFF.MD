@@ -1,5 +1,17 @@
 # Split SDK migration handoff
 
+- Handler CPU benchmark migration: clock() did not provide the intended Windows
+  CPU measurement. Reuse chttp_test_thread_cpu for separate handler-owner,
+  client and bounded application-worker totals; exclude listener/main explicitly.
+  Keep measured threads alive and reuse one calibration across A/B cases.
+  Initial port passed three repetitions; calibrated revision 36791e8 failed on
+  repetition 2, deferred/4 owners/1 ms without a detailed boundary diagnostic
+  (`migration-handler-cpu-final-measurements.log`). Preserve its partial raw data.
+  Added boundary diagnostics then passed all 90 points
+  (`migration-handler-cpu-boundary-ctest.log`), but that alone does not identify
+  or fix the earlier failure. Keep qualification draft until investigated;
+  do not claim a performance gain or close #215 based on this rerun.
+
 - Application policy ownership: the public init contract promised copied policy
   values, while Security/CORS/asset middleware still borrowed caller structures.
   Reusing those structures after init changed nosniff, CORS admission and asset
