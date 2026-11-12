@@ -33,34 +33,18 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Sanitizers)
 
-# Only the explicitly selected, compiler-matched SDK roots are admitted.
-foreach(input IN ITEMS VCPKG_INSTALLED_DIR VCPKG_TARGET_TRIPLET)
-  if("${${input}}" STREQUAL "")
-    message(FATAL_ERROR "${input} must select the restored vcpkg-cache profile")
-  endif()
-endforeach()
+# Consume the selected preinstalled vcpkg profile, as in SaltsBase/SaltsUtils.
 list(PREPEND CMAKE_PREFIX_PATH
   "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$ENV{VCPKG_CONFIGURATION_SUBDIR}"
   "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
-foreach(package IN ITEMS SaltsBase CMeta SaltsCore SaltsUtils)
-  # Version variables choose releases; roots never search a second SDK source.
-  if(package STREQUAL "SaltsBase")
-    set(input SALTS_BASE)
-  elseif(package STREQUAL "CMeta")
-    set(input CMETA)
-  elseif(package STREQUAL "SaltsCore")
-    set(input SALTS_CORE)
-  else()
-    set(input SALTS_UTILS)
-  endif()
-  if("$ENV{${input}_ROOT}" STREQUAL "" OR "$ENV{${input}_VERSION}" STREQUAL "")
-    message(FATAL_ERROR "${input}_ROOT and ${input}_VERSION must select an installed SDK release")
-  endif()
-  unset(${package}_DIR CACHE)
-  unset(${package}_DIR)
-  find_package(${package} "$ENV{${input}_VERSION}" EXACT CONFIG REQUIRED
-    PATHS "$ENV{${input}_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-endforeach()
+find_package(SaltsBase "$ENV{SALTS_BASE_VERSION}" EXACT CONFIG REQUIRED
+  PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_package(CMeta "$ENV{CMETA_VERSION}" EXACT CONFIG REQUIRED
+  PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_package(SaltsCore "$ENV{SALTS_CORE_VERSION}" EXACT CONFIG REQUIRED
+  PATHS "$ENV{SALTS_CORE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_package(SaltsUtils "$ENV{SALTS_UTILS_VERSION}" EXACT CONFIG REQUIRED
+  PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(llhttp CONFIG REQUIRED)
 find_package(GmSSL CONFIG REQUIRED)
 
@@ -72,8 +56,8 @@ add_subdirectory(app)
 add_subdirectory(s3)
 add_subdirectory(openapi)
 
-# MinGW stops implicit exports when linked static SDK objects carry explicit
-# export annotations. Preserve the libraries' WINDOWS_EXPORT_ALL_SYMBOLS contract.
+# Static SDK objects carry explicit exports, disabling MinGW's implicit exports.
+# Keep the shared libraries' WINDOWS_EXPORT_ALL_SYMBOLS contract on this linker.
 if(MINGW)
   foreach(library IN ITEMS chttp_client chttp_server chttp_app chttp_s3)
     target_link_options(${library} PRIVATE -Wl,--export-all-symbols)

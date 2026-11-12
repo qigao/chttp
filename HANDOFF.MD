@@ -618,3 +618,30 @@
   objects still construct and destroy once. Explicit ACE providers support other
   deletion models. Full published-SDK Windows build, 109/109 CTest and install
   passed (`migration-cpp-bean-admission-full-ctest.log`).
+
+- Worker response headers: the private Invocation writer now owns bounded copied
+  fields through entered hook unwind and business/Session/native-terminal joins.
+  Extra rows/arena are charged before defer. Content-Type uses one reserved row
+  and the reply arena; normal fields retain Server case-insensitive upsert and
+  append-only capacity semantics. Shared pure grammar rejects injection and
+  reserved framing/WS fields before mutation. H1/H2 formal tests cover copying,
+  exact/short/full budgets, MIME call order, foreign scope, failure/rejection,
+  cancellation, managed Cookie precedence and failed Cookie reservation without
+  ordinary Session commit; C++ exception/RAII tests cover the same writer.
+  Published-SDK native-release-user full build, CTest 117/117 and install passed
+  (migration-worker-header-qualified-ctest.log). The initial configuration-only
+  case exposed an uninitialized-Server fixture teardown; it now has its own test
+  group. Original failed test output is retained, with no TinyTest change.
+- Preinstalled SDK lookup: tree-sitter-c was present in the selected vcpkg-cache
+  profile; omitting its CMAKE_PREFIX_PATH caused the required OpenAPI find_library
+  to fail. Follow SaltsBase/SaltsUtils: derive that prefix directly from existing
+  VCPKG_INSTALLED_DIR/triplet/configuration inputs, and name each first-party
+  package explicitly with the environment-selected version/root. Neither root
+  configure nor the exported package clears dependency caches automatically;
+  SDK/toolchain changes require explicit --fresh. Preserve MinGW explicit exports:
+  linked static SDK export directives otherwise suppress implicit HTTP DLL
+  exports and break S3 linkage. The final llvm-mingw-x64-release-user fresh
+  configure/full build and native configure/full build/install passed
+  (migration-env-direct-release-build.log and migration-env-direct-packages-install.log).
+  Verification used an isolated full-repository worktree to preserve unrelated
+  local manifest/version-check deletions. Logs are retained in the main build/.

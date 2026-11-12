@@ -1,32 +1,12 @@
 @PACKAGE_INIT@
 set(CHTTP_RELEASE_VERSION "@CHTTP_RELEASE_VERSION@")
 include(CMakeFindDependencyMacro)
-if("$ENV{SALTS_BASE_ROOT}" STREQUAL "")
-  message(FATAL_ERROR "SALTS_BASE_ROOT must name the matching installed SaltsBase SDK")
-endif()
-unset(SaltsBase_DIR CACHE)
-unset(SaltsBase_DIR)
 find_dependency(SaltsBase @SaltsBase_VERSION@ EXACT CONFIG REQUIRED
   PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-if("$ENV{CMETA_ROOT}" STREQUAL "")
-  message(FATAL_ERROR "CMETA_ROOT must name the matching installed CMeta SDK")
-endif()
-unset(CMeta_DIR CACHE)
-unset(CMeta_DIR)
 find_dependency(CMeta @CMeta_VERSION@ EXACT CONFIG REQUIRED
   PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-if("$ENV{SALTS_CORE_ROOT}" STREQUAL "")
-  message(FATAL_ERROR "SALTS_CORE_ROOT must name the matching installed SaltsCore SDK")
-endif()
-unset(SaltsCore_DIR CACHE)
-unset(SaltsCore_DIR)
 find_dependency(SaltsCore @SaltsCore_VERSION@ EXACT CONFIG REQUIRED
   PATHS "$ENV{SALTS_CORE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-if("$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
-  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the matching installed SaltsUtils SDK")
-endif()
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
 find_dependency(SaltsUtils @SaltsUtils_VERSION@ EXACT CONFIG REQUIRED
   PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 

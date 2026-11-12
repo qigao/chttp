@@ -5,6 +5,7 @@
 #include <cmeta/data_reflect.h>
 #include <tinytest.hpp>
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <threads/threads.h>
 
@@ -60,7 +61,7 @@ struct InvocationCppContext {
   chttp_application *app = nullptr;
   chttp_protocol protocol = CHTTP_HTTP_1_1;
   const void *control = nullptr;
-  bool fail = false, worker = false, reflected = false, legacy_rejected = false;
+  bool fail = false, worker = false, reflected = false, legacy_rejected = false, header_copied = false;
   unsigned int code = 0;
 };
 struct InvocationCppController {
@@ -77,6 +78,10 @@ int cpp_invocation(void *self, const chttp_invocation *invocation) {
   struct Scope { ~Scope() noexcept { ++unwound; } } scope;
   context.worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
   context.reflected = cmeta_function_desc_equal(chttp_invocation_operation(invocation), FunctionAbi(cpp_invocation)->function);
+  char field[] = "cpp";
+  const int header_status = chttp_invocation_set_header(invocation, "X-Cpp", field);
+  std::memset(field, '!', sizeof(field) - 1u);
+  if (header_status != SALTS_OK) return header_status;
   if (context.fail) throw std::runtime_error("Invocation failure");
   if (!chttp_invocation_request(invocation) || chttp_invocation_request(invocation)->session) return SALTS_EPROTO;
   return chttp_invocation_respond(invocation, 200u, "text/plain", "42", 2u);
@@ -85,7 +90,7 @@ static_assert(std::is_convertible_v<decltype(&cpp_invocation), chttp_invocation_
 static_assert(!std::is_convertible_v<decltype(&cpp_throw), chttp_invocation_action_fn>, "old Exchange native type must be rejected");
 static int cpp_invocation_body(chttp_application *app, void *user) {
   auto& context = *static_cast<InvocationCppContext*>(user); context.app = app;
-  const chttp_application_work_config limits{1u, 2u, 8192u, 128u};
+  const chttp_application_work_config limits{1u, 2u, 8192u, 128u, 1u, 32u};
   int status = chttp_application_worker_prepare(app, &limits);
   if (status != SALTS_OK) return status;
   chttp_application_worker_binding binding{};
@@ -105,6 +110,8 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   chttp_options options{}; options.connection_uri = uri; options.authority = "cpp.test"; options.target = "/cpp";
   options.protocol = context.protocol; options.timeout_ms = 5000u;
   status = chttp_get(&client, &options, &response, &error); context.code = response.status_code;
+  const char *field = chttp_response_header(&response, "X-Cpp");
+  context.header_copied = context.fail ? field == nullptr : field && std::strcmp(field, "cpp") == 0;
   chttp_response_destroy(&response); const int closed = chttp_client_destroy(&client, 5000u);
   return status == SALTS_OK ? closed : status;
 }
@@ -157,6 +164,7 @@ spec("Application C++ RAII") {
       }
       check_equal(operation, SALTS_OK); check_equal(closed, SALTS_OK);
       check_true(context.worker); check_true(context.reflected); check_true(context.legacy_rejected);
+      check_true(context.header_copied);
       check_equal(context.code, failure ? 500u : 200u); check_equal(unwound, 1); check_equal(destroyed, 1);
     }
   }
