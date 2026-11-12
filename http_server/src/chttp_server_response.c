@@ -353,6 +353,7 @@ static int response_defer(chttp_server_response *response,
   }
 
   chttp_server_response_builder_reset(target->response_builder);
+  target->file = (chttp_server_deferred_file){0};
   target->request = *builder->request;
   target->request.target = NULL;
   target->request.path = NULL;
@@ -400,11 +401,53 @@ static void chttp_server_deferred_publish(chttp_server_deferred *deferred,
   sync_mutex_unlock(&server->mutex);
 }
 
+static int deferred_headers(chttp_server_deferred_target *target,
+    const chttp_header *headers, size_t count) {
+  chttp_server_response_builder *base = &target->request_state->response_builder;
+  int status = SALTS_OK;
+  chttp_server_response_builder_reset(target->response_builder);
+  target->file = (chttp_server_deferred_file){0};
+  for (size_t i = 0u; status == SALTS_OK && i < base->header_count; ++i)
+    status = chttp_server_response_set_header(target->response, base->headers[i].name, base->headers[i].value);
+  for (size_t i = 0u; status == SALTS_OK && i < count; ++i)
+    status = chttp_server_response_set_header(target->response, headers[i].name, headers[i].value);
+  return status;
+}
+
+int chttp_server_deferred_response_file(chttp_server_deferred *deferred,
+    const chttp_header *headers, size_t count, const chttp_server_deferred_file *file) {
+  if (!deferred || !deferred->impl || !deferred->generation || !file || !file->path || !file->path[0] ||
+      file->status_code < 200u || file->status_code > 599u || file->status_code == 204u ||
+      file->status_code == 205u || file->status_code == 304u || (count && !headers)) return SALTS_EINVAL;
+  chttp_server_deferred_target *target = deferred->impl;
+  if (!target->server || !target->request_state || !target->response_builder || !target->response || !target->token)
+    return SALTS_EINVAL;
+  int status = chttp_server_deferred_claim(target->token, deferred->generation);
+  if (status != SALTS_OK) return status;
+  status = deferred_headers(target, headers, count);
+  if (status != SALTS_OK) {
+    chttp_server_response_builder_reset(target->response_builder);
+    atomic_store_explicit(target->token,
+        chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_PENDING), memory_order_release);
+    return status;
+  }
+  target->file = *file;
+  chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_READY);
+  return SALTS_OK;
+}
+
+int chttp_server_deferred_file_prepare(chttp_server_deferred_target *target) {
+  const chttp_server_deferred_file file = target->file;
+  target->file = (chttp_server_deferred_file){0};
+  if (!file.path) return SALTS_OK;
+  const int status = chttp_server_response_file(target->response, file.status_code, NULL, file.path);
+  if (file.prepared) file.prepared(file.user, status);
+  return status;
+}
+
 int chttp_server_deferred_reply(chttp_server_deferred *deferred,
                                 const chttp_server_deferred_response *response) {
   chttp_server_deferred_target *target;
-  chttp_server_response_builder *base;
-  size_t index;
   int status = SALTS_OK;
   if (deferred == NULL || deferred->impl == NULL || deferred->generation == 0u ||
       response == NULL || response->size < sizeof(*response) ||
@@ -418,18 +461,7 @@ int chttp_server_deferred_reply(chttp_server_deferred *deferred,
   status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
 
-  base = &target->request_state->response_builder;
-  chttp_server_response_builder_reset(target->response_builder);
-  for (index = 0u; status == SALTS_OK && index < base->header_count; ++index)
-    status = chttp_server_response_set_header(target->response, base->headers[index].name,
-                                              base->headers[index].value);
-  for (index = 0u; status == SALTS_OK && index < response->header_count; ++index) {
-    if (response->headers[index].name == NULL || response->headers[index].value == NULL)
-      status = SALTS_EINVAL;
-    else
-      status = chttp_server_response_set_header(target->response, response->headers[index].name,
-                                                response->headers[index].value);
-  }
+  status = deferred_headers(target, response->headers, response->header_count);
   if (status == SALTS_OK)
     status = chttp_server_reply(target->response, response->status_code, response->content_type,
                                 response->body, response->body_size);
@@ -453,8 +485,6 @@ int chttp_server_deferred_reply_buffer(
     size_t header_count,
     mem_buffer_t *body) {
   chttp_server_deferred_target *target;
-  chttp_server_response_builder *base;
-  size_t index;
   int status = SALTS_OK;
 
   if (deferred == NULL || deferred->impl == NULL ||
@@ -471,20 +501,7 @@ int chttp_server_deferred_reply_buffer(
   status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
 
-  base = &target->request_state->response_builder;
-  chttp_server_response_builder_reset(target->response_builder);
-  for (index = 0u; status == SALTS_OK && index < base->header_count; ++index)
-    status = chttp_server_response_set_header(
-        target->response, base->headers[index].name, base->headers[index].value);
-
-  for (index = 0u; status == SALTS_OK && index < header_count; ++index) {
-    if (headers[index].name == NULL || headers[index].value == NULL)
-      status = SALTS_EINVAL;
-    else
-      status = chttp_server_response_set_header(
-          target->response, headers[index].name, headers[index].value);
-  }
-
+  status = deferred_headers(target, headers, header_count);
   if (status == SALTS_OK)
     status = chttp_server_reply_buffer(
         target->response, status_code, content_type, body);

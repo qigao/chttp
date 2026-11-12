@@ -23,6 +23,9 @@ typedef struct invocation_call {
   char body[16];
   char draft[32], stage[32], after[32], type[64];
   bool after_present;
+  bool head;
+  int repeat;
+  char length[24];
 } invocation_call;
 static struct {
   chttp_application app;
@@ -39,11 +42,14 @@ static struct {
   const chttp_invocation *first_scope;
   size_t workers;
   size_t header_capacity, header_bytes;
+  size_t reply_bytes;
+  char *file_path;
+  bool file_removed, file_then_fail;
   const char *reply_type;
   int (*write_headers)(const chttp_invocation *);
   int (*before_headers)(const chttp_invocation *);
   int (*after_headers)(const chttp_invocation *);
-  int header_status[18];
+  int header_status[20];
   int entered, calls, completions, destroyed, trace[32];
   size_t trace_count;
   chttp_application_work_outcome outcome;
@@ -85,6 +91,7 @@ static void foreign_scope(void *context) {
       chttp_invocation_cancelled(invocation, &cancelled) != SALTS_EINVAL || !cancelled ||
       chttp_invocation_respond(invocation, 200u, NULL, "bad", 3u) != SALTS_EINVAL ||
       chttp_invocation_set_header(invocation, "X-Draft", "foreign") != SALTS_EINVAL ||
+      chttp_invocation_response_file(invocation, 200u, NULL, "unused") != SALTS_EINVAL ||
       chttp_invocation_reject(invocation, &proceed, 403u, NULL, NULL, 0u) != SALTS_EINVAL || !proceed)
     atomic_fetch_add(&fixture.invalid, 1);
 }
@@ -129,6 +136,16 @@ int invocation_echo(void *self, const chttp_invocation *invocation) {
   }
   if (fixture.fail) return SALTS_EPERM;
   if (fixture.no_reply) return SALTS_OK;
+  if (fixture.file_path) {
+    char path[512];
+    if (strlen(fixture.file_path) >= sizeof(path)) return SALTS_EMSGSIZE;
+    snprintf(path, sizeof(path), "%s", fixture.file_path);
+    const int status = chttp_invocation_response_file(invocation, 201u, fixture.reply_type, path);
+    memset(path, '!', sizeof(path));
+    if (status == SALTS_OK && chttp_invocation_respond(invocation, 200u, NULL, NULL, 0u) != SALTS_EALREADY)
+      return SALTS_EPROTO;
+    return status == SALTS_OK && fixture.file_then_fail ? SALTS_EPERM : status;
+  }
   if (fixture.overflow) {
     char large[256]; memset(large, 'x', sizeof(large));
     const int status = chttp_invocation_respond(invocation, 200u, "text/plain", large, sizeof(large));
@@ -172,7 +189,7 @@ static void completed(void *self, const chttp_server_request_view *request, cons
 }
 static void initialize(void) {
   check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-  const chttp_application_work_config limits = {fixture.workers, 4u, 16384u, 128u,
+  const chttp_application_work_config limits = {fixture.workers, 4u, 16384u, fixture.reply_bytes,
       fixture.header_capacity, fixture.header_bytes};
   check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
 }
@@ -193,19 +210,26 @@ static void perform(void *context) {
   if (call->status != SALTS_OK) return;
   static const char body[] = {'a', '\0', 'z'};
   const chttp_options options = {.connection_uri = fixture.uri, .authority = "invocation.test", .target = call->target,
-      .protocol = call->protocol, .timeout_ms = 5000u, .body = body, .body_size = sizeof(body)};
-  call->status = chttp_post(&client, &options, &response, &error); call->code = response.status_code; call->bytes = response.body_size;
-  if (response.body_size <= sizeof(call->body) && response.body_size) memcpy(call->body, response.body, response.body_size);
-  const char *value = chttp_response_header(&response, "X-Draft");
-  if (value) snprintf(call->draft, sizeof(call->draft), "%s", value);
-  value = chttp_response_header(&response, "X-Stage");
-  if (value) snprintf(call->stage, sizeof(call->stage), "%s", value);
-  value = chttp_response_header(&response, "X-After");
-  call->after_present = value != NULL;
-  if (value) snprintf(call->after, sizeof(call->after), "%s", value);
-  value = chttp_response_header(&response, "Content-Type");
-  if (value) snprintf(call->type, sizeof(call->type), "%s", value);
-  chttp_response_destroy(&response); const int closed = chttp_client_destroy(&client, 5000u);
+      .protocol = call->protocol, .timeout_ms = 5000u, .body = call->head ? NULL : body, .body_size = call->head ? 0u : sizeof(body)};
+  for (int iteration = 0; iteration < (call->repeat ? call->repeat : 1); ++iteration) {
+    call->status = call->head ? chttp_head(&client, &options, &response, &error) : chttp_post(&client, &options, &response, &error);
+    call->code = response.status_code; call->bytes = response.body_size;
+    if (response.body_size <= sizeof(call->body) && response.body_size) memcpy(call->body, response.body, response.body_size);
+    const char *value = chttp_response_header(&response, "X-Draft");
+    if (value) snprintf(call->draft, sizeof(call->draft), "%s", value);
+    value = chttp_response_header(&response, "X-Stage");
+    if (value) snprintf(call->stage, sizeof(call->stage), "%s", value);
+    value = chttp_response_header(&response, "X-After");
+    call->after_present = value != NULL;
+    if (value) snprintf(call->after, sizeof(call->after), "%s", value);
+    value = chttp_response_header(&response, "Content-Type");
+    if (value) snprintf(call->type, sizeof(call->type), "%s", value);
+    value = chttp_response_header(&response, "Content-Length");
+    if (value) snprintf(call->length, sizeof(call->length), "%s", value);
+    chttp_response_destroy(&response);
+    if (call->status != SALTS_OK) break;
+  }
+  const int closed = chttp_client_destroy(&client, 5000u);
   if (call->status == SALTS_OK) call->status = closed;
 }
 static void wait_for_entry(void) {
@@ -244,6 +268,11 @@ static int invalid_headers(const chttp_invocation *invocation) {
   fixture.header_status[13] = chttp_invocation_respond(invocation, 204u, NULL, "x", 1u);
   char large[129]; memset(large, 'x', sizeof(large) - 1u); large[sizeof(large) - 1u] = 0;
   fixture.header_status[14] = chttp_invocation_set_header(invocation, "Content-Type", large);
+  fixture.header_status[15] = chttp_invocation_response_file(invocation, 200u, NULL, NULL);
+  fixture.header_status[16] = chttp_invocation_response_file(invocation, 200u, NULL, "");
+  fixture.header_status[17] = chttp_invocation_response_file(invocation, 204u, NULL, "unused");
+  fixture.header_status[18] = chttp_invocation_response_file(invocation, 200u, "bad\r\nX: true", "unused");
+  fixture.header_status[19] = chttp_invocation_response_file(invocation, 200u, NULL, large);
   return chttp_invocation_set_header(invocation, "X-Draft", "valid");
 }
 static int bounded_header(const chttp_invocation *invocation) {
@@ -263,6 +292,7 @@ spec("Application canonical buffered Invocation") {
     memset(&fixture, 0, sizeof(fixture)); atomic_init(&fixture.invalid, 0);
     sync_mutex_init(&fixture.mutex); sync_cond_init(&fixture.changed); fixture.workers = 1u;
     fixture.reply_type = "application/octet-stream";
+    fixture.reply_bytes = 128u;
     fixture.provider = (salts_configurator_provider_binding){sizeof(fixture.provider),
         SALTS_CONFIGURATOR_PROVIDER_BINDING_ABI_VERSION, cmeta_component_meta(InvocationComponent), NULL, NULL, create, NULL, NULL};
     fixture.deployment = (salts_configurator_deployment){&fixture.provider, NULL, NULL};
@@ -279,6 +309,10 @@ spec("Application canonical buffered Invocation") {
     sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
     if (fixture.thread_live) check_equal(sync_thread_join(&fixture.thread), SALTS_OK);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_equal(atomic_load(&fixture.invalid), 0);
+    if (fixture.file_path) {
+      if (!fixture.file_removed) check_equal(tt_remove_file(fixture.file_path), 0);
+      free(fixture.file_path);
+    }
     sync_cond_destroy(&fixture.changed); sync_mutex_destroy(&fixture.mutex);
   }
   it("rejects zero handles without changing query outputs") {
@@ -287,9 +321,43 @@ spec("Application canonical buffered Invocation") {
     check_equal(chttp_invocation_cancelled(&empty, &cancelled), SALTS_EINVAL); check_true(cancelled);
     check_equal(chttp_invocation_respond(&empty, 200u, NULL, NULL, 0u), SALTS_EINVAL);
     check_equal(chttp_invocation_set_header(&empty, "X-Draft", "bad"), SALTS_EINVAL);
+    check_equal(chttp_invocation_response_file(&empty, 200u, NULL, "unused"), SALTS_EINVAL);
     check_equal(chttp_invocation_reject(&empty, &proceed, 403u, NULL, NULL, 0u), SALTS_EINVAL); check_true(proceed);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    for (int kind = 0; kind < 3; ++kind) {
+      it("owns a copied file decision through native completion (protocol=%d kind=%d)", protocol, kind) {
+        fixture.file_path = tt_make_temp_file("chttp-worker-file-", ".bin"); check_not_null(fixture.file_path);
+        static const char bytes[] = {'a', '\0', 'z'};
+        check_equal(tt_write_file(fixture.file_path, bytes, kind == 1 ? 0u : sizeof(bytes)), 0);
+        fixture.reply_bytes = 512u; fixture.header_capacity = 3u; fixture.header_bytes = 128u;
+        fixture.write_headers = copied_header; fixture.before_headers = before_header; fixture.after_headers = after_headers;
+        if (kind == 2) fixture.binding.method = CHTTP_METHOD_HEAD;
+        start(); invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .head = kind == 2, .repeat = 2}; perform(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, 201u); check_equal(call.bytes, kind ? 0u : sizeof(bytes));
+        if (!kind) check_equal(call.body, bytes, sizeof(bytes));
+        check_equal(call.length, kind == 1 ? "0" : "3"); check_equal(call.draft, "copied"); check_equal(call.stage, "after");
+        chttp_server_stats stats = {0}; check_equal(chttp_application_stats(&fixture.app, &stats), SALTS_OK);
+        check_equal(stats.accepted_connections, 1u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(fixture.calls, 2); check_equal(fixture.completions, 2); check_equal(fixture.outcome.transport_status, SALTS_OK);
+      }
+    }
+    it("preserves an after-hook MIME override on a file response (protocol=%d)", protocol) {
+      fixture.file_path = tt_make_temp_file("chttp-worker-type-", ".txt"); check_not_null(fixture.file_path);
+      check_equal(tt_write_file(fixture.file_path, "file", 4u), 0); fixture.reply_bytes = 512u;
+      fixture.after_headers = content_type; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.bytes, 4u); check_equal(call.type, "test/override");
+    }
+    it("discards a staged file when the business method fails (protocol=%d)", protocol) {
+      fixture.file_path = tt_make_temp_file("chttp-discard-file-", ".txt"); check_not_null(fixture.file_path);
+      check_equal(tt_remove_file(fixture.file_path), 0); fixture.file_removed = true; fixture.file_then_fail = true;
+      fixture.reply_bytes = 512u; start(); invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 500u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(fixture.outcome.business_status, SALTS_EPERM); check_equal(fixture.outcome.publication_status, SALTS_OK);
+    }
     it("copies bounded headers through before/action/after hooks on protocol %d", protocol) {
       fixture.header_capacity = 3u; fixture.header_bytes = 128u;
       fixture.write_headers = copied_header; fixture.before_headers = before_header; fixture.after_headers = after_headers;
@@ -316,6 +384,8 @@ spec("Application canonical buffered Invocation") {
       for (size_t i = 0u; i < 12u; ++i) check_equal(fixture.header_status[i], i < 5u ? SALTS_EINVAL : SALTS_EPERM);
       check_equal(fixture.header_status[12], SALTS_EINVAL); check_equal(fixture.header_status[13], SALTS_EINVAL);
       check_equal(fixture.header_status[14], SALTS_EMSGSIZE);
+      for (size_t i = 15u; i < 19u; ++i) check_equal(fixture.header_status[i], SALTS_EINVAL);
+      check_equal(fixture.header_status[19], SALTS_EMSGSIZE);
     }
     for (int short_by = 0; short_by < 2; ++short_by) {
       it("enforces exact extra-header wire capacity minus %d on protocol %d", short_by, protocol) {
@@ -411,16 +481,23 @@ spec("Application canonical buffered Invocation") {
     check_equal(fixture.background.status, SALTS_OK); check_equal(fixture.background.code, 201u);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_equal(fixture.calls, 2); check_equal(fixture.completions, 2);
   }
-  it("queries observed cancellation without releasing a still-running Controller") {
-    fixture.header_capacity = 1u; fixture.header_bytes = 64u; fixture.write_headers = copied_header;
-    fixture.wait_cancel = true; fixture.config.deadlines.handler_ms = 500u; start();
-    fixture.background = (invocation_call){.target = "/echo", .protocol = CHTTP_HTTP_2};
-    check_equal(sync_thread_create(&fixture.thread, perform, &fixture.background), SALTS_OK); fixture.thread_live = true; wait_for_entry();
-    check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
-    check_not_equal(fixture.background.status, SALTS_OK); check_not_equal(fixture.background.status, SALTS_ETIMEDOUT);
-    check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT); check_not_null(fixture.app.impl); check_equal(fixture.destroyed, 0);
-    sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
-    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_equal(fixture.destroyed, 1);
-    check_equal(fixture.outcome.business_status, SALTS_OK); check_not_equal(fixture.outcome.transport_status, SALTS_OK);
+  for (int file = 0; file < 2; ++file) {
+    it("queries observed cancellation without releasing a still-running Controller (file=%d)", file) {
+      if (file) {
+        fixture.file_path = tt_make_temp_file("chttp-cancel-file-", ".txt"); check_not_null(fixture.file_path);
+        check_equal(tt_remove_file(fixture.file_path), 0); fixture.file_removed = true; fixture.reply_bytes = 512u;
+      }
+      fixture.header_capacity = 1u; fixture.header_bytes = 64u; fixture.write_headers = copied_header;
+      fixture.wait_cancel = true; fixture.config.deadlines.handler_ms = 500u; start();
+      fixture.background = (invocation_call){.target = "/echo", .protocol = CHTTP_HTTP_2};
+      check_equal(sync_thread_create(&fixture.thread, perform, &fixture.background), SALTS_OK); fixture.thread_live = true; wait_for_entry();
+      check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
+      check_not_equal(fixture.background.status, SALTS_OK); check_not_equal(fixture.background.status, SALTS_ETIMEDOUT);
+      check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT); check_not_null(fixture.app.impl); check_equal(fixture.destroyed, 0);
+      sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_equal(fixture.destroyed, 1);
+      check_equal(fixture.outcome.business_status, SALTS_OK); check_not_equal(fixture.outcome.transport_status, SALTS_OK);
+      check_not_equal(fixture.outcome.publication_status, SALTS_EIO);
+    }
   }
 }

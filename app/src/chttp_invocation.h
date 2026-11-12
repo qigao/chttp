@@ -52,6 +52,16 @@ int chttp_invocation_respond(const chttp_invocation *, unsigned int, const char 
  * reserved transport fields return EPERM, invalid fields EINVAL. Content-Type
  * uses the reply arena (EMSGSIZE on exhaustion), with one authoritative row. */
 int chttp_invocation_set_header(const chttp_invocation *, const char *, const char *);
+/* Copied raw-file decision, charged to reply_bytes. Body-bearing 200..599
+ * statuses only (not 204/205/304); HEAD is handled by the native engine.
+ * EINVAL/EMSGSIZE/ERANGE leaves the draft unsealed; EALREADY after selection.
+ * NULL type preserves Content-Type. No filesystem operation occurs here:
+ * owner preparation errors use after_completion.publication_status, while
+ * subsequent read/wire failures use the native transport outcome.
+ * The file must remain immutable through the native terminal. No URL mapping
+ * or conditional/range policy is added. Headers follow normal hook ordering. */
+int chttp_invocation_response_file(const chttp_invocation *, unsigned int,
+    const char *, const char *);
 /* Before-only handled rejection; success seals the draft and clears proceed. */
 int chttp_invocation_reject(const chttp_invocation *, bool *, unsigned int, const char *, const void *, size_t);
 

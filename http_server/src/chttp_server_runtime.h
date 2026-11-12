@@ -238,7 +238,9 @@ struct chttp_server_deferred_target {
   atomic_uint_fast64_t *token;
   chttp_server_request_view request;
   chttp_server_deferred_kind kind;
+  chttp_server_deferred_file file;
 };
+int chttp_server_deferred_file_prepare(chttp_server_deferred_target *);
 
 typedef enum chttp_server_websocket_command_kind {
   CHTTP_SERVER_WEBSOCKET_COMMAND_TEXT = 1,
@@ -321,6 +323,7 @@ struct chttp_server_connection {
   bool writing;
   bool close_after_write;
   bool response_streaming;
+  chttp_server_response_builder *stream_builder; /* Owner's active source. */
   bool response_source_chunked;
   bool response_close_after_stream;
   bool deferred_disconnected;

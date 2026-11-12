@@ -82,6 +82,7 @@ int cpp_invocation(void *self, const chttp_invocation *invocation) {
   const int header_status = chttp_invocation_set_header(invocation, "X-Cpp", field);
   std::memset(field, '!', sizeof(field) - 1u);
   if (header_status != SALTS_OK) return header_status;
+  if (chttp_invocation_response_file(invocation, 204u, nullptr, "unused") != SALTS_EINVAL) return SALTS_EPROTO;
   if (context.fail) throw std::runtime_error("Invocation failure");
   if (!chttp_invocation_request(invocation) || chttp_invocation_request(invocation)->session) return SALTS_EPROTO;
   return chttp_invocation_respond(invocation, 200u, "text/plain", "42", 2u);

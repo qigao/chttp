@@ -16,6 +16,7 @@ typedef struct chttp_h2_server_stream {
   struct chttp_h2_server_connection *owner;
   chttp_server_request_state request_state;
   chttp_server_response_builder deferred_builder;
+  chttp_server_response_builder *stream_builder;
   chttp_server_response deferred_response;
   chttp_server_deferred_target deferred_target;
   atomic_uint_fast64_t deferred_token;
@@ -305,6 +306,7 @@ static void chttp_h2_server_stream_reset(chttp_h2_server_stream *stream) {
   }
   chttp_server_request_state_reset(&stream->request_state);
   chttp_server_response_builder_reset(&stream->deferred_builder);
+  stream->stream_builder = NULL;
   chttp_server_buffer_release(stream->owner->connection->server, stream->body,
                               stream->body_capacity);
   stream->body = NULL;
@@ -399,6 +401,7 @@ static int chttp_h2_server_stream_init(chttp_h2_server_stream *stream,
     return status;
   }
   stream->deferred_response.impl = &stream->deferred_builder;
+  stream->deferred_builder.connection = owner->connection;
   atomic_init(&stream->deferred_token, chttp_server_deferred_token(0u, CHTTP_SERVER_DEFERRED_IDLE));
   stream->deferred_target =
       (chttp_server_deferred_target){.server = owner->connection->server,
@@ -628,7 +631,8 @@ static void chttp_h2_server_file_ready(void *user) {
   if (stream == NULL || !stream->active || !stream->response_submitted || stream->owner == NULL ||
       stream->owner->protocol == NULL)
     return;
-  builder = &stream->request_state.response_builder;
+  builder = stream->stream_builder;
+  if (builder == NULL) return;
   if (builder->file_transfer == NULL || !chttp_file_transfer_ready(builder->file_transfer)) return;
   connection = stream->owner->connection;
   if (chttp_h2_proto_resume_source(stream->owner->protocol, stream->stream_id) != 0) {
@@ -655,7 +659,8 @@ chttp_h2_server_response_source_read(void *user, uint8_t *buffer, size_t capacit
   int status;
   if (stream == NULL || buffer == NULL || capacity == 0u)
     return (chttp_h2_proto_source_result){CHTTP_H2_PROTO_SOURCE_ERROR, 0u};
-  builder = &stream->request_state.response_builder;
+  builder = stream->stream_builder;
+  if (builder == NULL) return (chttp_h2_proto_source_result){CHTTP_H2_PROTO_SOURCE_ERROR, 0u};
   if (!builder->source_enabled || builder->body_source.read == NULL)
     return (chttp_h2_proto_source_result){CHTTP_H2_PROTO_SOURCE_ERROR, 0u};
   source = &builder->body_source;
@@ -762,6 +767,7 @@ static int chttp_h2_server_submit_response_builder(chttp_h2_server_stream *strea
   }
   if (source_response && !stream_source)
     chttp_server_response_builder_close_source(builder, SALTS_OK);
+  stream->stream_builder = stream_source ? builder : NULL;
   if (stream_source && builder->file_transfer != NULL)
     chttp_file_transfer_set_ready(builder->file_transfer, chttp_h2_server_file_ready, stream);
   stream->response_submitted = true;
@@ -771,6 +777,7 @@ static int chttp_h2_server_submit_response_builder(chttp_h2_server_stream *strea
       stream_source ? chttp_h2_server_response_source_read : NULL, stream_source ? stream : NULL);
   if (submit_status != 0) {
     stream->response_submitted = false;
+    stream->stream_builder = NULL;
     chttp_server_response_builder_close_source(builder, SALTS_ENOBUFS);
     chttp_session_request_abort(&stream->request_state);
     return SALTS_ENOBUFS;
@@ -1264,8 +1271,8 @@ void chttp_h2_server_connection_cancel_file_sources(chttp_h2_server_connection *
   size_t index;
   if (h2 == NULL || h2->streams == NULL) return;
   for (index = 0u; index < h2->stream_capacity; ++index) {
-    chttp_server_response_builder *builder = &h2->streams[index].request_state.response_builder;
-    if (builder->file_transfer != NULL)
+    chttp_server_response_builder *builder = h2->streams[index].stream_builder;
+    if (builder != NULL && builder->file_transfer != NULL)
       chttp_server_response_builder_close_source(builder, SALTS_ECANCELED);
   }
 }
@@ -1391,8 +1398,10 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
     }
     if (state != CHTTP_SERVER_DEFERRED_READY) continue;
     stream->request_state.deadline_ms = 0;
-    status = chttp_session_request_finish_deferred(&stream->request_state,
-        &stream->deferred_response);
+    status = chttp_server_deferred_file_prepare(&stream->deferred_target);
+    if (status == SALTS_OK)
+      status = chttp_session_request_finish_deferred(&stream->request_state,
+          &stream->deferred_response);
     atomic_store_explicit(&stream->deferred_token,
                           chttp_server_deferred_token(chttp_server_deferred_token_generation(token),
                                                       CHTTP_SERVER_DEFERRED_IDLE),
