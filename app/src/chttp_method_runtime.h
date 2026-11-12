@@ -175,7 +175,7 @@ int chttp_method_runtime_mount_http(
 
 /* Private migration path: one Application-owned worker invocation performs
  * binding, synchronous native execution and output staging without a nested
- * executor hop. Direct or CFlow synchronous mounts without owner middleware are
+ * executor hop. Direct/CFlow/Plugin synchronous mounts without owner middleware are
  * admitted; metadata/runtime/work must outlive response-terminal finalization. */
 int chttp_method_runtime_mount_worker_http(chttp_method_runtime *, chttp_server *,
     const chttp_method_runtime_http_mount *, chttp_application_work *);

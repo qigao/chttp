@@ -113,7 +113,7 @@ submitted, and settle when NativeIO reports it sent. Peer RST_STREAM(NO_ERROR)
 still means cancellation. Success establishes local native send completion,
 not consumption by the remote application.
 
-Generated synchronous direct and CFlow HTTP methods can also mount on that same private
+Generated synchronous direct, CFlow and Plugin HTTP methods can mount on that same private
 pool. The existing MethodPlan evaluator now writes through an internal output
 adapter: the published engine path retains its buffer publication semantics,
 while the worker path copies into the invocation draft before releasing the
@@ -123,8 +123,11 @@ post/wait. The method record and canonical ACE receiver remain retained through
 terminal finalization. CFlow compiles its producer-owned typed adapter once and
 evaluates the immutable Plan in that same task, without a borrowed executor or
 nested scheduling. Owned Plan output remains live through serialization, then
-is destroyed before the input frame. Plugin providers and generated business
-hook outcome mapping still need migration.
+is destroyed before the input frame. Plugin HTTP mounts resolve catalog/native
+execution under an existing mount-owned lease; Plugin RPC retains the producer's
+execution context and its own mount lease. Both execute on the same pool and
+keep provider code pinned through joined close. Generated business hook outcome
+mapping still needs migration.
 
 Private generated RPC mounts use the same pool for the complete HTTP envelope.
 The Server registry exposes a private scheduler-neutral evaluator/output boundary;
@@ -133,7 +136,7 @@ sequential method dispatch, protocol errors and notification suppression remain
 shared with the engine path. Pure notification batches preserve an empty 204
 without adding a Content-Type header. Server registry/frame pools and ACE receivers
 remain live until the worker invocation drains, including after an H2 handler
-deadline. Per-RPC-method business hooks and non-direct providers are still pending.
+deadline. Per-RPC-method business hooks are still pending.
 
 Private buffered worker bindings now also support detached, bounded Session
 snapshots and owner-side intent commits. Same-Session calls wait in the existing
@@ -153,8 +156,11 @@ dispatch and graph retention across a blocked completion observer;
 `chttp_application_binding_test` verifies H1/H2 generated success/validation/
 missing-input behavior, typed RPC, mixed/notification batches, protocol errors
 and canceled running native methods. The Server suite
-covers the zero-error reset. Public Session/admission integration, stream/WS adaptation, remaining generated
-providers/per-method hook integration and the public Invocation migration remain required
+covers the zero-error reset. `chttp_application_plugin_test` exercises real DSO
+HTTP/RPC worker execution, provider context, lease rollback, stopped-provider
+admission, output failure/reuse and canceled running methods with finite close.
+Public Session/admission integration, stream/WS adaptation, generated per-method
+hook integration and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives
@@ -172,6 +178,19 @@ borrowed code/captures remain live through joined native-terminal finalization,
 including when cancellation wins before a running projection returns. This is
 an internal step only; it does not change installed metadata or public defaults.
 The legacy engine path retains its explicitly borrowed executor contract.
+
+The private Plugin migration reuses the existing registry and mount-owned method
+lease. HTTP resolves its catalog/export and exact adapter at mount; RPC borrows
+the admitted provider execution context under its own registry lease, rather
+than replacing that context with a Controller pointer. Both use the same owned
+Application worker task for binding/invocation/serialization and require no
+borrowed executor. Failed mounts release their acquired lease before exposing
+a route. Stop closes new lease admission but does not revoke an admitted method;
+unload stays busy until workers, native response terminals, method/Server storage
+and provider-owned value cleanup have drained. The control-thread registry and
+all borrowed descriptors remain address-stable through Application close. No
+lease counter, loader, retry or scheduling layer is added. This remains private;
+the old engine's explicit executor behavior and public defaults are unchanged.
 
 The baseline is that application-supplied Controller actions, generated native
 Service methods, RPC methods and application Interceptor hooks execute on a

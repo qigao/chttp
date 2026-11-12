@@ -23,14 +23,16 @@ typedef struct chttp_application_worker_binding {
  * is resolved from the canonical ACE graph; callers cannot provide a raw Bean. */
 int chttp_application_worker_prepare(chttp_application *, const chttp_application_work_config *);
 int chttp_application_worker_mount(chttp_application *, const chttp_application_worker_binding *);
-/* Generated synchronous direct/CFlow HTTP methods, using the same owned pool.
+/* Generated synchronous direct/CFlow/Plugin HTTP methods, using the same pool.
  * Binding/execution metadata is borrowed through close; receiver is canonical
  * ACE state. CFlow retains producer-owned captures and requires no borrowed
- * executor. Legacy deferred and Plugin providers remain outside this slice. */
+ * executor. Plugin resolves under a mount-owned lease; registry/code stay live
+ * through close. Legacy borrowed-executor dispatch remains outside this slice. */
 int chttp_application_worker_mount_http(chttp_application *, const char *,
     const cmeta_data_desc *, const chttp_http_method *);
 /* Private synchronous generated RPC envelope; batch methods run sequentially
- * within one worker invocation. No per-method worker hook facade is published. */
+ * within one worker invocation. Plugin-backed executions retain their provider
+ * context and mount lease. No per-method worker hook facade is published. */
 int chttp_application_worker_mount_rpc(chttp_application *, const char *,
     const cmeta_data_desc *, const chttp_rpc_method *);
 int chttp_application_worker_current(const chttp_application *);
