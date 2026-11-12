@@ -1,5 +1,13 @@
 # Split SDK migration handoff
 
+- H2 TLS client test peer must not close after flushing a new native send from
+  a preceding send callback. `proto_want_write == false` only means the encoder
+  was drained; require `send_active == false` before closing. Otherwise response
+  bytes may be canceled behind a SETTINGS send. macOS CI 43207921894 failed
+  `chttp_h2_client_test.c:2027` with request ESHUTDOWN despite server OK;
+  original log is `build/ci-43207921894-macos.log`. No timeout increase, retry,
+  TLS policy change or production fallback is involved.
+
 - Worker migration foundation is private: Application still uses its published
   dispatch model until the complete Invocation/Session/stream/WS migration.
   Deep-copy parser-backed headers, params, JWT strings/times, peer and body before
