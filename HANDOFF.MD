@@ -1,5 +1,16 @@
 # Split SDK migration handoff
 
+- Independent TLS qualification must observe handshake messages: default Python
+  group selection is not proof of HelloRetryRequest, and select() on a process
+  pipe is not portable to Windows. The Server-owned OpenSSL CTest selects groups
+  explicitly and checks the RFC HRR random and outbound dummy CCS records.
+  A bounded reader queue handles startup; checked process shutdown retains logs.
+  Current published SDKs pass all four TLS 1.3 profiles, mandatory-client-cert
+  negatives and verified-leaf pin/forged-header rejection. Full native-release-user
+  build and 112/112 CTests passed (`migration-tls-openssl-final-full-ctest.log`).
+  Independent OpenSSL 3.x is a host test executable, not a product TLS library;
+  no old source SDK/port stack or qualification feature switch is restored.
+
 - Application policy ownership: the public init contract promised copied policy
   values, while Security/CORS/asset middleware still borrowed caller structures.
   Reusing those structures after init changed nosniff, CORS admission and asset
