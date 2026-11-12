@@ -1,3 +1,4 @@
+#include "chttp_server_engine.h"
 #include "chttp_h2_server.h"
 #include "chttp_jwt_internal.h"
 #include "chttp_server_runtime.h"

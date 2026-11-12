@@ -1,4 +1,5 @@
-#include <chttp_app/service.h>
+#include "../../http_server/src/chttp_server_engine.h"
+#include "chttp_method_runtime.h"
 
 #include <core/error_codes.h>
 #include <memory/buffer.h>
@@ -24,7 +25,7 @@ typedef struct chttp_service_method_record {
   const DataBindBindingPlan *binding;
   const DataBindServiceNativeBinding *native_binding;
   const DataBindNativeExecution *execution;
-  chttp_service_execution_mode execution_mode;
+  chttp_method_runtime_execution_mode execution_mode;
   cflow_executor *executor;
   cflow_plan cflow_plan;
 
@@ -1504,12 +1505,12 @@ static int chttp_service_http_execute_deferred(
       record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->executor == NULL ||
       ((record->execution_mode ==
-            CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+            CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT ||
         record->execution_mode ==
-            CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN) &&
+            CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN) &&
        record->execution == NULL) ||
       (record->execution_mode ==
-           CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+           CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW &&
        record->cflow_plan.impl == NULL) ||
       request == NULL || response == NULL)
     return SALTS_EINVAL;
@@ -1561,7 +1562,7 @@ static int chttp_service_http_execute_deferred(
   invocation->deferred_method_held = 1;
   task = (cflow_executor_task){
       .run = record->execution_mode ==
-                     CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW
+                     CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW
                  ? chttp_service_deferred_cflow_run
                  : chttp_service_deferred_direct_run,
       .cancel = chttp_service_deferred_cancel_task,
@@ -1692,18 +1693,18 @@ static int chttp_service_http_handler(
   if (record == NULL || record->owner == NULL)
     return SALTS_EINVAL;
   if (record->execution_mode ==
-          CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT ||
+          CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT ||
       record->execution_mode ==
-          CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW ||
+          CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW ||
       record->execution_mode ==
-          CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN)
+          CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN)
     return chttp_service_http_execute_deferred(
         record, request, response);
   return chttp_service_http_execute(record, request, response);
 }
 
-int chttp_service_init(
-    chttp_service *service, const chttp_service_config *config) {
+int chttp_method_runtime_init(
+    chttp_method_runtime *service, const chttp_method_runtime_config *config) {
   chttp_service_impl *impl;
 
   if (service == NULL || config == NULL ||
@@ -1746,9 +1747,9 @@ int chttp_service_init(
   return SALTS_OK;
 }
 
-int chttp_service_mount_http(
-    chttp_service *service, chttp_server *server,
-    const chttp_service_http_mount *mount) {
+int chttp_method_runtime_mount_http(
+    chttp_method_runtime *service, chttp_server *server,
+    const chttp_method_runtime_http_mount *mount) {
   chttp_service_impl *impl;
   chttp_service_method_record *record;
   chttp_server_route_options route_options = {0};
@@ -1772,10 +1773,10 @@ int chttp_service_mount_http(
     return SALTS_EINVAL;
 
   plugin_mode =
-      mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_PLUGIN;
-  if (mount->execution_mode != CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
-      mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
-      mount->execution_mode != CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+      mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
+  if (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
+      mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT &&
+      mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW &&
       !plugin_mode)
     return SALTS_EINVAL;
 
@@ -1795,16 +1796,16 @@ int chttp_service_mount_http(
         mount->plugin_export_id != NULL ||
         mount->native_binding == NULL)
       return SALTS_EINVAL;
-    if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_INLINE_DIRECT &&
+    if (mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
         (mount->execution == NULL || mount->executor != NULL ||
          mount->cflow_projection != NULL))
       return SALTS_EINVAL;
-    if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_DIRECT &&
+    if (mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT &&
         (mount->execution == NULL || mount->executor == NULL ||
          !cflow_executor_valid(mount->executor) ||
          mount->cflow_projection != NULL))
       return SALTS_EINVAL;
-    if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW &&
+    if (mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW &&
         (mount->execution != NULL || mount->executor == NULL ||
          !cflow_executor_valid(mount->executor) ||
          mount->cflow_projection == NULL))
@@ -1843,7 +1844,7 @@ int chttp_service_mount_http(
     record->execution = execution;
   }
 
-  if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW)
+  if (mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW)
     status = chttp_service_cflow_admit(
         mount->method_plan, native, mount->cflow_projection,
         impl->max_call_frame_bytes,
@@ -1882,7 +1883,7 @@ int chttp_service_mount_http(
     return status;
   }
 
-  if (mount->execution_mode == CHTTP_SERVICE_EXECUTION_DEFERRED_CFLOW) {
+  if (mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_CFLOW) {
     cflow_graph graph = {0};
     cflow_graph_init(&graph, mount->cflow_projection->input_type);
     if (!cflow_graph_add_function_typed_adapter_projection(
@@ -1901,6 +1902,8 @@ int chttp_service_mount_http(
   route_options.middleware = mount->middleware;
   route_options.middleware_count = mount->middleware_count;
   route_options.handler = chttp_service_http_handler;
+  route_options.operation = record->execution != NULL ? record->execution->function :
+      mount->cflow_projection != NULL ? mount->cflow_projection->function : NULL;
   route_options.user = record;
 
   status = chttp_server_route_with(server, &route_options);
@@ -1914,7 +1917,16 @@ int chttp_service_mount_http(
   return SALTS_OK;
 }
 
-int chttp_service_destroy(chttp_service *service) {
+int chttp_method_runtime_quiescent(const chttp_method_runtime *service) {
+  const chttp_service_impl *impl = service != NULL ? service->impl : NULL;
+  if (impl == NULL) return SALTS_OK;
+  for (size_t i = 0u; i < impl->method_count; ++i)
+    if (atomic_load_explicit(&impl->methods[i].deferred_in_flight, memory_order_acquire) != 0u)
+      return SALTS_EBUSY;
+  return SALTS_OK;
+}
+
+int chttp_method_runtime_destroy(chttp_method_runtime *service) {
   chttp_service_impl *impl;
   size_t i;
   if (service == NULL) return SALTS_EINVAL;

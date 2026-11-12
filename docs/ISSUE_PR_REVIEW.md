@@ -1,61 +1,63 @@
 # Issue and PR integration review
 
-Snapshot: 2026-11-11, master `5098dc8ad6572874b0c8b71d36ddf090a739d324`,
-after [#272](https://github.com/qigao/chttp/pull/272). Reviewed the 14 open
-issues, the descriptions and branch ancestry/diff scope of 17 open PRs,
-and the current implementations cited below. This is an integration-readiness
-review, not a complete line-by-line audit of every historical draft.
+Snapshot: 2026-11-12, master `a615444ea31093a06d470dd3a942221a0315595a`,
+after #272 and #280–#283. This records source/queue triage, not a complete
+line-by-line audit of every historical branch or downstream deployment.
+Original issue and PR descriptions remain available on GitHub.
 
-## Findings
+## Closed historical work
 
-| Severity | Evidence and trigger | Impact and minimum next step |
-| --- | --- | --- |
-| MED | PRs [#233](https://github.com/qigao/chttp/pull/233), [#234](https://github.com/qigao/chttp/pull/234), [#236](https://github.com/qigao/chttp/pull/236) have heads that are already ancestors of master; their three-dot diffs are empty. | Their open status no longer represents outstanding changes. They are closure candidates; do not merge an old CI stack again. |
-| MED | [#270](https://github.com/qigao/chttp/pull/270) changes eight legacy SDK/cache files and pins vcpkg-cache 0.1.0. Master now uses environment-selected 0.1.3 with the split SDK matrix. | The original pinning solution is superseded by #272. Close as superseded or extract a demonstrably missing requirement, without restoring the old workflows. |
-| MED | [#219](https://github.com/qigao/chttp/pull/219) still calls `cmeta_threadpool_*` and `cmeta_thread_*` in its deferred benchmark. Current Base owns these APIs under the new names. | Rebase the benchmark onto current published inputs and qualify it through its formal CTest entry before merging or closing #215. No new performance conclusion follows from this review. |
-| MED | [#271](https://github.com/qigao/chttp/pull/271) contains the large H2 RPC regression together with its inherited #270 cache changes. | Preserve the useful bounded 32 KiB/8 KiB test, but port just that test onto current master and requalify it. Old-head green runs do not qualify the current SDK composition. |
-| MED | [#269](https://github.com/qigao/chttp/issues/269) still asks for master/source consumption and removal of mandatory installed SDKs. The later authorized design in #272 deliberately requires verified published SDKs. | Reconcile the issue's acceptance text with the chosen dependency contract before closure; do not reintroduce source fallback to satisfy stale text. |
+Fourteen historical PRs were closed without merging their old stacks:
+#225, #233, #234, #236, #249, #252, #253, #254, #255, #256, #257, #258,
+#259 and #270. The former Salts source/candidate, port and SDK/cache solutions
+are superseded by exact published split SDKs and the Application migration.
+Their branches and original descriptions were retained. Closing these stacks
+does not prove ServiceHost generations, downstream consumers or release gates.
 
-## Remaining PRs
-
-Keep [#263](https://github.com/qigao/chttp/pull/263) as a reference-only TLS
-qualification draft. Its old-source/port14 evidence does not establish an
-outstanding defect in the current published dependency graph.
-
-The ServiceHost/Component draft stack remains unmerged:
-[#225](https://github.com/qigao/chttp/pull/225),
-[#249](https://github.com/qigao/chttp/pull/249),
-[#252](https://github.com/qigao/chttp/pull/252),
-[#253](https://github.com/qigao/chttp/pull/253),
-[#255](https://github.com/qigao/chttp/pull/255),
-[#256](https://github.com/qigao/chttp/pull/256),
-[#257](https://github.com/qigao/chttp/pull/257),
-[#258](https://github.com/qigao/chttp/pull/258),
-[#259](https://github.com/qigao/chttp/pull/259).
-Their descriptions explicitly restrict merging or publication and use former
-Salts/Utils epochs, candidate source builds, or installed qualification projects.
-Any future production slice must use the current public CMeta/Base/Utils
-contracts and existing module tests. This review does not authorize their
-public API changes or reverse their draft-only instructions.
-
-[#254](https://github.com/qigao/chttp/pull/254) modifies the removed legacy SDK
-preflight workflow. Its exact-package GmSSL preflight needs reevaluation against
-the new restoration receipts rather than restoration of that workflow.
-
-## Issue disposition
-
-| Issues | Evidence in current master and disposition |
+| Issue | Disposition and evidence |
 | --- | --- |
-| #240, #241, #242, #243, #244 | Server/Client-owned RPC exists in `http_server/rpc/`, `http_client/rpc/` and their public headers. Server call slots own bounded frame storage; Client RPC uses the existing HTTP transport. `docs/RPC.md` records ownership/drain coverage. The #272 matrix passes the formal regressions, but a newly published CHttp SDK/export qualification was not established here. Reconcile completed source work with remaining release acceptance before closing the epic/SDK issue. |
-| #229 | `chttp_client_impl` already contains one CNet Manager and `cnet_client_pool`, separate H1/H2 sessions, request slots and `cnet_pool_lease` values. Pool release/bind-ready is implemented in `http_client/src/chttp_client.c`. Reconcile its old implementation premise with current coverage; do not rebuild a second pool. |
-| #230 | SG-hosted external progression/cohosting remains a separate capability. Published-SDK migration alone is not its acceptance evidence. Keep open. |
-| #231 | Protocol-ready admission and optional recovery/retry require separate contract qualification. Ordinary connection reuse is not proof of retry authorization. Keep open. |
-| #268 | Native curl-like CLI is not supplied by the dependency migration or this string refactor. Keep open. |
-| #215 | Inline owner-blocking evidence and deferred A/B benchmark acceptance are distinct; #219 needs rebasing. Keep open. |
-| #224 | Component request-scope/lifetime qualification is not proven by the historical ServiceHost drafts or current SDK migration. Keep open. |
-| #194 | `app/tests/service/chttp_service_generic_cross_tu_test.c` proves the cross-TU slice; it does not alone prove all cross-DSO generic graph lifetime requirements. Keep open. |
-| #191 | Architectural alignment spans canonical IDL, native reflection and transport plans. Old RpcService/package names need reconciliation with integrated Server/Client RPC; no claim of complete compiler alignment. Keep open. |
-| #269 | Dependency cutover is implemented by #272, but its original source-only criterion conflicts with the later published-SDK decision. Update acceptance before closure. |
+| #269 | Closed not planned: source-only consumption conflicts with the later authorized published-SDK contract in #272. Real downstream acceptance remains #244. |
+| #240 | Closed not planned: the old public Server/RpcService packaging plan is superseded by the #280 Application entry point. Residual release gates remain #244. |
+| #241 | Completed: Server-owned RPC registry/mounts share the HTTP listener and Owner; registration is now private behind Application. |
+| #242 | Completed: typed blocking/async RPC uses the native Client HTTP transport, without a nested client or pool. |
+| #243 | Completed: bounded per-call frames, params and workspaces replace shared mutable RPC storage; formal tests cover capacity, partial decode, owned values, provider leases and drain. |
+| #191 | Closed duplicate: remaining generic DSO qualification is tracked by #194; its old Server/no-CMeta restriction is superseded by #280. |
+
+## Remaining issues
+
+Priorities and risks describe the remaining work, not all historical checkboxes.
+
+| Priority | Issue | Residual acceptance |
+| --- | --- | --- |
+| P1 / MED | [#231](https://github.com/qigao/chttp/issues/231) | Deterministic hung/EOF/late-terminal diagnosis and drain qualification. `chttp_requests_recover(impl, UINT32_MAX)` is not bounded by the logical deadline; the historical WHEP delay has no confirmed CHttp root cause. Preserve retained-send ownership and default single-attempt behavior. |
+| P1 / MED | [#194](https://github.com/qigao/chttp/issues/194) | Real host/provider DSO generic metadata identity, mismatch admission and finalizer-before-unload tests. Cross-TU and ordinary plugin tests do not establish this. |
+| P1 / MED | [#224](https://github.com/qigao/chttp/issues/224) | Retained ServiceHost generations/Scope and bounded replacement/rollback on current public CMeta::ACE. The static Application graph is not dynamic hot replacement. Public interface design needs review before implementation. |
+| P1 / MED | [#244](https://github.com/qigao/chttp/issues/244) | Current SDK artifacts/exports and real existing downstream HTTP/RPC/TLS qualification, with exact versions/platform evidence. No independent consumer verification project. |
+| P2 / MED | [#229](https://github.com/qigao/chttp/issues/229) | Existing CNet pool protocol leases and identity isolation need the remaining TLS/authority/ALPN/generation/Owner and failure-path matrix; do not rewrite the implemented pool. |
+| P2 / LOW | [#268](https://github.com/qigao/chttp/issues/268) | A bounded curl-like Client CLI with strict options, HTTPS identity, atomic file output and formal runtime/exit tests is not delivered. |
+| P2 / MED | [#215](https://github.com/qigao/chttp/issues/215) | Port deferred CPU A/B benchmark and collect current raw owner/client/worker CPU and admission data. Old inline evidence is limited to its recorded revision. |
+| P3 / LOW | [#230](https://github.com/qigao/chttp/issues/230) | Explicit host-driven Server/Client cohosting needs a named consumer and lifetime/progress design. Ordinary threaded Server plus polled Client is not cohosting. |
+
+## Retained PRs
+
+All four retained PRs were draft after triage. Old-head green runs do not
+qualify a new baseline or authorize a production/performance claim.
+
+| PR | Next acceptance |
+| --- | --- |
+| [#273](https://github.com/qigao/chttp/pull/273) | Preserve JWT/WS Base string reuse and option-lifetime/case regressions, merge current master, retain both HANDOFF records, then qualify the resulting head. |
+| [#263](https://github.com/qigao/chttp/pull/263) | Port unique OpenSSL TLS 1.3 mTLS HRR/CCS and negative-identity tests onto current published SDKs; do not restore the old port/source workflow. |
+| [#271](https://github.com/qigao/chttp/pull/271) | Extract the bounded large-array H2 RPC test from the closed #270 parent stack, port to formal Server tests and qualify 32 KiB success/8 KiB rejection. |
+| [#219](https://github.com/qigao/chttp/pull/219) | Port the deferred CPU benchmark to current Base APIs and private Server benchmark contracts; use formal CTest and retain raw repeated measurements. |
+
+## Verification boundary
+
+The #280–#283 native CI covered Windows/macOS and Linux including TSan.
+Combined #281–#283 qualification on published SDKs passed the full local
+`native-release-user` build, 111/111 CTests and install. Android records establish
+cross-build/install only. Queue triage itself did not execute new tests or
+publish a release. #273 qualification after this baseline update is recorded
+in its PR; no old run is relabeled as a new-head result.
 
 ## Base string reuse
 
@@ -72,10 +74,3 @@ use ASCII-insensitive comparison. Views are local borrows, retained by no
 callback or queue. WebSocket NULL handling, header validation, wire buffers,
 capacity limits, public layouts and error codes stay unchanged. No new shared
 state, retry, unbounded builder or runtime owner is introduced.
-
-Formal JWT regressions cover independent option storage, each optional
-restriction, exact claim case, mixed-case authentication, duplicate headers,
-invalid separators, non-ASCII schemes and empty tokens. The published-SDK
-Windows full build and CTest pass 103/103. No performance gain is claimed.
-
-No issues or historical PRs were closed or merged by this review.

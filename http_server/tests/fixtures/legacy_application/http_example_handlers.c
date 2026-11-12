@@ -1,3 +1,4 @@
+#include "../../../src/chttp_server_engine.h"
 #include "http_example_app.h"
 
 static int example_page(void *user, const chttp_server_request_view *request,

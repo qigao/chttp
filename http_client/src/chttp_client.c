@@ -3,6 +3,7 @@
 #include "chttp_h2_session.h"
 #include "chttp_internal.h"
 #include "chttp_tls.h"
+#include "chttp_connection_recovery.h"
 #include <cnet/client_pool.h>
 #include <core/tstr.h>
 
@@ -40,6 +41,7 @@ typedef enum chttp_slot_state {
 } chttp_slot_state;
 
 typedef struct chttp_slot {
+  chttp_attempt_facts attempt;
   chttp_client_impl *client;
   chttp_request public_handle;
   chttp_h1_session *h1;
@@ -83,6 +85,7 @@ typedef enum chttp_h1_state {
 } chttp_h1_state;
 
 struct chttp_h1_session {
+  chttp_connection_recovery recovery;
   chttp_client_impl *client;
   chttp_slot *request;
   cnet_connection connection;
@@ -105,6 +108,8 @@ struct chttp_h1_session {
 };
 
 struct chttp_client_impl {
+  chttp_connection_recovery_options recovery_options;
+  bool admission_started;
   cnet_client network;
   /* Borrowed CNet owner, no separate poller, worker or Manager DLL. */
   cnet_manager transport_manager;
@@ -400,7 +405,12 @@ static int chttp_h1_reserve(void *user, cnet_managed_connection managed,
   chttp_h1_session *session;
   int status = cnet_manager_lookup(&slot->client->transport_manager, managed, &entry);
   if (status != SALTS_OK) return status;
-  session = (chttp_h1_session *)entry.context;
+  session = NULL;
+  for (size_t index = 0u; index < slot->client->connection_capacity; ++index) {
+    chttp_h1_session *candidate = &slot->client->h1_sessions[index];
+    if (candidate->managed.slot == managed.slot &&
+        candidate->managed.generation == managed.generation) { session = candidate; break; }
+  }
   if (session == NULL || session->client != slot->client ||
       session->state != CHTTP_H1_IDLE || session->request != NULL ||
       session->operation != 0u || session->send_pending || !session->receive_armed)
@@ -430,6 +440,14 @@ static chttp_slot *chttp_slot_find(chttp_client_impl *impl, chttp_request reques
   return slot->state != CHTTP_SLOT_FREE && slot->generation == request.generation
              ? slot
              : NULL;
+}
+
+int chttp_async_client_attempt_facts(chttp_async_client *client,
+    chttp_request request, chttp_attempt_facts *out) {
+  chttp_slot *slot = chttp_slot_find(chttp_client_get(client), request);
+  if (out == NULL || slot == NULL) return SALTS_EINVAL;
+  *out = slot->protocol == CHTTP_HTTP_2 ? slot->h2_request.attempt : slot->attempt;
+  return SALTS_OK;
 }
 
 static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *response, int status,
@@ -464,6 +482,10 @@ static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *resp
 
 static int chttp_h1_try_close(chttp_h1_session *session) {
   int status;
+  if (session != NULL && session->recovery.configured) {
+    status = chttp_connection_recovery_seal(&session->recovery);
+    if (status != SALTS_OK) return status;
+  }
   if (session == NULL || session->state == CHTTP_H1_FREE ||
       session->transport_closed || session->close_admitted) return SALTS_OK;
   session->state = CHTTP_H1_CLOSING;
@@ -758,10 +780,43 @@ static void chttp_cnet_state(void *user, cnet_connection connection, cnet_connec
   if (!chttp_h1_connection_matches(session, connection)) return;
   slot = session->request;
   if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+    if (slot != NULL && !slot->result_delivered) {
+      const cnet_reconnect_failure_kind kind = chttp_transport_failure_classify(
+          strncmp(session->connection_uri, "tls://", 6u) == 0,
+          slot->state != CHTTP_SLOT_CONNECTING, state, error);
+      slot->attempt.retryable_failure = kind == CNET_RECONNECT_TRANSIENT;
+      slot->attempt.security_failure = kind == CNET_RECONNECT_SECURITY;
+    }
     session->transport_closed = true;
     session->send_pending = false;
     session->receive_armed = false;
     session->state = CHTTP_H1_TERMINAL;
+    if (session->recovery.configured && slot != NULL && !slot->cancel_requested &&
+        !slot->client->stop_active && chttp_connection_recovery_opening_retry(&session->recovery))
+      return;
+  }
+  if (state == CNET_CONNECTION_CONNECTED && session->recovery.configured) {
+    status = chttp_connection_recovery_ready(&session->recovery);
+    if (status != SALTS_OK) {
+      session->recovery.permanent = true;
+      session->recovery.last_status = status;
+      (void)cnet_close(&session->client->network, connection);
+      return;
+    }
+    if (slot == NULL) {
+      session->state = CHTTP_H1_IDLE;
+      status = cnet_receive(&session->client->network, connection, 1u);
+      if (status == SALTS_OK) {
+        session->receive_armed = true;
+        status = chttp_connection_recovery_bind(&session->recovery, 1u);
+      }
+      if (status == SALTS_OK) session->pool_ready = true;
+      else {
+        session->recovery.last_status = status;
+        session->recovery.permanent = true;
+        (void)cnet_close(&session->client->network, connection);
+      }
+    }
   }
   if (slot == NULL) return;
 
@@ -861,6 +916,7 @@ static void chttp_cnet_receive(void *user, cnet_connection connection,
     chttp_slot_fail_and_close(slot, SALTS_ENOTSUP, 0, "transport-kind");
     return;
   }
+  if (view->size != 0u) slot->attempt.response_started = true;
   status = chttp_response_parser_execute(&slot->response_parser, view->data, view->size);
   if (status != SALTS_OK) {
     chttp_slot_fail_and_close(slot, status, slot->response_parser.parser_status,
@@ -930,7 +986,9 @@ static int chttp_reap_terminal_slots(chttp_client_impl *impl) {
         if (status != SALTS_OK) {
           (void)chttp_h1_try_close(session);
         } else if (session->pooled.slot != 0u && !session->pool_ready) {
-          status = cnet_pool_bind_ready(&impl->connection_pool, session->pooled, session->managed, 1u);
+          status = session->recovery.configured
+              ? chttp_connection_recovery_bind(&session->recovery, 1u)
+              : cnet_pool_bind_ready(&impl->connection_pool, session->pooled, session->managed, 1u);
           if (status != SALTS_OK) {
             (void)chttp_h1_try_close(session);
             chttp_slot_release(slot);
@@ -955,12 +1013,54 @@ static int chttp_reap_terminal_slots(chttp_client_impl *impl) {
   return SALTS_OK;
 }
 
+static bool chttp_h1_recovery_settled(void *user) {
+  chttp_h1_session *s = user;
+  return s->request == NULL || (!s->request->result_delivered &&
+      s->request->state == CHTTP_SLOT_CONNECTING && s->request->request_data != NULL &&
+      s->request->source_transferred == 0u);
+}
+static int chttp_h1_recovery_reset(void *user) {
+  chttp_h1_session *s = user;
+  s->transport_closed = false;
+  s->close_admitted = false;
+  s->close_pending = false;
+  s->receive_armed = false;
+  s->send_pending = false;
+  s->pool_ready = false;
+  s->state = CHTTP_H1_CONNECTING;
+  return SALTS_OK;
+}
+static void chttp_h1_recovery_fail(void *user, int status, int native_status) {
+  chttp_h1_session *s = user;
+  if (s->request != NULL && !s->request->result_delivered)
+    chttp_slot_fail_and_close(s->request, status, native_status, "connection-recovery");
+  if (s->managed.slot == 0u) {
+    s->transport_closed = true;
+    s->state = CHTTP_H1_TERMINAL;
+  }
+}
+
 static int chttp_client_pool_progress(chttp_client_impl *impl) {
   size_t index, advanced = 0u;
-  int status = chttp_reap_terminal_slots(impl);
+  int status;
+  /* Publish recovery exhaustion/stop results before releasing logical leases.
+   * The post-recycle pass below can then retire the physical reservation in
+   * the same owner turn, without reporting a false BUSY from client stop. */
+  if (impl->recovery_options.max_attempts > 1u) {
+    for (index = 0u; index < impl->connection_capacity; ++index) {
+      status = chttp_connection_recovery_progress(&impl->h1_sessions[index].recovery);
+      if (status != SALTS_OK) return status;
+    }
+    for (index = 0u; index < impl->h2_session_capacity; ++index) {
+      status = chttp_connection_recovery_progress(&impl->h2_sessions[index].recovery);
+      if (status != SALTS_OK) return status;
+    }
+  }
+  status = chttp_reap_terminal_slots(impl);
   if (status != SALTS_OK) return status;
   for (index = 0u; index < impl->connection_capacity; ++index) {
     chttp_h1_session *session = &impl->h1_sessions[index];
+    if (session->recovery.configured) continue;
     if (!session->transport_closed || session->request != NULL) continue;
     /* Manager has returned from its native terminal callback. Pool release
      * precedes context release, so neither can name recycled protocol storage. */
@@ -983,8 +1083,17 @@ static int chttp_client_pool_progress(chttp_client_impl *impl) {
   if (status != SALTS_OK) return status;
   for (index = 0u; index < impl->connection_capacity; ++index) {
     chttp_h1_session *session = &impl->h1_sessions[index];
+    if (session->recovery.configured) {
+      status = chttp_connection_recovery_progress(&session->recovery);
+      if (status != SALTS_OK) return status;
+      if (session->recovery.dial.impl != NULL) continue;
+    }
     if (session->transport_closed && session->request == NULL && session->managed.slot == 0u)
       chttp_h1_clear(session);
+  }
+  for (index = 0u; index < impl->h2_session_capacity; ++index) {
+    status = chttp_connection_recovery_progress(&impl->h2_sessions[index].recovery);
+    if (status != SALTS_OK) return status;
   }
   return SALTS_OK;
 }
@@ -1070,7 +1179,12 @@ static int chttp_h2_reserve(void *user, cnet_managed_connection managed,
   chttp_h2_session *session;
   int status = cnet_manager_lookup(&slot->client->transport_manager, managed, &entry);
   if (status != SALTS_OK) return status;
-  session = (chttp_h2_session *)entry.context;
+  session = NULL;
+  for (size_t index = 0u; index < slot->client->h2_session_capacity; ++index) {
+    chttp_h2_session *candidate = &slot->client->h2_sessions[index];
+    if (candidate->managed.slot == managed.slot &&
+        candidate->managed.generation == managed.generation) { session = candidate; break; }
+  }
   if (session == NULL || session->state != CHTTP_H2_SESSION_ACTIVE ||
       !session->pool_ready || session->pool_draining) return SALTS_ENOBUFS;
   /* Submit allocates an actual protocol stream under current peer SETTINGS,
@@ -1093,7 +1207,7 @@ static void chttp_h2_release_operation(void *user, uint64_t token) {
 static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options *options,
                            chttp_file_transfer *file_transfer,
                            chttp_file_sink_transfer *file_sink_transfer,
-                           const cnet_destination_result *destination,
+                           const cnet_destination_result *destination, uint64_t deadline_at_ms,
                            chttp_request *out_request) {
   chttp_h2_session_callbacks callbacks = {.user = impl, .on_complete = chttp_h2_complete};
   chttp_h2_session *session;
@@ -1173,10 +1287,12 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
     return SALTS_ENOBUFS;
   }
   status = chttp_h2_session_open(session, &impl->network, &impl->transport_manager,
-                                 &impl->connection_pool, &key, options, tls_profile, &impl->h2_config,
+                                 &impl->connection_pool, &key, options, tls_profile,
+                                 &impl->recovery_options, deadline_at_ms, &impl->h2_config,
                                  &impl->limits, &callbacks);
   if (destination != NULL) session->destination = *destination;
   tls_profile = NULL; /* Session open consumes the retained profile. */
+  if (status == SALTS_OK) impl->admission_started = true;
   if (status != SALTS_OK) {
     int cleanup_status;
     chttp_slot_release(slot);
@@ -1196,6 +1312,7 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
     return status;
   }
 admitted:
+  impl->admission_started = true;
   chttp_tls_profile_release(tls_profile);
   if (file_transfer != NULL)
     chttp_file_transfer_set_ready(file_transfer, chttp_h2_file_ready, &slot->h2_request);
@@ -1329,6 +1446,17 @@ int chttp_async_client_set_h2_receive_window_policy(
   return SALTS_OK;
 }
 
+int chttp_async_client_set_connection_recovery(chttp_async_client *client,
+    const chttp_connection_recovery_options *options) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  int status = chttp_connection_recovery_validate(options);
+  if (impl == NULL || status != SALTS_OK) return SALTS_EINVAL;
+  if (impl->admission_started || impl->poll_active || impl->callback_active ||
+      impl->stop_active || impl->stopped) return SALTS_EBUSY;
+  impl->recovery_options = *options;
+  return SALTS_OK;
+}
+
 int chttp_async_client_set_socket_options(
     chttp_async_client *client,
     const cnet_stream_socket_options *options) {
@@ -1362,7 +1490,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
                                           const chttp_request_options *options,
                                           chttp_file_transfer *file_transfer,
                                           chttp_file_sink_transfer *file_sink_transfer,
-                                          const cnet_destination_result *destination,
+                                          const cnet_destination_result *destination, uint64_t deadline_at_ms,
                                           chttp_request *out_request) {
   chttp_client_impl *impl = chttp_client_get(client);
   chttp_slot *slot;
@@ -1381,7 +1509,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   if (impl->callback_active) return SALTS_EBUSY;
   if (!impl->admission_open) return SALTS_ESHUTDOWN;
   if (options->protocol == CHTTP_HTTP_2)
-    return chttp_h2_submit(impl, options, file_transfer, file_sink_transfer, destination, out_request);
+    return chttp_h2_submit(impl, options, file_transfer, file_sink_transfer, destination, deadline_at_ms, out_request);
   if (options->protocol != CHTTP_HTTP_1_1) return SALTS_EINVAL;
   status = chttp_stream_uri_supported(options->connection_uri, options->tls != NULL);
   if (status != SALTS_OK) return status;
@@ -1455,6 +1583,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
     session->send_pending = true;
     slot->request_size = 0u;
     chttp_tls_profile_release(tls_profile);
+    impl->admission_started = true;
     *out_request = slot->public_handle;
     return SALTS_OK;
   }
@@ -1491,6 +1620,12 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
   if (pipe) {
     /* IPC is a distinct transport, outside Manager's tcp/tls contract. */
     status = cnet_connect(&impl->network, &connect_options, &session->connection);
+  } else if (impl->recovery_options.max_attempts > 1u) {
+    session->context_released = true;
+    status = chttp_connection_recovery_init(&session->recovery, &impl->recovery_options,
+        &impl->network, &impl->transport_manager, &impl->connection_pool, &key,
+        &session->pooled, &session->managed, &session->connection, deadline_at_ms, &connect_options,
+        chttp_h1_recovery_reset, chttp_h1_recovery_settled, chttp_h1_recovery_fail, session);
   } else {
     const cnet_manager_attachment attachment = {
         .observer = connect_options.observer, .on_recycle = chttp_h1_recycle,
@@ -1503,6 +1638,7 @@ static int chttp_async_client_submit_impl(chttp_async_client *client,
                                     &connect_options, &session->connection);
   }
   if (status != SALTS_OK) goto reject_connection;
+  impl->admission_started = true;
   *out_request = slot->public_handle;
   return SALTS_OK;
 
@@ -1546,7 +1682,7 @@ int chttp_async_client_rpc_submit_transport(
       return SALTS_EALREADY;
   }
   status = chttp_async_client_submit_impl(
-      client, options, NULL, NULL, NULL, out_request);
+      client, options, NULL, NULL, NULL, deadline_at_ms, out_request);
   if (status != SALTS_OK) return status;
   /* The successful submit published this exact generation; callbacks cannot
    * run before the owning HTTP progress loop executes again. */
@@ -1560,14 +1696,14 @@ int chttp_async_client_rpc_submit_transport(
 
 int chttp_async_client_submit(chttp_async_client *client, const chttp_request_options *options,
                               chttp_request *out_request) {
-  return chttp_async_client_submit_impl(client, options, NULL, NULL, NULL, out_request);
+  return chttp_async_client_submit_impl(client, options, NULL, NULL, NULL, 0u, out_request);
 }
 
 int chttp_async_client_submit_destination(chttp_async_client *client,
                                            const chttp_request_options *options,
                                            const cnet_destination_result *destination,
                                            chttp_request *out_request) {
-  return chttp_async_client_submit_impl(client, options, NULL, NULL, destination, out_request);
+  return chttp_async_client_submit_impl(client, options, NULL, NULL, destination, 0u, out_request);
 }
 
 int chttp_async_client_submit_to(chttp_async_client *client,
@@ -1594,7 +1730,7 @@ int chttp_async_client_submit_to(chttp_async_client *client,
 int chttp_async_client_submit_file(chttp_async_client *client, const chttp_request_options *options,
                                    chttp_file_transfer *transfer, chttp_request *out_request) {
   if (transfer == NULL || transfer->file.impl == NULL) return SALTS_EINVAL;
-  return chttp_async_client_submit_impl(client, options, transfer, NULL, NULL, out_request);
+  return chttp_async_client_submit_impl(client, options, transfer, NULL, NULL, 0u, out_request);
 }
 
 int chttp_async_client_submit_file_download(chttp_async_client *client,
@@ -1602,7 +1738,17 @@ int chttp_async_client_submit_file_download(chttp_async_client *client,
                                             chttp_file_sink_transfer *transfer,
                                             chttp_request *out_request) {
   if (transfer == NULL || transfer->file.impl == NULL) return SALTS_EINVAL;
-  return chttp_async_client_submit_impl(client, options, NULL, transfer, NULL, out_request);
+  return chttp_async_client_submit_impl(client, options, NULL, transfer, NULL, 0u, out_request);
+}
+
+int chttp_async_client_submit_timed(chttp_async_client *client,
+    const chttp_request_options *options, chttp_file_transfer *source,
+    chttp_file_sink_transfer *sink, const cnet_destination_result *destination,
+    uint64_t deadline_at_ms, chttp_request *out_request) {
+  if ((source != NULL && (source->file.impl == NULL || sink != NULL)) ||
+      (sink != NULL && sink->file.impl == NULL)) return SALTS_EINVAL;
+  return chttp_async_client_submit_impl(client, options, source, sink, destination,
+                                         deadline_at_ms, out_request);
 }
 
 int chttp_async_request_cancel(chttp_async_client *client, chttp_request request) {
@@ -1618,7 +1764,13 @@ int chttp_async_request_cancel(chttp_async_client *client, chttp_request request
     if (status == SALTS_OK) slot->cancel_requested = true;
     return status;
   }
-  status = cnet_close(&impl->network, slot->h1->connection);
+  if (slot->h1->recovery.configured) {
+    status = chttp_connection_recovery_seal(&slot->h1->recovery);
+    if (status == SALTS_OK) {
+      slot->h1->recovery.last_status = SALTS_ECANCELED;
+      slot->h1->recovery.last_native_status = 0;
+    }
+  } else status = cnet_close(&impl->network, slot->h1->connection);
   if (status != SALTS_OK) return status;
   slot->cancel_requested = true;
   slot->h1->close_admitted = true;
@@ -1703,6 +1855,14 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
     if (close_status == SALTS_OK) close_status = retry_status;
   }
   wait_ms = chttp_rpc_deadline_poll_budget(impl, timeout_ms);
+  if (impl->recovery_options.max_attempts > 1u) {
+    const int progress = chttp_client_pool_progress(impl);
+    if (progress != SALTS_OK && close_status == SALTS_OK) close_status = progress;
+    for (size_t index = 0u; index < impl->connection_capacity; ++index)
+      wait_ms = chttp_connection_recovery_wait(&impl->h1_sessions[index].recovery, wait_ms);
+    for (size_t index = 0u; index < impl->h2_session_capacity; ++index)
+      wait_ms = chttp_connection_recovery_wait(&impl->h2_sessions[index].recovery, wait_ms);
+  }
   status = cnet_client_poll(&impl->network, chttp_file_runtime_poll_timeout(impl, wait_ms),
                             &network_events);
   {
@@ -1738,6 +1898,14 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
   if (impl->stopped) return SALTS_OK;
   impl->admission_open = false;
   impl->stop_active = true;
+  for (index = 0u; index < impl->connection_capacity; ++index) {
+    int status = chttp_connection_recovery_seal(&impl->h1_sessions[index].recovery);
+    if (status != SALTS_OK) return status;
+  }
+  for (index = 0u; index < impl->h2_session_capacity; ++index) {
+    chttp_connection_recovery *r = &impl->h2_sessions[index].recovery;
+    if (r->configured) { r->permanent = true; r->stopping = true; r->defer_stop = true; }
+  }
   first_status = cnet_pool_seal(&impl->connection_pool);
   if (first_status != SALTS_OK) return first_status;
   impl->completion_count = 0u;

@@ -20,6 +20,7 @@ typedef SOCKET chttp_h2_test_socket;
 #else
   #include <netinet/in.h>
   #include <sys/socket.h>
+  #include <sys/select.h>
   #include <sys/time.h>
   #include <unistd.h>
 typedef int chttp_h2_test_socket;
@@ -36,6 +37,15 @@ typedef struct chttp_h2_test_server {
   char paths[4][64];
   size_t expected_requests;
   size_t goaway_responses;
+  int refuse_first_stream;
+  int unprocessed_goaway;
+  int partial_then_refuse;
+  int partial_wire_response;
+  int drop_first_response;
+  uint32_t goaway_error;
+  bool goaway_last_current;
+  size_t refuse_responses;
+  size_t received_body_bytes;
   size_t request_count;
   size_t accepted_connections;
   int empty_responses;
@@ -281,6 +291,25 @@ static int chttp_h2_test_on_end(void *user, int32_t stream_id, int end_stream) {
   if (request_index < sizeof(server->paths) / sizeof(server->paths[0]))
     memcpy(server->paths[request_index], server->path, sizeof(server->path));
   ++server->request_count;
+  if (request_index == 0u && server->drop_first_response) return 0;
+  if (server->partial_wire_response) return 0;
+  if (request_index == 0u && server->partial_then_refuse) {
+    if (chttp_h2_proto_submit_headers(server->protocol, stream_id, response_headers,
+        sizeof(response_headers) / sizeof(response_headers[0]), 0) != 0) return -1;
+    return chttp_h2_proto_submit_rst_stream(server->protocol, stream_id,
+                                           CHTTP_H2_ERR_REFUSED_STREAM);
+  }
+  if (server->refuse_responses != 0u) {
+    --server->refuse_responses;
+    return chttp_h2_proto_submit_rst_stream(server->protocol, stream_id,
+                                           CHTTP_H2_ERR_REFUSED_STREAM);
+  }
+  if (request_index == 0u && server->refuse_first_stream)
+    return chttp_h2_proto_submit_rst_stream(server->protocol, stream_id,
+                                           CHTTP_H2_ERR_REFUSED_STREAM);
+  if (request_index == 0u && server->unprocessed_goaway)
+    return chttp_h2_proto_submit_goaway(server->protocol,
+        server->goaway_last_current ? (uint32_t)stream_id : 0u, server->goaway_error);
   if (server->invalid_trailers) {
     if (chttp_h2_proto_submit_headers(server->protocol, stream_id, response_headers,
                                       sizeof(response_headers) / sizeof(response_headers[0]),
@@ -316,6 +345,15 @@ static void chttp_h2_test_on_goaway(void *user, uint32_t last_stream_id, uint32_
   (void)last_stream_id;
   (void)error_code;
   ++server->received_goaway;
+}
+
+static int chttp_h2_test_on_data(void *user, int32_t stream_id,
+    const uint8_t *data, size_t size) {
+  chttp_h2_test_server *server = user;
+  (void)stream_id; (void)data;
+  if (size > SIZE_MAX - server->received_body_bytes) return -1;
+  server->received_body_bytes += size;
+  return 0;
 }
 
 static void chttp_h2_test_flush(chttp_h2_test_server *server, chttp_h2_test_socket accepted) {
@@ -451,9 +489,13 @@ static void chttp_h2_test_serve_one(chttp_h2_test_server *server, size_t target_
   callbacks.on_header = chttp_h2_test_on_header;
   callbacks.on_end_headers = chttp_h2_test_on_end;
   callbacks.on_goaway = chttp_h2_test_on_goaway;
+  callbacks.on_data = chttp_h2_test_on_data;
   server->protocol = chttp_h2_proto_create(CHTTP_H2_PROTO_SERVER, NULL, &callbacks);
   if (server->status == SALTS_OK && server->protocol == NULL) server->status = SALTS_ENOMEM;
-  while (server->status == SALTS_OK && server->request_count < target_request_count) {
+  while (server->status == SALTS_OK && (server->request_count < target_request_count ||
+      ((server->partial_wire_response || (server->drop_first_response &&
+          server->request_count == 1u)) && (server->received_body_bytes < 3u ||
+          !chttp_h2_proto_settings_acked(server->protocol))))) {
     const int received = recv(accepted, (char *)input, (int)sizeof(input), 0);
     if (received <= 0 ||
         chttp_h2_proto_recv(server->protocol, input, (size_t)received) != received) {
@@ -463,6 +505,10 @@ static void chttp_h2_test_serve_one(chttp_h2_test_server *server, size_t target_
     chttp_h2_test_flush(server, accepted);
   }
   chttp_h2_test_flush(server, accepted);
+  if (server->status == SALTS_OK && server->partial_wire_response) {
+    static const uint8_t prefix[] = {0u, 0u, 1u, 1u};
+    server->status = chttp_h2_test_send_all(accepted, prefix, sizeof(prefix));
+  }
   while (server->status == SALTS_OK && wait_for_peer_close) {
     const int received = recv(accepted, (char *)input, (int)sizeof(input), 0);
     if (received == 0) break;
@@ -492,6 +538,12 @@ static void chttp_h2_test_serve_goaway(void *user) {
   chttp_h2_test_server *server = (chttp_h2_test_server *)user;
   if (server == NULL) return;
   chttp_h2_test_serve_one(server, 1u, 1);
+  if (server->status == SALTS_OK) chttp_h2_test_serve_one(server, 2u, 0);
+}
+
+static void chttp_h2_test_serve_transport_loss(void *user) {
+  chttp_h2_test_server *server = user;
+  chttp_h2_test_serve_one(server, 1u, 0);
   if (server->status == SALTS_OK) chttp_h2_test_serve_one(server, 2u, 0);
 }
 
@@ -707,7 +759,328 @@ static void chttp_h2_test_on_complete(void *user, chttp_request request,
   ++completion->count;
 }
 
+static void chttp_h2_test_no_replay(bool goaway, bool recovery) {
+  chttp_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
+  chttp_h2_test_server server = {0};
+  sync_thread_t thread = NULL;
+  chttp_response response = {0};
+  chttp_error first_error = {0}, error = {0};
+  chttp_options options;
+  chttp_connection_recovery_options policy = CHTTP_CONNECTION_RECOVERY_OPTIONS_INIT;
+  char uri[64], authority[64];
+  uint16_t port = 0u;
+  int first_status, next_status, close_status;
+  check_equal(chttp_client_init(&client, &config), SALTS_OK);
+  if (recovery) {
+    policy.max_attempts = 3u;
+    policy.episode_timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS;
+    check_equal(chttp_client_set_connection_recovery(&client, &policy), SALTS_OK);
+  }
+  check_equal(chttp_h2_test_listener(&listener, &port), SALTS_OK);
+  check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
+  check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
+  server.listener = listener;
+  server.expected_requests = 2u;
+  server.empty_responses = 1;
+  server.refuse_first_stream = !goaway;
+  server.unprocessed_goaway = goaway;
+  check_equal(sync_thread_create(&thread,
+      goaway ? chttp_h2_test_serve_goaway : chttp_h2_test_serve, &server), SALTS_OK);
+  options = (chttp_options){.connection_uri = uri, .authority = authority,
+      .target = "/original", .timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS,
+      .protocol = CHTTP_HTTP_2};
+  /* Even GET plus protocol-not-executed evidence is not replay permission.
+   * Only this second explicit call may send another application request. */
+  first_status = chttp_get(&client, &options, &response, &first_error);
+  chttp_response_destroy(&response);
+  options.target = "/explicit-next";
+  next_status = chttp_get(&client, &options, &response, &error);
+  chttp_response_destroy(&response);
+  close_status = chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS);
+  check_equal(sync_thread_join(&thread), SALTS_OK);
+  sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(listener);
+  check_equal(close_status, SALTS_OK);
+  check_equal(first_status, SALTS_ECONNRESET);
+  check_equal(first_error.native_status, (int)CHTTP_H2_ERR_REFUSED_STREAM);
+  check_equal(first_error.stage, "h2-refused-stream");
+  check_equal(next_status, SALTS_OK);
+  check_equal(server.status, SALTS_OK);
+  check_equal(server.request_count, (size_t)2u);
+  check_equal(server.accepted_connections, goaway ? (size_t)2u : (size_t)1u);
+  check_equal(server.paths[0], "/original");
+  check_equal(server.paths[1], "/explicit-next");
+}
+
+typedef enum h2_retry_case {
+  H2_RETRY_SUCCESS, H2_RETRY_GOAWAY, H2_RETRY_BYTE_BUDGET, H2_RETRY_DEADLINE,
+  H2_RETRY_ONE_ATTEMPT, H2_RETRY_EXHAUSTED, H2_RETRY_PARTIAL_RESPONSE,
+  H2_RETRY_PROTOCOL_ERROR, H2_RETRY_WIRE_PREFIX, H2_RETRY_TRANSPORT,
+  H2_RETRY_UNKNOWN_POST, H2_RETRY_IDEMPOTENT_POST, H2_RETRY_CUMULATIVE_BUDGET,
+  H2_RETRY_PROCESSED_GOAWAY_ERROR
+} h2_retry_case;
+
+static void chttp_h2_test_logical_retry(h2_retry_case mode, chttp_method method) {
+  chttp_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  chttp_h2_test_socket listener = CHTTP_H2_TEST_INVALID_SOCKET;
+  chttp_h2_test_server server = {0};
+  sync_thread_t thread = NULL;
+  chttp_response response = {0};
+  chttp_error error = {0};
+  chttp_options options;
+  chttp_retry_options policy = CHTTP_RETRY_OPTIONS_INIT;
+  char uri[64], authority[64];
+  uint16_t port = 0u;
+  int status, close_status, pending_retry = 0;
+  const bool succeeds = mode == H2_RETRY_SUCCESS || mode == H2_RETRY_GOAWAY ||
+      mode == H2_RETRY_TRANSPORT || mode == H2_RETRY_IDEMPOTENT_POST;
+  const bool transport = mode == H2_RETRY_TRANSPORT || mode == H2_RETRY_UNKNOWN_POST ||
+      mode == H2_RETRY_IDEMPOTENT_POST;
+  policy.max_attempts = mode == H2_RETRY_ONE_ATTEMPT ? 1u : 3u;
+  policy.retry_body_byte_budget = mode == H2_RETRY_BYTE_BUDGET ? 0u : 6u;
+  if (mode == H2_RETRY_CUMULATIVE_BUDGET) policy.retry_body_byte_budget = 3u;
+  policy.application_declares_idempotent = mode == H2_RETRY_IDEMPOTENT_POST;
+  if (mode == H2_RETRY_DEADLINE) {
+    policy.initial_backoff_ms = 20000u;
+    policy.maximum_backoff_ms = 20000u;
+  }
+  check_equal(chttp_client_init(&client, &config), SALTS_OK);
+  if (mode == H2_RETRY_PROCESSED_GOAWAY_ERROR) {
+    chttp_connection_recovery_options recovery = CHTTP_CONNECTION_RECOVERY_OPTIONS_INIT;
+    recovery.max_attempts = 3u;
+    recovery.episode_timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS;
+    check_equal(chttp_client_set_connection_recovery(&client, &recovery), SALTS_OK);
+  }
+  check_equal(chttp_h2_test_listener(&listener, &port), SALTS_OK);
+  check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
+  check_greater(snprintf(authority, sizeof(authority), "127.0.0.1:%u", (unsigned int)port), 0);
+  server.listener = listener;
+  server.expected_requests = succeeds ? 2u : mode == H2_RETRY_EXHAUSTED ? 3u : 1u;
+  if (mode == H2_RETRY_CUMULATIVE_BUDGET) server.expected_requests = 2u;
+  server.empty_responses = 1;
+  server.partial_then_refuse = mode == H2_RETRY_PARTIAL_RESPONSE;
+  server.partial_wire_response = mode == H2_RETRY_WIRE_PREFIX;
+  server.drop_first_response = transport;
+  server.unprocessed_goaway = mode == H2_RETRY_GOAWAY || mode == H2_RETRY_PROTOCOL_ERROR ||
+      mode == H2_RETRY_PROCESSED_GOAWAY_ERROR;
+  server.goaway_last_current = mode == H2_RETRY_PROCESSED_GOAWAY_ERROR;
+  server.goaway_error = mode == H2_RETRY_PROTOCOL_ERROR || server.goaway_last_current
+      ? CHTTP_H2_ERR_PROTOCOL_ERROR : 0u;
+  server.refuse_responses = server.partial_then_refuse || server.unprocessed_goaway ||
+      transport || server.partial_wire_response
+      ? 0u : mode == H2_RETRY_EXHAUSTED ? 3u :
+      mode == H2_RETRY_CUMULATIVE_BUDGET ? 2u : 1u;
+  check_equal(sync_thread_create(&thread, mode == H2_RETRY_GOAWAY ? chttp_h2_test_serve_goaway :
+      transport && succeeds ? chttp_h2_test_serve_transport_loss : chttp_h2_test_serve,
+      &server), SALTS_OK);
+  options = (chttp_options){.connection_uri = uri, .authority = authority,
+      .target = "/retry", .timeout_ms = mode == H2_RETRY_ONE_ATTEMPT ? 0u : CHTTP_H2_TEST_TIMEOUT_MS,
+      .protocol = CHTTP_HTTP_2, .body = "abc", .body_size = 3u};
+  status = chttp_request_retry(&client, method, &options, &policy, &response, &error);
+  if (succeeds && status != SALTS_OK)
+    info("retry result mode=%d status=%d native=%d stage=%s", (int)mode,
+         status, error.native_status, error.stage != NULL ? error.stage : "");
+  if (mode == H2_RETRY_WIRE_PREFIX || mode == H2_RETRY_PROCESSED_GOAWAY_ERROR) {
+    fd_set pending;
+    struct timeval wait = {0};
+    FD_ZERO(&pending);
+    FD_SET(listener, &pending);
+    /* No speculative retry connection may remain queued at the real peer. */
+#if defined(_WIN32)
+    pending_retry = select(0, &pending, NULL, NULL, &wait);
+#else
+    pending_retry = select(listener + 1, &pending, NULL, NULL, &wait);
+#endif
+  }
+  chttp_response_destroy(&response);
+  close_status = chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS);
+  check_equal(sync_thread_join(&thread), SALTS_OK);
+  sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(listener);
+  check_equal(close_status, SALTS_OK);
+  check_equal(pending_retry, 0);
+  check_equal(server.status, SALTS_OK);
+  check_equal(server.request_count, server.expected_requests);
+  check_equal(server.accepted_connections, mode == H2_RETRY_GOAWAY || (transport && succeeds)
+      ? (size_t)2u : (size_t)1u);
+  if (succeeds) {
+    check_equal(status, SALTS_OK);
+    check_equal(server.paths[0], "/retry");
+    check_equal(server.paths[1], "/retry");
+  } else if (mode == H2_RETRY_WIRE_PREFIX || mode == H2_RETRY_PROCESSED_GOAWAY_ERROR) {
+    check_not_equal(status, SALTS_OK);
+  } else {
+    check_equal(status, mode == H2_RETRY_BYTE_BUDGET || mode == H2_RETRY_CUMULATIVE_BUDGET
+        ? SALTS_ENOBUFS :
+        mode == H2_RETRY_DEADLINE ? SALTS_ETIMEDOUT : SALTS_ECONNRESET);
+    if (mode != H2_RETRY_WIRE_PREFIX && !transport)
+      check_equal(error.native_status, (int)CHTTP_H2_ERR_REFUSED_STREAM);
+  }
+}
+
+typedef struct h1_retry_peer {
+  chttp_h2_test_server server;
+  bool partial;
+  bool http_failure;
+} h1_retry_peer;
+
+static void chttp_h1_test_retry_peer(void *user) {
+  h1_retry_peer *peer = user;
+  chttp_h2_test_server *server = &peer->server;
+  static const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+  static const char failure[] = "HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+  static const char partial[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nx";
+  for (size_t index = 0u; index < server->expected_requests && server->status == SALTS_OK; ++index) {
+    chttp_h2_test_socket accepted = accept(server->listener, NULL, NULL);
+    char input[4096] = {0};
+    size_t used = 0u;
+    if (accepted == CHTTP_H2_TEST_INVALID_SOCKET) { server->status = SALTS_EIO; break; }
+    ++server->accepted_connections;
+    server->status = chttp_h2_test_set_timeout(accepted);
+    while (server->status == SALTS_OK) {
+      char *end = strstr(input, "\r\n\r\n");
+      if (end != NULL && used >= (size_t)(end + 4u - input) + 3u) {
+        if (memcmp(end + 4u, "abc", 3u) != 0) server->status = SALTS_EPROTO;
+        else ++server->request_count;
+        break;
+      }
+      if (used == sizeof(input) - 1u) { server->status = SALTS_EMSGSIZE; break; }
+      const int received = recv(accepted, input + used, (int)(sizeof(input) - used - 1u), 0);
+      if (received <= 0) { server->status = SALTS_EIO; break; }
+      used += (size_t)received;
+      input[used] = '\0';
+    }
+    if (server->status == SALTS_OK && (index != 0u || peer->partial || peer->http_failure)) {
+      const char *wire = index != 0u ? ok : peer->partial ? partial : failure;
+      server->status = chttp_h2_test_send_all(accepted, wire, strlen(wire));
+    }
+    chttp_h2_test_close_socket(accepted);
+  }
+}
+
+static void chttp_h1_test_logical_retry(chttp_method method, bool idempotent,
+    bool partial, bool http_failure) {
+  chttp_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  h1_retry_peer peer = {.partial = partial, .http_failure = http_failure};
+  sync_thread_t thread = NULL;
+  chttp_response response = {0};
+  chttp_error error = {0};
+  chttp_retry_options retry = CHTTP_RETRY_OPTIONS_INIT;
+  chttp_options options;
+  uint16_t port = 0u;
+  char uri[64];
+  int status, next_status, close_status;
+  unsigned int response_status;
+  const bool allowed = !partial && !http_failure && (method == CHTTP_METHOD_GET || idempotent);
+  check_equal(chttp_client_init(&client, &config), SALTS_OK);
+  check_equal(chttp_h2_test_listener(&peer.server.listener, &port), SALTS_OK);
+  check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned int)port), 0);
+  peer.server.expected_requests = allowed ? 3u : 2u;
+  check_equal(sync_thread_create(&thread, chttp_h1_test_retry_peer, &peer), SALTS_OK);
+  retry.max_attempts = 3u;
+  retry.retry_body_byte_budget = 3u;
+  retry.application_declares_idempotent = idempotent;
+  retry.initial_backoff_ms = 10u;
+  retry.maximum_backoff_ms = 20u;
+  retry.jitter_seed = 7u;
+  options = (chttp_options){.connection_uri = uri, .authority = "retry.test", .target = "/retry",
+      .body = "abc", .body_size = 3u, .timeout_ms = CHTTP_H2_TEST_TIMEOUT_MS};
+  status = chttp_request_retry(&client, method, &options, &retry, &response, &error);
+  response_status = response.status_code;
+  chttp_response_destroy(&response);
+  next_status = chttp_get(&client, &options, &response, &error);
+  chttp_response_destroy(&response);
+  close_status = chttp_client_destroy(&client, CHTTP_H2_TEST_TIMEOUT_MS);
+  check_equal(sync_thread_join(&thread), SALTS_OK);
+  sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(peer.server.listener);
+  check_equal(close_status, SALTS_OK);
+  check_equal(next_status, SALTS_OK);
+  check_equal(peer.server.status, SALTS_OK);
+  check_equal(peer.server.request_count, peer.server.expected_requests);
+  check_equal(peer.server.accepted_connections, peer.server.expected_requests);
+  if (allowed || http_failure) check_equal(status, SALTS_OK);
+  else check_not_equal(status, SALTS_OK);
+  if (http_failure) check_equal(response_status, 503u);
+}
+
 spec("CHTTP HTTP/2 client") {
+  it("explicitly replays an H1 GET body after a response-free transport loss") {
+    chttp_h1_test_logical_retry(CHTTP_METHOD_GET, false, false, false);
+  }
+  it("refuses H1 POST replay after an unknown execution outcome") {
+    chttp_h1_test_logical_retry(CHTTP_METHOD_POST, false, false, false);
+  }
+  it("permits H1 POST replay under the explicit application idempotency contract") {
+    chttp_h1_test_logical_retry(CHTTP_METHOD_POST, true, false, false);
+  }
+  it("never replays an H1 GET after partial response output") {
+    chttp_h1_test_logical_retry(CHTTP_METHOD_GET, false, true, false);
+  }
+  it("does not turn an HTTP 503 result into a retry trigger") {
+    chttp_h1_test_logical_retry(CHTTP_METHOD_GET, false, false, true);
+  }
+  it("explicitly retries an H2 refused GET after the old stream settles") {
+    chttp_h2_test_logical_retry(H2_RETRY_SUCCESS, CHTTP_METHOD_GET);
+  }
+  it("retries POST only when H2 proves that the attempt was not processed") {
+    chttp_h2_test_logical_retry(H2_RETRY_SUCCESS, CHTTP_METHOD_POST);
+  }
+  it("retries a stream above GOAWAY Last-Stream-ID on a new H2 connection") {
+    chttp_h2_test_logical_retry(H2_RETRY_GOAWAY, CHTTP_METHOD_POST);
+  }
+  it("enforces the cumulative retry body byte budget") {
+    chttp_h2_test_logical_retry(H2_RETRY_BYTE_BUDGET, CHTTP_METHOD_POST);
+  }
+  it("debits the body budget across attempts rather than resetting it") {
+    chttp_h2_test_logical_retry(H2_RETRY_CUMULATIVE_BUDGET, CHTTP_METHOD_POST);
+  }
+  it("does not start a backoff that cannot fit the total deadline") {
+    chttp_h2_test_logical_retry(H2_RETRY_DEADLINE, CHTTP_METHOD_GET);
+  }
+  it("keeps the explicit retry initializer at one attempt") {
+    chttp_h2_test_logical_retry(H2_RETRY_ONE_ATTEMPT, CHTTP_METHOD_GET);
+  }
+  it("returns the final original error after bounded retry attempts") {
+    chttp_h2_test_logical_retry(H2_RETRY_EXHAUSTED, CHTTP_METHOD_GET);
+  }
+  it("does not retry REFUSED_STREAM after response headers have started") {
+    chttp_h2_test_logical_retry(H2_RETRY_PARTIAL_RESPONSE, CHTTP_METHOD_GET);
+  }
+  it("does not authorize replay from an error GOAWAY") {
+    chttp_h2_test_logical_retry(H2_RETRY_PROTOCOL_ERROR, CHTTP_METHOD_POST);
+  }
+  it("keeps error GOAWAY permanent when a previously accepted stream loses transport") {
+    chttp_h2_test_logical_retry(H2_RETRY_PROCESSED_GOAWAY_ERROR, CHTTP_METHOD_GET);
+  }
+  it("does not replay when a partial H2 frame prevents response attribution") {
+    chttp_h2_test_logical_retry(H2_RETRY_WIRE_PREFIX, CHTTP_METHOD_GET);
+  }
+  it("retries an explicitly enabled H2 GET after a response-free transport loss") {
+    chttp_h2_test_logical_retry(H2_RETRY_TRANSPORT, CHTTP_METHOD_GET);
+  }
+  it("does not treat H2 transport loss as proof that POST was not executed") {
+    chttp_h2_test_logical_retry(H2_RETRY_UNKNOWN_POST, CHTTP_METHOD_POST);
+  }
+  it("honors explicit application idempotence for H2 POST transport loss") {
+    chttp_h2_test_logical_retry(H2_RETRY_IDEMPOTENT_POST, CHTTP_METHOD_POST);
+  }
+  it("does not replay GET after REFUSED_STREAM with the default policy") {
+    chttp_h2_test_no_replay(false, false);
+  }
+  it("does not turn physical recovery into GET replay after REFUSED_STREAM") {
+    chttp_h2_test_no_replay(false, true);
+  }
+  it("does not replay GET above GOAWAY Last-Stream-ID with the default policy") {
+    chttp_h2_test_no_replay(true, false);
+  }
+  it("restores a GOAWAY connection only for the next explicit GET") {
+    chttp_h2_test_no_replay(true, true);
+  }
   it("validates explicit H2 receive-window policy before session creation") {
     chttp_async_client async = {0};
     chttp_client blocking = {0};

@@ -195,17 +195,6 @@ typedef struct chttp_web_asset_mount {
   {sizeof(chttp_web_asset_mount), NULL, NULL, 0u, NULL, NULL, NULL, NULL, \
    NULL, NULL, NULL}
 
-/**
- * Registers one global asset/shell middleware before server start.
- *
- * Matched namespaces admit GET/HEAD only. Malformed, escaping, missing, or
- * symlink/reparse paths produce deterministic 404 responses. Other namespaces
- * call the next middleware/route unchanged.
- */
-int chttp_web_assets_use(
-    chttp_server *server,
-    const chttp_web_asset_mount *mount);
-
 const cmeta_data_desc *chttp_web_principal_data(void);
 
 /**
@@ -740,8 +729,6 @@ typedef struct chttp_web_security_policy {
 #define CHTTP_WEB_SECURITY_POLICY_INIT \
   {sizeof(chttp_web_security_policy), NULL, NULL, NULL, NULL, NULL, false}
 
-
-
 /**
  * Formats one event canonically into caller-owned storage.
  *
@@ -1009,25 +996,6 @@ chttp_web_security_policy chttp_web_security_reference_policy(void);
 chttp_web_security_policy chttp_web_security_authenticated_policy(void);
 
 /**
- * Appends security middleware to the existing CHTTP middleware chain.
- *
- * The policy is validated before middleware capacity is consumed and is then
- * borrowed until server destruction. Security headers are installed before
- * calling next, so later middleware or the terminal handler may explicitly
- * replace a header using chttp_server_response_set_header(). Register this
- * middleware before CORS when security headers are also required on CORS
- * preflight responses. Responses rejected by JWT/global admission before the
- * middleware chain do not receive these headers.
- *
- * Jinja HTML autoescape and this HTTP security policy are independent
- * guarantees: neither replaces the other.
- */
-int chttp_web_security_use(
-    chttp_server *server,
-    const chttp_web_security_policy *policy);
-
-
-/**
  * Parses application/x-www-form-urlencoded bytes into bounded caller-owned
  * storage. '+' decodes to space; percent escapes require exactly two hex
  * digits. Empty field names, empty '&' segments, malformed escapes, and all
@@ -1080,7 +1048,6 @@ chttp_web_status chttp_web_form_bind_method_plan(
     chttp_web_validation *validation,
     DataBindBindingPlanDiagnostic *diagnostic,
     chttp_web_error *error);
-
 
 /**
  * Sends an empty ordinary HTTP redirect. Only 301/302/303/307/308 are

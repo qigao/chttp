@@ -1,4 +1,4 @@
-#include <http_server/rpc_service.h>
+#include "../../rpc/chttp_rpc_mount.h"
 #include <http_client/rpc_service.h>
 #include <type_traits>
 

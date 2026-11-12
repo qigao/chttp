@@ -1,3 +1,4 @@
+#include "../../http_server/src/chttp_server_engine.h"
 #include <http_client/http.h>
 #include <http_server/http.h>
 #include <http_server/rate_limit.h>

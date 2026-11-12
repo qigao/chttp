@@ -54,7 +54,6 @@ for generic_api in (
     "chttp_web_renderer_init",
     "chttp_web_render",
     "chttp_web_render_response",
-    "chttp_web_security_use",
 ):
     assert generic_api in server, f"OpenAPI UI does not use generic Web API: {generic_api}"
 

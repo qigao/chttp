@@ -1,3 +1,4 @@
+#include "../../http_server/src/chttp_server_engine.h"
 #include <s3/s3_bucket.h>
 #include <s3/s3_object.h>
 

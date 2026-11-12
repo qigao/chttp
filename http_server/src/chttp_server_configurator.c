@@ -1,3 +1,4 @@
+#include "chttp_server_engine.h"
 #include "chttp_server_runtime.h"
 #include "chttp_h2_server.h"
 #include "chttp_tls.h"

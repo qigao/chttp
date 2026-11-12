@@ -44,7 +44,7 @@ HTTP 客户端通过 `CHttp::Client` 与 `<http_client/http.h>` 使用；服务�
 Server 的大型 payload 不在初始化时按槽位乘最大消息尺寸预留。请求体、缓冲响应体、H1/H2
 发送缓冲和 WebSocket 暂存区在需要时增长，合计受 `buffer_capacity_bytes` 硬限制；超过预算返回
 `SALTS_ENOBUFS`。零值按旧配置的逻辑最坏值计算预算，但仍不做物理预分配。可通过
-`chttp_server_get_stats()` 观察当前/峰值字节和预算拒绝次数。
+`chttp_application_stats()` 观察当前/峰值字节和预算拒绝次数。
 
 当前有意不提供 HTTP/3、WebSocket extension/subprotocol、通用 CONNECT route、redirect、
 compression、proxy、multipart 表单/多段 Range、deferred streaming body 或自动 retry。
@@ -94,6 +94,11 @@ pool 使用 `chttp_websocket_pool_config.client.socket_options`，作用于共�
 Pool 初始化校验并复制策略，调用方配置内存之后无需保留。零值保留系统默认；
 平台不支持的细分选项返回 `SALTS_ENOTSUP`，不回退到另一套语义。
 
+普通 HTTP Client 可在首次 admission 前调用 `chttp_client_set_connection_recovery()` 或
+`chttp_async_client_set_connection_recovery()` 显式启用有界 TCP/TLS/H1/H2 连接恢复。默认单次，
+不重放失败的 HTTP/RPC/S3 请求。配置、deadline、READY、所有权及安全边界见
+[显式连接恢复](CHTTP_CONNECTION_RECOVERY.md)。WebSocket client/pool 不使用这个 HTTP Client setter。
+
 CHTTP 的 production transport send 只使用 CNet retained ownership。长期 H1/H2/WebSocket
 wire buffer 通过 persistent external `mem_buffer_t` wrapper 交给 CNet；一次性 H1 request bytes
 把 malloc ownership 转交给 retained buffer。成功 admission 后 caller 不再修改对应 storage，直到
@@ -102,6 +107,9 @@ retain，因此 callback 内可以安全生成/复用下一块 wire bytes。H1 s
 receive；H2 为处理 WINDOW_UPDATE/PING 等控制帧允许收发全双工，但每条连接仍只有一个 CNet
 send in-flight。这个完成事实仍不等于应用级 exactly-once，CHTTP 不会根据断线猜测 peer 是否消费
 请求，也不做隐式 retry。
+
+阻塞内存请求的 [`chttp_request_retry()`](CHTTP_LOGICAL_RETRY.md) 是独立的显式入口，
+要求业务或协议证据、可重放 body 和固定总预算；不会为既有 RPC/S3/source/sink 自动授权。
 
 ## HTTP Server：路由、中间件与 Session
 
@@ -140,7 +148,7 @@ asctime 格式，复用 `Salts::DateTimeParser` 并在 HTTP 层转换旧格式�
 `chttp_server_set_deadlines()` 设置请求头、正文和执行阶段的绝对时间预算。
 两者默认关闭，生命周期和 H1/H2 超时结果见 [Admission 与 Deadline](../http_server/README.md#正文前-admission-与阶段-deadline)。
 
-普通服务端用户只注册 handler/middleware，然后调用 `chttp_server_start()`；配置的固定 owner
+普通服务端用户声明 Controller/Interceptor，然后调用 `chttp_application_start()`；配置的固定 owner
 线程各自独占自己的 CNet poller，业务代码不调用 `cnet_client_poll()`。listener/accept/admission
 由单独的 bounded control-plane thread 推进；它只做 detached accept、owner lease 选择、bounded
 admission-ring enqueue 和 owner wake，不执行 HTTP/TLS/H2 callback，也不计入 `owner_count`。默认
@@ -245,80 +253,15 @@ H1 每条连接最多挂起一个响应；H2 每个固定 stream slot 最多挂�
 达到 `session_capacity` 时不会驱逐仍有效的会话，新的 `chttp_session_set()` 返回
 `SALTS_ENOBUFS`。当前 store 是进程内内存，不承诺重启持久化、多进程共享或分布式一致性。
 
-```c
-#include <http_client/http.h>
-#include <http_server/http.h>
-#include <string.h>
-
-static int health(void *user, const chttp_server_request_view *request,
-                  chttp_server_response *response) {
-  const char *name = chttp_server_request_param(request, "name");
-  (void)user;
-  return chttp_server_reply(response, 200, "text/plain", name, name != NULL ? strlen(name) : 0);
-}
-
-static int add_security_headers(void *user, const chttp_server_request_view *request,
-                                chttp_server_response *response, chttp_server_next *next) {
-  int status;
-  (void)user;
-  (void)request;
-  status = chttp_server_response_set_header(response, "X-Content-Type-Options", "nosniff");
-  return status == SALTS_OK ? chttp_server_next_call(next) : status;
-}
-
-int main(void) {
-  chttp_server server = {0};
-  const chttp_server_config config = {
-    .host = "127.0.0.1", .port = 8080, .backlog = 128,
-    .network = {
-      .backend = NATIVE_IO_BACKEND_IOCP,
-      .connection_capacity = 128, .command_capacity = 256,
-      .command_buffer_bytes = 4 * 1024 * 1024,
-      .request_capacity = 256, .completion_batch_capacity = 64,
-      .event_capacity = 256, .max_send_bytes = 64 * 1024,
-      .event_buffer_bytes = 2 * 1024 * 1024,
-      .receive_buffer_bytes = 16 * 1024,
-      .read_timeout_ms = 30000, .write_timeout_ms = 5000,
-    },
-    .route_capacity = 64, .middleware_capacity = 16,
-    .max_route_middleware_count = 8, .max_route_param_count = 8,
-    .max_route_param_bytes = 4096, .max_target_bytes = 4096,
-    .max_header_count = 64, .max_header_bytes = 16 * 1024,
-    .max_request_body_bytes = 32 * 1024,
-    .max_response_header_count = 64, .max_response_header_bytes = 8 * 1024,
-    .max_response_body_bytes = 32 * 1024,
-    .session_capacity = 1024, .session_entry_capacity = 16,
-    .max_session_key_bytes = 64, .max_session_value_bytes = 1024,
-    .session_idle_timeout_ms = 30 * 60 * 1000,
-    .session_cookie_name = "sid", .session_cookie_secure = 0,
-    .poll_slice_ms = 5,
-    .enable_http2 = 1, .h2_stream_capacity = 64,
-    .h2_input_buffer_bytes = 64 * 1024,
-    .h2_output_buffer_bytes = 64 * 1024,
-    .h2_hpack_dynamic_table_bytes = 4 * 1024,
-    .h2_max_settings_count = 16,
-    .buffer_capacity_bytes = 32 * 1024 * 1024,
-  };
-  int status = chttp_server_init(&server, &config);
-  int started = 0;
-  if (status == SALTS_OK) status = chttp_server_use(&server, add_security_headers, NULL);
-  if (status == SALTS_OK) status = chttp_server_get(&server, "/health/:name", health, NULL);
-  if (status == SALTS_OK) {
-    status = chttp_server_start(&server);
-    started = status == SALTS_OK;
-  }
-  /* Wait here for the application's shutdown signal. */
-  if (started) {
-    const int stop_status = chttp_server_stop(&server, 0);
-    if (status == SALTS_OK) status = stop_status;
-  }
-  if (server.impl != NULL) {
-    const int destroy_status = chttp_server_destroy(&server);
-    if (status == SALTS_OK) status = destroy_status;
-  }
-  return status == SALTS_OK ? 0 : 1;
-}
-```
+业务入口统一使用 `CHttp::App` 的 Application / Controller / Service，
+不再公开手工 Server 路由或 middleware 注册。可直接构建的完整示例见
+[C11 Application](../app/examples/application.c)、
+[C++ RAII Application](../app/examples/application.cpp) 和
+[OpenAPI UI Controller](../openapi/examples/ui_server.c)。
+容量、Session、TLS 等协议配置通过 `chttp_application_config.http` 提供；
+socket/placement/JWT 等策略通过同一配置的对应字段提供。
+下文提到的 Server init/start/stop 是内部引擎生命周期，应用应调用
+`chttp_application_init/start/close`。
 
 非 Windows 平台应把 backend 换成实际支持的 EPOLL 或 KQUEUE。默认 owner_count=1 时 handler
 仍在单一 owner thread 上串行执行；显式多 owner 时，不同固定连接上的 handler 可能并发，因此

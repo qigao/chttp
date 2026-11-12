@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 /* CTest sets an immutable process environment; getenv's borrowed view is safe. */
 #define _CRT_SECURE_NO_WARNINGS
 #include "http_example_app.h"

@@ -122,6 +122,25 @@ CNet 或 NativeIO。迁移时记录实际源 commit，保留 SigV4、URL、XML�
 完成条件：S3 只依赖 CHTTP 的 H1/H2 能力，H3 不成为构建、运行或 fallback 依赖；真实凭据
 测试仅作补充，离线协议与 mock-server 测试必须可重复。
 
+## CNet 连接恢复前的 READY 验证（#231）
+
+基于已发布 CNet 0.1.4，`http_client/tests/chttp_pool_lifecycle_test.c` 在项目正式 CTest
+入口增加确定性交错：真实 TCP 连接已完成，但暂扣属于该连接的 NativeIO receive completion，
+让 HTTP/2 暂时看不到 peer SETTINGS。用 request slot/generation 识别被暂扣的完成，其他完成
+仍正常路由；fixture 在成功、失败和 teardown 时都负责交还该完成。
+
+- CONNECTED 后仍保留 CONNECTING 池记录，READY 为零；解析 SETTINGS 后才可发布 READY。
+- 在 SETTINGS 前取消的请求保持 `SALTS_ECANCELED`，迟到的 peer 字节不能重新交付成功，
+  旧 request handle 不再有效。健康连接随后可以进入 READY，但不复活已取消请求。
+- 连接计数保留一个 fixture H1 连接加一个 H2 连接，没有额外的恢复连接。
+
+这些前置测试验证协议/池边界；显式 ManagedDial 接入及其扩展测试见
+[连接恢复设计与接口](CHTTP_CONNECTION_RECOVERY.md)。阻塞内存请求可使用独立的
+[逻辑重试入口](CHTTP_LOGICAL_RETRY.md)；async logical retry 和 stream rewind 未实现。
+接入继续使用当前 attempt 的 recovery ticket，并同时满足 protocol READY、旧请求/
+保留字节/stream lease 的 terminal settlement 和 Manager recycle；不能把单个池快照当作所有
+资源均可回收的证明。恢复开关及预算必须显式，TLS/ALPN/authority 失败不能授权重放或降级。
+
 ## Castle 功能映射
 
 | Castle/Iris 风格能力 | 当前状态 | 归属与下一步 |

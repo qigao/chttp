@@ -1,3 +1,4 @@
+#include "../src/chttp_server_engine.h"
 #include "chttp_tls_test_material.h"
 #include "tinytest.h"
 

@@ -74,24 +74,108 @@ deferred execution and DSO behavior are verified by the formal integration
 tests under `app/tests/service` and `app/tests/web`. Use the root user preset
 and CTest entries described in [the build guide](../cmake/BUILD.md).
 
-## Generated service capability
+## Application, Controller and Service
 
-`<chttp_app/service.h>` exposes the existing `chttp_service` API. App admits
-generated DataBind MethodPlan/native capabilities at mount, materializes
-bounded per-invocation request/response storage, and supports inline direct,
-deferred direct, CFlow and Plugin execution. Plugin mounts retain their DSO
-lease until accepted work and HTTP terminal obligations have finished.
+`chttp_application` owns one protocol engine and a real CMeta ACE Configurator
+graph. Configure explicit Component deployments and Interface selections;
+ACE resolves dependencies before creating Beans, injects canonical Interface
+projections, and destroys dependents before their providers. No global registry
+or per-request dependency lookup is used.
 
-The service owner and renderer remain explicit independent resources within
-the same module. Initialize and configure them before server startup. Stop
-servers and drain accepted work before destroying mounted service state,
-borrowed providers or renderers. `chttp_service_destroy` reports busy rather
-than freeing live deferred work. Rendering is synchronous and non-reentrant;
-parallel workers need independent renderers or external serialization.
+Each `chttp_controller` identifies one Component by stable ID and canonical
+receiver DataDesc. `CHTTP_ACTION(name)` declares the exact reflected C callback
+ABI; `CHTTP_GET` / `CHTTP_POST` bind it to a route. Admission checks canonical
+Function ABI before publishing routes. The callback receives the ACE-owned
+receiver and a callback-scoped `chttp_exchange`; request, response, operation
+metadata and borrowed parameter views cannot escape it. Body sink callbacks
+receive that same Controller receiver. Configure bounded per-request sink
+state separately when connections can execute concurrently.
 
-The merge preserves feature API names, layouts and error semantics. Consumers
-must replace the old includes/link targets, rebuild, and deploy `chttp_app`.
-No Service/Web compatibility DLLs or target aliases are installed.
+Services use normal CMeta Components with provided/required Interfaces. The
+formal [dependency injection test](tests/application_test.c) demonstrates a
+Controller borrowing an injected Service, ordered Interceptors and H1/H2
+requests. This uses upstream metadata and provider lifecycles rather than a
+second reflection or dependency-injection system.
+
+`chttp_interceptor` identifies an ACE-owned Bean with typed before/after/error
+hooks. Hooks execute in declaration order and unwind in reverse order through
+the upstream ACE chain. A before hook may explicitly reject using
+`chttp_exchange_reject()` and `proceed=false`. Unhandled callback failure
+preserves the protocol engine's HTTP 500 behavior. Hooks surround dispatch;
+they do not indicate response-write or deferred completion. Generated RPC
+batch operations are below this HTTP dispatch boundary.
+
+Global hooks also wrap static assets and SPA fallback: rejecting a request
+prevents file-response publication. Asset-only requests carry NULL operation
+metadata. Security headers and CORS preflight precede the application chain;
+CORS-handled preflight and earlier JWT/admission rejection do not enter it.
+
+For generated IDL, populate Controller `http_methods` / `rpc_methods` with
+immutable DataBind MethodPlan/native bindings. Native execution descriptors
+are copied and their context bound to the Controller before admission.
+Set `bindings.method_capacity` explicitly for HTTP MethodPlans and `rpc`
+capacities for RPC. Inline dispatch has no executor; deferred dispatch borrows
+a bounded executor. CFlow and Plugin dispatch use their producer-owned typed
+projection/capability and its own context/lease, not a forged Controller ABI.
+Unsupported combinations fail at initialization. Plans, native descriptors,
+executors and plugin registries must outlive Application close.
+
+Controller `websockets` use `chttp_websocket_endpoint`; callbacks receive the
+same ACE-owned receiver. HTTP capacities, socket/placement policies, TLS,
+sessions, security, JWT and admission remain explicit Application inputs.
+`chttp_application_config_default()` provides bounded loopback H1/H2 defaults,
+an ephemeral port and no authentication/session policy. Production callers
+must supply their own policies and capacity limits.
+
+Use `chttp_application_init/start/port/close` or C11
+`chttp_application_with`. The latter reports operation and cleanup status
+separately, never closes a pre-existing owner, and returns unsettled ownership
+for explicit cleanup. A zero close timeout waits without a deadline; a finite
+timeout retains a live owner when work remains. Close stops ingress, drains
+real I/O and DTO task finalizers, destroys protocol storage, then releases the
+ACE graph. User provider stop/destruction callbacks must terminate themselves;
+the framework cannot preempt them. Metadata remains borrowed until close settles.
+Application copies Security, CORS and asset policy structures during init, so a
+configuration builder may reuse those structures after returning. Their referenced
+strings, origin arrays, callback code and contexts remain borrowed and immutable
+until close settles. JWT validators and admission contexts also remain borrowed.
+
+C++17 `chttp::Application` is noncopyable/nonmovable and closes on destruction.
+Call `close()` explicitly to handle errors; an unhandled destructor cleanup
+error terminates. `chttp::Bean<T, Factory>` owns factory-created objects with
+`unique_ptr` and canonical ObjectRef lifecycle. Factory exceptions translate at
+the C boundary. `CHTTP_CPP_GET` catches action exceptions before returning to
+C and reports a native failure; C callbacks must return normally.
+
+Bean factories must return exactly `std::unique_ptr<T>` by value. A custom
+deleter, pointer-like return or derived-pointer result cannot be erased into
+Bean's `delete T` lifecycle; use an explicit ACE provider lifecycle for those
+cases. The supplied DataDesc must describe T. Bean rejects invalid descriptors
+or storage size/alignment mismatches before invoking the factory. Semantic
+descriptor identity remains the caller's explicit metadata responsibility.
+
+Buildable entry points: [C11](examples/application.c),
+[C++17](examples/application.cpp), and
+[OpenAPI UI](../openapi/examples/ui_server.c). Link only `CHttp::App` for the
+server application. Old public `<chttp_app/service.h>` and
+`<http_server/rpc_service.h>` are removed. Manual Server registration is private;
+existing manual Web programs are retained under `tests/web/fixtures` solely
+for protocol/security regression coverage.
+
+The public C11/C++17 examples share
+[canonical declarations](examples/application_contract.h): AnswerService provides
+the ExampleAnswer Interface, GreetingController receives that dependency from
+ACE, and a separate DispatchPolicy Bean supplies an Interceptor. `/answer`
+returns the injected value as JSON; `/reject` demonstrates an explicit 403 and
+does not represent authentication. `X-Example-Interceptor: ACE` makes chain
+entry observable, including on unmatched routes. Press Enter for checked scoped
+or RAII shutdown. The module's formal CTest entries start both actual programs,
+exercise requests and verify successful process shutdown under `BUILD_TESTS`.
+
+Rendering remains synchronous and non-reentrant. An injected rendering Service
+must serialize access or own independent renderers for concurrent workers.
+The remaining Web sections describe reusable request/render/security primitives;
+their fixture code uses the private engine to isolate those behaviors.
 
 ## Core model
 
@@ -99,7 +183,7 @@ A Web application normally composes these pieces:
 
 1. Initialize one or more bounded `chttp_web_renderer` instances from a fixed
    application-owned template bundle.
-2. Register ordinary CHTTP routes and middleware.
+2. Declare reflected Controller actions and ACE Interceptors on Application.
 3. Build typed CMeta models in route handlers.
 4. Render a full page or fragment with `chttp_web_render_response()`.
 5. Use `chttp_web_request_context_init()` when templates need selected
@@ -238,7 +322,7 @@ mutable virtual filesystem API.
 
 ### Authenticated reference application
 
-`app/examples/chttp_web_authenticated_app.c` is the Web III reference
+`app/tests/web/fixtures/chttp_web_authenticated_app.c` is the Web III reference
 application. It uses only bounded in-memory demo identity records so the
 example demonstrates browser composition rather than database or password
 infrastructure.
@@ -449,7 +533,7 @@ Important limits and lifecycle rules:
 - caller-owned upload state may be reused only after commit or abort.
 
 The full browser-oriented composition is
-`app/examples/chttp_web_form_upload_example.c`. It uses a fixed application
+`app/tests/web/fixtures/chttp_web_form_upload_example.c`. It uses a fixed application
 slot pool and bounded in-memory staging deliberately; CHttp::App does not
 provide a hidden upload directory or persistence layer.
 
@@ -553,7 +637,7 @@ For browser-facing applications:
   the application's staging/commit pipeline where required.
 
 The security reference application is
-`app/examples/chttp_web_security_example.c`.
+`app/tests/web/fixtures/chttp_web_security_example.c`.
 
 ## Renderer ownership and lifecycle
 

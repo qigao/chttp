@@ -1,16 +1,7 @@
+file(GLOB CHTTP_CLIENT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "src" FILES ${CHTTP_CLIENT_SOURCES})
 add_library(chttp_client SHARED
-
-  src/chttp_client.c
-  src/chttp_file_sink.c
-  src/chttp_files.c
-  src/chttp_h2_session.c
-  src/chttp_request.c
-  src/chttp_requests.c
-  src/chttp_response.c
-  src/chttp_response_owner.c
-  src/chttp_websocket_client.c
-  src/chttp_websocket_pool.c
-  src/chttp_auth.c
+  ${CHTTP_CLIENT_SOURCES}
 
   rpc/crpc_prepare_call.c
   rpc/crpc_request_reply.c

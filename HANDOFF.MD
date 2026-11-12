@@ -1,13 +1,77 @@
 # Split SDK migration handoff
 
-- Post-merge review is recorded in `docs/ISSUE_PR_REVIEW.md` against master
-  5098dc8. PR heads #233/#234/#236 are already ancestors of master; old cache
-  and candidate ServiceHost drafts must not be merged as current SDK changes.
+- Issue/PR disposition is recorded in `docs/ISSUE_PR_REVIEW.md`, refreshed
+  after the 2026-11-12 triage against master a615444. Closed historical SDK and
+  ServiceHost stacks are not current implementation or acceptance evidence.
 - Base string reuse keeps JWT issuer/audience ownership private and optional.
   `tstr_dup(NULL)` returns an empty string, so guard optional copies explicitly
   and pair them with `tstr_free`. Borrowed `vstr` comparisons preserve exact
-  claim case and ASCII-insensitive header/scheme matching. Full local build
-  and 103/103 CTests pass (`build/migration-base-strings-full-ctest.log`).
+  claim case and ASCII-insensitive header/scheme matching. Updated master
+  a615444 qualification passes full native-release-user build, 111/111 CTests
+  and install (`build/migration-base-strings-current-*.log`). Earlier 103/103
+  and 104/104 evidence remains historical; cross-platform qualification belongs
+  to the updated PR head CI.
+- Application policy ownership: the public init contract promised copied policy
+  values, while Security/CORS/asset middleware still borrowed caller structures.
+  Reusing those structures after init changed nosniff, CORS admission and asset
+  routing; three real H1/H2 tests reproduce the mismatch without invalid-memory
+  access (`migration-application-policy-copy-red-ctest.log`). Application now
+  snapshots these fixed-size structures before graph activation and registers
+  only its owned copies. Referenced strings/origin arrays/callback contexts remain
+  explicitly borrowed through close. Sized policy storage is admitted before
+  copying; invalid size fails before any Bean factory. Full published-SDK Windows
+  build, 109/109 CTest and install pass
+  (`migration-application-policy-snapshot-full-ctest.log`).
+
+- Application policy ordering: a static asset/SPA middleware can complete the
+  response without calling next. Registering it before the ACE Interceptor
+  bypassed global application authorization. Four real H1/H2 regressions show
+  rejected assets returning 200 and hooks never entering before the fix
+  (`migration-application-assets-red-ctest.log`). Register Interceptors after
+  security/CORS but before assets, so rejection publishes no file response;
+  successful dispatch still unwinds hooks and rejection keeps security headers.
+  Asset-only requests have NULL operation metadata. Focused asset tests and
+  published-SDK full build, 109/109 CTest and install pass
+  (`migration-application-policy-rpc-full-ctest.log`). The same formal App binding
+  suite now proves typed H1/H2 RPC and HTTP share one ACE Controller, preserve
+  operation metadata boundaries, enter/unwind Interceptors and destroy once.
+
+- Reflected Application migration: route engine `user` now points to an action
+  binding record, while body-open/body-close callbacks require the ACE-owned
+  Controller receiver. Forward both callbacks through explicit adapters; passing
+  them through unchanged sends the wrong object. Formal Application tests cover
+  H2 streamed-body open/write/close receiver identity and exactly-once close.
+  Deferred MethodPlan finalizers may still borrow Beans after response terminal;
+  Application close must wait for the runtime's in-flight count before destroying
+  the ACE graph. A real blocked native invocation verifies timeout retains the
+  owner/Beans and later drain destroys them once. Published-SDK Windows full
+  build, 105/105 CTest and install passed (`migration-application-final-*` logs);
+  subsequent C11 scoped-owner cases passed the focused Application CTest
+  (`migration-application-scoped-ctest.log`). No device or final CI claim here.
+- OpenAPI UI was gated entirely by BUILD_EXAMPLES, so the default test graph
+  did not compile its Controller or run its four HTTP regressions. Build its
+  example target whenever BUILD_TESTS is enabled and register those tests in
+  the module's formal suite. The expanded Windows graph passed 109/109 and
+  install (`migration-application-ui-qualified-*`). UI configuration is an
+  explicit configured ACE Component; its native adapters keep user/request/
+  response argument order. CI's MSVC link found that a public DLL data symbol
+  is unsuitable for C11 constant FunctionDecl metadata. Exchange descriptors
+  now use static immutable metadata with CMeta's explicit semantic identity
+  equality across translation units/DLLs, preserving canonical ABI admission.
+  Full build and focused Application/UI runtime tests passed after that fix
+  (`migration-application-static-metadata-*`, `migration-application-static-ui-*`).
+
+- Public Application examples now share canonical Service/Controller/Interceptor
+  declarations and use real ACE Interface dependency injection. Compile-only
+  coverage missed that the C++ example did not flush its listener URL to a pipe;
+  the new formal HTTP test timed out before obtaining that URL
+  (`migration-application-examples-red-ctest.log`). Flush after publishing the
+  bound port. Module-owned CTest entries run both actual public programs, check
+  the injected answer, Interceptor header/rejection, request isolation, 404 and
+  checked shutdown; startup/shutdown timeouts fail and clean up the child without
+  retry. Full published-SDK Windows build, 111/111 CTest and install pass
+  (`migration-application-examples-full-ctest.log`).
+
 - Socket policy audit: HTTP async/blocking Client, Server accepted streams and
   standalone WebSocket already forward CNet options. H2 WebSocket Pool omitted
   both validation and application of `config.client.socket_options`; apply it
@@ -72,9 +136,111 @@
 - `.env` now names the actual published SDKs restored into versioned roots.
   Its unrelated fields were compared and preserved. CMake does not load dotenv.
   Keep original failure logs and do not retry unchanged CI jobs.
+- #231 READY qualification: `chttp_pool_lifecycle_test` now withholds the real
+  H2 receive completion while continuing other NativeIO routing. TCP CONNECTED
+  alone leaves the pool CONNECTING; consumed peer SETTINGS publishes READY.
+  A pre-SETTINGS cancellation remains one ECANCELED result after late bytes,
+  with its old request handle retired and no additional physical connection.
+  The fixture matches native request slot/generation, owns the delayed
+  completion through delivery/teardown and closes H2 as well as H1 before
+  external stop. No product hook, ManagedDial or retry API was introduced.
+  Published-SDK Windows build and full CTest pass 104/104; evidence:
+  `build/migration-h2-ready-full-ctest.log`. #231 remains open.
 - CI 42947933660 reported five TSan races in the io_uring WebSocket fixture:
   session capture was release-published but read without acquire, and JWT
   subject publication used a relaxed counter. Acquire the captured session,
   retire each connection before resetting its publication flag, and publish
   the subject with release/acquire. The published-SDK Windows build and
   WebSocket CTests pass; Linux TSan validation requires the new CI run.
+- #231 explicit physical connection recovery uses published CNet ManagedDial;
+  the default remains one attempt and failed HTTP/RPC/S3 requests are never
+  replayed. H2 stages bounded owned headers until verified transport and peer
+  SETTINGS, while retaining the existing body/source ownership contract.
+- NativeIO can report generic EIO with a signed native connection-refused code;
+  classify only explicit transport codes. Before verified TLS CONNECTED, an
+  undiagnosed reset can mean rejected SNI and must remain permanent.
+- A logical cancellation must not release a request lease while a retained
+  NativeIO send is outstanding. Deliver the terminal result only after actual
+  transport terminal, then recycle Manager state before another attempt.
+  Episode timeout closes the real transport but reaches HTTP as ETIMEDOUT,
+  rather than response EOF. Blocking/RPC absolute deadlines cap the initial
+  episode and never restart on backoff. Design and rollback are recorded in
+  `docs/CHTTP_CONNECTION_RECOVERY.md`.
+- Published-SDK Windows LLVM-MinGW full build, install and CTest pass, 105/105:
+  `build/migration-recovery-deadline-terminal-build.log`,
+  `build/migration-recovery-final-full-ctest.log` and
+  `build/migration-recovery-final-install.log`. Earlier failed logs are retained.
+  Cross-platform and sanitizer qualification requires the feature CI run.
+- Feature CI 42966502206 exposed four budget cases on Linux/macOS: fast refusal
+  let CNet determine that the next backoff cannot fit the deadline, represented
+  by next_attempt_ms=UINT64_MAX. Convert this exhausted episode into the owned
+  HTTP timeout result, preserving native status, instead of returning it from
+  poll before the request callback. A longer first-attempt budget plus a larger
+  backoff now exercises this boundary on Windows too. Never mark idle restored
+  H2 READY while the peer advertises zero stream capacity. Windows full CTest
+  passes 105/105 (`build/migration-recovery-budget-preflight-ctest.log`);
+  the failed first CI remains available and was not retried unchanged.
+- #231 H2 replay boundary: the real protocol peer can reject the first stream
+  with REFUSED_STREAM or send GOAWAY Last-Stream-ID=0 before a response.
+  Under both default and explicit physical-recovery policies, the original GET
+  returns one ECONNRESET/native REFUSED_STREAM; only a later explicit GET reaches
+  the peer again. Exact paths/request/connection counts also verify healthy
+  stream-session reuse versus GOAWAY replacement. Published-SDK Windows full
+  build and `chttp_h2_client_test` pass; logs:
+  `build/migration-h2-replay-boundary-build.log` and
+  `build/migration-h2-replay-boundary-ctest.log`.
+- #231 logical retry is opt-in per blocking call through chttp_request_retry;
+  old HTTP/RPC/S3/file/async calls remain single attempts. Keep typed attempt
+  evidence in the request owner and copy it during terminal callback before
+  slot recycle. Diagnostic stage strings never prove remote execution safety.
+  One owned Base-tstr/header/body snapshot and one absolute deadline survive
+  all attempts. CNet retry gate and backoff helper authorize each new attempt
+  only after old request/stream/payload settlement; byte budget is cumulative.
+- A GOAWAY error must remain permanent for streams below Last-Stream-ID too:
+  their later transport loss cannot erase that protocol failure or restart
+  physical recovery. Partial H2 frame/header input conservatively disables
+  replay if response attribution is incomplete. TLS identity/ALPN rejection
+  still permits only one connection even with application idempotence enabled.
+- Raw H2 failure fixtures must consume the test body and SETTINGS ACK before
+  closing. Closing with unread DATA can create a native write reset instead
+  of the intended observed-response-prefix boundary. Check queued speculative
+  connections while CNet still owns Winsock initialization, before destroying
+  the client (WSACleanup otherwise invalidates this raw-peer observation).
+- Published-SDK native-release-user full build, CTest 105/105 and install pass:
+  `build/migration-logical-retry-goaway-final-ctest.log` and
+  `build/migration-logical-retry-goaway-final-install.log`. The final fixture
+  change also passes chttp_h2_client_test:
+  `build/migration-logical-retry-peer-drain-ctest.log`.
+  API/ownership/errors/limitations and rollback: docs/CHTTP_LOGICAL_RETRY.md.
+- #231 deterministic budget qualification: retry counters, fixed absolute
+  deadline, byte credit and seeded backoff now live in the owner-local private
+  chttp_retry_budget. prepare follows real attempt settlement; advance commits
+  admission credit only once. Time is an explicit input, not a global clock
+  override or runtime test hook. Formal chttp_retry_budget_test covers exact
+  seeded waits, late/exhausted budgets, duplicate prepare/advance, method/protocol
+  authorization, cancellation/authentication, zero-body bounds and overflow.
+  Existing real-peer and retained-NativeIO regressions continue through CTest.
+  Published-SDK Windows native-release-user full build and CTest pass 106/106:
+  `build/migration-retry-clock-budget-build.log` and
+  `build/migration-retry-clock-budget-ctest.log`.
+- CI 42975102602 failed the old physical-attempt exhaustion assertion under
+  TSan (sampled 1, expected 2), without a TSan race report. Sampling a live
+  ManagedDial snapshot only between polls misses a fast final refusal/recycle
+  completed within one poll. The test now records the snapshot in the actual
+  state callback and forwards the original observer unchanged, retaining the
+  exact two-attempt assertion. No retry, sleep, production hook or TinyTest
+  modification is needed. Windows full build and focused recovery suite pass:
+  `build/migration-retry-clock-attempt-observer-ctest.log`.
+
+- Typed C++ Bean admission: ObjectRef cannot infer the allocation size or the
+  native T behind an erased pointer. Bean accepted mismatched reflected native
+  size/alignment and invoked a factory even when DataDesc was missing. Three
+  formal runtime cases reproduce this without invalid reads
+  (`migration-cpp-bean-admission-red-ctest.log`). Validate DataDesc and exact
+  sizeof(T)/alignof(T) before factory side effects. Constructor constraints also
+  require an exact std::unique_ptr<T> value result, preserving the default delete-T
+  lifecycle instead of erasing custom deleter or derived-pointer semantics.
+  Public constructibility assertions cover these type boundaries; normal aligned
+  objects still construct and destroy once. Explicit ACE providers support other
+  deletion models. Full published-SDK Windows build, 109/109 CTest and install
+  passed (`migration-cpp-bean-admission-full-ctest.log`).

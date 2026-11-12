@@ -3,6 +3,7 @@
 
 #include <http_common/http.h>
 #include <cnet/owner_placement.h>
+#include <cmeta/function.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -131,6 +132,8 @@ typedef struct chttp_server_request_view {
    * Kept at the end of the public view so existing field offsets stay stable.
    */
   void *body_sink_user;
+  /** Admitted Controller operation; NULL for protocol-only/RPC batch dispatch. */
+  const cmeta_function_desc *operation;
 } chttp_server_request_view;
 
 /** Handler-scoped response builder. Memory replies are copied; source descriptors are retained. */
@@ -172,22 +175,6 @@ int chttp_jwt_bearer_validator_init(chttp_jwt_bearer_validator *validator,
 /** Releases copied validation material. The validator must no longer be registered on a server. */
 int chttp_jwt_bearer_validator_destroy(chttp_jwt_bearer_validator *validator);
 
-typedef struct chttp_server_middleware {
-  chttp_server_middleware_fn handler;
-  void *user;
-} chttp_server_middleware;
-
-typedef struct chttp_server_route_options {
-  chttp_method method;
-  const char *path;
-  const chttp_server_middleware *middleware;
-  size_t middleware_count;
-  chttp_server_handler_fn handler;
-  void *user;
-  chttp_server_body_open_fn body_open;
-  chttp_server_body_close_fn body_close;
-} chttp_server_route_options;
-
 /**
  * Runs as the terminal handler after global and route middleware approve an
  * HTTP/1.1 Upgrade or HTTP/2 Extended CONNECT. The request method is GET for
@@ -207,22 +194,6 @@ typedef int (*chttp_websocket_open_fn)(void *user, chttp_websocket *websocket,
  */
 typedef void (*chttp_websocket_event_fn)(void *user, chttp_websocket *websocket,
                                          const chttp_websocket_event *event);
-
-typedef struct chttp_server_websocket_options {
-  size_t size;
-  const char *path;
-  const chttp_server_middleware *middleware;
-  size_t middleware_count;
-  /** Zero selects the largest payload that fits one bounded CNet send, capped at 64 KiB. */
-  size_t max_frame_bytes;
-  /** Zero selects max_frame_bytes. Must be at least max_frame_bytes. */
-  size_t max_message_bytes;
-  /** Zero selects max_frame_bytes plus the maximum RFC 6455 frame header. */
-  size_t max_buffered_input_bytes;
-  chttp_websocket_open_fn on_open;
-  chttp_websocket_event_fn on_event;
-  void *user;
-} chttp_server_websocket_options;
 
 /**
  * Every capacity is a hard bound. `network.connection_capacity` bounds active
@@ -341,16 +312,6 @@ typedef struct chttp_server_owner_placement_options {
   {sizeof(chttp_server_owner_placement_options), \
    CHTTP_SERVER_OWNER_PLACEMENT_OPTIONS_VERSION, CNET_OWNER_PLACE_ROUND_ROBIN, 0u}
 
-/**
- * Set policy before start. EXPLICIT owner must be within the currently
- * configured execution_options.owner_count. Reconfiguring owner_count later
- * cannot silently invalidate the selected explicit Owner.
- * Invalid shape / unsupported policy -> SALTS_EINVAL.
- * Called after start -> SALTS_EBUSY; no runtime reconfiguration.
- */
-int chttp_server_set_owner_placement(
-    chttp_server *server, const chttp_server_owner_placement_options *options);
-
 typedef struct chttp_server_websocket_transport_options {
   size_t size;
   uint32_t version;
@@ -361,17 +322,6 @@ typedef struct chttp_server_websocket_transport_options {
 #define CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT \
   {sizeof(chttp_server_websocket_transport_options), \
    CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_VERSION, 0}
-
-/**
- * Copies an opt-in H1 WS/WSS transport policy before start. dedicated_h1 is 0
- * (existing copied writer) or 1 (CNet exclusive writer after Upgrade completes).
- * Dedicated mode permits one pending output, including one on_open send;
- * direct callbacks must handle EBUSY. The bounded server command queue retries
- * non-admission. H2 continues to use its stream adapter. No replay is enabled.
- * Returns OK, EINVAL for invalid input/version, or EBUSY after start.
- */
-int chttp_server_set_websocket_transport(
-    chttp_server *server, const chttp_server_websocket_transport_options *options);
 
 /** Thread-safe snapshot of server lifecycle and bounded admission counters. */
 typedef struct chttp_server_stats {
@@ -391,39 +341,12 @@ typedef struct chttp_server_stats {
   int terminal_status;
 } chttp_server_stats;
 
-/**
- * Initializes a stopped server and copies configuration and bounded storage.
- * @return `SALTS_OK`, an invalid/range/aggregate-size error, or `SALTS_ENOMEM`.
- */
-int chttp_server_init(chttp_server *server, const chttp_server_config *config);
-
-/** Replaces socket policy before listener/network start; later calls return `SALTS_EBUSY`. */
-int chttp_server_set_socket_options(chttp_server *server,
-                                    const chttp_server_socket_options *options);
-
-/**
- * Replaces the versioned execution policy before start.
- * owner_count must be in [1, network.connection_capacity]. Start materializes
- * exactly that many fixed owner lanes or returns the concrete startup error; it
- * never silently falls back to one owner.
- */
-int chttp_server_set_execution_options(
-    chttp_server *server, const chttp_server_execution_options *options);
-
 /** Optional absolute stage budgets in milliseconds. Zero disables the corresponding deadline. */
 typedef struct chttp_server_deadlines {
   uint32_t headers_ms; /**< H1 message headers; H2 preface/frame/header-block assembly. */
   uint32_t body_ms; /**< Complete headers through admission/body/trailers. */
   uint32_t handler_ms; /**< Middleware/handler plus deferred completion; excludes response transfer. */
 } chttp_server_deadlines;
-
-/**
- * Copies budgets before start; returns SALTS_EINVAL for NULL, SALTS_EBUSY after start.
- * Expiry closes H1 or resets the affected H2 stream (incomplete H2 framing closes the connection).
- * Callbacks cannot be preempted. Deferred expiry only cancels an unclaimed PENDING terminal;
- * a worker already owning WRITING completes publication. No application side effects are undone.
- */
-int chttp_server_set_deadlines(chttp_server *server, const chttp_server_deadlines *deadlines);
 
 typedef struct chttp_server_admission_result {
   unsigned int status_code; /**< Zero continues; 400..599 rejects before body delivery. */
@@ -438,65 +361,6 @@ typedef struct chttp_server_admission_result {
  */
 typedef int (*chttp_server_admission_fn)(void *user, const chttp_server_request_view *request,
                                          chttp_server_admission_result *result);
-
-/**
- * Sets one admission hook before start. NULL removes it. User remains borrowed until destroy.
- * Returns SALTS_OK, SALTS_EINVAL for an invalid server, or SALTS_EBUSY after start.
- */
-int chttp_server_set_admission(chttp_server *server, chttp_server_admission_fn admission, void *user);
-
-/**
- * Adds one method/path-pattern route before start. Complete `:name` segments
- * bind raw, non-percent-decoded params. The user pointer is borrowed through
- * stop. Returns `SALTS_ENOBUFS` at route/param capacity, `SALTS_EALREADY` for a
- * duplicate method/pattern, or `SALTS_EBUSY` after start.
- */
-int chttp_server_route(chttp_server *server, chttp_method method, const char *path,
-                       chttp_server_handler_fn handler, void *user);
-
-int chttp_server_route_with(chttp_server *server, const chttp_server_route_options *options);
-
-/** Registers one route protected by the supplied HS256 Bearer validator. */
-int chttp_server_route_with_jwt_bearer(chttp_server *server,
-                                       const chttp_server_route_options *options,
-                                       chttp_jwt_bearer_validator *validator);
-
-/** Installs one server-wide JWT Bearer admission policy before server start. */
-int chttp_server_use_jwt_bearer(chttp_server *server, chttp_jwt_bearer_validator *validator);
-
-int chttp_server_get(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                     void *user);
-
-int chttp_server_head(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                      void *user);
-
-int chttp_server_post(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                      void *user);
-
-int chttp_server_put(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                     void *user);
-
-int chttp_server_delete(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                        void *user);
-
-int chttp_server_patch(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                       void *user);
-
-int chttp_server_options(chttp_server *server, const char *path, chttp_server_handler_fn handler,
-                         void *user);
-
-/** Registers one explicit H1 Upgrade/H2 Extended CONNECT WebSocket route before server start. */
-int chttp_server_websocket_with(chttp_server *server,
-                                const chttp_server_websocket_options *options);
-
-/** Registers one WebSocket route protected by the supplied JWT Bearer validator. */
-int chttp_server_websocket_with_jwt_bearer(chttp_server *server,
-                                           const chttp_server_websocket_options *options,
-                                           chttp_jwt_bearer_validator *validator);
-
-/** Convenience WebSocket route using bounded defaults and no route middleware. */
-int chttp_server_websocket(chttp_server *server, const char *path, chttp_websocket_open_fn on_open,
-                           chttp_websocket_event_fn on_event, void *user);
 
 /** Server WebSocket operations are valid only from that peer's callbacks. */
 int chttp_websocket_state_get(const chttp_websocket *websocket, chttp_websocket_state *out_state);
@@ -541,12 +405,6 @@ int chttp_server_websocket_send_pong(const chttp_server_websocket_session *sessi
 int chttp_server_websocket_close(const chttp_server_websocket_session *session, uint16_t code,
                                  const void *reason, size_t reason_size);
 
-/**
- * Appends one global middleware before start. Bindings are copied in
- * registration order. Returns `SALTS_ENOBUFS` at middleware capacity.
- */
-int chttp_server_use(chttp_server *server, chttp_server_middleware_fn middleware, void *user);
-
 /** Immutable, application-owned CORS policy; retain it and its strings until server destruction. */
 typedef struct chttp_server_cors_options {
   const char *const *origins; /**< Exact serialized origins, or a single "*" without credentials. */
@@ -557,34 +415,6 @@ typedef struct chttp_server_cors_options {
   uint32_t max_age_seconds; /**< Preflight cache lifetime; zero disables caching. */
   int allow_credentials;
 } chttp_server_cors_options;
-
-/**
- * Registers global CORS middleware before start. Invalid policy returns SALTS_EINVAL;
- * registration also propagates chttp_server_use() errors. No configuration is copied.
- * Allowed preflights return 204, rejected origins/methods/headers return 403, malformed
- * preflight fields return 400. Requests without Origin continue normally.
- * JWT admission and streaming body delivery still precede ordinary middleware.
- */
-int chttp_server_use_cors(chttp_server *server, const chttp_server_cors_options *options);
-
-/** Runs the next middleware or terminal dispatch; a second call returns `SALTS_EALREADY`. */
-int chttp_server_next_call(chttp_server_next *next);
-
-/**
- * Starts the listener and configured fixed CNet owner threads. Port zero
- * selects an ephemeral port. Bind/backend/thread failures from any owner are
- * returned before success.
- */
-int chttp_server_start(chttp_server *server);
-
-/** Returns the bound port after a successful start. */
-int chttp_server_port(const chttp_server *server, uint16_t *out_port);
-
-/** Stops admission and joins the owner thread. Timeout zero waits without a deadline. */
-int chttp_server_stop(chttp_server *server, uint32_t timeout_ms);
-
-/** Releases a stopped server; a zero server is already destroyed. */
-int chttp_server_destroy(chttp_server *server);
 
 /** Returns the first case-insensitive request header, or NULL. */
 const char *chttp_server_request_header(const chttp_server_request_view *request, const char *name);
@@ -769,9 +599,6 @@ int chttp_session_clear(chttp_session *session);
 int chttp_session_regenerate(chttp_session *session);
 
 int chttp_session_invalidate(chttp_session *session);
-
-/** Obtains a thread-safe stats snapshot without advancing server state. */
-int chttp_server_get_stats(const chttp_server *server, chttp_server_stats *out_stats);
 
 #ifdef __cplusplus
 }

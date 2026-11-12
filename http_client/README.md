@@ -10,6 +10,10 @@
 客户端不链接服务端库。请求 owner、取消、完成回调和关闭协议保持原有语义。
 详细接口见 [HTTP](../docs/HTTP.md)、[RPC](../docs/RPC.md)。
 
+阻塞内存请求可按调用显式使用 [`chttp_request_retry()`](../docs/CHTTP_LOGICAL_RETRY.md)，
+复用 CNet gate 检查幂等/未执行证据、body 和固定总预算。既有入口保持单次行为；
+物理连接恢复独立配置，source/sink、RPC/S3 不自动获得逻辑重试授权。
+
 可选头文件 [`response_scope.h`](include/http_client/response_scope.h) 为
 `chttp_response` 提供 C11/C++17 的 CMeta 静态生命周期：用 `cmeta_scope`
 执行返回状态码的 body，结束时释放 response 拥有的内存。完整可运行用法见
@@ -90,8 +94,12 @@ drain 仍按既有协议完成，不能提前回收借用资源。
 完整可运行用例在 [chttp_destination_test.c](tests/chttp_destination_test.c)，覆盖五种策略、
 H1/H2 复用与代际隔离、相同 URI 的不同 ID、输入释放、失效快照、容量拒绝及阻塞入口。
 
-这里完成的是远端选择接入。共享宿主 SG（#230）、managed reconnect、显式请求 retry
-及其 deadline/rewind/not-executed 证明（#231 其余部分）仍未接入；本入口不启用这些行为。
+远端选择本身不启用重试。普通 HTTP Client 可在首次 admission 前使用独立的
+`chttp_async_client_set_connection_recovery()` / `chttp_client_set_connection_recovery()`
+显式配置 ManagedDial，恢复 TCP/TLS/H1/H2 连接能力；默认仍单次，不重放失败请求。
+配置、预算、READY 与 terminal 所有权见[显式连接恢复](../docs/CHTTP_CONNECTION_RECOVERY.md)。
+内存请求的逻辑重试由单独的 `chttp_request_retry()` 按调用授权；stream rewind、
+async logical retry 和共享宿主 SG（#230）仍未接入。
 
 ## RC2 WS composition (#238)
 
@@ -177,7 +185,8 @@ stream 预留和旧 WS/lease 结算 gate，CONNECTED 不能代替协议 READY。
 邻居连接隔离；现有 WS/WSS H1/H2 集成覆盖 handshake、发送、拒绝与池容量。
 
 该集成验证使用配套 Salts `2.3.0-rc.2` / SaltsUtils `4.3.0-rc.2` SDK。
-ManagedDial 的队列满关闭重试修复另在 Salts rc.3 源码工作树验证，尚未进入这些预编译 SDK。
+当时 ManagedDial 的队列满关闭重试修复另在 Salts rc.3 源码工作树验证，未进入该批旧 SDK。
+当前普通 HTTP 的显式恢复使用拆包后的 CNet 0.1.4 SDK；该旧 WS 迁移记录不代表它的发布状态。
 本阶段没有吞吐量或 CPU 改善的测量结论。
 
 最终 Chttp 全量回归：Clang Release 99/99、MSVC Release 95/95、Debug/ASan

@@ -1,3 +1,4 @@
+#include "../../../../app/src/chttp_method_runtime.h"
 #ifndef HTTP_EXAMPLE_APP_H
 #define HTTP_EXAMPLE_APP_H
 
@@ -30,7 +31,7 @@ typedef struct http_example_config {
 typedef struct http_example_app {
   chttp_server server;
   chttp_rate_limiter limiter;
-  chttp_service service;
+  chttp_method_runtime service;
   chttp_web_renderer renderer;
   cmeta_plugin_registry plugins;
   cmeta_plugin_ref plugin_ref;

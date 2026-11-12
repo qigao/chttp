@@ -1,3 +1,4 @@
+#include "../../http_server/src/chttp_server_engine.h"
 /* Exercise the production pool and read its live socket through CNet's public
  * owner API, matching the existing pool lifecycle test's source-unit approach.
  * No native descriptor or test hook enters the product API. */

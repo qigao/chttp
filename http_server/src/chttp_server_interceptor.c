@@ -1,3 +1,4 @@
+#include "chttp_server_engine.h"
 #include "chttp_server_runtime.h"
 
 #include <string.h>
@@ -107,6 +108,7 @@ int chttp_server_dispatch_request(chttp_server_request_state *state,
   server = state->server;
   route = state->admitted_route;
   routed_request = *request;
+  routed_request.operation = route != NULL ? route->operation : NULL;
   routed_request.params = state->params;
   routed_request.param_count = state->param_count;
   routed_request.session = server->config.session_capacity == 0u ? NULL : &state->session;
