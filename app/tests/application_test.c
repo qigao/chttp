@@ -101,9 +101,9 @@ static cmeta_status bean_create(void *context, const cmeta_data_desc *data,
   return status == CMETA_OK && state->fail ? CMETA_CALLBACK_ERROR : status;
 }
 
-static int worker_hello(void *self, const chttp_server_request_view *request,
-    chttp_application_work_reply *reply) {
-  (void)request;
+CHTTP_INVOCATION_ACTION(worker_hello);
+int worker_hello(void *self, const chttp_invocation *invocation) {
+  if (!cmeta_function_desc_valid(chttp_invocation_operation(invocation))) return SALTS_EPROTO;
   TestController *controller = self;
   fixture.worker_method = chttp_application_worker_current(&fixture.app);
   fixture.worker_close_status = chttp_application_close(&fixture.app, 1u);
@@ -117,7 +117,7 @@ static int worker_hello(void *self, const chttp_server_request_view *request,
   char value[32];
   const int size = snprintf(value, sizeof(value), "%d", TestCounter_value(&controller->counter));
   return size < 0 || (size_t)size >= sizeof(value) ? SALTS_ERANGE :
-      chttp_application_work_respond(reply, 200u, "text/plain", value, (size_t)size);
+      chttp_invocation_respond(invocation, 200u, "text/plain", value, (size_t)size);
 }
 static void worker_completed(void *self, const chttp_server_request_view *request,
     const chttp_application_work_outcome *outcome) {
@@ -528,7 +528,7 @@ spec("Reflected HTTP Application") {
         check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
         const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
             .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
-            .path = "/hello", .invoke = worker_hello, .after_completion = worker_completed};
+            .path = "/hello", .abi = FunctionAbi(worker_hello), .invoke = worker_hello, .after_completion = worker_completed};
         check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
         unsigned int status = 0u;
         check_equal(request((chttp_protocol)protocol, "/hello", &status), SALTS_OK);
@@ -555,7 +555,7 @@ spec("Reflected HTTP Application") {
     check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
     const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
         .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
-        .path = "/hello", .invoke = worker_hello, .after_completion = worker_completed};
+        .path = "/hello", .abi = FunctionAbi(worker_hello), .invoke = worker_hello, .after_completion = worker_completed};
     check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
     check_equal(chttp_application_start(&fixture.app), SALTS_OK);
     uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
@@ -587,7 +587,7 @@ spec("Reflected HTTP Application") {
     check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
     const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
         .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
-        .path = "/hello", .invoke = worker_hello, .after_completion = worker_completed};
+        .path = "/hello", .abi = FunctionAbi(worker_hello), .invoke = worker_hello, .after_completion = worker_completed};
     check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
     check_equal(chttp_application_start(&fixture.app), SALTS_OK);
     uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);

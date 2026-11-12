@@ -62,8 +62,13 @@ static cmeta_status create(void *context, const cmeta_data_desc *data, const voi
   if (status != CMETA_OK) { (void)cmeta_object_release(out); free(self); }
   return status;
 }
-static int invoke(void *self, const chttp_server_request_view *request,
-    chttp_application_work_reply *reply) {
+CHTTP_INVOCATION_ACTION(invoke);
+int invoke(void *self, const chttp_invocation *invocation) {
+  /* Existing browser helpers consume an explicit detached Session view; this
+   * is not the engine's owner-affine request/Session context. */
+  chttp_server_request_view view = *chttp_invocation_request(invocation);
+  view.session = chttp_invocation_session(invocation);
+  const chttp_server_request_view *request = &view;
   if (!self || ((SessionController *)self)->marker != 42 || !request->session) return SALTS_EPROTO;
   const bool hold = strcmp(request->path, "/hold") == 0;
   const bool increment = hold || strcmp(request->path, "/increment") == 0 ||
@@ -81,7 +86,7 @@ static int invoke(void *self, const chttp_server_request_view *request,
   int status = SALTS_OK;
   if (hold && fixture.invalidate_held) {
     status = chttp_session_invalidate(session);
-    return status == SALTS_OK ? chttp_application_work_respond(reply, 200u, "text/plain", "bye", 3u) : status;
+    return status == SALTS_OK ? chttp_invocation_respond(invocation, 200u, "text/plain", "bye", 3u) : status;
   }
   char value[32];
   const char *body = chttp_session_get(session, "n");
@@ -123,16 +128,16 @@ static int invoke(void *self, const chttp_server_request_view *request,
   } else if (strcmp(request->path, "/principal") == 0) {
     chttp_web_principal principal = CHTTP_WEB_PRINCIPAL_INIT;
     if (chttp_web_principal_get(request, &principal, NULL) != CHTTP_WEB_OK) return SALTS_EIO;
-    return chttp_application_work_respond(reply, principal.authenticated ? 200u : 401u, "text/plain",
+    return chttp_invocation_respond(invocation, principal.authenticated ? 200u : 401u, "text/plain",
         principal.authenticated ? principal.subject.data : "anonymous",
         principal.authenticated ? principal.subject.size : 9u);
   }
   if (status != SALTS_OK) return status;
   if (strcmp(request->path, "/large") == 0)
-    return chttp_application_work_respond(reply, code, "application/octet-stream",
+    return chttp_invocation_respond(invocation, code, "application/octet-stream",
         fixture.large_body, fixture.large_size);
   const bool no_type = strstr(request->path, "-no-type") != NULL;
-  return chttp_application_work_respond(reply, code, no_type ? NULL : "text/plain", body, strlen(body));
+  return chttp_invocation_respond(invocation, code, no_type ? NULL : "text/plain", body, strlen(body));
 }
 static void completed(void *self, const chttp_server_request_view *request,
     const chttp_application_work_outcome *outcome) {
@@ -156,14 +161,14 @@ static void start(void) {
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
     const chttp_application_worker_binding binding = {.component_id = "SessionComponent",
         .receiver = cmeta_reflected_data(SessionController), .method = CHTTP_METHOD_GET,
-        .path = paths[i], .invoke = invoke, .after_completion = completed};
+        .path = paths[i], .abi = FunctionAbi(invoke), .invoke = invoke, .after_completion = completed};
     check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
   }
   static const char *const post_paths[] = {"/login", "/signout"};
   for (size_t i = 0; i < sizeof(post_paths) / sizeof(post_paths[0]); ++i) {
     const chttp_application_worker_binding binding = {.component_id = "SessionComponent",
         .receiver = cmeta_reflected_data(SessionController), .method = CHTTP_METHOD_POST,
-        .path = post_paths[i], .invoke = invoke, .after_completion = completed};
+        .path = post_paths[i], .abi = FunctionAbi(invoke), .invoke = invoke, .after_completion = completed};
     check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
   }
   check_equal(chttp_application_start(&fixture.app), SALTS_OK);

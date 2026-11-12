@@ -55,6 +55,17 @@ struct work_impl {
   int accepting;
   work_item *waiting_head, *waiting_tail;
 };
+int chttp_application_work_reply_current(const chttp_application_work_reply *reply) {
+  return reply && reply->item && cflow_executor_is_current(&reply->item->owner->executor);
+}
+int chttp_application_work_cancelled(const chttp_application_work_reply *reply, bool *out) {
+  if (!out || !chttp_application_work_reply_current(reply)) return SALTS_EINVAL;
+  work_item *item = reply->item;
+  sync_mutex_lock(&item->owner->mutex);
+  *out = item->transport_done && item->outcome.transport_status != SALTS_OK;
+  sync_mutex_unlock(&item->owner->mutex);
+  return SALTS_OK;
+}
 
 static void count_event(uint64_t *count) { if (*count != UINT64_MAX) ++*count; }
 

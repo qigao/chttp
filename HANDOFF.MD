@@ -1,5 +1,36 @@
 # Split SDK migration handoff
 
+- Private handwritten Controller actions now use an exact callback-scoped
+  `int(void *, const chttp_invocation *)` contract with canonical
+  `chttp.invocation` identity. Mount admits FunctionAbi before route publication,
+  rejects the old Exchange despite its identical pointer carrier, resolves hook
+  Beans canonically and copies typed hook rows. Thin adapters reuse the existing
+  worker ACE chain and terminal join; the raw handwritten worker signature was
+  replaced, without adding an installed parallel API or public default mode.
+- Invocation borrows the owned request snapshot and bounded copied draft. Its
+  request view exposes no Session pointer; explicit Session access returns only
+  the detached intent transaction. Cancellation reads the existing synchronized
+  failed native-terminal state. Handles/views cannot escape their callback.
+  Record the actual callback thread token, not only executor membership: another
+  worker on the same pool must not read/write a foreign Invocation. The formal
+  two-worker overlapping-scope test exercises this distinction.
+- C++17 private worker declarations require extern-C linkage to the C library.
+  The typed action guard unwinds C++ locals and translates exceptions before
+  crossing C worker frames. TinyTest's function-like `context(...)` macro also
+  expands constructor member initializers; use a distinct member name, without
+  changing TinyTest. The public with-helper starts before its body, so private
+  pre-start mount fixtures initialize/mount/start explicitly and close at C++
+  scope exit; do not change that public lifecycle as a test workaround.
+- Validation: native-release-user complete graph, 120/120 formal CTests and
+  install pass in `migration-worker-invocation-{final-build,final-full-ctest,final-install}.log`.
+  New Invocation suite: 18 cases / 243 assertions; C++ suite: 10 cases / 58
+  assertions. Coverage includes H1/H2 binary snapshot/draft ownership, hook
+  ordering/rejection/failure, unsealed/overflow results, copied metadata rows,
+  ABI/Bean admission rollback, foreign and same-pool thread rejection, observed
+  cancellation, C++ exception/RAII and existing Session/CSRF/principal gates.
+  Earlier failed local fixture logs remain preserved. Feature CI must still
+  qualify the commit; Android device execution and open #290 are not claimed.
+
 - Private generated HTTP/RPC after_completion now joins the existing App
   business/Session/native-terminal notification. Admission reserves one HTTP
   record or RPC max_batch_items records and charges checked bytes before defer.

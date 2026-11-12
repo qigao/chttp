@@ -53,6 +53,9 @@ typedef struct chttp_application_work_stats {
   int publication_status;
 } chttp_application_work_stats;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 int chttp_application_work_init(chttp_application_work *, const chttp_application_work_config *);
 /* Transactional until response_defer succeeds. Rejection invokes no callback.
  * Accepted work owns its snapshot and borrows task.user through finalize.
@@ -70,6 +73,8 @@ int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
     const char *, const void *, size_t);
 int chttp_application_work_reject(const chttp_application_work_exchange *, unsigned int,
     const char *, const void *, size_t);
+int chttp_application_work_reply_current(const chttp_application_work_reply *);
+int chttp_application_work_cancelled(const chttp_application_work_reply *, bool *);
 chttp_method_completion_sink chttp_application_work_method_sink(chttp_application_work_reply *);
 int chttp_application_work_is_current(const chttp_application_work *);
 int chttp_application_work_get_stats(chttp_application_work *, chttp_application_work_stats *);
@@ -81,4 +86,7 @@ int chttp_application_work_wait(chttp_application_work *, uint32_t timeout_ms);
  * Destroy is control-plane only: caller first quiesces submitters/observers,
  * including owner callbacks that can enter submit, before successful close. */
 int chttp_application_work_close(chttp_application_work *, uint32_t timeout_ms);
+#ifdef __cplusplus
+}
+#endif
 #endif
