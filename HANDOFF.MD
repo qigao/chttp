@@ -1,6 +1,10 @@
 # Split SDK migration handoff
 
 - Private worker Sessions now use a charged detached snapshot/intent context.
+  Prefix alignment derives from the actual context/header/param union. The
+  selected MSVC C headers do not provide max_align_t (CI 43225024633, preserved
+  in build/ci-43225024633-msvc.log); do not guess an alignment, select a different
+  compiler or add a platform fallback to conceal that compile failure.
   Never let a live native Session escape to a worker or simply remove the public
   defer guard. The private defer entry validates and attaches the owned context;
   the public deferred API keeps rejecting live Sessions. Cookie headers belong

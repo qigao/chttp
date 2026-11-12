@@ -21,7 +21,7 @@ typedef struct chttp_server_response_terminal {
 int chttp_server_response_observe(chttp_server_response *, chttp_server_response_terminal *);
 int chttp_server_response_unobserve(chttp_server_response *, chttp_server_response_terminal *);
 
-/* Private detached Session transaction. Storage is caller-owned, max-aligned,
+/* Private detached Session transaction. Storage is caller-owned, malloc-aligned,
  * charged to its invocation and retained through owner terminal + worker drain.
  * The store/record remain Server-owned. The commit callback only records/signals;
  * it runs on the native owner and may release the logical Session gate. */

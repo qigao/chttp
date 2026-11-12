@@ -700,6 +700,14 @@ struct chttp_session_work {
   bool pinned, begun, commit_allowed, owner_done;
   int owner_status;
 };
+/* The prefix must align both its own context and the copied request arrays
+ * following it. Derive this from stored types, not a compiler-specific maximum
+ * alignment typedef or an assumed pointer width. */
+typedef union session_work_alignment {
+  chttp_session_work context;
+  chttp_header header;
+  chttp_server_param param;
+} session_work_alignment;
 
 static bool session_work_matches(const chttp_session_work *work) {
   return work->record && work->record->used && work->record->generation == work->generation &&
@@ -724,14 +732,14 @@ int chttp_session_work_size(const chttp_session *session, size_t *out) {
   bytes += keys;
   if (values > SIZE_MAX - bytes) return SALTS_ERANGE;
   bytes += values;
-  const size_t alignment = _Alignof(max_align_t);
+  const size_t alignment = _Alignof(session_work_alignment);
   if (bytes > SIZE_MAX - (alignment - 1u)) return SALTS_ERANGE;
   *out = (bytes + alignment - 1u) / alignment * alignment;
   return SALTS_OK;
 }
 int chttp_session_work_prepare(void *storage, size_t capacity, const chttp_session *session,
     void (*committed)(void *, int), void *user, chttp_session_work **out) {
-  if (!out || !storage || !committed || (uintptr_t)storage % _Alignof(max_align_t))
+  if (!out || !storage || !committed || (uintptr_t)storage % _Alignof(session_work_alignment))
     return SALTS_EINVAL;
   *out = NULL;
   size_t bytes;
