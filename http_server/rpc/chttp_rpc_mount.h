@@ -31,10 +31,11 @@ typedef struct chttp_server_rpc_mount_options {
   cmeta_plugin_ref plugin_ref;
   const chttp_method_chain_hook *hooks;
   size_t hook_count;
+  DataBind *output_codec; /* Private worker composition; mount-time borrow. */
 } chttp_server_rpc_mount_options;
 
 #define CHTTP_SERVER_RPC_MOUNT_OPTIONS_INIT \
-  { sizeof(chttp_server_rpc_mount_options), NULL, NULL, NULL, NULL, NULL, {0}, NULL, 0u }
+  { sizeof(chttp_server_rpc_mount_options), NULL, NULL, NULL, NULL, NULL, {0}, NULL, 0u, NULL }
 
 /**
  * Admit one generated method into a configured chttp_server RPC registry.

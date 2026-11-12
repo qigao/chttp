@@ -33,6 +33,19 @@ target_link_libraries(chttp_service_plugin_fixture_native PRIVATE chttp_service_
 target_link_libraries(chttp_service_plugin_fixture_plugin PRIVATE chttp_service_plugin_probe)
 
 salts_idl_target(
+  TARGET chttp_worker_output_fixture
+  IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_worker_output.schema"
+  COMPONENT "Output.OutputPlugin"
+  VERSION "1.0.0"
+  ARTIFACT_NAME "chttp_worker_output"
+  ARTIFACTS NATIVE PLUGIN
+  BINARY_CODEC
+  SOURCES chttp_worker_output_business.c)
+target_sources(chttp_worker_output_fixture_native PRIVATE chttp_worker_output_business.c)
+target_link_libraries(chttp_worker_output_fixture_native PRIVATE chttp_service_plugin_probe)
+target_link_libraries(chttp_worker_output_fixture_plugin PRIVATE chttp_service_plugin_probe)
+
+salts_idl_target(
   TARGET chttp_service_cflow_fixture
   IDL "${CMAKE_CURRENT_SOURCE_DIR}/chttp_service_cflow.schema"
   ARTIFACT_NAME "chttp_service_cflow"
@@ -116,6 +129,19 @@ add_dependencies(chttp_application_plugin_test chttp_service_plugin_fixture_plug
 set_target_properties(chttp_application_plugin_test PROPERTIES FOLDER "app/tests/service")
 add_test(NAME chttp_application_plugin_test COMMAND chttp_application_plugin_test)
 set_tests_properties(chttp_application_plugin_test PROPERTIES TIMEOUT 90)
+
+add_executable(chttp_application_output_test chttp_application_output_test.c)
+target_link_libraries(chttp_application_output_test PRIVATE
+  CHttp::App CHttp::Client chttp_worker_output_fixture_native chttp_service_plugin_probe
+  Salts::TinyTest Salts::JsonParser Salts::JsonCSerdeAdapter)
+target_include_directories(chttp_application_output_test PRIVATE
+  "${chttp_worker_output_fixture_GENERATED_DIR}" "${PROJECT_SOURCE_DIR}/app/src")
+target_compile_definitions(chttp_application_output_test PRIVATE
+  WORKER_OUTPUT_PLUGIN_PATH="$<TARGET_FILE:chttp_worker_output_fixture_plugin>")
+add_dependencies(chttp_application_output_test chttp_worker_output_fixture_plugin)
+set_target_properties(chttp_application_output_test PROPERTIES FOLDER "app/tests/service")
+add_test(NAME chttp_application_output_test COMMAND chttp_application_output_test)
+set_tests_properties(chttp_application_output_test PROPERTIES TIMEOUT 90)
 
 set_target_properties(chttp_service_generated_cflow_http_test PROPERTIES
   FOLDER "app/tests/service"

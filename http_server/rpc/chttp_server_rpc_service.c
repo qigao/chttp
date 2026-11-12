@@ -1,6 +1,7 @@
 #include "../src/chttp_server_engine.h"
 #include "chttp_rpc_mount.h"
 #include "chttp_server_rpc_service_internal.h"
+#include "../../http_common/http/chttp_native_json.h"
 
 #include <core/error_codes.h>
 #include <cmeta/plugin.h>
@@ -25,6 +26,7 @@ typedef struct chttp_rpc_service_method_record {
   cmeta_plugin_lease plugin_lease;
   chttp_method_chain_hook hooks[CHTTP_METHOD_MAX_HOOKS];
   size_t hook_count;
+  chttp_native_json_plans json;
 
   unsigned char *request_storage;
   size_t request_bytes;
@@ -71,6 +73,9 @@ typedef struct chttp_rpc_service_provider {
   mem_buffer_t *token_storage;
   int writer_started;
   int token_valid;
+  const chttp_native_json_plans *json;
+  DataBindFormatReader json_reader;
+  int structured_output;
 
   int output_attempted;
   int output_active;
@@ -184,9 +189,13 @@ static DataBindStatus chttp_rpc_service_open_input(
 
 static void chttp_rpc_service_release_token_storage(
     chttp_rpc_service_provider *provider) {
-  if (provider == NULL || provider->token_storage == NULL) return;
-  mem_buffer_release(provider->token_storage);
+  if (provider == NULL) return;
+  /* The built-in JSON reader has a void close callback; failure here means
+   * this private lease was corrupted, not a recoverable provider error. */
+  if (data_bind_format_reader_close(&provider->json_reader) != DATA_BIND_OK) abort();
+  if (provider->token_storage) mem_buffer_release(provider->token_storage);
   provider->token_storage = NULL;
+  provider->structured_output = 0;
 }
 
 static cserde_status chttp_rpc_service_capture_token(
@@ -251,6 +260,7 @@ static DataBindStatus chttp_rpc_service_begin_output(
   provider->token = (cserde_token){0};
   provider->writer_started = 0;
   provider->token_valid = 0;
+  provider->json_reader = (DataBindFormatReader)DATA_BIND_FORMAT_READER_INIT;
   provider->output_attempted = 1;
   provider->output_active = 1;
   provider->output_published = 0;
@@ -291,6 +301,17 @@ static DataBindStatus chttp_rpc_service_write_output(
     provider->output_is_error = 0;
   }
 
+  const DataBindFormatPlan *format = provider->json ? chttp_native_json_plan_for(provider->json, entry) : NULL;
+  if (format) {
+    if (state != DATA_BIND_VALUE_STATE_VALUE || !value)
+      return chttp_native_json_error(error, DATA_BIND_ERR_TYPE_MISMATCH, "Structured RPC output requires VALUE");
+    status = chttp_native_json_encode(format, provider->native_options, entry->data, value, value_bytes,
+        provider->service->output_capacity, &provider->token_storage, error);
+    if (status != DATA_BIND_OK) return status;
+    provider->structured_output = 1; provider->token_valid = 1;
+    return DATA_BIND_OK;
+  }
+
   if (state == DATA_BIND_VALUE_STATE_NULL) {
     provider->token = (cserde_token){.kind = CSERDE_NULL};
     provider->token_valid = 1;
@@ -328,6 +349,12 @@ static DataBindStatus chttp_rpc_service_commit_output(
       (chttp_rpc_service_provider *)context;
   if (provider == NULL || !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
+  if (provider->structured_output) {
+    const DataBindStatus opened = data_bind_format_reader_open(data_bind_json_format_provider(),
+        mem_buffer_const_data(provider->token_storage), mem_buffer_used(provider->token_storage),
+        provider->native_options->max_depth, &provider->json_reader, error);
+    if (opened != DATA_BIND_OK) return opened;
+  }
   if (provider->writer_started &&
       cserde_writer_finish(&provider->writer) != CSERDE_OK) {
     chttp_rpc_service_error_set(
@@ -363,6 +390,15 @@ static cserde_status chttp_rpc_service_encode_staged(
       (chttp_rpc_service_provider *)user;
   if (provider == NULL || writer == NULL || !provider->token_valid)
     return CSERDE_INVALID_ARGUMENT;
+  if (provider->structured_output) {
+    cserde_token token;
+    cserde_status status;
+    while ((status = cserde_reader_next(provider->json_reader.reader, &token)) == CSERDE_OK) {
+      status = cserde_writer_write(writer, &token);
+      if (status != CSERDE_OK) return status;
+    }
+    return status == CSERDE_DONE ? CSERDE_OK : status;
+  }
   return cserde_writer_write(writer, &provider->token);
 }
 
@@ -444,6 +480,7 @@ static int chttp_rpc_service_execution_admit(
     const DataBindRpcMethodPlan *method_plan,
     const DataBindServiceNativeBinding *native,
     const DataBindNativeExecution *execution,
+    bool structured,
     size_t max_frame_bytes,
     size_t *request_bytes,
     size_t *response_bytes,
@@ -520,7 +557,8 @@ static int chttp_rpc_service_execution_admit(
           entry.target_is_return || entry.function_param_index != 1u ||
           entry.address.space == NULL ||
           strcmp(entry.address.space, "rpc.result") != 0 ||
-          !chttp_rpc_service_scalar_kind(entry.data))
+          (!chttp_rpc_service_scalar_kind(entry.data) &&
+           !(structured && entry.data->kind == CMETA_DATA_STRUCT)))
         return SALTS_ENOTSUP;
       bytes = entry.data->storage_type->size;
       if (entry.native_offset > *response_bytes ||
@@ -584,6 +622,7 @@ static int chttp_rpc_service_execution_admit(
 static void chttp_rpc_service_method_release(
     chttp_rpc_service_method_record *record) {
   if (record == NULL) return;
+  chttp_native_json_plans_clear(&record->json);
   /* Stable method record holds an optional DSO generation lease until all
    * accepted native callbacks have drained. Unloading before this boundary
    * is an ownership violation, not a recoverable best-effort cleanup. */
@@ -698,6 +737,8 @@ static int chttp_rpc_service_handler_call(
   provider_context = (chttp_rpc_service_provider){
       .service = record->owner,
       .native_options = &slot->native_options,
+      .json = &record->json,
+      .json_reader = DATA_BIND_FORMAT_READER_INIT,
       .request = request,
       .param_reader = CRPC_SERVER_PARAM_READER_INIT};
 
@@ -850,7 +891,7 @@ static int chttp_rpc_service_handler(
 }
 
 static int chttp_rpc_service_plan_supported(
-    const DataBindRpcMethodPlan *plan) {
+    const DataBindRpcMethodPlan *plan, bool structured) {
   const DataBindBindingPlan *binding;
   size_t i;
   DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
@@ -878,7 +919,8 @@ static int chttp_rpc_service_plan_supported(
     if (!data_bind_binding_plan_egress_at(binding, 0u, &entry) ||
         entry.address.space == NULL ||
         strcmp(entry.address.space, "rpc.result") != 0 ||
-        !chttp_rpc_service_scalar_kind(entry.data))
+        (!chttp_rpc_service_scalar_kind(entry.data) &&
+         !(structured && entry.data && entry.data->kind == CMETA_DATA_STRUCT)))
       return 0;
   }
 
@@ -974,7 +1016,7 @@ int chttp_server_rpc_generated_mount(
       !cmeta_plugin_ref_valid(mount->plugin_ref))
     return SALTS_EINVAL;
   if (!chttp_method_hooks_valid(mount->hooks, mount->hook_count)) return SALTS_EINVAL;
-  if (!chttp_rpc_service_plan_supported(mount->method_plan))
+  if (!chttp_rpc_service_plan_supported(mount->method_plan, mount->output_codec != NULL))
     return SALTS_ENOTSUP;
 
   impl = (chttp_rpc_service_impl *)context;
@@ -983,6 +1025,7 @@ int chttp_server_rpc_generated_mount(
 
   status = chttp_rpc_service_execution_admit(
       mount->method_plan, mount->native_binding, mount->execution,
+      mount->output_codec != NULL,
       impl->max_call_frame_bytes, &request_bytes, &response_bytes,
       &error_bytes, &param_count);
   if (status != SALTS_OK) return status;
@@ -1020,6 +1063,16 @@ int chttp_server_rpc_generated_mount(
         manifest == NULL) {
       chttp_rpc_service_method_release(record);
       return SALTS_EBUSY;
+    }
+  }
+
+  if (mount->output_codec) {
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    const DataBindStatus compiled = chttp_native_json_plans_compile(mount->output_codec, binding,
+        mount->native_binding, data_bind_rpc_method_plan_transport(mount->method_plan), &record->json, &error);
+    if (compiled != DATA_BIND_OK) {
+      chttp_rpc_service_method_release(record);
+      return compiled == DATA_BIND_ERR_OOM ? SALTS_ENOMEM : SALTS_ENOTSUP;
     }
   }
 

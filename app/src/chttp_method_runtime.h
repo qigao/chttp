@@ -122,11 +122,12 @@ typedef struct chttp_method_runtime_http_mount {
   const char *plugin_export_id;
   const chttp_method_chain_hook *hooks;
   size_t hook_count;
+  DataBind *output_codec; /* Private worker mount only; borrowed during mount. */
 } chttp_method_runtime_http_mount;
 
 #define CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT \
   { sizeof(chttp_method_runtime_http_mount), NULL, NULL, NULL, NULL, 0u, \
-    CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, {0u, 0u}, NULL, NULL, 0u }
+    CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT, NULL, NULL, NULL, {0u, 0u}, NULL, NULL, 0u, NULL }
 
 /**
  * Initialize bounded runtime storage for generated HTTP MethodPlan mounts.

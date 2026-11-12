@@ -4,6 +4,7 @@
 #include <core/error_codes.h>
 #include <memory/buffer.h>
 #include <data_bind_plugin_execution.h>
+#include "../../http_common/http/chttp_native_json.h"
 
 #include <cserde/cserde.h>
 #include <cflow/plan.h>
@@ -29,6 +30,7 @@ typedef struct chttp_service_method_record {
   cflow_executor *executor;
   chttp_application_work *workers;
   cflow_plan cflow_plan;
+  chttp_native_json_plans json;
   chttp_method_chain_hook hooks[CHTTP_METHOD_MAX_HOOKS];
   size_t hook_count;
 
@@ -96,6 +98,7 @@ typedef struct chttp_service_http_provider {
   int output_attempted;
   int output_active;
   int output_published;
+  int structured_output;
   size_t staged_body_size;
   const char *staged_content_type;
 } chttp_service_http_provider;
@@ -657,6 +660,7 @@ static DataBindStatus chttp_service_http_begin_output(
   provider->staged_body_size = 0u;
   provider->staged_content_type = "text/plain";
   provider->writer_tokens = 0u;
+  provider->structured_output = 0;
   provider->writer = (cserde_writer){0};
   return DATA_BIND_OK;
 }
@@ -677,7 +681,7 @@ static DataBindStatus chttp_service_http_write_output(
   if (provider->writer_tokens != 0u) {
     chttp_service_error_set(
         error, DATA_BIND_ERR_RUNTIME,
-        "Phase-1 HTTP egress admits one scalar response value");
+        "HTTP egress admits one response value");
     return DATA_BIND_ERR_RUNTIME;
   }
 
@@ -686,7 +690,7 @@ static DataBindStatus chttp_service_http_write_output(
         strcmp(entry->address.space, "http.response.body") != 0) {
       chttp_service_error_set(
           error, DATA_BIND_ERR_RUNTIME,
-          "Phase-1 HTTP egress does not support response headers/structured output");
+          "HTTP egress does not support response headers");
       return DATA_BIND_ERR_RUNTIME;
     }
   }
@@ -695,10 +699,24 @@ static DataBindStatus chttp_service_http_write_output(
       (state != DATA_BIND_VALUE_STATE_VALUE || value == NULL)) {
     chttp_service_error_set(
         error, DATA_BIND_ERR_TYPE_MISMATCH,
-        "HTTP scalar egress requires VALUE or NULL state");
+        "HTTP egress requires VALUE or NULL state");
     return DATA_BIND_ERR_TYPE_MISMATCH;
   }
 
+  if (provider->invocation == NULL)
+    return DATA_BIND_ERR_INVALID_ARG;
+  const DataBindFormatPlan *format = chttp_native_json_plan_for(&provider->invocation->record->json, entry);
+  if (format) {
+    if (state != DATA_BIND_VALUE_STATE_VALUE || !value)
+      return chttp_native_json_error(error, DATA_BIND_ERR_TYPE_MISMATCH, "Structured HTTP output requires VALUE");
+    status = chttp_native_json_encode(format, &provider->invocation->native_options, entry->data,
+        value, value_bytes, provider->service->response_capacity, &provider->output_buffer, error);
+    if (status != DATA_BIND_OK) return status;
+    provider->structured_output = 1; provider->writer_tokens = 1u;
+    provider->staged_body_size = mem_buffer_used(provider->output_buffer);
+    provider->staged_content_type = "application/json";
+    return DATA_BIND_OK;
+  }
   if (cserde_writer_init(
           &provider->writer, &CHTTP_SERVICE_SCALAR_WRITER_OPS,
           provider) != CSERDE_OK) {
@@ -727,8 +745,6 @@ static DataBindStatus chttp_service_http_write_output(
     return DATA_BIND_OK;
   }
 
-  if (provider->invocation == NULL)
-    return DATA_BIND_ERR_INVALID_ARG;
   status = data_bind_native_encode(
       &provider->invocation->native_options, entry->data,
       value, value_bytes, &provider->writer, &diagnostic);
@@ -745,7 +761,7 @@ static DataBindStatus chttp_service_http_commit_output(
       (chttp_service_http_provider *)context;
   if (provider == NULL || !provider->output_active)
     return DATA_BIND_ERR_INVALID_ARG;
-  if (provider->writer_tokens != 0u &&
+  if (!provider->structured_output && provider->writer_tokens != 0u &&
       cserde_writer_finish(&provider->writer) != CSERDE_OK) {
     chttp_service_http_release_output(provider);
     provider->output_active = 0;
@@ -1144,6 +1160,7 @@ static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
+  chttp_native_json_plans_clear(&record->json);
   cmeta_cleanup_run(&record->plugin_cleanup);
   memset(record, 0, sizeof(*record));
 }
@@ -1255,7 +1272,7 @@ static int chttp_service_invocation_init(
 }
 
 static int chttp_service_plan_supported(
-    const DataBindHttpMethodPlan *plan) {
+    const DataBindHttpMethodPlan *plan, bool structured) {
   const DataBindBindingPlan *binding;
   size_t i;
   size_t egress_count;
@@ -1287,7 +1304,8 @@ static int chttp_service_plan_supported(
     if (!data_bind_binding_plan_egress_at(binding, 0u, &entry) ||
         entry.address.space == NULL ||
         strcmp(entry.address.space, "http.response.body") != 0 ||
-        !chttp_service_scalar_kind(entry.data))
+        (!chttp_service_scalar_kind(entry.data) &&
+         !(structured && entry.data && entry.data->kind == CMETA_DATA_STRUCT)))
       return 0;
   }
   return 1;
@@ -1857,6 +1875,7 @@ static int chttp_method_runtime_mount_http_impl(
   if (workers && mount->executor) return SALTS_EINVAL;
   if (!chttp_method_hooks_valid(mount->hooks, mount->hook_count)) return SALTS_EINVAL;
   if (!workers && mount->hook_count) return SALTS_ENOTSUP;
+  if ((!workers && mount->output_codec) || (workers && !mount->output_codec)) return SALTS_ENOTSUP;
   plugin_mode =
       mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
   if (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
@@ -1896,7 +1915,7 @@ static int chttp_method_runtime_mount_http_impl(
       return SALTS_EINVAL;
   }
 
-  if (!chttp_service_plan_supported(mount->method_plan))
+  if (!chttp_service_plan_supported(mount->method_plan, mount->output_codec != NULL))
     return SALTS_ENOTSUP;
 
   impl = (chttp_service_impl *)service->impl;
@@ -1956,6 +1975,15 @@ static int chttp_method_runtime_mount_http_impl(
   record->response_bytes = response_bytes;
   record->error_bytes = error_bytes;
   record->param_count = param_count;
+  if (mount->output_codec) {
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    const DataBindStatus compiled = chttp_native_json_plans_compile(mount->output_codec, binding, native,
+        data_bind_http_method_plan_transport(mount->method_plan), &record->json, &error);
+    if (compiled != DATA_BIND_OK) {
+      chttp_service_method_release(record);
+      return compiled == DATA_BIND_ERR_OOM ? SALTS_ENOMEM : SALTS_ENOTSUP;
+    }
+  }
 
   method_text = data_bind_http_method_plan_method(mount->method_plan);
   route_text = data_bind_http_method_plan_route(mount->method_plan);

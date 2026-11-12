@@ -163,8 +163,11 @@ and canceled running native methods. The Server suite
 covers the zero-error reset. `chttp_application_plugin_test` exercises real DSO
 HTTP/RPC worker execution, provider context, lease rollback, stopped-provider
 admission, output failure/reuse and canceled running methods with finite close.
-Public Session/admission integration, stream/WS adaptation, structured DTO/error
-output, per-method completion observation and the public Invocation migration remain required
+`chttp_application_output_test` verifies bounded required record JSON output,
+typed-error mappings, integer/text fidelity, capacity rollback/reuse, mixed RPC
+batches and real DSO drain under canceled running methods.
+Public Session/admission integration, stream/WS adaptation, remaining DTO ingress/
+state/collection representations, per-method completion observation and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives
@@ -304,6 +307,41 @@ completion authority even when an external producer participates.
 
 ### Interceptors, RPC and terminal outcomes
 
+The private structured-output migration takes the same codec used to compile
+the MethodPlan explicitly at worker mount. Control-plane schema introspection
+resolves a projected record field or a declared typed-error name; native
+MessagePlan admission and a JSON FormatPlan verify that payload before route
+publication. Method records own copied FormatPlans and borrow canonical native
+descriptors under the existing Bean/provider lifetime. The codec is borrowed
+only during mount, with no runtime schema lookup or transport format guessing.
+Supplying the same schema is a caller precondition: the current SDK exposes no
+MethodPlan schema fingerprint. Native admission rejects incompatible payload
+layouts but is not a substitute for schema identity.
+Legacy engine mounts retain their scalar contract.
+
+This slice admits required non-nullable record payloads whose FormatPlan needs
+no optional/null native state overlay or nested field-name rewriting. Existing
+scalar field projections keep their original raw HTTP/JSON-RPC representation.
+Unsupported payloads/formats fail mount, with no scalar or format fallback.
+HTTP emits structured JSON with application/json. RPC stages the same bounded
+JSON and opens the existing JSON reader before commit, then synchronously
+replays its exact integer/string/container tokens into the envelope writer.
+The reader and backing byte buffer are retained through result/error encoding;
+native DTO/error objects remain live through business-hook unwind and cleanup.
+
+The existing per-response/value byte limit bounds the JSON sink, and native
+depth/item/workspace limits still apply. RPC's temporary parser storage is
+proportional to that bounded document and its depth; the outer envelope/batch
+retains its own byte/depth limits. Each accepted worker/call slot owns at most
+one output transaction. Capacity, native encode, writer finish, reader open or
+envelope failure propagates without publishing partial output. FormatPlans
+are freed before Plugin leases, and all worker/terminal joins still precede
+method/Server/Bean destruction. No new dependency, parser, serializer framework,
+unbounded growth, public mode or installed ABI is introduced.
+RPC pays one bounded JSON parse to reuse the provider's exact token handling;
+a new token tape would add separate string/container ownership and admission
+rules. This choice makes no performance improvement claim.
+
 The private generated-method business slice uses one scheduler-neutral ACE
 chain shared by HTTP and RPC. Application resolves every hook context from its
 canonical ACE graph and mounts a copied array of at most 16 hooks. Only the
@@ -324,12 +362,12 @@ An explicit before rejection skips the target and maps to HTTP 403 or JSON-RPC
 callback maps to the existing internal-error path. Native status, typed business
 error and binding/serialization failure enter on_error with separate DataBind
 status/outcome facts; transport cancellation never reruns business on_error.
-The existing phase-1 HTTP/RPC writers still admit scalar output only. A
-structured typed-error payload therefore remains a staging failure (HTTP 500 /
-RPC -32603, DataBind outcome NONE); on_error can inspect the still-live native
-error frame. No mapped typed-error response is claimed after failed staging.
-Bounded structured DTO/error FormatPlan output remains a separate migration
-requirement before the public replacement.
+Private worker mounts use the admitted FormatPlan for required record values
+and typed errors. Successful typed-error staging preserves the declared HTTP
+status / RPC code and live error frame during on_error. Staging failure still
+maps to HTTP 500 / RPC -32603 with DataBind outcome NONE; it never claims the
+business mapping after failed serialization. Scalar-only legacy engine mounts
+retain their existing behavior.
 Ingress failures have no entered method chain. RPC invokes a fresh chain for
 each bound batch item, preserving sequential order, method identity and
 notification/error suppression. No second task is posted. Hooks remain borrowed
