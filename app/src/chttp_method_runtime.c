@@ -27,6 +27,7 @@ typedef struct chttp_service_method_record {
   const DataBindNativeExecution *execution;
   chttp_method_runtime_execution_mode execution_mode;
   cflow_executor *executor;
+  chttp_application_work *workers;
   cflow_plan cflow_plan;
 
   cmeta_plugin_lease plugin_lease;
@@ -1583,10 +1584,24 @@ static int chttp_service_http_execute_deferred(
   return SALTS_OK;
 }
 
+typedef struct chttp_service_output {
+  void *context;
+  int (*write)(void *, unsigned int, const char *, const void *, size_t, mem_buffer_t *);
+} chttp_service_output;
+static int chttp_service_engine_output(void *context, unsigned int code,
+    const char *type, const void *body, size_t size, mem_buffer_t *buffer) {
+  return buffer ? chttp_server_reply_buffer(context, code, type, buffer) :
+      chttp_server_reply(context, code, type, body, size);
+}
+static int chttp_service_worker_output(void *context, unsigned int code,
+    const char *type, const void *body, size_t size, mem_buffer_t *buffer) {
+  (void)buffer;
+  return chttp_application_work_respond(context, code, type, body, size);
+}
 static int chttp_service_http_execute(
     chttp_service_method_record *record,
     const chttp_server_request_view *request,
-    chttp_server_response *response) {
+    const chttp_service_output *output) {
   chttp_service_invocation invocation = {0};
   chttp_service_http_provider provider_context;
   DataBindBindingProvider provider = DATA_BIND_BINDING_PROVIDER_INIT;
@@ -1602,7 +1617,7 @@ static int chttp_service_http_execute(
   if (record == NULL || record->owner == NULL ||
       record->method_plan == NULL || record->binding == NULL ||
       record->native_binding == NULL || record->execution == NULL ||
-      request == NULL || response == NULL)
+      request == NULL || output == NULL)
     return SALTS_EINVAL;
 
   result = chttp_service_invocation_init(record, &invocation);
@@ -1631,7 +1646,8 @@ static int chttp_service_http_execute(
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =
         chttp_service_http_ingress_failure(bind_status);
-    result = chttp_service_http_failure_reply(response, failure);
+    result = output->write(output->context, failure.status_code, "text/plain",
+        failure.body, failure.body_size, NULL);
     goto cleanup;
   }
 
@@ -1646,43 +1662,54 @@ static int chttp_service_http_execute(
         &outcome, &diagnostic);
 
   if (bind_status != DATA_BIND_OK) {
-    result = chttp_server_reply(
-        response, 500u, "text/plain",
+    result = output->write(
+        output->context, 500u, "text/plain",
         "Internal Server Error",
-        sizeof("Internal Server Error") - 1u);
+        sizeof("Internal Server Error") - 1u, NULL);
     goto cleanup;
   }
 
   if (outcome.kind == DATA_BIND_BINDING_OUTCOME_NATIVE_STATUS) {
-    result = chttp_server_reply(
-        response, 500u, "text/plain",
+    result = output->write(
+        output->context, 500u, "text/plain",
         "Application Error",
-        sizeof("Application Error") - 1u);
+        sizeof("Application Error") - 1u, NULL);
     goto cleanup;
   }
 
   if (!data_bind_http_method_plan_status_for_outcome(
           record->method_plan, &outcome, &http_status)) {
-    result = chttp_server_reply(
-        response, 500u, "text/plain", "Internal Server Error", 21u);
+    result = output->write(
+        output->context, 500u, "text/plain", "Internal Server Error", 21u, NULL);
     goto cleanup;
   }
 
   if (!provider_context.output_published) {
-    result = chttp_server_reply(
-        response, (unsigned int)http_status, "text/plain", NULL, 0u);
+    result = output->write(
+        output->context, (unsigned int)http_status, "text/plain", NULL, 0u, NULL);
     goto cleanup;
   }
 
-  result = chttp_server_reply_buffer(
-      response, (unsigned int)http_status,
+  result = output->write(
+      output->context, (unsigned int)http_status,
       provider_context.staged_content_type,
+      mem_buffer_data(provider_context.output_buffer), provider_context.staged_body_size,
       provider_context.output_buffer);
 
 cleanup:
   chttp_service_http_release_output(&provider_context);
   chttp_service_invocation_release(&invocation);
   return result;
+}
+
+static int chttp_service_http_worker_run(void *user,
+    const chttp_server_request_view *request, chttp_application_work_reply *reply) {
+  const chttp_service_output output = {reply, chttp_service_worker_output};
+  return chttp_service_http_execute(user, request, &output);
+}
+static void chttp_service_http_worker_finalized(void *user) {
+  chttp_service_method_record *record = user;
+  atomic_fetch_sub_explicit(&record->deferred_in_flight, 1u, memory_order_release);
 }
 
 static int chttp_service_http_handler(
@@ -1692,6 +1719,17 @@ static int chttp_service_http_handler(
       (chttp_service_method_record *)user;
   if (record == NULL || record->owner == NULL)
     return SALTS_EINVAL;
+  if (record->workers) {
+    const chttp_application_work_task task = {.run = chttp_service_http_worker_run,
+        .finalize = chttp_service_http_worker_finalized, .user = record};
+    atomic_fetch_add_explicit(&record->deferred_in_flight, 1u, memory_order_acq_rel);
+    const int status = chttp_application_work_submit(record->workers, request, response, &task);
+    if (status == SALTS_OK) return status;
+    chttp_service_http_worker_finalized(record);
+    if (status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN)
+      return chttp_server_reply(response, 503u, "text/plain", "Service Unavailable", 19u);
+    return status;
+  }
   if (record->execution_mode ==
           CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_DIRECT ||
       record->execution_mode ==
@@ -1700,7 +1738,8 @@ static int chttp_service_http_handler(
           CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN)
     return chttp_service_http_execute_deferred(
         record, request, response);
-  return chttp_service_http_execute(record, request, response);
+  const chttp_service_output output = {response, chttp_service_engine_output};
+  return chttp_service_http_execute(record, request, &output);
 }
 
 int chttp_method_runtime_init(
@@ -1747,9 +1786,9 @@ int chttp_method_runtime_init(
   return SALTS_OK;
 }
 
-int chttp_method_runtime_mount_http(
+static int chttp_method_runtime_mount_http_impl(
     chttp_method_runtime *service, chttp_server *server,
-    const chttp_method_runtime_http_mount *mount) {
+    const chttp_method_runtime_http_mount *mount, chttp_application_work *workers) {
   chttp_service_impl *impl;
   chttp_service_method_record *record;
   chttp_server_route_options route_options = {0};
@@ -1772,6 +1811,9 @@ int chttp_method_runtime_mount_http(
       mount->method_plan == NULL)
     return SALTS_EINVAL;
 
+  if (workers && (!workers->impl ||
+      mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT ||
+      mount->middleware_count != 0u)) return SALTS_ENOTSUP;
   plugin_mode =
       mount->execution_mode == CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
   if (mount->execution_mode != CHTTP_METHOD_RUNTIME_EXECUTION_INLINE_DIRECT &&
@@ -1826,6 +1868,7 @@ int chttp_method_runtime_mount_http(
   record->method_plan = mount->method_plan;
   record->execution_mode = mount->execution_mode;
   record->executor = mount->executor;
+  record->workers = workers;
 
   if (plugin_mode) {
     status = chttp_service_plugin_resolve(
@@ -1915,6 +1958,17 @@ int chttp_method_runtime_mount_http(
 
   ++impl->method_count;
   return SALTS_OK;
+}
+
+int chttp_method_runtime_mount_http(chttp_method_runtime *service,
+    chttp_server *server, const chttp_method_runtime_http_mount *mount) {
+  return chttp_method_runtime_mount_http_impl(service, server, mount, NULL);
+}
+int chttp_method_runtime_mount_worker_http(chttp_method_runtime *service,
+    chttp_server *server, const chttp_method_runtime_http_mount *mount,
+    chttp_application_work *workers) {
+  if (!workers) return SALTS_EINVAL;
+  return chttp_method_runtime_mount_http_impl(service, server, mount, workers);
 }
 
 int chttp_method_runtime_quiescent(const chttp_method_runtime *service) {

@@ -23,5 +23,10 @@ typedef struct chttp_application_worker_binding {
  * is resolved from the canonical ACE graph; callers cannot provide a raw Bean. */
 int chttp_application_worker_prepare(chttp_application *, const chttp_application_work_config *);
 int chttp_application_worker_mount(chttp_application *, const chttp_application_worker_binding *);
+/* Generated synchronous direct HTTP methods only, using the same owned pool.
+ * Binding/execution metadata is borrowed through close; receiver is canonical
+ * ACE state. Deferred/CFlow/Plugin providers remain outside this private slice. */
+int chttp_application_worker_mount_http(chttp_application *, const char *,
+    const cmeta_data_desc *, const chttp_http_method *);
 int chttp_application_worker_current(const chttp_application *);
 #endif

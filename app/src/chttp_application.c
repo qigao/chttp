@@ -14,6 +14,7 @@ CHTTP_ACTION(chttp_expected_action);
 typedef struct application_worker_action {
   chttp_application_work *work;
   chttp_application_work_task task;
+  DataBindNativeExecution execution;
 } application_worker_action;
 
 typedef struct application_action { const chttp_action *action; void *receiver; } application_action;
@@ -21,6 +22,7 @@ typedef struct application_impl {
   chttp_server server;
   chttp_method_runtime methods;
   chttp_application_work workers;
+  chttp_binding_limits worker_binding_limits;
   application_worker_action *worker_actions;
   size_t worker_action_count;
   size_t worker_route_capacity;
@@ -147,6 +149,38 @@ int chttp_application_worker_mount(chttp_application *owner,
                .hooks = binding->hooks, .hook_count = binding->hook_count}};
   status = chttp_server_route(&app->server, binding->method, binding->path,
       application_worker_dispatch, action);
+  if (status == SALTS_OK) ++app->worker_action_count;
+  return status;
+}
+
+int chttp_application_worker_mount_http(chttp_application *owner, const char *component_id,
+    const cmeta_data_desc *data, const chttp_http_method *method) {
+  application_impl *app = owner ? owner->impl : NULL;
+  if (!app || !method || !app->workers.impl) return SALTS_EINVAL;
+  if (app->configuration_closed) return SALTS_EBUSY;
+  if (method->dispatch != CHTTP_DISPATCH_INLINE || !method->execution || method->executor ||
+      method->projection || method->plugin_registry || cmeta_plugin_ref_valid(method->plugin_ref) ||
+      method->plugin_export_id) return SALTS_ENOTSUP;
+  if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
+  void *receiver = NULL;
+  int status = application_receiver(app, component_id, data, &receiver);
+  if (status != SALTS_OK) return status;
+  if (!app->methods.impl) {
+    const chttp_binding_limits *b = &app->worker_binding_limits;
+    if (b->size != sizeof(*b)) return SALTS_EINVAL;
+    const chttp_method_runtime_config limits = {sizeof(limits), b->method_capacity,
+        b->max_binding_value_bytes, b->max_response_body_bytes, b->max_call_frame_bytes,
+        b->native_workspace_bytes, b->native_max_depth, b->native_max_items, b->native_max_owned_bytes};
+    status = chttp_method_runtime_init(&app->methods, &limits);
+    if (status != SALTS_OK) return status;
+  }
+  application_worker_action *action = &app->worker_actions[app->worker_action_count];
+  action->execution = *method->execution;
+  action->execution.context = receiver;
+  chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
+  mount.method_plan = method->plan; mount.native_binding = method->binding;
+  mount.execution = &action->execution;
+  status = chttp_method_runtime_mount_worker_http(&app->methods, &app->server, &mount, &app->workers);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
 }
@@ -323,6 +357,7 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   if (config->cors != NULL) app->cors = *config->cors;
   if (config->assets != NULL) app->assets = *config->assets;
   app->worker_route_capacity = config->http.route_capacity;
+  app->worker_binding_limits = config->bindings;
   app->worker_prototype_allowed = config->interceptor_count == 0u && !config->admission &&
       !config->assets && config->http.session_capacity == 0u;
   for (size_t i = 0u; i < config->controller_count; ++i) {

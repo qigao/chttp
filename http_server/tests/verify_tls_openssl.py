@@ -146,19 +146,39 @@ def main(binary):
                 if code or statuses != ["403"]:
                     raise AssertionError("unpinned/forged identity admitted: " + diagnostics + output)
                 print("PASS trusted-but-unpinned and forged forwarded identity", flush=True)
-                for label, cert in [("missing-client-cert", None),
-                                    ("wrong-client-ca", wrong_issuer),
-                                    ("wrong-client-EKU", wrong_eku)]:
+                for expected_count, (label, cert) in enumerate([
+                    ("missing-client-cert", None),
+                    ("wrong-client-ca", wrong_issuer),
+                    ("wrong-client-EKU", wrong_eku),
+                ], start=1):
                     code, output, diagnostics, statuses = exchange(port, ca, cert, "P-256", True)
-                    if not code or statuses or "alert" not in (output + diagnostics).lower():
+                    if not code or statuses:
                         raise AssertionError(label + " did not fail at TLS: " + diagnostics + output)
-                    print("PASS " + label, flush=True)
+                    # A peer may receive a socket reset instead of the TLS alert.
+                    # Require the server's real TLS failure and unchanged HTTP
+                    # dispatch count, not wording or a guessed errno list.
+                    # Failure categories are provider-owned, including generic
+                    # HANDSHAKE. Do not infer a finer certificate diagnosis.
+                    reader.join(timeout=TIMEOUT)
+                    process.stdin.write(f"TLS_REJECTIONS {expected_count}\n")
+                    process.stdin.flush()
+                    reader = threading.Thread(target=lambda: startup.put(process.stdout.readline()), daemon=True)
+                    reader.start()
+                    evidence = startup.get(timeout=TIMEOUT).strip()
+                    match = re.fullmatch(r"CHTTP_TLS_REJECTIONS=(\d+) (-?\d+) (\d+) (\d+)", evidence)
+                    if (not match or int(match[1]) != expected_count or not int(match[2]) or
+                            not int(match[3]) or int(match[4]) != 5):
+                        raise AssertionError(label + " lacks verifier rejection evidence: " + evidence +
+                                             "\n" + diagnostics + output)
+                    print("PASS " + label + " " + evidence, flush=True)
                 # Negative handshakes must not poison the listener or pin state.
                 code, output, diagnostics, statuses = exchange(port, ca, allowed, "P-256", True)
                 if code or statuses != ["200"]:
                     raise AssertionError("listener not reusable after rejection: " + diagnostics + output)
             finally:
                 timed_out = False
+                # Do not race communicate() against the line reader on stdout.
+                reader.join(timeout=TIMEOUT)
                 try:
                     process.communicate(input="\n", timeout=TIMEOUT)
                 except subprocess.TimeoutExpired:
