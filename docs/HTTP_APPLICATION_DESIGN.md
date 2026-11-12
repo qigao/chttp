@@ -113,15 +113,18 @@ submitted, and settle when NativeIO reports it sent. Peer RST_STREAM(NO_ERROR)
 still means cancellation. Success establishes local native send completion,
 not consumption by the remote application.
 
-Generated synchronous direct HTTP methods can also mount on that same private
+Generated synchronous direct and CFlow HTTP methods can also mount on that same private
 pool. The existing MethodPlan evaluator now writes through an internal output
 adapter: the published engine path retains its buffer publication semantics,
 while the worker path copies into the invocation draft before releasing the
 DataBind native frame and serializer buffer. Binding, validation, native method
 execution and output staging all stay on the worker; there is no nested executor
 post/wait. The method record and canonical ACE receiver remain retained through
-terminal finalization. CFlow/Plugin providers and generated business hook outcome
-mapping still need migration; this slice does not accept them as direct methods.
+terminal finalization. CFlow compiles its producer-owned typed adapter once and
+evaluates the immutable Plan in that same task, without a borrowed executor or
+nested scheduling. Owned Plan output remains live through serialization, then
+is destroyed before the input frame. Plugin providers and generated business
+hook outcome mapping still need migration.
 
 Private generated RPC mounts use the same pool for the complete HTTP envelope.
 The Server registry exposes a private scheduler-neutral evaluator/output boundary;
@@ -155,6 +158,20 @@ providers/per-method hook integration and the public Invocation migration remain
 before switching the programming model. No runtime feature switch was added.
 
 ### Decision and alternatives
+
+The private CFlow migration admits a synchronous producer-owned typed adapter
+without an external executor. Mount compiles one immutable Plan using the same
+canonical type/effect/ABI checks as the engine path. The existing Application
+slot/byte admission owns the copied input and draft; its worker binds a bounded
+native frame, evaluates exactly one Plan input, serializes the owned result into
+the draft, and destroys that result before the frame. No second task, blocking
+post/wait, interpreter fallback or async-Plan emulation is allowed. Invalid
+projection/unsupported effects fail before publishing the route; evaluation or
+serialization failure yields the existing 500 response. The method record and
+borrowed code/captures remain live through joined native-terminal finalization,
+including when cancellation wins before a running projection returns. This is
+an internal step only; it does not change installed metadata or public defaults.
+The legacy engine path retains its explicitly borrowed executor contract.
 
 The baseline is that application-supplied Controller actions, generated native
 Service methods, RPC methods and application Interceptor hooks execute on a

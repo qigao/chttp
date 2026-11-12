@@ -1,5 +1,20 @@
 # Split SDK migration handoff
 
+- The private worker HTTP mount now admits synchronous typed CFlow projections
+  with no borrowed executor. Mount retains the existing semantic/effect/ABI
+  admission and compiles one immutable Plan; worker input binding, evaluation
+  and serialization use one Application task. The shared CFlow evaluator keeps
+  owned result bytes live until serialization, then destroys them before the
+  native input frame. The legacy engine mode still requires its explicit
+  executor. Do not add a nested post/wait, owner-thread fallback or interpreter
+  fallback. Formal Application tests cover H1/H2 success/400/422/500, invalid
+  projection rollback, rejection of an external executor, and cancellation with
+  finite close/Bean retention on a one-worker pool. Native full graph and focused
+  binding suite pass in `migration-worker-cflow-{build,focused}.log`. Full native
+  CTest 117/117 and install pass in `migration-worker-cflow-{full-ctest,install}.log`;
+  subsequent test-only serialization-capacity failure/reuse coverage passes in
+  `migration-worker-cflow-output-{build,ctest}.log`.
+
 - Private worker Sessions now use a charged detached snapshot/intent context.
   Prefix alignment derives from the actual context/header/param union. The
   selected MSVC C headers do not provide max_align_t (CI 43225024633, preserved
