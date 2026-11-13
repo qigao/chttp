@@ -420,6 +420,7 @@ int chttp_server_deferred_response_file(chttp_server_deferred *deferred,
   if (!deferred || !deferred->impl || !deferred->generation || !file || !file->path || !file->path[0] ||
       file->status_code < 200u || file->status_code > 599u || file->status_code == 204u ||
       file->status_code == 205u || file->status_code == 304u || (count && !headers)) return SALTS_EINVAL;
+  if (file->bounded && file->length > UINT64_MAX - file->offset) return SALTS_ERANGE;
   chttp_server_deferred_target *target = deferred->impl;
   if (!target->server || !target->request_state || !target->response_builder || !target->response || !target->token)
     return SALTS_EINVAL;
@@ -441,7 +442,9 @@ int chttp_server_deferred_file_prepare(chttp_server_deferred_target *target) {
   const chttp_server_deferred_file file = target->file;
   target->file = (chttp_server_deferred_file){0};
   if (!file.path) return SALTS_OK;
-  const int status = chttp_server_response_file(target->response, file.status_code, NULL, file.path);
+  const int status = file.bounded ? chttp_server_send_file(target->response, file.status_code,
+      NULL, file.path, file.offset, file.length, true) :
+      chttp_server_response_file(target->response, file.status_code, NULL, file.path);
   if (file.prepared) file.prepared(file.user, status);
   return status;
 }

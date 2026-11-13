@@ -32,8 +32,7 @@ enum {
 typedef struct chttp_server_impl chttp_server_impl;
 typedef struct chttp_server_owner_lane chttp_server_owner_lane;
 
-enum { CHTTP_SERVER_DATE_BYTES = 29, CHTTP_SERVER_DATE_CAPACITY = CHTTP_SERVER_DATE_BYTES + 1,
-       CHTTP_SERVER_GENERATED_HEADER_COUNT = 3 };
+enum { CHTTP_SERVER_GENERATED_HEADER_COUNT = 3 };
 typedef struct chttp_server_connection chttp_server_connection;
 typedef struct chttp_server_request_state chttp_server_request_state;
 typedef struct chttp_h2_server_connection chttp_h2_server_connection;

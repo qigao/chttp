@@ -57,9 +57,33 @@ typedef struct chttp_server_deferred_file {
   unsigned int status_code;
   void (*prepared)(void *, int);
   void *user;
+  uint64_t offset;
+  size_t length;
+  bool bounded;
 } chttp_server_deferred_file;
 int chttp_server_deferred_response_file(chttp_server_deferred *, const chttp_header *, size_t,
     const chttp_server_deferred_file *);
+
+enum { CHTTP_SERVER_DATE_BYTES = 29, CHTTP_SERVER_DATE_CAPACITY = CHTTP_SERVER_DATE_BYTES + 1,
+       CHTTP_SERVER_FILE_ETAG_CAPACITY = 80, CHTTP_SERVER_FILE_RANGE_CAPACITY = 96,
+       CHTTP_SERVER_FILE_HEADER_CAPACITY = 4 };
+/* Shared value-only file policy. Generated strings live in this address-stable
+ * plan; other strings borrow options. Consume/copy before either expires, never
+ * copy the plan by value. No file handle or native response crosses threads. */
+typedef struct chttp_server_file_plan {
+  unsigned int status_code;
+  const char *content_type;
+  uint64_t offset;
+  size_t length;
+  bool send_file;
+  chttp_header headers[CHTTP_SERVER_FILE_HEADER_CAPACITY];
+  size_t header_count;
+  char etag[CHTTP_SERVER_FILE_ETAG_CAPACITY];
+  char modified[CHTTP_SERVER_DATE_CAPACITY];
+  char range[CHTTP_SERVER_FILE_RANGE_CAPACITY];
+} chttp_server_file_plan;
+int chttp_server_file_plan_make(const chttp_server_request_view *,
+    const chttp_server_file_options *, chttp_server_file_plan *);
 
 typedef struct chttp_server_middleware {
   chttp_server_middleware_fn handler;

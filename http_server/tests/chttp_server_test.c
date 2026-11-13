@@ -1,4 +1,5 @@
 #include "../src/chttp_server_engine.h"
+#include "chttp_server_runtime.h"
 #include <http_server/rate_limit.h>
 #include "tinytest.h"
 #include <http_client/http.h>
@@ -10,6 +11,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -89,6 +91,33 @@ typedef struct chttp_server_test_stop {
   uint32_t timeout_ms;
   atomic_int status;
 } chttp_server_test_stop;
+
+/* Owner-state fixture: an earlier close while writing leaves CLOSE pending.
+ * The final send callback clears writing before reading source EOF. Seed that
+ * exact close intent in the owner callback, then assert real peer EOF. */
+typedef struct chttp_server_stop_source {
+  chttp_server_connection *connection;
+  size_t remaining;
+} chttp_server_stop_source;
+static int chttp_server_stop_source_read(void *user, void *buffer, size_t capacity, size_t *out) {
+  chttp_server_stop_source *source = user;
+  *out = source->remaining < capacity ? source->remaining : capacity;
+  if (*out) { memset(buffer, 'x', *out); source->remaining -= *out; }
+  else {
+    source->connection->close_after_write = true;
+    source->connection->pending_action = CHTTP_SERVER_PENDING_CLOSE;
+  }
+  return SALTS_OK;
+}
+static int chttp_server_stop_source_handler(void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  (void)request;
+  chttp_server_stop_source *probe = user;
+  probe->connection = ((chttp_server_response_builder *)response->impl)->connection;
+  const chttp_body_source source = {.read = chttp_server_stop_source_read, .user = probe,
+      .content_length = probe->remaining, .content_length_known = 1};
+  return chttp_server_response_source(response, 200u, "text/plain", &source);
+}
 
 typedef struct chttp_server_stream_probe {
   unsigned char data[64];
@@ -2199,6 +2228,27 @@ spec("CHTTP background HTTP/1.1 server") {
     check_equal(chttp_server_deferred_cancel(&stale), SALTS_ENOENT);
     check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("preserves an owner close intent through final H1 source EOF") {
+    chttp_server server = {0};
+    chttp_server_config config = chttp_server_test_config();
+    /* Closing must not depend on a later idle-read deadline. */
+    config.network.read_timeout_ms = 0u;
+    chttp_server_stop_source source = {.remaining = 8u};
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_get(&server, "/stop-source", chttp_server_stop_source_handler, &source), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    uint16_t port = 0u; check_equal(chttp_server_port(&server, &port), SALTS_OK);
+    char response[CHTTP_SERVER_TEST_RAW_BYTES]; size_t size = 0u;
+    const int received = chttp_server_test_raw_exchange(port,
+        "GET /stop-source HTTP/1.1\r\nHost: x\r\n\r\n", response, sizeof(response), &size);
+    check_equal(chttp_server_stop(&server, CHTTP_SERVER_TEST_TIMEOUT_MS), SALTS_OK);
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+    check_equal(received, SALTS_OK);
+    check_not_null(strstr(response, "HTTP/1.1 200"));
+    const char *body = strstr(response, "\r\n\r\n"); check_not_null(body);
+    check_equal(size - (size_t)(body + 4u - response), 8u); check_equal(body + 4u, "xxxxxxxx");
   }
 
   it("wakes a concurrent server stop when a deferred request is canceled") {

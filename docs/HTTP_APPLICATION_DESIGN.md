@@ -734,6 +734,20 @@ requests, WebSocket handshakes and deferred streaming bodies.
 - Static file selection and application authorization run on workers. File I/O
   and file response terminal remain in the existing asynchronous file runtime.
   File/source ownership survives method return and after hooks until terminal.
+  The private conditional-file adapter shares Server's metadata/ETag/date/range
+  planner with the synchronous helper, so protocol policy has one implementation.
+  It evaluates that plan on the worker snapshot and copies its response fields
+  into the configured header arena, with path/MIME in reply_bytes. All required
+  capacity and input checks precede draft mutation; after hooks can override
+  fields in their normal order. The retained native decision adds only a bounded
+  offset/length, not a file handle or copied file body. The owner opens that exact
+  range before Session commit; preparation and later I/O failures keep the existing
+  per-request publication/transport outcomes. Conditional no-body results need no
+  file open. Files must stay immutable from planning through terminal, as with
+  serve_file today. Directory mounting, asset classifiers and SPA dispatch remain
+  separate adapters; this step exposes no URL-to-filesystem mapping or public mode.
+  H1 source EOF preserves an existing stop/error close intent; its saved keep-alive
+  decision may only add a close, never reopen a connection during drain.
 - Upload sinks, SSE/source producers and WebSocket opening/events are user
   callbacks and therefore need worker adapters too. Use bounded immutable chunk/
   event messages and one sequential worker stage per stream/peer; keep engine
