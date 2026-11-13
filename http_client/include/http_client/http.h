@@ -509,7 +509,9 @@ int chttp_client_destroy(chttp_client *client, uint32_t timeout_ms);
 int chttp_websocket_client_init(chttp_websocket_client *client,
                                 const chttp_websocket_client_config *config);
 
-/** Connects through HTTP/1.1 Upgrade or RFC 8441 Extended CONNECT. No protocol fallback occurs. */
+/** Connects through HTTP/1.1 Upgrade or RFC 8441 Extended CONNECT. No protocol fallback occurs.
+ * out_http_status preserves a parsed response status even when connect fails;
+ * it is zero when no HTTP status was parsed. The failure status still propagates. */
 int chttp_websocket_client_connect(chttp_websocket_client *client,
                                    const chttp_websocket_connect_options *options,
                                    unsigned int *out_http_status);

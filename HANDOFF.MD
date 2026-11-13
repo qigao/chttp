@@ -1061,3 +1061,10 @@
   before allowing SALTS_EIO, then still verifies exactly one message, Close and
   completion with the original business error. Failed job 131768681035 remains
   on run 43390271574; no transport return code was weakened or retried.
+- Run 108's macOS C++ opening-exception case found a Client output bug: an H2
+  rejection parsed while connect drains request output takes the error cleanup
+  path before the old out_http_status assignment. Move that assignment to the
+  common exit, preserving the original error while returning the parsed status.
+  Client's existing formal socket suite adds H1/H2 403/500 denial cases. This is
+  a production output fix, not a looser exception assertion. Preserve failed
+  job 131771365280 on run 43391093568.

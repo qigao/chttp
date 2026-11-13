@@ -9,6 +9,8 @@
 enum { SOCKET_TEST_TIMEOUT_MS = 5000, SOCKET_TEST_WIRE_BYTES = 64 * 1024 };
 static chttp_websocket_pool pool;
 static chttp_server server;
+static chttp_websocket_client client;
+static unsigned int denial_status;
 static chttp_websocket_pool_config config;
 
 static cnet_client_config socket_test_network(void) {
@@ -44,10 +46,31 @@ static int socket_test_open(void *user, chttp_websocket *websocket,
   return chttp_server_response_set_header(response, "X-Socket-Test", "accepted");
 }
 
+static chttp_server_config socket_test_server_config(void) {
+  const chttp_server_config server_config = {
+        .host = "127.0.0.1", .backlog = 4u, .network = socket_test_network(),
+        .route_capacity = 1u, .max_target_bytes = 128u, .max_header_count = 16u,
+        .max_header_bytes = 1024u, .max_request_body_bytes = 128u,
+        .max_response_header_count = 8u, .max_response_header_bytes = 1024u,
+        .max_response_body_bytes = 128u, .poll_slice_ms = 1u,
+        .enable_http2 = 1, .h2_stream_capacity = 2u,
+        .h2_input_buffer_bytes = SOCKET_TEST_WIRE_BYTES,
+        .h2_output_buffer_bytes = SOCKET_TEST_WIRE_BYTES,
+        .h2_hpack_dynamic_table_bytes = 4096u, .h2_max_settings_count = 16u};
+  return server_config;
+}
+
+static int socket_test_deny(void *user, chttp_websocket *websocket,
+    const chttp_server_request_view *request, chttp_server_response *response) {
+  (void)websocket; (void)request;
+  return chttp_server_reply(response, *(const unsigned int *)user, "text/plain", "denied", 6u);
+}
+
 spec("WebSocket pool socket policy") {
   before_each() {
     pool = (chttp_websocket_pool){0};
     server = (chttp_server){0};
+    client = (chttp_websocket_client){0};
     config = (chttp_websocket_pool_config){
         .size = sizeof(config), .session_capacity = 2u,
         .client = {.size = sizeof(config.client), .network = socket_test_network(),
@@ -55,11 +78,38 @@ spec("WebSocket pool socket policy") {
                    .max_message_bytes = 1024u, .max_handshake_header_bytes = 4096u}};
   }
   after_each() {
+    check_equal(chttp_websocket_client_destroy(&client, SOCKET_TEST_TIMEOUT_MS), SALTS_OK);
     if (pool.impl != NULL)
       check_equal(chttp_websocket_pool_destroy(&pool, SOCKET_TEST_TIMEOUT_MS), SALTS_OK);
     if (server.impl != NULL) {
       check_equal(chttp_server_stop(&server, SOCKET_TEST_TIMEOUT_MS), SALTS_OK);
       check_equal(chttp_server_destroy(&server), SALTS_OK);
+    }
+  }
+
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    for (int error = 0; error < 2; ++error) {
+      it("preserves a denied handshake status on failure (protocol=%d server_error=%d)", protocol, error) {
+        const unsigned int denied = error ? 500u : 403u;
+        denial_status = denied;
+        const chttp_server_config server_config = socket_test_server_config();
+        const chttp_server_websocket_options route = {.size = sizeof(route), .path = "/socket",
+            .on_open = socket_test_deny, .on_event = socket_test_event, .user = &denial_status};
+        check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+        check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
+        check_equal(chttp_server_start(&server), SALTS_OK);
+        check_equal(chttp_websocket_client_init(&client, &config.client), SALTS_OK);
+        uint16_t port = 0u; check_equal(chttp_server_port(&server, &port), SALTS_OK);
+        char uri[96]; snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/socket", (unsigned int)port);
+        const chttp_websocket_connect_options options = {.size = sizeof(options), .uri = uri,
+            .protocol = (chttp_protocol)protocol, .timeout_ms = SOCKET_TEST_TIMEOUT_MS};
+        unsigned int code = 0u;
+        const int status = chttp_websocket_client_connect(&client, &options, &code);
+        /* Native stream retirement may win the rejection observer race; the
+         * API preserves that error rather than normalizing it to EPROTO. */
+        check_true(status == SALTS_EPROTO || status == SALTS_ECONNRESET);
+        check_equal(code, denied);
+      }
     }
   }
 
@@ -83,16 +133,7 @@ spec("WebSocket pool socket policy") {
   }
 
   it("applies nodelay and keepalive to the shared live H2 socket") {
-    const chttp_server_config server_config = {
-        .host = "127.0.0.1", .backlog = 4u, .network = socket_test_network(),
-        .route_capacity = 1u, .max_target_bytes = 128u, .max_header_count = 16u,
-        .max_header_bytes = 1024u, .max_request_body_bytes = 128u,
-        .max_response_header_count = 8u, .max_response_header_bytes = 1024u,
-        .max_response_body_bytes = 128u, .poll_slice_ms = 1u,
-        .enable_http2 = 1, .h2_stream_capacity = 2u,
-        .h2_input_buffer_bytes = SOCKET_TEST_WIRE_BYTES,
-        .h2_output_buffer_bytes = SOCKET_TEST_WIRE_BYTES,
-        .h2_hpack_dynamic_table_bytes = 4096u, .h2_max_settings_count = 16u};
+    const chttp_server_config server_config = socket_test_server_config();
     const chttp_server_websocket_options route = {
         .size = sizeof(route), .path = "/socket", .on_open = socket_test_open,
         .on_event = socket_test_event};
