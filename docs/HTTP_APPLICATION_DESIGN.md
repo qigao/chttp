@@ -400,7 +400,8 @@ keeps its existing H1 413 or H2 stream reset. No content sniffing is used.
 At mount, the supplied MethodPlan codec compiles an immutable payload FormatPlan
 and verifies its canonical native record. All schema/name work stays there;
 codec storage can be released before start. Input fields admit scalar/string/
-enum/record shapes. Optional/null overlays, bytes, collections, variants and
+enum/record/sequence shapes; the projected body root is still a record.
+Optional/null overlays, bytes, map/set, variants and
 multiple projected body fields remain rejected at mount until their complete
 representation contracts land. Nested non-identity
 name mappings remain governed by the SDK's FormatPlan admission.
@@ -416,6 +417,20 @@ storage retain the existing native depth, item and owned-byte budgets.
 No owner-affine body/reader escapes to user code, extra task/pool or unbounded
 input cache is introduced. Failed admission publishes no route; failed decoding
 enters no business hook and releases the same resources before response staging.
+
+The private sequence extension admits required sequence fields recursively
+inside that record. MessagePlan first verifies the finite native/schema graph;
+mount then follows the public CMeta element descriptor, rejecting unsupported
+element representations before publishing the route. The JSON provider forwards
+arrays directly to native decoding. Canonical CSTL collectors own initialized
+elements and their strings/records; no DOM view or shallow container copy crosses
+reader close, the worker task or a CFlow producer capture. Native item/depth/
+workspace bounds constrain container storage, and owned-byte bounds constrain
+element buffers. Decode/validation failure restores partial collections before
+the single invocation slot is reused. Output uses the same native encoder and
+bounded JSON transaction. Plugin leases cover container metadata and cleanup
+through finite-close drain. Map/set/bytes/variant and optional/null representations
+remain outside this sequence extension; there is no token coercion or fallback.
 
 The private structured-output migration takes the same codec used to compile
 the MethodPlan explicitly at worker mount. Control-plane schema introspection
