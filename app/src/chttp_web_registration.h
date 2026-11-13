@@ -18,6 +18,8 @@ typedef struct chttp_web_asset_selection {
 extern "C" {
 #endif
 int chttp_web_assets_validate(const chttp_web_asset_mount *);
+int chttp_web_sse_source_open(chttp_web_sse_stream *, chttp_body_source *);
+void chttp_web_sse_source_cleanup(void *, int);
 bool chttp_web_assets_matches(const chttp_web_asset_mount *, const char *);
 int chttp_web_assets_select(const chttp_web_asset_mount *, const chttp_server_request_view *,
     chttp_web_asset_selection *);

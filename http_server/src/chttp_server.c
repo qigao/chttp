@@ -1129,6 +1129,7 @@ static int chttp_server_response_stream_next(chttp_server_connection *connection
     if (result == CHTTP_FILE_SOURCE_EOF) size = 0u;
   } else {
     status = source->read(source->user, body_output, capacity, &size);
+    if (status == CHTTP_SERVER_WORKER_SOURCE_WAIT && builder->worker_source_ready) return SALTS_OK;
     if (status != SALTS_OK) return chttp_server_response_stream_finish(connection, status);
   }
   if (size > capacity) return chttp_server_response_stream_finish(connection, SALTS_EPROTO);
@@ -1170,7 +1171,9 @@ static void chttp_server_h1_file_ready(void *user) {
     return;
   builder = connection->stream_builder;
   if (builder == NULL) { chttp_server_connection_close(connection); return; }
-  if (builder->file_transfer == NULL || !chttp_file_transfer_ready(builder->file_transfer)) return;
+  if (builder->worker_source_ready) {
+    if (!builder->worker_source_ready(builder->body_source.user)) return;
+  } else if (builder->file_transfer == NULL || !chttp_file_transfer_ready(builder->file_transfer)) return;
   status = chttp_server_response_stream_next(connection);
   if (status == SALTS_OK) status = chttp_server_h1_deferred_complete(connection);
   if (status != SALTS_OK) {
@@ -1766,6 +1769,8 @@ static int chttp_server_deferred_progress(
         chttp_server_deferred_token_state(deferred_token);
     status = chttp_h2_server_connection_deferred_progress(connection->h2);
     if (status != SALTS_OK) return status;
+    if (connection->response_streaming && connection->stream_builder &&
+        connection->stream_builder->worker_source_ready) chttp_server_h1_file_ready(connection);
     if (deferred_state == CHTTP_SERVER_DEFERRED_READY && connection->deferred_target.admission) {
       status = chttp_server_h1_admission_ready(connection, deferred_token);
       if (status != SALTS_OK) return status;

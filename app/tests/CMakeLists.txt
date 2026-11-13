@@ -1,6 +1,13 @@
 add_subdirectory(service)
 add_subdirectory(web)
 
+add_executable(chttp_application_stream_test application_stream_test.c)
+target_include_directories(chttp_application_stream_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_link_libraries(chttp_application_stream_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)
+set_target_properties(chttp_application_stream_test PROPERTIES FOLDER "app/tests")
+add_test(NAME chttp_application_stream_test COMMAND chttp_application_stream_test)
+set_tests_properties(chttp_application_stream_test PROPERTIES TIMEOUT 90)
+
 add_executable(chttp_application_test application_test.c)
 target_include_directories(chttp_application_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_link_libraries(chttp_application_test PRIVATE CHttp::App CHttp::Client Salts::TinyTest)

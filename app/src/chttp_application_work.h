@@ -88,6 +88,8 @@ int chttp_application_work_respond(chttp_application_work_reply *, unsigned int,
 int chttp_application_work_set_header(chttp_application_work_reply *, const char *, const char *);
 int chttp_application_work_response_file(chttp_application_work_reply *, unsigned int,
     const char *, const char *);
+int chttp_application_work_response_source(chttp_application_work_reply *, unsigned int,
+    const char *, const chttp_body_source *, void (*)(void *, int), size_t);
 int chttp_application_work_serve_file(chttp_application_work_reply *, const chttp_server_file_options *);
 int chttp_application_work_reject(const chttp_application_work_exchange *, unsigned int,
     const char *, const void *, size_t);

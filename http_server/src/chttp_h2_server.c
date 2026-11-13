@@ -17,6 +17,7 @@ typedef struct chttp_h2_server_stream {
   chttp_server_request_state request_state;
   chttp_server_response_builder deferred_builder;
   chttp_server_response_builder *stream_builder;
+  bool worker_source_waiting;
   chttp_server_response deferred_response;
   chttp_server_deferred_target deferred_target;
   atomic_uint_fast64_t deferred_token;
@@ -307,6 +308,7 @@ static void chttp_h2_server_stream_reset(chttp_h2_server_stream *stream) {
   chttp_server_request_state_reset(&stream->request_state);
   chttp_server_response_builder_reset(&stream->deferred_builder);
   stream->stream_builder = NULL;
+  stream->worker_source_waiting = false;
   stream->deferred_target.admission = false;
   chttp_server_buffer_release(stream->owner->connection->server, stream->body,
                               stream->body_capacity);
@@ -635,7 +637,10 @@ static void chttp_h2_server_file_ready(void *user) {
     return;
   builder = stream->stream_builder;
   if (builder == NULL) return;
-  if (builder->file_transfer == NULL || !chttp_file_transfer_ready(builder->file_transfer)) return;
+  if (builder->worker_source_ready) {
+    if (!stream->worker_source_waiting || !builder->worker_source_ready(builder->body_source.user)) return;
+    stream->worker_source_waiting = false;
+  } else if (builder->file_transfer == NULL || !chttp_file_transfer_ready(builder->file_transfer)) return;
   connection = stream->owner->connection;
   if (chttp_h2_proto_resume_source(stream->owner->protocol, stream->stream_id) != 0) {
     chttp_server_response_builder_close_source(builder, SALTS_EPROTO);
@@ -694,6 +699,10 @@ chttp_h2_server_response_source_read(void *user, uint8_t *buffer, size_t capacit
     if (result == CHTTP_FILE_SOURCE_EOF) size = 0u;
   } else {
     status = source->read(source->user, buffer, capacity, &size);
+    if (status == CHTTP_SERVER_WORKER_SOURCE_WAIT && builder->worker_source_ready) {
+      stream->worker_source_waiting = true;
+      return (chttp_h2_proto_source_result){CHTTP_H2_PROTO_SOURCE_WAIT, 0u};
+    }
     if (status != SALTS_OK) {
       chttp_server_response_builder_close_source(builder, status);
       return (chttp_h2_proto_source_result){CHTTP_H2_PROTO_SOURCE_ERROR, 0u};
@@ -1417,6 +1426,8 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
   if (h2->streams == NULL || h2->connection == NULL) return SALTS_EINVAL;
   for (index = 0u; index < h2->stream_capacity; ++index) {
     chttp_h2_server_stream *stream = &h2->streams[index];
+    if (stream->stream_builder && stream->stream_builder->worker_source_ready)
+      chttp_h2_server_file_ready(stream);
     uint_fast64_t token = atomic_load_explicit(&stream->deferred_token, memory_order_acquire);
     const chttp_server_deferred_state state = chttp_server_deferred_token_state(token);
     int status;

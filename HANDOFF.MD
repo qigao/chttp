@@ -784,3 +784,33 @@
   H1/H2 conditional/range/HEAD/SPA, hook ordering and copied policy output, JWT,
   Session cookies/304 commit, two workers/owners, slot/byte/header exhaustion,
   policy exceptions/RAII, cancellation/finite close and transactional registration.
+
+- Private Invocation source/SSE responses now retain one charged reply-arena
+  chunk and the existing worker record through producer cleanup plus native
+  terminal. Owner adapters request/copy only; user read/next/close and C++ unwind
+  run serially on the shared CFlow pool after action/hook unwind. The internal
+  positive WAIT is distinct from every negative user error and synchronous EOF.
+  Owner wake uses the Server lifecycle mutex and remains valid through pool drain.
+  Failed selection transfers no resource; HEAD, failed business, cancellation
+  and failed publication still settle accepted source cleanup exactly once.
+- The first formal source run exposed H2 resume placement: calling readiness
+  from flush recursed through the same flush and attempted resume outside WAIT.
+  Readiness now runs from owner deferred progress with an explicit stream-local
+  WAIT bit; source descriptor/reset ownership remains unchanged. Preserve
+  migration-worker-streams-cases-types-ctest.log (12 passed/4 failed), followed
+  by migration-worker-streams-source-wait-ctest.log passing all 16 source cases.
+  The later length fixture assumed H1 could revoke already received complete
+  Content-Length bytes. Excess producer data instead fails the Server cleanup/
+  native terminal; the client may already report its promised-length success.
+  Formal tests assert both views without weakening the native error contract.
+  Final native-release-user full build, 121/121 CTests (including benchmarks)
+  and install passed: migration-worker-streams-source-qualified-*.log. Tests
+  include larger-than-arena transfers, H1/H2 WAIT, known/unknown/empty lengths,
+  SSE formatting, negative producer status, C++ exception/RAII, overload,
+  cancellation and finite-close ownership. Upload and WebSocket remain ongoing.
+- Source CI 43357112929 on Linux GCC/Clang exposed a cancellation-fixture race:
+  the 4096-byte H2 response could finish its native send before the client's sink
+  canceled. Client cancellation does not retroactively fail an already completed
+  Server terminal. The producer now blocks after its first chunk until the
+  client returns cancellation, guaranteeing EOF/END_STREAM has not completed.
+  Original CI failures remain preserved; no production change or retry.
