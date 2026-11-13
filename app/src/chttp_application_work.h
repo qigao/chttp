@@ -40,6 +40,13 @@ typedef struct chttp_application_work_task {
   /* Request-owned method records, charged to retained_bytes before defer. */
   size_t method_capacity;
 } chttp_application_work_task;
+typedef int (*chttp_application_upload_open_fn)(void *, const chttp_server_request_view *, chttp_body_sink *);
+typedef struct chttp_application_upload_callbacks {
+  chttp_application_upload_open_fn open;
+  void (*close)(void *, chttp_body_sink *, int);
+  void (*cleanup)(void *, chttp_body_sink *, const chttp_application_work_outcome *);
+  void *user;
+} chttp_application_upload_callbacks;
 typedef struct chttp_application_work_config {
   size_t workers;
   size_t capacity;
@@ -78,6 +85,15 @@ int chttp_application_work_admit(chttp_application_work *, const chttp_server_re
  * joins the real owner response terminal (success/reset/close). */
 int chttp_application_work_submit(chttp_application_work *, const chttp_server_request_view *,
     chttp_server_response *, const chttp_application_work_task *);
+/* Private owner bookkeeping. Open copies headers/reserves one shared record;
+ * positive WAIT accepts a whole copied chunk. Poll returns its consumption
+ * result. Close seals body input; finish attaches final Session/response defer.
+ * User open/write/close/cleanup always run serially on workers. */
+int chttp_application_work_upload_open(chttp_application_work *, const chttp_server_request_view *,
+    chttp_server_response *, const chttp_application_work_task *, const chttp_application_upload_callbacks *, size_t, chttp_body_sink *);
+int chttp_application_work_upload_poll(void *);
+void chttp_application_work_upload_close(void *, int);
+int chttp_application_work_upload_finish(void *, const chttp_server_request_view *, chttp_server_response *);
 /* Owner-side conversion of rejected admission after caller-owned payload
  * cleanup: overload/closed -> 503; stale Session generation -> 409. */
 int chttp_application_work_admission_response(chttp_server_response *, int);

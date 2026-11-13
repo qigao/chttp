@@ -14,6 +14,7 @@ CHTTP_ACTION(chttp_expected_action);
 CHTTP_INVOCATION_ACTION(chttp_expected_invocation);
 CHTTP_ADMISSION_ACTION(chttp_expected_admission);
 CHTTP_ASSET_POLICY_ACTION(chttp_expected_asset_policy);
+CHTTP_UPLOAD_OPEN_ACTION(chttp_expected_upload_open);
 CHTTP_INVOCATION_ACTION(chttp_application_asset_invoke);
 
 typedef struct application_invocation_hook { chttp_invocation_chain_hook hook; } application_invocation_hook;
@@ -26,6 +27,8 @@ typedef struct application_worker_action {
   chttp_application_work_completion_fn completed;
   application_invocation_hook invocation_hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
   chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+  chttp_application_upload_callbacks upload;
+  size_t upload_chunk_bytes;
 } application_worker_action;
 
 typedef struct application_worker_assets {
@@ -237,8 +240,23 @@ static int application_worker_hooks(application_impl *app,
   }
   return SALTS_OK;
 }
-int chttp_application_worker_mount(chttp_application *owner,
-    const chttp_application_worker_binding *binding) {
+static int application_upload_open(void *user, const chttp_server_request_view *request,
+    chttp_server_response *response, chttp_body_sink *sink) {
+  application_worker_action *action = user;
+  return chttp_application_work_upload_open(action->work, request, response, &action->task,
+      &action->upload, action->upload_chunk_bytes, sink);
+}
+static void application_upload_close(void *user, chttp_body_sink *sink, int status) {
+  (void)user; chttp_application_work_upload_close(sink->user, status);
+}
+static int application_upload_dispatch(void *user, const chttp_server_request_view *request,
+    chttp_server_response *response) {
+  (void)user;
+  return chttp_application_work_admission_response(response,
+      chttp_application_work_upload_finish(request->body_sink_user, request, response));
+}
+static int application_worker_mount(chttp_application *owner,
+    const chttp_application_worker_binding *binding, const chttp_application_upload_binding *upload) {
   application_impl *app = owner ? owner->impl : NULL;
   if (!app || !binding || !binding->invoke || !binding->path || !app->workers.impl ||
       binding->hook_count > CHTTP_APPLICATION_WORK_MAX_HOOKS ||
@@ -246,6 +264,8 @@ int chttp_application_worker_mount(chttp_application *owner,
   if (app->configuration_closed) return SALTS_EBUSY;
   if (!cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_invocation), binding->abi))
     return SALTS_EINVAL;
+  if (upload && (!upload->open || !upload->close || !upload->cleanup ||
+      !cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_upload_open), upload->open_abi))) return SALTS_EINVAL;
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
   int status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
@@ -258,11 +278,25 @@ int chttp_application_worker_mount(chttp_application *owner,
                .hooks = action->hooks, .hook_count = binding->hook_count}};
   status = application_worker_hooks(app, binding->hooks, binding->hook_count, action->invocation_hooks, action->hooks);
   if (status != SALTS_OK) return status;
+  if (upload) {
+    status = chttp_server_worker_body_chunk_bound(&app->server, &action->upload_chunk_bytes);
+    if (status != SALTS_OK) return status;
+    action->upload = (chttp_application_upload_callbacks){upload->open, upload->close, upload->cleanup, receiver};
+  }
   const chttp_server_route_options route = {.method = binding->method, .path = binding->path,
-      .handler = application_worker_dispatch, .user = action, .operation = binding->abi->function};
+      .handler = upload ? application_upload_dispatch : application_worker_dispatch, .user = action, .operation = binding->abi->function,
+      .worker_body_open = upload ? application_upload_open : NULL,
+      .worker_body_poll = upload ? chttp_application_work_upload_poll : NULL,
+      .body_close = upload ? application_upload_close : NULL, .worker_body_chunk_bytes = action->upload_chunk_bytes};
   status = chttp_server_route_with(&app->server, &route);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
+}
+int chttp_application_worker_mount(chttp_application *owner, const chttp_application_worker_binding *binding) {
+  return application_worker_mount(owner, binding, NULL);
+}
+int chttp_application_worker_upload(chttp_application *owner, const chttp_application_upload_binding *binding) {
+  return binding ? application_worker_mount(owner, &binding->controller, binding) : SALTS_EINVAL;
 }
 
 int chttp_application_asset_invoke(void *self, const chttp_invocation *invocation) {

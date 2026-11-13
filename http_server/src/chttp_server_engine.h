@@ -116,7 +116,14 @@ typedef struct chttp_server_route_options {
   chttp_server_body_open_fn body_open;
   chttp_server_body_close_fn body_close;
   const cmeta_function_desc *operation;
+  /* Framework-only asynchronous sink, mutually exclusive with body_open.
+   * poll/close are bookkeeping; user callbacks never run on this owner. */
+  int (*worker_body_open)(void *, const chttp_server_request_view *, chttp_server_response *, chttp_body_sink *);
+  int (*worker_body_poll)(void *);
+  size_t worker_body_chunk_bytes;
 } chttp_server_route_options;
+enum { CHTTP_SERVER_WORKER_BODY_WAIT = 1 };
+int chttp_server_worker_body_chunk_bound(const chttp_server *, size_t *);
 
 typedef struct chttp_server_websocket_options {
   size_t size;

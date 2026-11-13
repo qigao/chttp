@@ -752,6 +752,7 @@ void chttp_server_connection_close(chttp_server_connection *connection) {
 static int chttp_server_connection_receive(chttp_server_connection *connection) {
   int status;
   if (connection == NULL || connection->close_after_write) return SALTS_ESHUTDOWN;
+  if (connection->request_state.body_waiting) return SALTS_OK;
   if (connection->websocket_peer.bridge.impl != NULL &&
       connection->websocket_peer.receive_pending) return SALTS_OK;
   if (connection->websocket_peer.bridge.impl != NULL &&
@@ -936,7 +937,7 @@ static int chttp_server_h1_input(chttp_server_connection *connection, const void
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire));
     if (connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_HANDSHAKE &&
         deferred_state == CHTTP_SERVER_DEFERRED_IDLE &&
-        !connection->retained_response_paused)
+        !connection->retained_response_paused && !connection->request_state.body_waiting)
       return SALTS_EPROTO;
     status = chttp_server_buffer_grow(connection->server, &connection->websocket_upgrade_input,
                                       &connection->websocket_upgrade_input_capacity, remaining,
@@ -1185,7 +1186,7 @@ static void chttp_server_h1_file_ready(void *user) {
   else if (!connection->response_streaming) (void)chttp_server_send_pending(connection);
 }
 
-static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
+static int chttp_server_h1_input_resume_status(chttp_server_connection *connection, unsigned int *out_http_status) {
   unsigned int http_status = 0u;
   size_t size;
   int status;
@@ -1202,6 +1203,7 @@ static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
   if (size == 0u) return SALTS_OK;
   status =
       chttp_server_h1_input(connection, connection->websocket_upgrade_input, size, &http_status);
+  if (out_http_status) *out_http_status = http_status;
   if (connection->websocket_upgrade_input_size == 0u) {
     chttp_server_buffer_release(connection->server, connection->websocket_upgrade_input,
                                 connection->websocket_upgrade_input_capacity);
@@ -1209,6 +1211,9 @@ static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
     connection->websocket_upgrade_input_capacity = 0u;
   }
   return status;
+}
+static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
+  return chttp_server_h1_input_resume_status(connection, NULL);
 }
 
 static int chttp_server_h1_deferred_complete(chttp_server_connection *connection) {
@@ -1353,6 +1358,16 @@ static int chttp_server_on_continue(void *user) {
   return SALTS_OK;
 }
 
+int chttp_server_worker_body_chunk_bound(const chttp_server *owner, size_t *out) {
+  const chttp_server_impl *server = owner ? owner->impl : NULL;
+  if (!server || !out) return SALTS_EINVAL;
+  size_t bytes = server->config.network.receive_buffer_bytes;
+  if (server->config.enable_http2 && server->config.h2_input_buffer_bytes > bytes) bytes = server->config.h2_input_buffer_bytes;
+  if (bytes > server->config.max_request_body_bytes) bytes = server->config.max_request_body_bytes;
+  if (!bytes) return SALTS_ENOTSUP;
+  *out = bytes;
+  return SALTS_OK;
+}
 int chttp_server_request_body_open(chttp_server_request_state *state,
                                    const chttp_server_request_view *request,
                                    chttp_body_sink *out_sink) {
@@ -1373,7 +1388,7 @@ int chttp_server_request_body_open(chttp_server_request_state *state,
   state->body_sink_user = NULL;
   state->body_was_streamed = false;
   route = state->admitted_route;
-  if (route == NULL || route->body_open == NULL) return SALTS_OK;
+  if (route == NULL || (!route->body_open && !route->worker_body_open)) return SALTS_OK;
 
   routed_request = *request;
   routed_request.params = state->params;
@@ -1381,9 +1396,14 @@ int chttp_server_request_body_open(chttp_server_request_state *state,
   routed_request.session = NULL;
   routed_request.jwt_claims = state->jwt_owner != NULL ? &state->jwt_claims : NULL;
   routed_request.body_sink_user = NULL;
+  routed_request.operation = route->operation;
   previous_callback_server = chttp_active_callback_server;
   chttp_active_callback_server = state->server;
-  status = route->body_open(route->user, &routed_request, out_sink);
+  if (route->worker_body_open) {
+    state->response_builder.request = &routed_request;
+    status = route->worker_body_open(route->user, &routed_request, &state->response, out_sink);
+    state->response_builder.request = NULL;
+  } else status = route->body_open(route->user, &routed_request, out_sink);
   chttp_active_callback_server = previous_callback_server;
   if (status != SALTS_OK) {
     *out_sink = (chttp_body_sink){0};
@@ -1396,6 +1416,7 @@ int chttp_server_request_body_open(chttp_server_request_state *state,
   state->body_sink_user = out_sink->user;
   state->body_sink_open = true;
   state->body_was_streamed = true;
+  state->body_waiting = false;
   return SALTS_OK;
 }
 
@@ -1405,7 +1426,10 @@ int chttp_server_request_body_write(chttp_server_request_state *state, const voi
   if (state == NULL || !state->body_sink_open || state->body_sink.write == NULL ||
       (data == NULL && size != 0u))
     return SALTS_EINVAL;
-  return size == 0u ? SALTS_OK : state->body_sink.write(state->body_sink.user, data, size);
+  const int status = size == 0u ? SALTS_OK : state->body_sink.write(state->body_sink.user, data, size);
+  if (status == CHTTP_SERVER_WORKER_BODY_WAIT && state->body_route->worker_body_poll) state->body_waiting = true;
+  else if (status > SALTS_OK) return SALTS_EPROTO;
+  return status;
 }
 
 void chttp_server_request_body_close(chttp_server_request_state *state, int status) {
@@ -1417,6 +1441,7 @@ void chttp_server_request_body_close(chttp_server_request_state *state, int stat
   route = state->body_route;
   sink = state->body_sink;
   state->body_sink_open = false;
+  state->body_waiting = false;
   state->body_route = NULL;
   state->body_sink = (chttp_body_sink){0};
   if (route == NULL || route->body_close == NULL) return;
@@ -1430,11 +1455,18 @@ bool chttp_server_request_body_streaming(const chttp_server_request_state *state
   return state != NULL && state->body_was_streamed;
 }
 
+static int chttp_server_on_body_write(void *user, const void *data, size_t bytes) {
+  chttp_server_connection *connection = user;
+  return chttp_server_request_body_write(&connection->request_state, data, bytes);
+}
 static int chttp_server_on_body_open(void *user, const chttp_server_request_view *request,
                                      chttp_body_sink *out_sink) {
   chttp_server_connection *connection = (chttp_server_connection *)user;
   if (connection == NULL) return SALTS_EINVAL;
-  return chttp_server_request_body_open(&connection->request_state, request, out_sink);
+  const int status = chttp_server_request_body_open(&connection->request_state, request, out_sink);
+  if (status == SALTS_OK && connection->request_state.body_route && connection->request_state.body_route->worker_body_poll)
+    *out_sink = (chttp_body_sink){chttp_server_on_body_write, connection};
+  return status;
 }
 
 static void chttp_server_on_body_close(void *user, chttp_body_sink *sink, int status) {
@@ -1499,7 +1531,7 @@ static int chttp_server_on_request(void *user, const chttp_server_request_view *
     } else {
       if (builder->source_enabled) chttp_server_response_builder_close_source(builder, SALTS_OK);
       if (!request->protocol_keep_alive) connection->close_after_write = true;
-      if (builder->retained_body != NULL &&
+      if ((builder->retained_body != NULL || connection->request_state.terminal != NULL) &&
           connection->wire_protocol == CHTTP_SERVER_WIRE_HTTP_1_1) {
         connection->retained_response_paused = true;
         return CHTTP_SERVER_REQUEST_DEFERRED;
@@ -1769,6 +1801,27 @@ static int chttp_server_deferred_progress(
         chttp_server_deferred_token_state(deferred_token);
     status = chttp_h2_server_connection_deferred_progress(connection->h2);
     if (status != SALTS_OK) return status;
+    if (connection->request_state.body_waiting && connection->request_state.body_route) {
+      chttp_server_request_state *body = &connection->request_state;
+      const int consumed = body->body_route->worker_body_poll(body->body_sink.user);
+      if (consumed != CHTTP_SERVER_WORKER_BODY_WAIT) {
+        body->body_waiting = false;
+        unsigned int http_status = 0u;
+        int resumed = consumed;
+        if (resumed == SALTS_OK) resumed = chttp_server_h1_input_resume_status(connection, &http_status);
+        if (resumed != SALTS_OK && http_status && connection->active) {
+          chttp_server_stats_protocol_error(server);
+          connection->close_after_write = true;
+          resumed = chttp_server_connection_reserve_outbound(connection, server->max_response_wire_bytes);
+          if (resumed == SALTS_OK) resumed = chttp_server_error_serialize(http_status, connection->outbound,
+              connection->outbound_capacity, &connection->outbound_size);
+          if (resumed == SALTS_OK) { connection->retained_response_paused = body->terminal != NULL; chttp_server_stats_response(server); }
+        }
+        if (resumed == SALTS_OK) resumed = chttp_server_send_pending(connection);
+        if (resumed != SALTS_OK && !chttp_server_action_pressure(resumed))
+          chttp_server_connection_close(connection);
+      }
+    }
     if (connection->response_streaming && connection->stream_builder &&
         connection->stream_builder->worker_source_ready) chttp_server_h1_file_ready(connection);
     if (deferred_state == CHTTP_SERVER_DEFERRED_READY && connection->deferred_target.admission) {

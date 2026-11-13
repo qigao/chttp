@@ -9,7 +9,7 @@ typedef struct chttp_server_parser {
   void *impl;
 } chttp_server_parser;
 
-enum { CHTTP_SERVER_REQUEST_DEFERRED = 1, CHTTP_SERVER_ADMISSION_PENDING = 2 };
+enum { CHTTP_SERVER_REQUEST_DEFERRED = 1, CHTTP_SERVER_ADMISSION_PENDING = 2, CHTTP_SERVER_PARSER_BODY_WAIT = 1 };
 
 typedef int (*chttp_server_parser_request_fn)(void *user, const chttp_server_request_view *request);
 

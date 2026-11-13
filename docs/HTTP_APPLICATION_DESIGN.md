@@ -797,6 +797,22 @@ requests, WebSocket handshakes and deferred streaming bodies.
   including SSE scratch, must remain live through cleanup; copied request and
   Bean ownership remain with the Invocation/Application. Read failure after
   headers terminates the stream rather than inventing a successful empty body.
+  Upload admission reserves its header snapshot, one input chunk and ordinary
+  reply/header budget on that same worker record before invoking user code.
+  The native route owns the input cursor; a copied chunk returns WAIT and no
+  further H1 read credit until worker consumption. H2 retains already received
+  DATA in its bounded stream input while withholding stream/connection credit;
+  sibling protocol/control progress remains owner-affine. Open, writes and body
+  close are sequential worker stages. EOF close preserves the staged resource
+  through the final Invocation and its cleanup. Only then can the record retire,
+  after joining the native request terminal, even if middleware bypasses the
+  final Controller. Header views stay immutable; the existing H1/H2 policy
+  rejects nonempty trailers. The parser's captured final keep-alive value is
+  copied only after body callbacks settle. Session state is admitted at final
+  dispatch and kept out of header/body callbacks; its extra snapshot bytes must
+  fit the same retained budget before response defer. Failure aborts this request without an inline
+  callback or second admission slot. Native cancellation never reclaims a
+  running body callback; finite close retains its Bean and chunk until drain.
 - Existing low-level engine source-cleanup callbacks still run on their owner
   as nonblocking resource callbacks. The Application adapter records their
   terminal and schedules the user's worker notification; it does not change the

@@ -12,6 +12,7 @@
 
 typedef struct work_impl work_impl;
 typedef struct work_item work_item;
+enum upload_stage { UPLOAD_OPEN, UPLOAD_WRITE, UPLOAD_CLOSE };
 struct chttp_application_work_reply {
   work_item *item;
   unsigned int status;
@@ -62,6 +63,15 @@ struct work_item {
   int source_status, source_close_status;
   bool source_selected, source_requested, source_ready, source_active;
   bool source_closed, source_cleaned, source_cleaning;
+  chttp_application_upload_callbacks upload;
+  chttp_body_sink upload_sink;
+  unsigned char *upload_chunk, *upload_session_storage;
+  int upload_keep_alive;
+  size_t upload_capacity, upload_size, upload_total;
+  enum upload_stage upload_stage;
+  int upload_status, upload_close_status;
+  bool upload_active, upload_open_done, upload_opened, upload_pending, upload_ready;
+  bool upload_closed, upload_close_done, upload_attached, upload_business_started;
   chttp_server_admission_gate admission;
   chttp_application_admission_fn admission_fn;
   void *admission_user;
@@ -462,6 +472,11 @@ static void run_work(void *arg) {
     publish(item, SALTS_ECANCELED);
     return;
   }
+  if (item->upload.open && item->upload_status != SALTS_OK) {
+    item->outcome.business_status = item->upload_status;
+    publish(item, item->upload_status);
+    return;
+  }
   const int begun = chttp_session_work_begin(item->session);
   if (begun != SALTS_OK) {
     item->outcome.business_status = begun;
@@ -489,11 +504,13 @@ static void cancel_work(void *arg) {
 static void release_work(void *arg) {
   work_item *item = arg;
   work_impl *impl = item->owner;
+  if (item->upload_opened) item->upload.cleanup(item->upload.user, &item->upload_sink, &item->outcome);
   if (item->task.finalize) item->task.finalize(item->task.user);
   chttp_session_work_release(item->session);
   free(item->header_block);
   free(item->methods);
   free(item->storage);
+  free(item->upload_session_storage);
   sync_mutex_lock(&impl->mutex);
   impl->stats.retained_bytes -= item->bytes;
   --impl->stats.pending;
@@ -532,6 +549,7 @@ static void completion_cancelled(void *arg) {
 }
 static void business_finalized(void *arg);
 static void source_finalized(void *arg);
+static void upload_finalized(void *arg);
 static void invariant_failure(work_impl *impl) {
   sync_mutex_lock(&impl->mutex);
   impl->accepting = 0;
@@ -572,6 +590,45 @@ static void source_cancelled(void *arg) {
   sync_mutex_unlock(&item->owner->mutex);
   invariant_failure(item->owner); /* Admitted cleanup must never be dropped. */
 }
+static void upload_run(void *arg) {
+  work_item *item = arg;
+  sync_mutex_lock(&item->owner->mutex);
+  const bool cancelled = item->transport_done && item->outcome.transport_status != SALTS_OK;
+  const int close_status = item->upload_status != SALTS_OK ? item->upload_status : item->upload_close_status;
+  sync_mutex_unlock(&item->owner->mutex);
+  int status = SALTS_OK;
+  if (item->upload_stage == UPLOAD_OPEN) {
+    chttp_body_sink sink = {0};
+    status = cancelled ? SALTS_ECANCELED : item->upload.open(item->upload.user, &item->request, &sink);
+    sync_mutex_lock(&item->owner->mutex);
+    item->upload_opened = status == SALTS_OK; item->upload_sink = sink;
+    sync_mutex_unlock(&item->owner->mutex);
+    if (status == SALTS_OK && !sink.write) status = SALTS_EINVAL;
+  } else if (item->upload_stage == UPLOAD_WRITE) {
+    status = cancelled ? SALTS_ECANCELED : item->upload_sink.write(item->upload_sink.user, item->upload_chunk, item->upload_size);
+  } else {
+    chttp_body_sink sink = item->upload_sink;
+    item->upload.close(item->upload.user, &sink, close_status);
+  }
+  if (status > SALTS_OK) status = SALTS_EPROTO;
+  sync_mutex_lock(&item->owner->mutex);
+  if (status != SALTS_OK && item->upload_status == SALTS_OK) item->upload_status = status;
+  sync_mutex_unlock(&item->owner->mutex);
+}
+static void upload_cancelled(void *arg) { invariant_failure(((work_item *)arg)->owner); }
+static bool session_queue_locked(work_impl *impl, work_item *item) {
+  if (!item->session_key) return false;
+  for (size_t i = 0u; i < impl->config.capacity; ++i)
+    if (impl->items[i].gate_owned && impl->items[i].session_key == item->session_key) {
+      item->business_waiting = 1; break;
+    }
+  if (item->business_waiting) {
+    if (impl->waiting_tail) impl->waiting_tail->wait_next = item;
+    else impl->waiting_head = item;
+    impl->waiting_tail = item; ++impl->stats.session_waiting;
+  } else item->gate_owned = 1;
+  return item->business_waiting != 0;
+}
 static void unqueue_waiter(work_impl *impl, work_item *item) {
   work_item **cursor = &impl->waiting_head, *previous = NULL;
   while (*cursor && *cursor != item) { previous = *cursor; cursor = &(*cursor)->wait_next; }
@@ -582,12 +639,14 @@ static void unqueue_waiter(work_impl *impl, work_item *item) {
     --impl->stats.session_waiting;
   }
 }
-enum work_event { WORK_BUSINESS_DONE, WORK_TRANSPORT_DONE, WORK_SESSION_DONE, WORK_SOURCE_PROGRESS, WORK_SOURCE_DONE };
+enum work_event { WORK_BUSINESS_DONE, WORK_TRANSPORT_DONE, WORK_SESSION_DONE, WORK_SOURCE_PROGRESS, WORK_SOURCE_DONE,
+    WORK_UPLOAD_PROGRESS, WORK_UPLOAD_DONE };
 static void join_completion(work_item *item, enum work_event event, int status) {
   work_impl *impl = item->owner;
   work_item *launch = NULL;
   int notify = 0;
   bool source_post = false;
+  bool upload_post = false;
   chttp_server_owner_waker waker = {0};
   sync_mutex_lock(&impl->mutex);
   if (event == WORK_BUSINESS_DONE) item->business_done = 1;
@@ -608,6 +667,39 @@ static void join_completion(work_item *item, enum work_event event, int status) 
       waker = item->waker;
     }
   }
+  if (event == WORK_UPLOAD_DONE) {
+    item->upload_active = false; waker = item->waker;
+    if (item->upload_stage == UPLOAD_OPEN) item->upload_open_done = true;
+    else if (item->upload_stage == UPLOAD_WRITE) { item->upload_pending = false; item->upload_ready = true; }
+    else item->upload_close_done = true;
+    if (item->upload_status != SALTS_OK && item->upload_pending) {
+      item->upload_pending = false; item->upload_ready = true;
+    }
+  }
+  if (item->upload.open && item->upload_open_done && !item->upload_active && !item->upload_close_done) {
+    if (item->upload_closed) {
+      if (item->upload_opened) { item->upload_stage = UPLOAD_CLOSE; item->upload_active = true; upload_post = true; }
+      else item->upload_close_done = true;
+    } else if (item->upload_pending && item->upload_status == SALTS_OK) {
+      item->upload_stage = UPLOAD_WRITE; item->upload_active = true; upload_post = true;
+    }
+  }
+  if (item->upload_close_done && !item->upload_business_started) {
+    if (item->upload_attached) {
+      item->upload_business_started = true;
+      item->request.protocol_keep_alive = item->upload_keep_alive;
+      item->request.body = NULL; item->request.body_size = item->upload_total; item->request.body_streamed = 1;
+      item->request.body_sink_user = item->upload_sink.user; item->request.session = chttp_session_work_view(item->session);
+      /* A native terminal may precede the body-close finalizer. Its canceled
+       * business must settle without joining a Session queue whose cancellation
+       * event has already passed. run_work skips user code before Session begin. */
+      if ((item->transport_done && item->outcome.transport_status != SALTS_OK) ||
+          !session_queue_locked(impl, item)) launch = item;
+    } else if (item->transport_done) {
+      item->business_done = 1;
+      item->outcome.business_status = item->upload_status != SALTS_OK ? item->upload_status : SALTS_ECANCELED;
+    }
+  }
   if (item->business_done && item->session_done && item->gate_owned) {
     /* Lock order is worker -> Session. Owner commits drop the Session mutex
      * before signaling this join. Retire the pin before another record can
@@ -626,6 +718,7 @@ static void join_completion(work_item *item, enum work_event event, int status) 
   }
   if (item->business_done && item->transport_done && (!item->session || item->session_done) &&
       (!item->source_selected || item->source_cleaned) && !item->source_active &&
+      !item->upload_active &&
       !item->completion_queued) {
     item->completion_queued = 1; notify = 1;
   }
@@ -636,6 +729,11 @@ static void join_completion(work_item *item, enum work_event event, int status) 
   if (source_post) {
     const cflow_executor_task task = {.run = source_run, .cancel = source_cancelled,
         .finalize = source_finalized, .user = item};
+    if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
+  }
+  if (upload_post) {
+    const cflow_executor_task task = {.run = upload_run, .cancel = upload_cancelled,
+        .finalize = upload_finalized, .user = item};
     if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
   }
   /* Each record has at most one queued stage. The gate adds no executor queue
@@ -650,6 +748,7 @@ static void join_completion(work_item *item, enum work_event event, int status) 
 static void business_finalized(void *arg) { join_completion(arg, WORK_BUSINESS_DONE, SALTS_OK); }
 static void source_progress(work_item *item) { join_completion(item, WORK_SOURCE_PROGRESS, SALTS_OK); }
 static void source_finalized(void *arg) { join_completion(arg, WORK_SOURCE_DONE, SALTS_OK); }
+static void upload_finalized(void *arg) { join_completion(arg, WORK_UPLOAD_DONE, SALTS_OK); }
 static void response_terminal(void *arg, int status) { join_completion(arg, WORK_TRANSPORT_DONE, status); }
 static void session_committed(void *arg, int status) { join_completion(arg, WORK_SESSION_DONE, status); }
 
@@ -752,17 +851,15 @@ int chttp_application_work_admit(chttp_application_work *owner, const chttp_serv
   return SALTS_OK;
 }
 
-int chttp_application_work_submit(chttp_application_work *owner,
-    const chttp_server_request_view *request, chttp_server_response *response,
-    const chttp_application_work_task *task) {
-  if (!owner || !owner->impl || !response || !task || !task->run) return SALTS_EINVAL;
+static int allocate_work(work_impl *impl, const chttp_server_request_view *request,
+    const chttp_application_work_task *task, size_t extra, work_item **out) {
+  if (!task || !task->run) return SALTS_EINVAL;
   if (task->hook_count > CHTTP_APPLICATION_WORK_MAX_HOOKS ||
       (task->hook_count && !task->hooks)) return SALTS_EINVAL;
   for (size_t i = 0u; i < task->hook_count; ++i) {
     if (!task->hooks[i].before && !task->hooks[i].after && !task->hooks[i].on_error)
       return SALTS_EINVAL;
   }
-  work_impl *impl = owner->impl;
   size_t bytes;
   int status = snapshot_size(request, &bytes);
   if (status != SALTS_OK) return status;
@@ -772,6 +869,8 @@ int chttp_application_work_submit(chttp_application_work *owner,
     if (status != SALTS_OK) return status;
   }
   status = add_bytes(&bytes, session_bytes);
+  if (status != SALTS_OK) return status;
+  status = add_bytes(&bytes, extra);
   if (status != SALTS_OK) return status;
   status = add_bytes(&bytes, impl->config.reply_bytes);
   if (status != SALTS_OK) return status;
@@ -807,6 +906,17 @@ int chttp_application_work_submit(chttp_application_work *owner,
   }
   snapshot_copy(item, request);
   item->reply.item = item;
+  *out = item;
+  return SALTS_OK;
+}
+int chttp_application_work_submit(chttp_application_work *owner,
+    const chttp_server_request_view *request, chttp_server_response *response,
+    const chttp_application_work_task *task) {
+  if (!owner || !owner->impl || !response) return SALTS_EINVAL;
+  work_impl *impl = owner->impl;
+  work_item *item = NULL;
+  int status = allocate_work(impl, request, task, 0u, &item);
+  if (status != SALTS_OK) return status;
   status = chttp_server_response_waker(response, &item->waker);
   if (status != SALTS_OK) { release_work(item); return status; }
   item->terminal = (chttp_server_response_terminal){.complete = response_terminal, .user = item};
@@ -826,19 +936,7 @@ int chttp_application_work_submit(chttp_application_work *owner,
   item->task.hooks = item->hooks;
   sync_mutex_lock(&impl->mutex);
   count_event(&impl->stats.accepted);
-  if (item->session_key) {
-    for (size_t i = 0u; i < impl->config.capacity; ++i)
-      if (impl->items[i].gate_owned && impl->items[i].session_key == item->session_key) {
-        item->business_waiting = 1; break;
-      }
-    if (item->business_waiting) {
-      if (impl->waiting_tail) impl->waiting_tail->wait_next = item;
-      else impl->waiting_head = item;
-      impl->waiting_tail = item;
-      ++impl->stats.session_waiting;
-    } else item->gate_owned = 1;
-  }
-  const int waiting = item->business_waiting;
+  const int waiting = session_queue_locked(impl, item);
   sync_mutex_unlock(&impl->mutex);
   if (waiting) return SALTS_OK;
   const cflow_admission_status admitted = post_business(item);
@@ -856,6 +954,110 @@ int chttp_application_work_submit(chttp_application_work *owner,
   publish(item, SALTS_EPROTO);
   business_finalized(item);
   return SALTS_EPROTO;
+}
+static int upload_native_write(void *user, const void *data, size_t bytes) {
+  work_item *item = user;
+  if (!bytes) return SALTS_OK;
+  if (!data) return SALTS_EINVAL;
+  sync_mutex_lock(&item->owner->mutex);
+  int status = item->upload_closed ? SALTS_ESHUTDOWN : item->upload_status;
+  if (status == SALTS_OK && (item->upload_pending || item->upload_ready)) status = SALTS_EPROTO;
+  if (status == SALTS_OK && bytes > item->upload_capacity) status = SALTS_EMSGSIZE;
+  if (status == SALTS_OK && bytes > SIZE_MAX - item->upload_total) status = SALTS_ERANGE;
+  if (status == SALTS_OK) {
+    memcpy(item->upload_chunk, data, bytes);
+    item->upload_size = bytes; item->upload_pending = true; item->upload_total += bytes;
+  }
+  sync_mutex_unlock(&item->owner->mutex);
+  if (status != SALTS_OK) return status;
+  join_completion(item, WORK_UPLOAD_PROGRESS, SALTS_OK);
+  return CHTTP_SERVER_WORKER_BODY_WAIT;
+}
+int chttp_application_work_upload_poll(void *user) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex);
+  int status = CHTTP_SERVER_WORKER_BODY_WAIT;
+  if (item->upload_ready && !item->upload_active) {
+    item->upload_ready = false; status = item->upload_status;
+  }
+  sync_mutex_unlock(&item->owner->mutex);
+  return status;
+}
+void chttp_application_work_upload_close(void *user, int status) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex);
+  if (!item->upload_closed) {
+    item->upload_closed = true; item->upload_close_status = status;
+    if (status != SALTS_OK && item->upload_status == SALTS_OK) item->upload_status = status;
+  }
+  sync_mutex_unlock(&item->owner->mutex);
+  join_completion(item, WORK_UPLOAD_PROGRESS, SALTS_OK);
+}
+int chttp_application_work_upload_open(chttp_application_work *owner,
+    const chttp_server_request_view *request, chttp_server_response *response,
+    const chttp_application_work_task *task, const chttp_application_upload_callbacks *callbacks,
+    size_t chunk_bytes, chttp_body_sink *out) {
+  if (!owner || !owner->impl || !request || request->session || !response || !out || !callbacks ||
+      !callbacks->open || !callbacks->close || !callbacks->cleanup || !chunk_bytes) return SALTS_EINVAL;
+  work_impl *impl = owner->impl;
+  work_item *item = NULL;
+  int status = allocate_work(impl, request, task, chunk_bytes, &item);
+  if (status != SALTS_OK) return status;
+  status = chttp_server_response_waker(response, &item->waker);
+  if (status != SALTS_OK) { release_work(item); return status; }
+  item->terminal = (chttp_server_response_terminal){.complete = response_terminal, .user = item};
+  status = chttp_server_response_observe(response, &item->terminal);
+  if (status != SALTS_OK) { release_work(item); return status; }
+  item->upload = *callbacks; item->upload_capacity = chunk_bytes;
+  item->upload_chunk = item->storage + item->storage_bytes - impl->config.reply_bytes - chunk_bytes;
+  item->task = *task;
+  if (task->hook_count) memcpy(item->hooks, task->hooks, task->hook_count * sizeof(*task->hooks));
+  item->task.hooks = item->hooks;
+  item->upload_active = true; item->upload_stage = UPLOAD_OPEN;
+  const cflow_executor_task open = {.run = upload_run, .cancel = upload_cancelled, .finalize = upload_finalized, .user = item};
+  *out = (chttp_body_sink){upload_native_write, item};
+  sync_mutex_lock(&impl->mutex); count_event(&impl->stats.accepted); sync_mutex_unlock(&impl->mutex);
+  if (cflow_executor_try_post_task(&impl->executor, &open) == CFLOW_ADMISSION_ACCEPTED) return SALTS_OK;
+  *out = (chttp_body_sink){0}; item->task.finalize = NULL;
+  const int detached = chttp_server_response_unobserve(response, &item->terminal);
+  if (detached == SALTS_OK) release_work(item);
+  invariant_failure(impl);
+  return SALTS_EPROTO;
+}
+int chttp_application_work_upload_finish(void *user, const chttp_server_request_view *request, chttp_server_response *response) {
+  work_item *item = user;
+  if (!item || !request || !response || !request->body_streamed || request->body_sink_user != item) return SALTS_EINVAL;
+  work_impl *impl = item->owner;
+  sync_mutex_lock(&impl->mutex);
+  int status = !item->upload_closed || item->upload_attached || item->upload_total != request->body_size ? SALTS_EPROTO : SALTS_OK;
+  sync_mutex_unlock(&impl->mutex);
+  size_t bytes = 0u;
+  if (status == SALTS_OK && request->session) status = chttp_session_work_size(request->session, &bytes);
+  if (status == SALTS_OK && bytes) {
+    sync_mutex_lock(&impl->mutex);
+    if (bytes > impl->config.retained_bytes - impl->stats.retained_bytes) status = SALTS_ENOBUFS;
+    else { item->bytes += bytes; impl->stats.retained_bytes += bytes; }
+    sync_mutex_unlock(&impl->mutex);
+    if (status == SALTS_OK) {
+      item->upload_session_storage = malloc(bytes);
+      if (!item->upload_session_storage) status = SALTS_ENOMEM;
+    }
+    if (status == SALTS_OK) status = chttp_session_work_prepare(item->upload_session_storage, bytes,
+        request->session, session_committed, item, &item->session);
+    if (status == SALTS_OK) item->session_key = chttp_session_work_key(item->session);
+  }
+  if (status == SALTS_OK) status = chttp_server_response_defer_worker(response, &item->deferred, item->session);
+  if (status != SALTS_OK) chttp_session_work_release(item->session);
+  sync_mutex_lock(&impl->mutex);
+  if (status == SALTS_OK) { item->upload_attached = true; item->upload_keep_alive = request->protocol_keep_alive; }
+  else {
+    if (item->upload_status == SALTS_OK) item->upload_status = status;
+    item->outcome.publication_status = status;
+    item->session_done = 1; item->outcome.session_status = status;
+  }
+  sync_mutex_unlock(&impl->mutex);
+  join_completion(item, WORK_UPLOAD_PROGRESS, SALTS_OK);
+  return status;
 }
 int chttp_application_work_is_current(const chttp_application_work *owner) {
   const work_impl *impl = owner ? owner->impl : NULL;

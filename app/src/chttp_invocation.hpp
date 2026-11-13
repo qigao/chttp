@@ -25,5 +25,15 @@ int source_read(void *user, void *buffer, size_t capacity, size_t *out) noexcept
   try { return Read(user, buffer, capacity, out); }
   catch (...) { return SALTS_EIO; }
 }
+template<chttp_application_upload_open_fn Open>
+int upload_open(void *self, const chttp_server_request_view *request, chttp_body_sink *sink) noexcept {
+  try { return Open(self, request, sink); }
+  catch (...) { return SALTS_EIO; }
+}
+template<chttp_body_write_fn Write>
+int sink_write(void *user, const void *data, size_t size) noexcept {
+  try { return Write(user, data, size); }
+  catch (...) { return SALTS_EIO; }
+}
 }
 #endif

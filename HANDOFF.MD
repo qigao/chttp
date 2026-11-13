@@ -814,3 +814,48 @@
   Server terminal. The producer now blocks after its first chunk until the
   client returns cancellation, guaranteeing EOF/END_STREAM has not completed.
   Original CI failures remain preserved; no production change or retry.
+- Source/SSE PR #303 merged after CI 43357861421 passed all eight configurations
+  and the aggregate at 2a3b150ca54fa8022a97f09f15c25be524c81274. Windows/macOS
+  passed 121 CTests; Linux GCC/Clang/TSan passed 122. Merge 77cdf251 has the
+  same tree c4175a7901edb462f7e9cf692577bcf76528e56f. Android is build/install only.
+
+- Private upload mounting now resolves a reflected canonical Bean open method,
+  body close/resource cleanup and final Invocation on the same bounded worker
+  record. Header/JWT/params are copied before user open; one native-input-sized
+  chunk plus ordinary reply/header budgets are reserved at admission. H1 pauses
+  parser/read demand after a copied chunk. H2 withholds consumed DATA credit and
+  uses its bounded native stream input for already received bytes. Worker open,
+  writes and close are serial. Final dispatch adds a separately charged detached
+  Session snapshot, preserving the existing per-Session gate without blocking
+  workers. Multipart/CSRF/commit use the same web implementation on workers.
+  Resource cleanup follows after_completion and the native terminal, including
+  CORS bypass, failed final admission, cancellation and failed finite close.
+  Public defaults and installed APIs remain unchanged; WebSocket remains ongoing.
+- Initial upload tests found H1 parser writes bypassing the request-state WAIT
+  bit and the saved-input/read-demand boundary (worker-upload-cases-state and
+  worker-upload-h1-wait logs). H2 lifecycle additions then exposed owner-side
+  consumption queuing WINDOW_UPDATE/response bytes without a subsequent flush;
+  worker-upload-observed-cancel-ctest.log preserves those timeouts. Owner progress
+  now flushes the concrete bytes instead of waiting for another inbound event.
+  No timeout increase, retry, inline fallback or second pool.
+- A canceled native response can precede the worker body-close finalizer. Such
+  final business must skip Session queue admission, since its cancellation event
+  has already passed. The formal two-worker test keeps another same-Session
+  callback blocked, expires the upload during body close, then requires upload
+  cleanup before releasing that unrelated holder. H1 client timeout alone does
+  not prove observed cancellation while read credit is paused; the fixture uses
+  the existing body/handler deadlines rather than assuming FIN was observed.
+- Both existing parsers reject nonempty trailers. Retain that contract: remove
+  an unnecessary second header-snapshot proposal, copy only final keep-alive
+  after body callbacks settle, and propagate a buffered H1 continuation's actual
+  400 status before closing. Coalesced chunk/terminator/Connection-close socket
+  cases cover ordinary EOF and forbidden trailers. Middleware-bypassed buffered
+  H1 replies now pause until their already registered native terminal settles,
+  so upload cleanup reports actual write success rather than later connection
+  reset. CORS, JWT, late Session exhaustion and C++ unwind have formal coverage.
+- Final native-release-user full build, 122/122 CTests including benchmarks,
+  and install passed: migration-worker-upload-final-*.log. An earlier overlapping
+  build hit Windows' loaded-DLL write lock while the preceding CTest ran
+  (worker-upload-canceled-session-build); wait for test quiescence before any
+  further build in that directory. The complete validation above ran after that
+  test process exited. No TinyTest, upstream SDK or dependency changes.

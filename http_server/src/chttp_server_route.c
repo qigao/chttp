@@ -67,7 +67,10 @@ int chttp_server_route_register(chttp_server_impl *server,
   int status;
   if (server == NULL || options == NULL || options->handler == NULL ||
       (options->middleware_count != 0u && options->middleware == NULL) ||
-      ((options->body_open == NULL) != (options->body_close == NULL)))
+      (options->body_open && options->worker_body_open) ||
+      ((options->body_open != NULL || options->worker_body_open != NULL) != (options->body_close != NULL)) ||
+      ((options->worker_body_open != NULL) != (options->worker_body_poll != NULL)) ||
+      (options->worker_body_open && !options->worker_body_chunk_bytes))
     return SALTS_EINVAL;
   if (server->start_called) return SALTS_EBUSY;
   if (server->route_count >= server->config.route_capacity ||
@@ -94,6 +97,9 @@ int chttp_server_route_register(chttp_server_impl *server,
   route->user = options->user;
   route->body_open = options->body_open;
   route->body_close = options->body_close;
+  route->worker_body_open = options->worker_body_open;
+  route->worker_body_poll = options->worker_body_poll;
+  route->worker_body_chunk_bytes = options->worker_body_chunk_bytes;
   route->dynamic = param_count != 0u;
   ++server->route_count;
   return SALTS_OK;
