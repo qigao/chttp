@@ -1,0 +1,11 @@
+schema BodyIngress [version(1)];
+component BodyPlugin { service Probe; }
+message Child { @Min(1) uint32 number; }
+message Detail {
+  uint64 id;
+  Child child;
+  string note;
+}
+message Request { Detail payload; @Min(1) uint32 tenant; }
+message Response { Detail payload; }
+service Probe { Echo: Request -> Response; }

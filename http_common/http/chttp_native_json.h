@@ -1,6 +1,6 @@
 #ifndef CHTTP_NATIVE_JSON_H
 #define CHTTP_NATIVE_JSON_H
-/* Private worker output adapter. All schema work is confined to mount. */
+/* Private worker JSON adapter. All schema work is confined to mount. */
 #include <data_bind_message_plan.h>
 #include <data_bind_method_plan.h>
 #include <data_bind_json_provider.h>
@@ -35,14 +35,14 @@ static inline void chttp_native_json_plans_clear(chttp_native_json_plans *plans)
 static inline DataBindStatus chttp_native_json_plan_compile(DataBind *codec, const char *name,
     const cmeta_data_desc *data, chttp_native_json_plan *out, DataBindError *error) {
   if (!name || !data || data->kind != CMETA_DATA_STRUCT)
-    return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Structured output requires a declared record");
+    return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Structured JSON requires a declared record");
   DataBindFormatPlan *format = NULL;
   DataBindStatus status = data_bind_format_plan_compile(codec, name, DATA_BIND_FORMAT_JSON, &format, error);
   if (status != DATA_BIND_OK) return status;
   DataBindFormatPlanInfo info = DATA_BIND_FORMAT_PLAN_INFO_INIT;
   if (!data_bind_format_plan_info(format, &info) || info.has_optional || info.has_nullable) {
     data_bind_format_plan_free(format);
-    return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Structured output needs explicit presence/null native bindings");
+    return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Structured JSON needs explicit presence/null native bindings");
   }
   DataBindNativeTypeBinding native = DATA_BIND_NATIVE_TYPE_BINDING_INIT(name, data);
   DataBindMessagePlan *message = NULL;
@@ -55,6 +55,25 @@ static inline DataBindStatus chttp_native_json_plan_compile(DataBind *codec, con
   }
   *out = (chttp_native_json_plan){format, name};
   return DATA_BIND_OK;
+}
+static inline DataBindStatus chttp_native_json_projected_record_compile(DataBind *codec,
+    const char *root_type, const DataBindBindingPlanEntry *entry,
+    chttp_native_json_plan *out, DataBindError *error) {
+  if (entry->has_presence || entry->nullable)
+    return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Projected JSON record must be required and non-nullable");
+  DataBindSchemaField field = DATA_BIND_SCHEMA_FIELD_INIT;
+  bool found = false;
+  const size_t count = data_bind_schema_field_count(codec, root_type);
+  for (size_t i = 0u; i < count; ++i) {
+    if (!data_bind_schema_field_at(codec, root_type, i, &field))
+      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Missing JSON schema field");
+    if (strcmp(field.name, entry->schema_field) == 0) { found = true; break; }
+  }
+  if (!found || field.is_collection || field.is_map || field.is_group)
+    return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Projected JSON record schema is unavailable");
+  const DataBindStatus status = chttp_native_json_plan_compile(codec, field.type, entry->data, out, error);
+  if (status == DATA_BIND_OK) out->name = NULL; /* FormatPlan owns its type/name facts. */
+  return status;
 }
 static inline DataBindStatus chttp_native_json_plans_compile(DataBind *codec,
     const DataBindBindingPlan *binding, const DataBindServiceNativeBinding *native,
@@ -75,22 +94,8 @@ static inline DataBindStatus chttp_native_json_plans_compile(DataBind *codec,
     return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Structured worker output requires the declared JSON format");
   DataBindStatus status = DATA_BIND_OK;
   if (structured) {
-    if (entry.has_presence || entry.nullable)
-      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Structured projected value must be required and non-nullable");
-    DataBindSchemaField field = DATA_BIND_SCHEMA_FIELD_INIT;
-    bool found = false;
-    const size_t fields = data_bind_schema_field_count(codec, native->response->idl_type_name);
-    for (size_t i = 0u; i < fields; ++i) {
-      if (!data_bind_schema_field_at(codec, native->response->idl_type_name, i, &field))
-        return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Missing output schema field");
-      if (strcmp(field.name, entry.schema_field) == 0) { found = true; break; }
-    }
-    if (!found || field.is_collection || field.is_map || field.is_group)
-      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Projected record schema is unavailable");
-    /* The FormatPlan owns a copy of field.type. Do not retain codec strings. */
-    status = chttp_native_json_plan_compile(codec, field.type, entry.data, &out->value, error);
+    status = chttp_native_json_projected_record_compile(codec, native->response->idl_type_name, &entry, &out->value, error);
     if (status != DATA_BIND_OK) return status;
-    out->value.name = NULL;
   }
   if (native->error_count > SIZE_MAX / sizeof(*out->errors)) {
     status = DATA_BIND_ERR_LIMIT; goto failed;
@@ -111,6 +116,24 @@ static inline DataBindStatus chttp_native_json_plans_compile(DataBind *codec,
 failed:
   chttp_native_json_plans_clear(out);
   return status;
+}
+
+static inline DataBindStatus chttp_native_json_input_compile(DataBind *codec,
+    const DataBindBindingPlan *binding, const DataBindServiceNativeBinding *native,
+    const DataBindTransportPlan *transport, chttp_native_json_plan *out, DataBindError *error) {
+  for (size_t i = 0u; i < data_bind_binding_plan_ingress_count(binding); ++i) {
+    DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
+    if (!data_bind_binding_plan_ingress_at(binding, i, &entry))
+      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "Missing ingress binding");
+    if (strcmp(entry.address.space, "http.body") != 0) continue;
+    DataBindTransportPlanInfo info = DATA_BIND_TRANSPORT_PLAN_INFO_INIT;
+    DataBindFormatPlanInfo format = DATA_BIND_FORMAT_PLAN_INFO_INIT;
+    if (out->format || !entry.required || !data_bind_transport_plan_info(transport, &info) ||
+        !info.ingress || !data_bind_format_plan_info(info.ingress, &format) || format.format != DATA_BIND_FORMAT_JSON)
+      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "One required record with declared JSON ingress is supported");
+    return chttp_native_json_projected_record_compile(codec, native->request->idl_type_name, &entry, out, error);
+  }
+  return DATA_BIND_OK;
 }
 static inline const DataBindFormatPlan *chttp_native_json_plan_for(const chttp_native_json_plans *plans,
     const DataBindBindingPlanEntry *entry) {

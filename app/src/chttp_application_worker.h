@@ -166,7 +166,9 @@ int chttp_application_worker_assets(chttp_application *, const chttp_application
  * ACE state. CFlow retains producer-owned captures and requires no borrowed
  * executor. Plugin resolves under a mount-owned lease; registry/code stay live
  * through close. The required codec must match the MethodPlan; it is borrowed
- * only while mounting and compiling owned output FormatPlans. Legacy
+ * only while mounting and compiling owned JSON input/output FormatPlans.
+ * One required record may bind the whole JSON body, with scalar HTTP inputs;
+ * nonempty bodies require application/json before method hooks execute. Legacy
  * borrowed-executor dispatch remains outside this slice. */
 int chttp_application_worker_mount_http(chttp_application *, const char *,
     const cmeta_data_desc *, const chttp_http_method *, DataBind *,

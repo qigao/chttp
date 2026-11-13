@@ -942,3 +942,30 @@
   capacity overflow, protocol failure, H2 sibling survival and 128 KiB windows,
   one-record reuse/stale handles, opening/event cancellation, blocked Close and
   finite-close ownership. Public defaults/installed interfaces remain unchanged.
+
+## Private worker JSON body ingress
+
+- Worker HTTP mounts now compile one required, non-nullable record body from
+  the explicit MethodPlan codec/JSON format. The existing owned snapshot feeds
+  the published JSON provider only while BindingPlan decodes/validates input;
+  the reader closes before business hooks. Native DTOs and cached FormatPlans
+  retire before their Plugin lease. Codec storage may be freed before start.
+- MethodPlan compilation rejects nested field aliases in the selected SDK.
+  Preserve that admission boundary; do not bypass it with a consumer mapper.
+  The first admission failure is recorded in worker-body-admission.log.
+- The canonical JSON reader returns CSERDE_UNSUPPORTED for unknown keys/root
+  kinds. After mount admits the schema, the HTTP input boundary maps only that
+  wire rejection to CSERDE_VALUE_OUT_OF_RANGE (400), preserving other failures.
+  CSERDE_INVALID_TOKEN is not a permitted reader callback return and becomes a
+  callback error; preserve worker-body-reader.log with that failed experiment.
+- Empty owned native strings may use their canonical zero representation.
+  Test length/content rather than requiring a non-NULL tstr. The transient JSON
+  DOM scales with admitted body bytes/active workers, outside native owned-byte
+  accounting. An oversized transport body retains H1 413/H2 stream-reset behavior.
+- Full native-release-user graph build, 124/124 CTests (three benchmarks) and
+  install passed: migration-worker-body-release-{build,ctest,install}.log.
+  Application-focused regression passed 11/11 suites; the new body suite has
+  27 cases across H1/H2 and DIRECT/CFlow/real Plugin execution, including
+  malformed/unknown/duplicate/missing input, nested validation, exact uint64/
+  embedded-NUL text, media/native budgets, one-slot reuse and blocked-method
+  finite-close DTO/Bean/DSO retention. No public default switch is included.
