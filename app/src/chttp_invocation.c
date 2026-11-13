@@ -56,6 +56,13 @@ int chttp_invocation_sse_response(const chttp_invocation *invocation, chttp_web_
   if (status != SALTS_OK) stream->active = false;
   return status;
 }
+chttp_web_status chttp_invocation_upload_finalize(const chttp_invocation *invocation, chttp_web_upload_request *upload,
+    const chttp_web_validation *validation, chttp_web_error *error) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  if (!state) return CHTTP_WEB_INVALID_ARGUMENT;
+  chttp_server_request_view request = state->request; request.session = state->session;
+  return chttp_web_upload_finalize(upload, &request, validation, error);
+}
 int chttp_invocation_reject(const chttp_invocation *invocation, bool *proceed, unsigned int code,
     const char *type, const void *body, size_t size) {
   const chttp_invocation_state *state = invocation_state(invocation);

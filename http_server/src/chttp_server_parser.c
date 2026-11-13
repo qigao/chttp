@@ -72,7 +72,7 @@ typedef struct chttp_server_parser_impl {
   bool paused;
   bool upgrade_stopped;
   bool headers_stopped;
-  bool headers_waiting, headers_message_complete, continue_pending;
+  bool headers_waiting, headers_message_complete, continue_pending, body_waiting;
   bool wire_previous_was_cr;
   chttp_server_wire_phase wire_phase;
 } chttp_server_parser_impl;
@@ -502,7 +502,8 @@ static int chttp_server_parser_on_body(llhttp_t *llparser, const char *at, size_
   required = parser->request.body_size + length;
   if (length != 0u && parser->body_sink_open) {
     const int status = parser->body_sink.write(parser->body_sink.user, at, length);
-    if (status != SALTS_OK) return chttp_server_parser_callback_fail(parser, status);
+    if (status == CHTTP_SERVER_PARSER_BODY_WAIT) { parser->body_waiting = true; parser->paused = true; }
+    else if (status != SALTS_OK) return chttp_server_parser_callback_fail(parser, status);
   } else if (length != 0u) {
     int status;
     if (parser->buffer_grow != NULL)
@@ -545,7 +546,7 @@ static int chttp_server_parser_on_message_complete(llhttp_t *llparser) {
   /* llhttp may clear framing flags after this callback even when the wrapper
    * waits at an empty message's headers. Capture before that transition. */
   parser->request.protocol_keep_alive = llhttp_should_keep_alive(llparser);
-  if (parser->headers_waiting) {
+  if (parser->headers_waiting || parser->body_waiting) {
     parser->headers_message_complete = true;
     return 0;
   }
@@ -873,6 +874,14 @@ int chttp_server_parser_resume(chttp_server_parser *parser) {
   if (impl->terminal || impl->upgrade_stopped || impl->headers_stopped)
     return SALTS_ESHUTDOWN;
   impl->paused = false;
+  if (impl->body_waiting) {
+    impl->body_waiting = false;
+    if (impl->headers_message_complete) {
+      impl->headers_message_complete = false;
+      const int status = chttp_server_parser_finish_message(impl);
+      if (status != 0) { impl->terminal = true; return impl->callback_status != SALTS_OK ? impl->callback_status : SALTS_EPROTO; }
+    }
+  }
   if (impl->headers_waiting) {
     impl->headers_waiting = false;
     int status = chttp_server_parser_after_headers(impl, &impl->parser, impl->continue_pending);
@@ -903,6 +912,7 @@ int chttp_server_parser_reset(chttp_server_parser *parser) {
   impl->upgrade_stopped = false;
   impl->headers_stopped = false;
   impl->headers_waiting = false;
+  impl->body_waiting = false;
   impl->headers_message_complete = false;
   impl->continue_pending = false;
   chttp_server_parser_reset_message(impl);

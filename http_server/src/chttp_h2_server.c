@@ -34,6 +34,7 @@ typedef struct chttp_h2_server_stream {
   size_t header_count;
   size_t body_size;
   size_t body_capacity;
+  size_t worker_body_buffered, worker_body_credit;
   size_t response_header_capacity;
   size_t websocket_output_capacity;
   size_t websocket_output_size;
@@ -321,6 +322,7 @@ static void chttp_h2_server_stream_reset(chttp_h2_server_stream *stream) {
   stream->header_storage_used = 0u;
   stream->header_count = 0u;
   stream->body_size = 0u;
+  stream->worker_body_buffered = 0u; stream->worker_body_credit = 0u;
   stream->websocket_output_size = 0u;
   stream->stream_id = 0;
   stream->method = (chttp_method)0;
@@ -994,6 +996,8 @@ static int chttp_h2_server_dispatch_or_reset(chttp_h2_server_stream *stream) {
   return chttp_h2_proto_submit_rst_stream(protocol, stream_id, error_code) == 0 ? 0 : -1;
 }
 
+static bool chttp_h2_server_worker_body(const chttp_h2_server_stream *);
+static int chttp_h2_server_worker_body_progress(chttp_h2_server_stream *);
 static int chttp_h2_server_end_headers(void *user, int32_t stream_id, int end_stream) {
   chttp_h2_server_connection *h2 = (chttp_h2_server_connection *)user;
   chttp_h2_server_stream *stream = chttp_h2_server_stream_find(h2, stream_id);
@@ -1044,10 +1048,51 @@ static int chttp_h2_server_end_headers(void *user, int32_t stream_id, int end_st
                  : -1;
     }
   }
-  if (end_stream && !stream->deferred_target.admission) return chttp_h2_server_dispatch_or_reset(stream);
+  if (end_stream && !stream->deferred_target.admission) return chttp_h2_server_worker_body(stream) ?
+      chttp_h2_server_worker_body_progress(stream) : chttp_h2_server_dispatch_or_reset(stream);
   return stream->trailers ? -1 : 0;
 }
 
+static bool chttp_h2_server_worker_body(const chttp_h2_server_stream *stream) {
+  return stream->request_state.admitted_route && stream->request_state.admitted_route->worker_body_open;
+}
+static int chttp_h2_server_worker_body_progress(chttp_h2_server_stream *stream) {
+  chttp_h2_server_connection *h2 = stream->owner;
+  chttp_server_request_state *state = &stream->request_state;
+  if (!stream->active || stream->protocol_closed || !chttp_h2_server_worker_body(stream) ||
+      stream->deferred_target.admission || !state->body_sink_open) return 0;
+  int status = SALTS_OK;
+  if (state->body_waiting) {
+    status = state->body_route->worker_body_poll(state->body_sink.user);
+    if (status == CHTTP_SERVER_WORKER_BODY_WAIT) return 0;
+    if (status == SALTS_OK) {
+      const size_t credit = stream->worker_body_credit;
+      stream->worker_body_credit = 0u; state->body_waiting = false;
+      if (credit && (chttp_h2_proto_consume_stream(h2->protocol, stream->stream_id, credit) != 0 ||
+          chttp_h2_proto_consume_connection(h2->protocol, credit) != 0)) return -1;
+    }
+  }
+  if (status == SALTS_OK && stream->worker_body_buffered) {
+    const size_t limit = state->body_route->worker_body_chunk_bytes;
+    const size_t bytes = stream->worker_body_buffered < limit ? stream->worker_body_buffered : limit;
+    status = chttp_server_request_body_write(state, stream->body, bytes);
+    if (status == CHTTP_SERVER_WORKER_BODY_WAIT) {
+      stream->worker_body_buffered -= bytes; stream->worker_body_credit = bytes;
+      memmove(stream->body, stream->body + bytes, stream->worker_body_buffered);
+      return 0;
+    }
+    if (status == SALTS_OK) status = SALTS_EPROTO; /* Private adapter must withhold credit. */
+  }
+  if (status != SALTS_OK) {
+    const int32_t id = stream->stream_id;
+    chttp_server_request_body_close(state, status);
+    return chttp_h2_proto_submit_rst_stream(h2->protocol, id,
+        status == SALTS_ETIMEDOUT ? CHTTP_H2_ERR_CANCEL : CHTTP_H2_ERR_INTERNAL_ERROR) == 0 ? 0 : -1;
+  }
+  if (!state->body_waiting && !stream->worker_body_buffered &&
+      chttp_h2_proto_remote_end_stream(h2->protocol, stream->stream_id)) return chttp_h2_server_dispatch_or_reset(stream);
+  return 0;
+}
 static int chttp_h2_server_data(void *user, int32_t stream_id, const uint8_t *data, size_t size) {
   chttp_h2_server_connection *h2 = (chttp_h2_server_connection *)user;
   chttp_h2_server_stream *stream = chttp_h2_server_stream_find(h2, stream_id);
@@ -1093,6 +1138,20 @@ static int chttp_h2_server_data(void *user, int32_t stream_id, const uint8_t *da
                ? 0
                : -1;
   }
+  if (chttp_h2_server_worker_body(stream)) {
+    if (size) {
+      const int grown = chttp_server_buffer_grow(h2->connection->server, &stream->body, &stream->body_capacity,
+          stream->worker_body_buffered + size, capacity, stream->worker_body_buffered);
+      if (grown != SALTS_OK) {
+        if (chttp_h2_proto_consume_connection(h2->protocol, size) != 0) return -1;
+        chttp_server_request_body_close(&stream->request_state, grown);
+        return chttp_h2_proto_submit_rst_stream(h2->protocol, stream_id, CHTTP_H2_ERR_INTERNAL_ERROR) == 0 ? 0 : -1;
+      }
+      memcpy(stream->body + stream->worker_body_buffered, data, size);
+      stream->worker_body_buffered += size; stream->body_size += size;
+    }
+    return chttp_h2_server_worker_body_progress(stream);
+  }
   if (size != 0u) {
     if (chttp_server_request_body_streaming(&stream->request_state)) {
       const int sink_status = chttp_server_request_body_write(&stream->request_state, data, size);
@@ -1133,6 +1192,9 @@ static int chttp_h2_server_stream_close(void *user, int32_t stream_id, uint32_t 
   chttp_h2_server_stream *stream = chttp_h2_server_stream_find(h2, stream_id);
   uint_fast64_t token;
   if (stream == NULL) return 0;
+  const size_t credit = stream->worker_body_buffered + stream->worker_body_credit;
+  stream->worker_body_buffered = 0u; stream->worker_body_credit = 0u;
+  if (credit && chttp_h2_proto_consume_connection(h2->protocol, credit) != 0) return -1;
   if (error_code != 0u) {
     chttp_server_request_terminal_notify(&stream->request_state,
         error_code == CHTTP_H2_ERR_CANCEL ? SALTS_ECANCELED : SALTS_EPROTO);
@@ -1404,9 +1466,11 @@ static int chttp_h2_server_admission_ready(chttp_h2_server_stream *stream, uint_
     request.body = NULL; request.body_size = 0u;
     chttp_body_sink sink = {0};
     status = chttp_server_request_body_open(&stream->request_state, &request, &sink);
-    if (status == SALTS_OK && stream->body_size && chttp_server_request_body_streaming(&stream->request_state))
+    if (status == SALTS_OK && chttp_h2_server_worker_body(stream)) {
+      if (chttp_h2_server_worker_body_progress(stream) != 0) status = SALTS_EPROTO;
+    } else if (status == SALTS_OK && stream->body_size && chttp_server_request_body_streaming(&stream->request_state))
       status = chttp_server_request_body_write(&stream->request_state, stream->body, stream->body_size);
-    if (status == SALTS_OK && chttp_h2_proto_remote_end_stream(h2->protocol, stream->stream_id))
+    if (status == SALTS_OK && !chttp_h2_server_worker_body(stream) && chttp_h2_proto_remote_end_stream(h2->protocol, stream->stream_id))
       status = chttp_h2_server_dispatch_or_reset(stream) == 0 ? SALTS_OK : SALTS_EPROTO;
   }
   if (status != SALTS_OK) {
@@ -1426,6 +1490,14 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
   if (h2->streams == NULL || h2->connection == NULL) return SALTS_EINVAL;
   for (index = 0u; index < h2->stream_capacity; ++index) {
     chttp_h2_server_stream *stream = &h2->streams[index];
+    const bool worker_body = chttp_h2_server_worker_body(stream);
+    if (chttp_h2_server_worker_body_progress(stream) != 0) return SALTS_EPROTO;
+    if (worker_body) {
+      int flushed = chttp_h2_server_connection_flush(h2);
+      if (flushed == SALTS_OK && h2->connection->outbound_size && !h2->connection->writing)
+        flushed = chttp_server_send_pending(h2->connection);
+      if (flushed != SALTS_OK && flushed != SALTS_ENOBUFS && flushed != SALTS_EBUSY) return flushed;
+    }
     if (stream->stream_builder && stream->stream_builder->worker_source_ready)
       chttp_h2_server_file_ready(stream);
     uint_fast64_t token = atomic_load_explicit(&stream->deferred_token, memory_order_acquire);

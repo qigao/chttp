@@ -69,6 +69,8 @@ struct InvocationCppContext {
   int asset_unwound = 0;
   bool source = false, source_fail = false, source_worker = false;
   int source_unwound = 0, source_closed = 0;
+  bool upload = false, upload_worker = false;
+  int upload_failure = 0, upload_open_unwound = 0, upload_write_unwound = 0, upload_closed = 0, upload_cleaned = 0;
   unsigned int code = 0;
 };
 struct InvocationCppController {
@@ -81,6 +83,30 @@ cmeta_reflect_data(InvocationCppController, "test.InvocationCppController", cmet
 CHTTP_INVOCATION_ACTION(cpp_invocation);
 CHTTP_ADMISSION_ACTION(cpp_admission);
 CHTTP_ASSET_POLICY_ACTION(cpp_asset_policy);
+CHTTP_UPLOAD_OPEN_ACTION(cpp_upload_open);
+static int cpp_upload_write(void *user, const void *data, size_t size) {
+  auto& context = *static_cast<InvocationCppContext*>(user);
+  struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.upload_write_unwound};
+  context.upload_worker = context.upload_worker && chttp_application_worker_current(context.app);
+  if (context.upload_failure == 2) throw std::runtime_error("upload write failure");
+  return size == 2u && std::memcmp(data, "42", 2u) == 0 ? SALTS_OK : SALTS_EPROTO;
+}
+int cpp_upload_open(void *self, const chttp_server_request_view *request, chttp_body_sink *sink) {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.upload_open_unwound};
+  context.upload_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  *sink = {chttp::detail::sink_write<cpp_upload_write>, &context};
+  if (context.upload_failure == 1) throw std::runtime_error("upload open failure");
+  return request && !request->session && !request->body && !request->body_size ? SALTS_OK : SALTS_EPROTO;
+}
+static void cpp_upload_close(void *self, chttp_body_sink*, int) noexcept {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  context.upload_worker = context.upload_worker && chttp_application_worker_current(context.app); ++context.upload_closed;
+}
+static void cpp_upload_cleanup(void *self, chttp_body_sink*, const chttp_application_work_outcome*) noexcept {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  context.upload_worker = context.upload_worker && chttp_application_worker_current(context.app); ++context.upload_cleaned;
+}
 static int cpp_source_read(void *user, void *buffer, size_t capacity, size_t *out) {
   auto& context = *static_cast<InvocationCppContext*>(user);
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.source_unwound};
@@ -123,6 +149,8 @@ int cpp_invocation(void *self, const chttp_invocation *invocation) {
   if (chttp_invocation_serve_file(invocation, nullptr) != SALTS_EINVAL) return SALTS_EPROTO;
   if (context.fail) throw std::runtime_error("Invocation failure");
   if (!chttp_invocation_request(invocation) || chttp_invocation_request(invocation)->session) return SALTS_EPROTO;
+  if (context.upload && (!chttp_invocation_request(invocation)->body_streamed ||
+      chttp_invocation_request(invocation)->body_sink_user != &context)) return SALTS_EPROTO;
   if (context.source) {
     const chttp_body_source source{chttp::detail::source_read<cpp_source_read>, &context, 0u, 0};
     return chttp_invocation_response_source(invocation, 200u, "text/plain", &source, cpp_source_close, 16u);
@@ -133,7 +161,7 @@ static_assert(std::is_convertible_v<decltype(&cpp_invocation), chttp_invocation_
 static_assert(!std::is_convertible_v<decltype(&cpp_throw), chttp_invocation_action_fn>, "old Exchange native type must be rejected");
 static int cpp_invocation_body(chttp_application *app, void *user) {
   auto& context = *static_cast<InvocationCppContext*>(user); context.app = app;
-  const chttp_application_work_config limits{1u, 2u, 8192u, context.asset_root ? 512u : 128u,
+  const chttp_application_work_config limits{1u, 2u, context.upload ? 256u * 1024u : 8192u, context.asset_root ? 512u : 128u,
       context.asset_root ? 4u : 1u, context.asset_root ? 256u : 32u};
   int status = chttp_application_worker_prepare(app, &limits);
   if (status != SALTS_OK) return status;
@@ -152,11 +180,16 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   }
   chttp_application_worker_binding binding{};
   binding.component_id = "CppComponent"; binding.receiver = cmeta_reflected_data(InvocationCppController);
-  binding.method = CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_throw);
+  binding.method = context.upload ? CHTTP_METHOD_POST : CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_throw);
   binding.invoke = chttp::detail::invocation_action<cpp_invocation>;
   context.legacy_rejected = chttp_application_worker_mount(app, &binding) == SALTS_EINVAL;
   if (!context.legacy_rejected) return SALTS_EPROTO;
-  binding.abi = FunctionAbi(cpp_invocation); status = chttp_application_worker_mount(app, &binding);
+  binding.abi = FunctionAbi(cpp_invocation);
+  if (context.upload) {
+    const chttp_application_upload_binding upload{binding, FunctionAbi(cpp_upload_open),
+        chttp::detail::upload_open<cpp_upload_open>, cpp_upload_close, cpp_upload_cleanup};
+    status = chttp_application_worker_upload(app, &upload);
+  } else status = chttp_application_worker_mount(app, &binding);
   if (status != SALTS_OK) return status;
   status = chttp_application_start(app); if (status != SALTS_OK) return status;
   uint16_t port = 0; status = chttp_application_port(app, &port); if (status != SALTS_OK) return status;
@@ -167,7 +200,9 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   chttp_options options{}; options.connection_uri = uri; options.authority = "cpp.test";
   options.target = context.asset_root ? "/static/answer.txt" : "/cpp";
   options.protocol = context.protocol; options.timeout_ms = 5000u;
-  status = chttp_get(&client, &options, &response, &error); context.code = response.status_code;
+  if (context.upload) { options.body = "42"; options.body_size = 2u; }
+  status = context.upload ? chttp_post(&client, &options, &response, &error) : chttp_get(&client, &options, &response, &error);
+  context.code = response.status_code;
   const char *field = chttp_response_header(&response, context.asset_root ? "ETag" : "X-Cpp");
   context.header_copied = context.fail || context.admission_fail || context.asset_fail ? field == nullptr :
       field && std::strcmp(field, context.asset_root ? "\"cpp-v1\"" : "cpp") == 0;
@@ -193,6 +228,32 @@ static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 4; ++failure) {
+    it("unwinds upload open/body/action on a worker before resource cleanup (protocol=%d failure=%d)", protocol, failure) {
+      InvocationCppContext context; context.upload = true; context.upload_failure = failure; context.fail = failure == 3;
+      context.protocol = static_cast<chttp_protocol>(protocol); context.control = sync_thread_current_token();
+      auto factory = [&context](const cmeta_data_desc*, const void*, const salts_configurator_dependency*, size_t) {
+        return std::make_unique<InvocationCppController>(&context);
+      };
+      chttp::Bean<InvocationCppController, decltype(factory)> bean(cmeta_component_meta(CppComponent),
+          cmeta_reflected_data(InvocationCppController), factory);
+      const auto deployment = bean.deployment();
+      chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
+      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      config.controllers = &controller; config.controller_count = 1u;
+      chttp_application app{}; check_equal(chttp_application_init(&app, &config), SALTS_OK);
+      const int called = cpp_invocation_body(&app, &context);
+      check_equal(chttp_application_close(&app, 0u), SALTS_OK);
+      if (failure == 1 || failure == 2) {
+        if (called == SALTS_OK) check_equal(context.code, 500u);
+        else check_not_equal(called, SALTS_ETIMEDOUT);
+      } else { check_equal(called, SALTS_OK); check_equal(context.code, failure ? 500u : 200u); }
+      check_true(context.upload_worker); check_equal(context.upload_open_unwound, 1);
+      check_equal(context.upload_write_unwound, failure == 1 ? 0 : 1);
+      check_equal(context.upload_closed, failure == 1 ? 0 : 1); check_equal(context.upload_cleaned, failure == 1 ? 0 : 1);
+      check_equal(unwound, failure == 1 || failure == 2 ? 0 : 1); check_equal(destroyed, 1);
+    }
+  }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 2; ++failure) {
     it("unwinds a C++ source on a worker before terminal cleanup (protocol=%d failure=%d)", protocol, failure) {
       InvocationCppContext context; context.source = true; context.source_fail = failure != 0;

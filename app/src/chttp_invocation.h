@@ -3,6 +3,7 @@
 /* Private buffered Controller migration. Not installed. Only the runtime
  * constructs this borrowed handle; never retain it or its accessor views. */
 #include "chttp_application_work.h"
+#include <chttp_app/web.h>
 #include <cmeta/function.h>
 
 #ifdef __cplusplus
@@ -81,6 +82,10 @@ int chttp_invocation_response_source(const chttp_invocation *, unsigned int, con
  * borrow the same successful source-selection lifetime through cleanup. */
 struct chttp_web_sse_stream;
 int chttp_invocation_sse_response(const chttp_invocation *, struct chttp_web_sse_stream *, size_t chunk_bytes);
+/* Validates CSRF and commits the upload on this worker using the detached
+ * Session view. The request must belong to this upload's copied sink user. */
+chttp_web_status chttp_invocation_upload_finalize(const chttp_invocation *, chttp_web_upload_request *,
+    const chttp_web_validation *, chttp_web_error *);
 /* Before-only handled rejection; success seals the draft and clears proceed. */
 int chttp_invocation_reject(const chttp_invocation *, bool *, unsigned int, const char *, const void *, size_t);
 

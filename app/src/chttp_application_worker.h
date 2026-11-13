@@ -55,6 +55,24 @@ typedef struct chttp_application_worker_binding {
   size_t hook_count;
 } chttp_application_worker_binding;
 
+static const cmeta_type_identity chttp_upload_sink_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.upload.sink");
+static const cmeta_type_desc chttp_upload_sink_type = {"chttp_body_sink", sizeof(chttp_body_sink),
+    CMETA_ALIGNOF(chttp_body_sink), CMETA_T_OBJECT, NULL, NULL, &chttp_upload_sink_identity};
+static const cmeta_type_desc chttp_upload_sink_pointer = {"chttp_body_sink *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_upload_sink_type, NULL, NULL};
+#define CHTTP_UPLOAD_OPEN_ACTION(name_) \
+  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER), \
+    (chttp_body_sink *, sink, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_upload_sink_pointer, CMETA_ABI_OBJECT_POINTER))
+typedef struct chttp_application_upload_binding {
+  chttp_application_worker_binding controller;
+  const cmeta_function_abi_desc *open_abi;
+  chttp_application_upload_open_fn open;
+  void (*close)(void *, chttp_body_sink *, int);
+  void (*cleanup)(void *, chttp_body_sink *, const chttp_application_work_outcome *);
+} chttp_application_upload_binding;
+
 typedef struct chttp_application_asset_policy_result {
   bool immutable;
   const char *etag;
@@ -104,6 +122,12 @@ int chttp_application_worker_prepare(chttp_application *, const chttp_applicatio
  * status/Retry-After decision. Same-pool close is forbidden as for actions. */
 int chttp_application_worker_admission(chttp_application *, const chttp_application_admission_binding *);
 int chttp_application_worker_mount(chttp_application *, const chttp_application_worker_binding *);
+/* Resolves one canonical Bean for header open/body close/resource cleanup and
+ * the final Invocation. Open input is callback-scoped and has no Session/body.
+ * A successful open transfers its sink resource through cleanup; close must
+ * preserve it through final action/terminal. All user stages run on workers.
+ * The copied sink user is exposed only to the final streamed request view. */
+int chttp_application_worker_upload(chttp_application *, const chttp_application_upload_binding *);
 /* One private asset/SPA mount before start, using the same bounded Invocation
  * pool and entered hooks as Controllers. Descriptor/hook rows are copied;
  * strings/code/metadata borrow Application lifetime. Legacy mount callbacks and
