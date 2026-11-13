@@ -1,6 +1,7 @@
 #ifndef CHTTP_APPLICATION_HPP
 #define CHTTP_APPLICATION_HPP
 #include <chttp_app/application.h>
+#include <chttp_app/invocation.hpp>
 #include <exception>
 #include <memory>
 #include <new>
@@ -75,13 +76,13 @@ public:
       const void *value = nullptr) const noexcept { return {&binding_, data, value}; }
 };
 
-template<chttp_action_fn Action> chttp_action mapping(chttp_method method,
+template<chttp_invocation_action_fn Action> chttp_action mapping(chttp_method method,
     const char *path, const cmeta_function_abi_desc *abi) noexcept {
-  const auto invoke = [](void *self, const chttp_exchange *exchange) noexcept -> int {
-    try { return Action(self, exchange); }
+  const auto invoke = [](void *self, const chttp_invocation *invocation) noexcept -> int {
+    try { return Action(self, invocation); }
     catch (...) { return SALTS_EIO; }
   };
-  return {method, path, abi, invoke, nullptr, nullptr};
+  return {method, path, abi, invoke, nullptr, nullptr, 0u, nullptr};
 }
 }
 #define CHTTP_CPP_GET(path_, action_) \

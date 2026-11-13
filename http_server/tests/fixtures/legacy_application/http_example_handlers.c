@@ -1,3 +1,4 @@
+#include "../../../../app/src/chttp_web_engine.h"
 #include "../../../src/chttp_server_engine.h"
 #include "http_example_app.h"
 
@@ -6,7 +7,7 @@ static int example_page(void *user, const chttp_server_request_view *request,
   http_example_app *app = user;
   chttp_web_error error = CHTTP_WEB_ERROR_INIT;
   (void)request;
-  const chttp_web_status status = chttp_web_render_response(&app->renderer,
+  const chttp_web_status status = chttp_web_engine_render_response(&app->renderer,
       response, "page.html", app->page_desc, &app->page, 200u, NULL, &error);
   return status == CHTTP_WEB_OK ? SALTS_OK : SALTS_EIO;
 }

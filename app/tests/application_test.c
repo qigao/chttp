@@ -1,5 +1,4 @@
 #include <chttp_app/app.h>
-#include "chttp_application_worker.h"
 #include <threads/threads.h>
 #include <core/clock.h>
 #include <http_client/http.h>
@@ -30,8 +29,10 @@ static struct {
   salts_configurator_deployment deployments[4];
   chttp_controller controller;
   chttp_action actions[4];
-  chttp_interceptor hooks[2];
+  chttp_invocation_interceptor hooks[2];
   chttp_web_asset_mount assets;
+  chttp_assets asset_binding;
+  chttp_upload upload;
   chttp_web_security_policy security;
   chttp_server_cors_options cors;
   chttp_header request_headers[1];
@@ -39,6 +40,8 @@ static struct {
   const char *expected_origin;
   char *asset_root;
   bool reject_assets;
+  bool browser_auth, htmx;
+  char redirect[128];
   size_t response_size;
   int creates, destroys, calls, opened, closed, body_bytes, body_status;
   int worker_method, worker_service, worker_completed, worker_close_status, destroyed_during_work;
@@ -51,7 +54,7 @@ static struct {
 } fixture;
 
 static int counter_value(void *self) {
-  if (chttp_application_worker_current(&fixture.app)) ++fixture.worker_service;
+  if (chttp_application_is_worker(&fixture.app)) ++fixture.worker_service;
   return *(int *)self;
 }
 CMETA_IMPLEMENTS(TestCounter, counter_impl, 0u, .value = counter_value);
@@ -101,11 +104,11 @@ static cmeta_status bean_create(void *context, const cmeta_data_desc *data,
   return status == CMETA_OK && state->fail ? CMETA_CALLBACK_ERROR : status;
 }
 
-CHTTP_INVOCATION_ACTION(worker_hello);
+CHTTP_ACTION(worker_hello);
 int worker_hello(void *self, const chttp_invocation *invocation) {
   if (!cmeta_function_desc_valid(chttp_invocation_operation(invocation))) return SALTS_EPROTO;
   TestController *controller = self;
-  fixture.worker_method = chttp_application_worker_current(&fixture.app);
+  fixture.worker_method = chttp_application_is_worker(&fixture.app);
   fixture.worker_close_status = chttp_application_close(&fixture.app, 1u);
   fixture.destroyed_during_work = fixture.destroys;
   sync_mutex_lock(&fixture.worker_mutex);
@@ -120,9 +123,9 @@ int worker_hello(void *self, const chttp_invocation *invocation) {
       chttp_invocation_respond(invocation, 200u, "text/plain", value, (size_t)size);
 }
 static void worker_completed(void *self, const chttp_server_request_view *request,
-    const chttp_application_work_outcome *outcome) {
+    const chttp_response_outcome *outcome) {
   (void)self; (void)request;
-  if (chttp_application_worker_current(&fixture.app) && fixture.destroys == 0 &&
+  if (chttp_application_is_worker(&fixture.app) && fixture.destroys == 0 &&
       outcome->business_status == SALTS_OK && outcome->transport_status == SALTS_OK)
     ++fixture.worker_completed;
   sync_mutex_lock(&fixture.worker_mutex);
@@ -133,16 +136,16 @@ static void worker_completed(void *self, const chttp_server_request_view *reques
   sync_mutex_unlock(&fixture.worker_mutex);
 }
 CHTTP_ACTION(hello);
-int hello(void *self, const chttp_exchange *exchange) {
+int hello(void *self, const chttp_invocation *exchange) {
   TestController *controller = self;
   char value[32];
   ++fixture.calls;
   const int size = snprintf(value, sizeof(value), "%d", TestCounter_value(&controller->counter));
   return size < 0 || (size_t)size >= sizeof(value) ? SALTS_ERANGE :
-      chttp_server_reply(exchange->response, 200u, "text/plain", value, (size_t)size);
+      chttp_invocation_respond(exchange, 200u, "text/plain", value, (size_t)size);
 }
 CHTTP_ACTION(failure);
-int failure(void *self, const chttp_exchange *exchange) {
+int failure(void *self, const chttp_invocation *exchange) {
   (void)self; (void)exchange; ++fixture.calls; return SALTS_EINVAL;
 }
 static int body_write(void *self, const void *bytes, size_t size) {
@@ -153,7 +156,8 @@ static int body_write(void *self, const void *bytes, size_t size) {
   fixture.body_bytes += (int)size;
   return SALTS_OK;
 }
-static int body_open(void *self, const chttp_server_request_view *request, chttp_body_sink *sink) {
+CHTTP_UPLOAD_OPEN_ACTION(body_open);
+int body_open(void *self, const chttp_server_request_view *request, chttp_body_sink *sink) {
   TestController *controller = self;
   (void)request;
   if (controller->initialized != 1) return SALTS_EINVAL;
@@ -165,15 +169,28 @@ static void body_close(void *self, chttp_body_sink *sink, int status) {
   fixture.body_status = self == sink->user ? status : SALTS_EINVAL;
   ++fixture.closed;
 }
-static int websocket_open(void *self, chttp_websocket *websocket,
-    const chttp_server_request_view *request, chttp_server_response *response) {
-  TestController *controller = self;
-  (void)request; (void)response;
-  if (controller->initialized != 1 || TestCounter_value(&controller->counter) != 42) return SALTS_EPROTO;
-  return chttp_websocket_send_text(websocket, "42", 2u);
+static void body_cleanup(void *self, chttp_body_sink *sink, const chttp_response_outcome *outcome) {
+  (void)self; (void)sink; (void)outcome;
 }
-static void websocket_event(void *self, chttp_websocket *websocket, const chttp_websocket_event *event) {
-  (void)self; (void)websocket; (void)event;
+CHTTP_ACTION(websocket_open);
+int websocket_open(void *self, const chttp_invocation *invocation) {
+  TestController *controller = self;
+  if (controller->initialized != 1 || TestCounter_value(&controller->counter) != 42) return SALTS_EPROTO;
+  return chttp_invocation_websocket_accept(invocation);
+}
+CHTTP_WEBSOCKET_EVENT_ACTION(websocket_event);
+CHTTP_WEBSOCKET_EVENT_ACTION(websocket_ready);
+int websocket_ready(void *self, const chttp_websocket_event_view *scope) {
+  TestController *controller = self;
+  if (!chttp_application_is_worker(&fixture.app) || scope->event || scope->request->session ||
+      !cmeta_function_desc_equal(scope->request->operation, FunctionAbi(websocket_ready)->function) ||
+      TestCounter_value(&controller->counter) != 42) return SALTS_EPROTO;
+  return chttp_server_websocket_send_text(scope->peer, "42", 2u);
+}
+int websocket_event(void *self, const chttp_websocket_event_view *scope) {
+  (void)self;
+  return scope->event->kind == CHTTP_WEBSOCKET_EVENT_MESSAGE ?
+      chttp_server_websocket_send_text(scope->peer, "42", 2u) : SALTS_OK;
 }
 static int scoped_error(chttp_application *app, void *context) {
   (void)app;
@@ -184,22 +201,25 @@ static void trace(int value) {
   if (fixture.trace_count < sizeof(fixture.trace) / sizeof(fixture.trace[0]))
     fixture.trace[fixture.trace_count++] = value;
 }
-static cmeta_status before(void *self, const chttp_exchange *exchange, bool *proceed) {
+static cmeta_status before(void *self, const chttp_invocation *exchange, bool *proceed) {
   const int hook = *(int *)self;
   trace(hook == 2 ? 1 : 2);
-  if (fixture.config.assets != NULL) {
-    if (exchange->operation != NULL) return CMETA_TYPE_MISMATCH;
-  } else if (!cmeta_function_desc_valid(exchange->operation)) return CMETA_TYPE_MISMATCH;
-  if (hook == 3 && (fixture.reject_assets || strcmp(exchange->request->path, "/reject") == 0)) {
-    if (chttp_exchange_reject(exchange, 403u, NULL, NULL, 0u) != SALTS_OK) return CMETA_CALLBACK_ERROR;
+  if (!chttp_application_is_worker(&fixture.app)) return CMETA_CALLBACK_ERROR;
+  if (!cmeta_function_desc_valid(chttp_invocation_operation(exchange))) return CMETA_TYPE_MISMATCH;
+  if (hook == 3 && fixture.browser_auth) {
+    const chttp_web_auth_policy policy = {sizeof(policy), "/login", true, 256u, NULL, NULL, NULL, NULL};
+    return chttp_web_authorize(exchange, &policy, proceed) == SALTS_OK ? CMETA_OK : CMETA_CALLBACK_ERROR;
+  }
+  if (hook == 3 && (fixture.reject_assets || strcmp(chttp_invocation_request(exchange)->path, "/reject") == 0)) {
+    if (chttp_invocation_reject(exchange, proceed, 403u, NULL, NULL, 0u) != SALTS_OK) return CMETA_CALLBACK_ERROR;
     *proceed = false;
   }
   return CMETA_OK;
 }
-static void after(void *self, const chttp_exchange *exchange, const chttp_exchange_result *result) {
+static void after(void *self, const chttp_invocation *exchange, const chttp_invocation_result *result) {
   (void)exchange; (void)result; trace(*(int *)self == 3 ? 3 : 4);
 }
-static void on_error(void *self, const chttp_exchange *exchange, cmeta_status status) {
+static void on_error(void *self, const chttp_invocation *exchange, cmeta_status status) {
   (void)exchange; (void)status; trace(*(int *)self == 3 ? -3 : -4);
 }
 static int request(chttp_protocol protocol, const char *target, unsigned int *http_status) {
@@ -225,6 +245,10 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
         error.native_status, response.status_code, response.body_size);
   *http_status = response.status_code;
   fixture.response_size = response.body_size;
+  if (fixture.browser_auth) {
+    const char *redirect = chttp_response_header(&response, fixture.htmx ? "HX-Redirect" : "Location");
+    snprintf(fixture.redirect, sizeof(fixture.redirect), "%s", redirect ? redirect : "");
+  }
   if (status == SALTS_OK && fixture.config.security != NULL) {
     const char *value = chttp_response_header(&response, "X-Content-Type-Options");
     if (value == NULL || strcmp(value, "nosniff") != 0) status = SALTS_EPROTO;
@@ -235,7 +259,7 @@ static int request(chttp_protocol protocol, const char *target, unsigned int *ht
     if (origin == NULL || strcmp(origin, fixture.expected_origin) != 0 ||
         credentials == NULL || strcmp(credentials, "true") != 0) status = SALTS_EPROTO;
   }
-  if (status == SALTS_OK && response.status_code == 200u &&
+  if (status == SALTS_OK && response.status_code == 200u && !fixture.browser_auth &&
       (response.body_size != 2u || memcmp(response.body, "42", 2u) != 0)) status = SALTS_EPROTO;
   chttp_response_destroy(&response);
   chttp_server_stats before_close = {0};
@@ -271,8 +295,17 @@ static void setup_assets(bool reject) {
   fixture.assets.spa_fallback_relative_path = "answer.txt";
   fixture.security = (chttp_web_security_policy)CHTTP_WEB_SECURITY_POLICY_INIT;
   fixture.security.nosniff = true;
-  fixture.config.assets = &fixture.assets; fixture.config.security = &fixture.security;
+  fixture.asset_binding = (chttp_assets){.mount = &fixture.assets};
+  fixture.config.assets = &fixture.asset_binding; fixture.config.security = &fixture.security;
   fixture.reject_assets = reject;
+}
+
+static void setup_worker_controller(void) {
+  fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+  fixture.config.workers = (chttp_worker_config){1u, 2u, 8192u, 256u};
+  fixture.actions[0] = (chttp_action)CHTTP_GET("/hello", worker_hello);
+  fixture.actions[0].after_completion = worker_completed;
+  fixture.controller.action_count = 1u;
 }
 
 spec("Reflected HTTP Application") {
@@ -295,11 +328,12 @@ spec("Reflected HTTP Application") {
     fixture.actions[1] = (chttp_action)CHTTP_GET("/reject", hello);
     fixture.actions[2] = (chttp_action)CHTTP_GET("/failure", failure);
     fixture.actions[3] = (chttp_action)CHTTP_POST("/upload", hello);
-    fixture.actions[3].body_open = body_open; fixture.actions[3].body_close = body_close;
+    fixture.upload = (chttp_upload){FunctionAbi(body_open), body_open, body_close, body_cleanup};
+    fixture.actions[3].upload = &fixture.upload;
     fixture.controller = (chttp_controller){.component_id = "TestControllerComponent",
         .receiver = cmeta_reflected_data(TestController), .actions = fixture.actions, .action_count = 4u};
-    fixture.hooks[0] = (chttp_interceptor){"TestHookA", &cmeta_data_int, before, after, on_error};
-    fixture.hooks[1] = (chttp_interceptor){"TestHookB", &cmeta_data_int, before, after, on_error};
+    fixture.hooks[0] = (chttp_invocation_interceptor){"TestHookA", &cmeta_data_int, before, after, on_error};
+    fixture.hooks[1] = (chttp_invocation_interceptor){"TestHookB", &cmeta_data_int, before, after, on_error};
     fixture.config.components = fixture.deployments; fixture.config.component_count = 4u;
     fixture.config.dependency_capacity = 1u;
     fixture.config.controllers = &fixture.controller; fixture.config.controller_count = 1u;
@@ -392,8 +426,10 @@ spec("Reflected HTTP Application") {
     check_equal(fixture.destroys, 4);
   }
   it("mounts a WebSocket endpoint on the ACE-owned Controller until handshake and drain complete") {
-    const chttp_websocket_endpoint endpoint = {.path = "/socket", .on_open = websocket_open,
-        .on_event = websocket_event};
+    const chttp_websocket_endpoint endpoint = {.opening = CHTTP_GET("/socket", websocket_open),
+        .event_abi = FunctionAbi(websocket_event), .event = websocket_event, .event_capacity = 2u,
+        .max_frame_bytes = 4096u, .max_message_bytes = 4096u, .max_buffered_input_bytes = 8192u,
+        .ready_abi = FunctionAbi(websocket_ready), .ready = websocket_ready};
     fixture.controller.websockets = &endpoint; fixture.controller.websocket_count = 1u;
     fixture.config.interceptor_count = 0u;
     check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
@@ -514,22 +550,32 @@ spec("Reflected HTTP Application") {
   it("rejects an undersized asset policy before reading or activating the graph") {
     fixture.assets = (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
     fixture.assets.size = sizeof(fixture.assets) - 1u;
-    fixture.config.assets = &fixture.assets;
+    fixture.asset_binding = (chttp_assets){.mount = &fixture.assets};
+    fixture.config.assets = &fixture.asset_binding;
     check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_EINVAL);
     check_null(fixture.app.impl); check_equal(fixture.creates, 0); check_equal(fixture.destroys, 0);
   }
-  group("private worker Controller migration") {
+  group("public worker Controllers") {
+    for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+      for (int htmx = 0; htmx <= 1; ++htmx) {
+        it("stages browser authentication denial from a worker before hook (protocol=%d HTMX=%d)", protocol, htmx) {
+          fixture.browser_auth = true; fixture.htmx = htmx != 0;
+          fixture.request_headers[0] = (chttp_header){"HX-Request", htmx ? "true" : "false"};
+          fixture.request_header_count = 1u;
+          check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+          unsigned int code = 0u;
+          check_equal(request((chttp_protocol)protocol, "/hello", &code), SALTS_OK);
+          check_equal(code, htmx ? 200u : 303u); check_equal(fixture.calls, 0);
+          check_equal(fixture.redirect, "/login?return_to=%2Fhello");
+          const int expected[] = {1, 2, -3, -4};
+          check_equal(fixture.trace_count, 4u); check_equal(fixture.trace, expected, sizeof(expected));
+        }
+      }
+    }
     for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
       it("keeps the injected Service and Controller alive through protocol %d completion", protocol) {
-        fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
-        fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
+        setup_worker_controller();
         check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-        const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
-        check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
-        const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
-            .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
-            .path = "/hello", .abi = FunctionAbi(worker_hello), .invoke = worker_hello, .after_completion = worker_completed};
-        check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
         unsigned int status = 0u;
         check_equal(request((chttp_protocol)protocol, "/hello", &status), SALTS_OK);
         check_equal(status, 200u); check_equal(fixture.worker_method, 1);
@@ -538,25 +584,18 @@ spec("Reflected HTTP Application") {
         check_equal(fixture.destroyed_during_work, 0); check_equal(fixture.destroys, 4);
       }
     }
-    it("does not enable a mixed owner/worker prototype on existing public callbacks") {
-      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-      const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
-      check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_ENOTSUP);
+    it("rejects an Application without worker capacity") {
+      fixture.config.workers.workers = 0u;
+      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_EINVAL);
+      check_null(fixture.app.impl);
     }
   }
 
   it("keeps Server storage alive while a timed-out worker still owns its deferred handle") {
-    fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
-    fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
     fixture.config.deadlines.handler_ms = 100u;
     fixture.hold_worker_method = 1;
+    setup_worker_controller();
     check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-    const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
-    check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
-    const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
-        .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
-        .path = "/hello", .abi = FunctionAbi(worker_hello), .invoke = worker_hello, .after_completion = worker_completed};
-    check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
     check_equal(chttp_application_start(&fixture.app), SALTS_OK);
     uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
     char uri[64]; snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);
@@ -579,16 +618,9 @@ spec("Reflected HTTP Application") {
     check_equal(fixture.worker_service, 1);
   }
   it("retains the ACE graph when worker notification makes close exceed its budget") {
-    fixture.controller.actions = NULL; fixture.controller.action_count = 0u;
-    fixture.config.interceptors = NULL; fixture.config.interceptor_count = 0u;
     fixture.hold_worker_completion = 1;
+    setup_worker_controller();
     check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-    const chttp_application_work_config work = {1u, 2u, 8192u, 256u};
-    check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
-    const chttp_application_worker_binding binding = {.component_id = "TestControllerComponent",
-        .receiver = cmeta_reflected_data(TestController), .method = CHTTP_METHOD_GET,
-        .path = "/hello", .abi = FunctionAbi(worker_hello), .invoke = worker_hello, .after_completion = worker_completed};
-    check_equal(chttp_application_worker_mount(&fixture.app, &binding), SALTS_OK);
     check_equal(chttp_application_start(&fixture.app), SALTS_OK);
     uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
     char uri[64]; snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port);

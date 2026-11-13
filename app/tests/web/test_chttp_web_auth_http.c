@@ -1,3 +1,4 @@
+#include "../../src/chttp_web_engine.h"
 #include "../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 #include <http_client/http.h>
@@ -302,7 +303,6 @@ static int auth_http_post(
   return chttp_post(client, &options, response, &error);
 }
 
-
 typedef struct auth_http_gate_probe {
   size_t authorize_calls;
   size_t handler_calls;
@@ -555,7 +555,6 @@ spec("CHttp::App browser principal lifecycle") {
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 
-
   it("validates only bounded origin-form local return targets") {
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
 
@@ -626,15 +625,15 @@ spec("CHttp::App browser principal lifecycle") {
     chttp_server server = {0};
     chttp_server_config server_config = auth_http_server_config();
     auth_http_gate_probe probe = {0};
-    chttp_web_auth_policy policy =
-        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+    chttp_web_engine_auth_policy policy =
+        (chttp_web_engine_auth_policy)CHTTP_WEB_ENGINE_AUTH_POLICY_INIT;
     chttp_server_middleware middleware[2];
     chttp_server_route_options route = {0};
 
     server_config.max_route_middleware_count = 1u;
     policy.login_path = "/login-page";
     middleware[0] = (chttp_server_middleware){
-        chttp_web_auth_middleware, &policy};
+        chttp_web_engine_auth_middleware, &policy};
     middleware[1] = middleware[0];
     route = (chttp_server_route_options){
         .method = CHTTP_METHOD_GET,
@@ -657,12 +656,12 @@ spec("CHttp::App browser principal lifecycle") {
     auth_http_gate_probe allow_probe = {0};
     auth_http_gate_probe deny_probe = {0};
     auth_http_gate_probe error_probe = {0};
-    chttp_web_auth_policy allow_policy =
-        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
-    chttp_web_auth_policy deny_policy =
-        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
-    chttp_web_auth_policy error_policy =
-        (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+    chttp_web_engine_auth_policy allow_policy =
+        (chttp_web_engine_auth_policy)CHTTP_WEB_ENGINE_AUTH_POLICY_INIT;
+    chttp_web_engine_auth_policy deny_policy =
+        (chttp_web_engine_auth_policy)CHTTP_WEB_ENGINE_AUTH_POLICY_INIT;
+    chttp_web_engine_auth_policy error_policy =
+        (chttp_web_engine_auth_policy)CHTTP_WEB_ENGINE_AUTH_POLICY_INIT;
     chttp_server_middleware allow_middleware = {0};
     chttp_server_middleware deny_middleware = {0};
     chttp_server_middleware error_middleware = {0};
@@ -689,7 +688,7 @@ spec("CHttp::App browser principal lifecycle") {
     allow_policy.authorize = auth_http_authorize_admin;
     allow_policy.authorize_user = &allow_probe;
     allow_middleware = (chttp_server_middleware){
-        chttp_web_auth_middleware, &allow_policy};
+        chttp_web_engine_auth_middleware, &allow_policy};
 
     deny_policy.login_path = "/login-page";
     deny_policy.authorize = auth_http_authorize_deny;
@@ -697,13 +696,13 @@ spec("CHttp::App browser principal lifecycle") {
     deny_policy.forbidden = auth_http_forbidden;
     deny_policy.forbidden_user = &deny_probe;
     deny_middleware = (chttp_server_middleware){
-        chttp_web_auth_middleware, &deny_policy};
+        chttp_web_engine_auth_middleware, &deny_policy};
 
     error_policy.login_path = "/login-page";
     error_policy.authorize = auth_http_authorize_error;
     error_policy.authorize_user = &error_probe;
     error_middleware = (chttp_server_middleware){
-        chttp_web_auth_middleware, &error_policy};
+        chttp_web_engine_auth_middleware, &error_policy};
 
     protected_route = (chttp_server_route_options){
         .method = CHTTP_METHOD_GET,
@@ -826,6 +825,5 @@ spec("CHttp::App browser principal lifecycle") {
         chttp_server_stop(&server, AUTH_HTTP_TIMEOUT_MS), SALTS_OK);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
-
 
 }

@@ -82,6 +82,7 @@ struct work_item {
   int websocket_status;
   bool websocket_opened, websocket_retired, websocket_active;
   bool websocket_closing, websocket_close_done, websocket_running_close;
+  bool websocket_ready_done, websocket_running_ready;
   chttp_server_admission_gate admission;
   chttp_application_admission_fn admission_fn;
   void *admission_user;
@@ -636,11 +637,13 @@ static void upload_cancelled(void *arg) { invariant_failure(((work_item *)arg)->
 static void websocket_run(void *arg) {
   work_item *item = arg;
   chttp_server_request_view request = item->request;
-  request.session = NULL; request.operation = item->websocket.operation;
-  const chttp_websocket_event *event = item->websocket_running_close ?
+  request.session = NULL;
+  request.operation = item->websocket_running_ready ? item->websocket.ready_operation : item->websocket.operation;
+  const chttp_websocket_event *event = item->websocket_running_ready ? NULL : item->websocket_running_close ?
       &item->websocket_close : &item->websocket_events[item->websocket_head];
   const chttp_application_websocket_event scope = {&request, &item->websocket_peer, event};
-  int status = item->websocket.event(item->websocket.user, &scope);
+  const chttp_application_websocket_event_fn invoke = item->websocket_running_ready ? item->websocket.ready : item->websocket.event;
+  int status = invoke(item->websocket.user, &scope);
   if (status > SALTS_OK) status = SALTS_EPROTO;
   sync_mutex_lock(&item->owner->mutex);
   if (status != SALTS_OK && item->websocket_status == SALTS_OK) item->websocket_status = status;
@@ -711,7 +714,8 @@ static void join_completion(work_item *item, enum work_event event, int status) 
   }
   if (event == WORK_WEBSOCKET_DONE) {
     item->websocket_active = false;
-    if (item->websocket_running_close) item->websocket_close_done = true;
+    if (item->websocket_running_ready) item->websocket_ready_done = true;
+    else if (item->websocket_running_close) item->websocket_close_done = true;
     else { item->websocket_head = (item->websocket_head + 1u) % item->websocket.capacity; --item->websocket_count; }
     waker = item->waker;
   }
@@ -767,9 +771,11 @@ static void join_completion(work_item *item, enum work_event event, int status) 
     item->source_active = true; item->source_cleaning = item->source_closed; source_post = true;
   }
   if (item->business_done && item->websocket_opened && !item->websocket_active &&
-      (item->websocket_count || (item->websocket_closing && !item->websocket_close_done))) {
+      ((item->websocket.ready && !item->websocket_ready_done) || item->websocket_count ||
+       (item->websocket_closing && !item->websocket_close_done))) {
     item->websocket_active = true; websocket_post = true;
-    item->websocket_running_close = item->websocket_count == 0u;
+    item->websocket_running_ready = item->websocket.ready && !item->websocket_ready_done;
+    item->websocket_running_close = !item->websocket_running_ready && item->websocket_count == 0u;
   }
   if (item->business_done && item->transport_done && (!item->session || item->session_done) &&
       (!item->source_selected || item->source_cleaned) && !item->source_active &&
@@ -1076,7 +1082,8 @@ static int websocket_native_event(void *user, const chttp_websocket_event *event
 static bool websocket_native_pending(void *user) {
   work_item *item = user;
   sync_mutex_lock(&item->owner->mutex);
-  const bool pending = !item->business_done || !item->websocket_opened || item->websocket_active || item->websocket_count;
+  const bool pending = !item->business_done || !item->websocket_opened || item->websocket_active ||
+      (item->websocket.ready && !item->websocket_ready_done) || item->websocket_count;
   sync_mutex_unlock(&item->owner->mutex);
   return pending;
 }

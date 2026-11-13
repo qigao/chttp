@@ -1,6 +1,6 @@
 #include <chttp_app/application.h>
 #include "chttp_method_runtime.h"
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include "chttp_invocation_internal.h"
 #include "chttp_web_registration.h"
 #include "../../http_server/src/chttp_server_engine.h"
@@ -10,13 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-CHTTP_ACTION(chttp_expected_action);
-CHTTP_INVOCATION_ACTION(chttp_expected_invocation);
+CHTTP_ACTION(chttp_expected_invocation);
 CHTTP_ADMISSION_ACTION(chttp_expected_admission);
 CHTTP_ASSET_POLICY_ACTION(chttp_expected_asset_policy);
 CHTTP_UPLOAD_OPEN_ACTION(chttp_expected_upload_open);
 CHTTP_WEBSOCKET_EVENT_ACTION(chttp_expected_websocket_event);
-CHTTP_INVOCATION_ACTION(chttp_application_asset_invoke);
+CHTTP_ACTION(chttp_application_asset_invoke);
 
 typedef struct application_invocation_hook { chttp_invocation_chain_hook hook; } application_invocation_hook;
 typedef struct application_worker_action {
@@ -44,7 +43,6 @@ typedef struct application_worker_assets {
   chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
 } application_worker_assets;
 
-typedef struct application_action { const chttp_action *action; void *receiver; } application_action;
 typedef struct application_impl {
   chttp_server server;
   chttp_method_runtime methods;
@@ -57,7 +55,6 @@ typedef struct application_impl {
   application_worker_assets *worker_assets;
   size_t worker_action_count;
   size_t worker_route_capacity;
-  bool worker_prototype_allowed;
   bool configuration_closed;
   chttp_application_admission_fn admission_invoke;
   void *admission_receiver;
@@ -66,15 +63,12 @@ typedef struct application_impl {
   salts_configurator_dependency *dependencies;
   size_t *order;
   size_t component_count;
-  application_action *actions;
-  size_t action_count;
-  DataBindNativeExecution *executions;
-  size_t execution_count;
-  chttp_dispatch_chain_hook hooks[16];
+  chttp_invocation_interceptor global_sources[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+  application_invocation_hook global_invocation_hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+  chttp_application_work_chain_hook global_work_hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
   size_t hook_count;
   chttp_web_security_policy security;
   chttp_server_cors_options cors;
-  chttp_web_asset_mount assets;
   int shutdown_status;
 } application_impl;
 
@@ -84,6 +78,7 @@ chttp_application_config chttp_application_config_default(void) {
   chttp_application_config config = {0};
   config.bindings = (chttp_binding_limits)CHTTP_BINDING_LIMITS_INIT;
   config.rpc = (chttp_server_rpc_config)CHTTP_SERVER_RPC_CONFIG_INIT;
+  config.workers = (chttp_worker_config){1u, 16u, 512u * 1024u, BODY_BYTES, 32u, HEADER_BYTES};
   config.http = (chttp_server_config){.host = "127.0.0.1", .backlog = CONNECTIONS,
       .network = {.backend =
 #if defined(_WIN32)
@@ -145,7 +140,7 @@ static int application_method_hooks(application_impl *app,
   }
   return SALTS_OK;
 }
-int chttp_application_worker_current(const chttp_application *owner) {
+int chttp_application_is_worker(const chttp_application *owner) {
   const application_impl *app = owner ? owner->impl : NULL;
   return app && chttp_application_work_is_current(&app->workers);
 }
@@ -158,6 +153,24 @@ static int application_worker_dispatch(void *context,
   application_worker_action *action = context;
   const int status = chttp_application_work_submit(action->work, request, response, &action->task);
   return chttp_application_work_admission_response(response, status);
+}
+static int application_fallback_404(void *context, const chttp_server_request_view *request,
+    chttp_application_work_reply *reply) {
+  (void)context; (void)request;
+  return chttp_application_work_respond(reply, 404u, "text/plain", "Not Found", 9u);
+}
+static int application_fallback_405(void *context, const chttp_server_request_view *request,
+    chttp_application_work_reply *reply) {
+  (void)context; (void)request;
+  return chttp_application_work_respond(reply, 405u, "text/plain", "Method Not Allowed", 18u);
+}
+static int application_fallback(void *context, const chttp_server_request_view *request,
+    chttp_server_response *response, unsigned int status) {
+  application_impl *app = context;
+  const chttp_application_work_task task = {.run = status == 405u ? application_fallback_405 : application_fallback_404,
+      .hooks = app->global_work_hooks, .hook_count = app->hook_count};
+  return chttp_application_work_admission_response(response,
+      chttp_application_work_submit(&app->workers, request, response, &task));
 }
 static int application_invocation_run(void *context, const chttp_server_request_view *request,
     chttp_application_work_reply *reply) {
@@ -190,12 +203,11 @@ static void application_invocation_completed(void *context, const chttp_server_r
   const application_worker_action *action = context;
   action->completed(action->receiver, request, outcome);
 }
-int chttp_application_worker_prepare(chttp_application *owner,
+static int application_prepare_workers(chttp_application *owner,
     const chttp_application_work_config *config) {
   application_impl *app = owner ? owner->impl : NULL;
   if (!app || !config) return SALTS_EINVAL;
   if (app->configuration_closed) return SALTS_EBUSY;
-  if (!app->worker_prototype_allowed) return SALTS_ENOTSUP;
   if (app->workers.impl) return SALTS_EALREADY;
   if (app->worker_route_capacity > SIZE_MAX / sizeof(*app->worker_actions)) return SALTS_ERANGE;
   application_worker_action *actions = calloc(app->worker_route_capacity, sizeof(*actions));
@@ -277,6 +289,9 @@ static int application_worker_mount(chttp_application *owner,
       !cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_upload_open), upload->open_abi))) return SALTS_EINVAL;
   if (websocket && (!websocket->event || !websocket->event_capacity || binding->method != CHTTP_METHOD_GET ||
       !cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_websocket_event), websocket->event_abi))) return SALTS_EINVAL;
+  if (websocket && ((websocket->ready != NULL) != (websocket->ready_abi != NULL) ||
+      (websocket->ready && !cmeta_function_abi_contract_compatible(
+          FunctionAbi(chttp_expected_websocket_event), websocket->ready_abi)))) return SALTS_EINVAL;
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
   int status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
@@ -291,7 +306,8 @@ static int application_worker_mount(chttp_application *owner,
   if (status != SALTS_OK) return status;
   if (websocket) {
     action->websocket = (chttp_application_websocket_callbacks){websocket->event, websocket->event_abi->function,
-        receiver, websocket->event_capacity};
+        receiver, websocket->event_capacity, websocket->ready,
+        websocket->ready_abi ? websocket->ready_abi->function : NULL};
     const chttp_server_websocket_options route = {.size = sizeof(route), .path = binding->path,
         .max_frame_bytes = websocket->max_frame_bytes, .max_message_bytes = websocket->max_message_bytes,
         .max_buffered_input_bytes = websocket->max_buffered_input_bytes,
@@ -377,8 +393,7 @@ int chttp_application_worker_assets(chttp_application *owner, const chttp_applic
   if (app->worker_assets) return SALTS_EALREADY;
   int status = chttp_web_assets_validate(binding->mount);
   if (status != SALTS_OK) return status;
-  if (binding->mount->immutable || binding->mount->etag || binding->mount->user ||
-      (binding->policy != NULL) != (binding->policy_abi != NULL)) return SALTS_EINVAL;
+  if ((binding->policy != NULL) != (binding->policy_abi != NULL)) return SALTS_EINVAL;
   if (binding->policy && !cmeta_function_abi_contract_compatible(
       FunctionAbi(chttp_expected_asset_policy), binding->policy_abi)) return SALTS_EINVAL;
   void *receiver = NULL;
@@ -415,7 +430,8 @@ static int application_worker_rpc_dispatch(void *user,
     const chttp_server_request_view *request, chttp_server_response *response) {
   application_impl *app = user;
   const chttp_application_work_task task = {.run = application_worker_rpc_run, .user = app,
-      .method_capacity = app->worker_rpc_completion_capacity};
+      .method_capacity = app->worker_rpc_completion_capacity,
+      .hooks = app->global_work_hooks, .hook_count = app->hook_count};
   const int status = chttp_application_work_submit(&app->workers, request, response, &task);
   return chttp_application_work_admission_response(response, status);
 }
@@ -463,7 +479,7 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   if (app->configuration_closed) return SALTS_EBUSY;
   const bool flow = method->dispatch == CHTTP_DISPATCH_CFLOW;
   const bool plugin = method->dispatch == CHTTP_DISPATCH_PLUGIN;
-  if ((!flow && !plugin && method->dispatch != CHTTP_DISPATCH_INLINE) || method->executor)
+  if ((!flow && !plugin && method->dispatch != CHTTP_DISPATCH_DIRECT))
     return SALTS_ENOTSUP;
   if (plugin) {
     if (method->binding || method->execution || method->projection || !method->plugin_registry ||
@@ -493,6 +509,7 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   mount.method_plan = method->plan; mount.native_binding = method->binding;
   mount.hooks = admitted; mount.hook_count = hook_count;
   mount.output_codec = codec;
+  mount.request_hooks = app->global_work_hooks; mount.request_hook_count = app->hook_count;
   if (plugin) {
     mount.execution_mode = CHTTP_METHOD_RUNTIME_EXECUTION_DEFERRED_PLUGIN;
     mount.plugin_registry = method->plugin_registry; mount.plugin_ref = method->plugin_ref;
@@ -510,152 +527,64 @@ int chttp_application_worker_mount_http(chttp_application *owner, const char *co
   return status;
 }
 
-typedef struct application_dispatch {
-  chttp_server_next *next;
-} application_dispatch;
-
-static cmeta_status application_continue(void *context, const chttp_exchange *exchange,
-    chttp_exchange_result *result) {
-  const application_dispatch *dispatch = context;
-  (void)exchange;
-  result->status = chttp_server_next_call(dispatch->next);
-  return result->status == SALTS_OK ? CMETA_OK : CMETA_CALLBACK_ERROR;
+static int application_merge_hooks(application_impl *app,
+    const chttp_invocation_interceptor *local, size_t count,
+    chttp_invocation_interceptor *out, size_t *total) {
+  if (count > CHTTP_APPLICATION_WORK_MAX_HOOKS - app->hook_count) return SALTS_ENOBUFS;
+  if (count && !local) return SALTS_EINVAL;
+  if (app->hook_count) memcpy(out, app->global_sources, app->hook_count * sizeof(*out));
+  if (count) memcpy(out + app->hook_count, local, count * sizeof(*out));
+  *total = app->hook_count + count;
+  return SALTS_OK;
 }
-
-static int application_intercept(void *context, const chttp_server_request_view *request,
-    chttp_server_response *response, chttp_server_next *next) {
-  application_impl *app = context;
-  application_dispatch dispatch = {next};
-  chttp_exchange_result result = {SALTS_OK, false};
-  const chttp_exchange exchange = {request, response, request->operation, &result};
-  const chttp_dispatch_chain chain = {&dispatch, application_continue, app->hooks, app->hook_count};
-  const cmeta_status status = chttp_dispatch_chain_invoke(&chain, &exchange, &result);
-  if (result.rejected) return result.status;
-  return status == CMETA_OK ? result.status : result.status != SALTS_OK ? result.status : SALTS_EIO;
-}
-
-static int application_action_call(void *context, const chttp_server_request_view *request,
-    chttp_server_response *response) {
-  const application_action *record = context;
-  chttp_exchange_result result = {SALTS_OK, false};
-  const chttp_exchange exchange = {request, response, record->action->abi->function, &result};
-  return record->action->invoke(record->receiver, &exchange);
-}
-
-static int application_body_open(void *context, const chttp_server_request_view *request,
-    chttp_body_sink *sink) {
-  const application_action *record = context;
-  return record->action->body_open(record->receiver, request, sink);
-}
-
-static void application_body_close(void *context, chttp_body_sink *sink, int status) {
-  const application_action *record = context;
-  record->action->body_close(record->receiver, sink, status);
-}
-
-int chttp_exchange_reject(const chttp_exchange *exchange, unsigned int status_code,
-    const char *content_type, const void *body, size_t body_size) {
-  if (exchange == NULL || exchange->result == NULL || status_code < 400u || status_code > 599u)
-    return SALTS_EINVAL;
-  const int status = chttp_server_reply(exchange->response, status_code, content_type, body, body_size);
-  if (status == SALTS_OK) {
-    exchange->result->status = SALTS_OK;
-    exchange->result->rejected = true;
-  }
-  return status;
-}
-
-static int application_bind(application_impl *app, const chttp_application_config *config) {
-  size_t action_count = 0u, method_count = 0u, rpc_count = 0u;
-  int status;
+static int application_bind(chttp_application *owner, const chttp_application_config *config) {
+  application_impl *app = owner->impl;
   for (size_t i = 0u; i < config->controller_count; ++i) {
     const chttp_controller *c = &config->controllers[i];
-    if ((c->action_count != 0u && c->actions == NULL) ||
-        (c->http_method_count != 0u && c->http_methods == NULL) ||
-        (c->rpc_method_count != 0u && c->rpc_methods == NULL) ||
-        (c->websocket_count != 0u && c->websockets == NULL)) return SALTS_EINVAL;
-    if (c->action_count > SIZE_MAX - action_count || c->http_method_count > SIZE_MAX - method_count ||
-        c->rpc_method_count > SIZE_MAX - rpc_count) return SALTS_ERANGE;
-    action_count += c->action_count; method_count += c->http_method_count; rpc_count += c->rpc_method_count;
-  }
-  if (action_count > config->http.route_capacity || method_count > config->http.route_capacity ||
-      rpc_count > config->rpc.method_capacity) return SALTS_ENOBUFS;
-  if (action_count > SIZE_MAX / sizeof(*app->actions) || rpc_count > SIZE_MAX - method_count ||
-      method_count + rpc_count > SIZE_MAX / sizeof(*app->executions)) return SALTS_ERANGE;
-  if (action_count != 0u) {
-    app->actions = calloc(action_count, sizeof(*app->actions));
-    if (app->actions == NULL) return SALTS_ENOMEM;
-  }
-  if (method_count + rpc_count != 0u) {
-    app->executions = calloc(method_count + rpc_count, sizeof(*app->executions));
-    if (app->executions == NULL) return SALTS_ENOMEM;
-  }
-  if (method_count != 0u) {
-    const chttp_binding_limits *b = &config->bindings;
-    if (b->size != sizeof(*b) || method_count > b->method_capacity) return SALTS_EINVAL;
-    const chttp_method_runtime_config limits = {sizeof(limits), b->method_capacity,
-        b->max_binding_value_bytes, b->max_response_body_bytes, b->max_call_frame_bytes,
-        b->native_workspace_bytes, b->native_max_depth, b->native_max_items, b->native_max_owned_bytes};
-    status = chttp_method_runtime_init(&app->methods, &limits);
-    if (status != SALTS_OK) return status;
-  }
-  if (rpc_count != 0u) {
-    status = chttp_server_rpc_configure(&app->server, &config->rpc);
-    if (status != SALTS_OK) return status;
-  }
-  for (size_t i = 0u; i < config->controller_count; ++i) {
-    const chttp_controller *c = &config->controllers[i];
+    if ((c->action_count && !c->actions) || (c->http_method_count && !c->http_methods) ||
+        (c->rpc_method_count && !c->rpc_methods) || (c->websocket_count && !c->websockets)) return SALTS_EINVAL;
+    if (c->action_count > config->http.route_capacity || c->websocket_count > config->http.route_capacity ||
+        c->http_method_count > config->bindings.method_capacity || c->rpc_method_count > config->rpc.method_capacity)
+      return SALTS_ENOBUFS;
     void *receiver = NULL;
-    status = application_receiver(app, c->component_id, c->receiver, &receiver);
+    int status = application_receiver(app, c->component_id, c->receiver, &receiver);
     if (status != SALTS_OK) return status;
     for (size_t j = 0u; j < c->action_count; ++j) {
       const chttp_action *a = &c->actions[j];
-      if (a->invoke == NULL || !cmeta_function_abi_contract_compatible(
-          FunctionAbi(chttp_expected_action), a->abi)) return SALTS_EINVAL;
-      application_action *record = &app->actions[app->action_count++];
-      *record = (application_action){a, receiver};
-      const chttp_server_route_options route = {.method = a->method, .path = a->path,
-          .handler = application_action_call, .user = record,
-          .body_open = a->body_open != NULL ? application_body_open : NULL,
-          .body_close = a->body_close != NULL ? application_body_close : NULL,
-          .operation = a->abi->function};
-      status = chttp_server_route_with(&app->server, &route);
+      chttp_invocation_interceptor hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS]; size_t count = 0u;
+      status = application_merge_hooks(app, a->hooks, a->hook_count, hooks, &count);
+      if (status != SALTS_OK) return status;
+      const chttp_application_worker_binding binding = {c->component_id, c->receiver, a->method, a->path,
+          a->abi, a->invoke, a->after_completion, hooks, count};
+      if (a->upload) {
+        const chttp_application_upload_binding upload = {binding, a->upload->open_abi,
+            a->upload->open, a->upload->close, a->upload->cleanup};
+        status = chttp_application_worker_upload(owner, &upload);
+      } else status = chttp_application_worker_mount(owner, &binding);
       if (status != SALTS_OK) return status;
     }
     for (size_t j = 0u; j < c->http_method_count; ++j) {
       const chttp_http_method *m = &c->http_methods[j];
-      chttp_method_runtime_http_mount mount = CHTTP_METHOD_RUNTIME_HTTP_MOUNT_INIT;
-      mount.method_plan = m->plan; mount.native_binding = m->binding;
-      if (m->execution != NULL) {
-        DataBindNativeExecution *execution = &app->executions[app->execution_count++];
-        *execution = *m->execution; execution->context = receiver;
-        mount.execution = execution;
-      }
-      mount.execution_mode = (chttp_method_runtime_execution_mode)m->dispatch;
-      mount.executor = m->executor; mount.cflow_projection = m->projection;
-      mount.plugin_registry = m->plugin_registry; mount.plugin_ref = m->plugin_ref;
-      mount.plugin_export_id = m->plugin_export_id;
-      status = chttp_method_runtime_mount_http(&app->methods, &app->server, &mount);
+      status = chttp_application_worker_mount_http(owner, c->component_id, c->receiver, m, m->codec, m->hooks, m->hook_count);
       if (status != SALTS_OK) return status;
     }
     for (size_t j = 0u; j < c->rpc_method_count; ++j) {
       const chttp_rpc_method *m = &c->rpc_methods[j];
-      if (m->execution == NULL) return SALTS_EINVAL;
-      DataBindNativeExecution *execution = &app->executions[app->execution_count++];
-      *execution = *m->execution; execution->context = receiver;
-      const chttp_server_rpc_mount_options mount = {sizeof(mount), m->path, m->plan,
-          m->binding, execution, m->plugin_registry, m->plugin_ref, NULL, 0u, NULL};
-      status = chttp_server_rpc_mount(&app->server, &mount);
+      status = chttp_application_worker_mount_rpc(owner, c->component_id, c->receiver, m, m->codec, m->hooks, m->hook_count);
       if (status != SALTS_OK) return status;
     }
     for (size_t j = 0u; j < c->websocket_count; ++j) {
-      const chttp_websocket_endpoint *endpoint = &c->websockets[j];
-      const chttp_server_websocket_options options = {.size = sizeof(options),
-          .path = endpoint->path, .max_frame_bytes = endpoint->max_frame_bytes,
-          .max_message_bytes = endpoint->max_message_bytes,
-          .max_buffered_input_bytes = endpoint->max_buffered_input_bytes,
-          .on_open = endpoint->on_open, .on_event = endpoint->on_event, .user = receiver};
-      status = chttp_server_websocket_with(&app->server, &options);
+      const chttp_websocket_endpoint *ws = &c->websockets[j]; const chttp_action *a = &ws->opening;
+      if (a->upload) return SALTS_EINVAL;
+      chttp_invocation_interceptor hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS]; size_t count = 0u;
+      status = application_merge_hooks(app, a->hooks, a->hook_count, hooks, &count);
+      if (status != SALTS_OK) return status;
+      const chttp_application_worker_binding binding = {c->component_id, c->receiver, a->method, a->path,
+          a->abi, a->invoke, a->after_completion, hooks, count};
+      const chttp_application_websocket_binding endpoint = {binding, ws->event_abi, ws->event,
+          ws->event_capacity, ws->max_frame_bytes, ws->max_message_bytes, ws->max_buffered_input_bytes,
+          ws->ready_abi, ws->ready};
+      status = chttp_application_worker_websocket(owner, &endpoint);
       if (status != SALTS_OK) return status;
     }
   }
@@ -671,7 +600,7 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   if (owner->impl != NULL) return SALTS_EALREADY;
   /* Sized policy storage must cover the snapshot before a full structure read. */
   if ((config->security != NULL && config->security->size < sizeof(*config->security)) ||
-      (config->assets != NULL && config->assets->size < sizeof(*config->assets))) return SALTS_EINVAL;
+      (config->assets != NULL && (!config->assets->mount || config->assets->mount->size < sizeof(*config->assets->mount)))) return SALTS_EINVAL;
   if (config->component_count > SIZE_MAX / sizeof(*app->instances) ||
       config->component_count > SIZE_MAX / sizeof(*app->order) ||
       config->dependency_capacity > SIZE_MAX / sizeof(*app->dependencies)) return SALTS_ERANGE;
@@ -680,17 +609,13 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   owner->impl = app;
   if (config->security != NULL) app->security = *config->security;
   if (config->cors != NULL) app->cors = *config->cors;
-  if (config->assets != NULL) app->assets = *config->assets;
   app->worker_route_capacity = config->http.route_capacity;
+  if (config->bindings.method_capacity > SIZE_MAX - app->worker_route_capacity) { status = SALTS_ERANGE; goto failed; }
+  app->worker_route_capacity += config->bindings.method_capacity;
+  if (config->rpc.method_capacity > SIZE_MAX - app->worker_route_capacity) { status = SALTS_ERANGE; goto failed; }
+  app->worker_route_capacity += config->rpc.method_capacity;
   app->worker_binding_limits = config->bindings;
   app->worker_rpc_config = config->rpc;
-  app->worker_prototype_allowed = config->interceptor_count == 0u && !config->admission &&
-      !config->assets;
-  for (size_t i = 0u; i < config->controller_count; ++i) {
-    const chttp_controller *controller = &config->controllers[i];
-    if (controller->action_count || controller->http_method_count || controller->rpc_method_count ||
-        controller->websocket_count) app->worker_prototype_allowed = false;
-  }
   app->component_count = config->component_count;
   app->instances = calloc(config->component_count, sizeof(*app->instances));
   app->order = calloc(config->component_count, sizeof(*app->order));
@@ -707,14 +632,6 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   if (status != SALTS_OK) goto failed;
   status = application_graph_status(salts_configurator_context_start(&app->graph));
   if (status != SALTS_OK) goto failed;
-  for (size_t i = 0u; i < config->interceptor_count; ++i) {
-    const chttp_interceptor *hook = &config->interceptors[i];
-    void *receiver = NULL;
-    if (hook->before == NULL && hook->after == NULL && hook->on_error == NULL) { status = SALTS_EINVAL; goto failed; }
-    status = application_receiver(app, hook->component_id, hook->receiver, &receiver);
-    if (status != SALTS_OK) goto failed;
-    app->hooks[app->hook_count++] = (chttp_dispatch_chain_hook){receiver, hook->before, hook->after, hook->on_error};
-  }
   status = chttp_server_init(&app->server, &config->http);
   if (status != SALTS_OK) goto failed;
 #define APP_CONFIGURE(pointer_, call_) do { if ((pointer_) != NULL) { status = (call_); if (status != SALTS_OK) goto failed; } } while (0)
@@ -725,15 +642,34 @@ int chttp_application_init(chttp_application *owner, const chttp_application_con
   status = chttp_server_set_deadlines(&app->server, &config->deadlines);
   if (status != SALTS_OK) goto failed;
   APP_CONFIGURE(config->jwt, chttp_server_use_jwt_bearer(&app->server, config->jwt));
-  APP_CONFIGURE(config->admission, chttp_server_set_admission(&app->server, config->admission, config->admission_context));
   APP_CONFIGURE(config->security, chttp_web_security_use(&app->server, &app->security));
   APP_CONFIGURE(config->cors, chttp_server_use_cors(&app->server, &app->cors));
-  /* Assets may terminate dispatch, so global application policy must wrap them. */
-  status = chttp_server_use(&app->server, application_intercept, app);
-  if (status != SALTS_OK) goto failed;
-  APP_CONFIGURE(config->assets, chttp_web_assets_use(&app->server, &app->assets));
 #undef APP_CONFIGURE
-  status = application_bind(app, config);
+  status = application_prepare_workers(owner, &config->workers);
+  if (status != SALTS_OK) goto failed;
+  app->hook_count = config->interceptor_count;
+  if (app->hook_count) memcpy(app->global_sources, config->interceptors, app->hook_count * sizeof(*app->global_sources));
+  status = application_worker_hooks(app, app->global_sources, app->hook_count,
+      app->global_invocation_hooks, app->global_work_hooks);
+  if (status != SALTS_OK) goto failed;
+  if (app->hook_count) {
+    status = chttp_server_set_fallback(&app->server, application_fallback, app);
+    if (status != SALTS_OK) goto failed;
+  }
+  if (config->admission) {
+    status = chttp_application_worker_admission(owner, config->admission);
+    if (status != SALTS_OK) goto failed;
+  }
+  if (config->assets) {
+    chttp_assets assets = *config->assets;
+    chttp_invocation_interceptor hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+    status = application_merge_hooks(app, assets.hooks, assets.hook_count, hooks, &assets.hook_count);
+    if (status != SALTS_OK) goto failed;
+    assets.hooks = hooks;
+    status = chttp_application_worker_assets(owner, &assets);
+    if (status != SALTS_OK) goto failed;
+  }
+  status = application_bind(owner, config);
   if (status == SALTS_OK) return SALTS_OK;
 failed: {
     const int close_status = chttp_application_close(owner, 0u);
@@ -807,7 +743,7 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
   const int result = app->shutdown_status;
   free(app->worker_assets);
   free(app->worker_actions);
-  free(app->actions); free(app->executions); free(app->dependencies); free(app->instances); free(app->order);
+  free(app->dependencies); free(app->instances); free(app->order);
   free(app); owner->impl = NULL;
   return result;
 }

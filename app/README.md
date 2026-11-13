@@ -82,50 +82,56 @@ ACE resolves dependencies before creating Beans, injects canonical Interface
 projections, and destroys dependents before their providers. No global registry
 or per-request dependency lookup is used.
 
-Each `chttp_controller` identifies one Component by stable ID and canonical
-receiver DataDesc. `CHTTP_ACTION(name)` declares the exact reflected C callback
-ABI; `CHTTP_GET` / `CHTTP_POST` bind it to a route. Admission checks canonical
-Function ABI before publishing routes. The callback receives the ACE-owned
-receiver and a callback-scoped `chttp_exchange`; request, response, operation
-metadata and borrowed parameter views cannot escape it. Body sink callbacks
-receive that same Controller receiver. Configure bounded per-request sink
-state separately when connections can execute concurrently.
+Each `chttp_controller` identifies a Component by stable ID and canonical
+receiver DataDesc. `CHTTP_ACTION(name)` declares the reflected
+`int(void *, const chttp_invocation *)` callback; `CHTTP_GET` / `CHTTP_POST`
+bind it to a route. Init activates Beans, validates exact ABI, creates the
+bounded worker pool and publishes configured bindings before start.
+
+The callback receives an ACE-owned receiver and worker-scoped Invocation.
+Request/parameter/header/JWT views cannot escape it. Responses use
+`chttp_invocation_respond`, copied headers and file/source decisions.
+`request->session` and `chttp_invocation_session` expose the same detached
+Session intent view; the owner commits changes and publishes the response.
 
 Services use normal CMeta Components with provided/required Interfaces. The
-formal [dependency injection test](tests/application_test.c) demonstrates a
-Controller borrowing an injected Service, ordered Interceptors and H1/H2
-requests. This uses upstream metadata and provider lifecycles rather than a
-second reflection or dependency-injection system.
+[public tests](tests/application_test.c), [C example](examples/application.c)
+and [C++17 example](examples/application.cpp) demonstrate dependency injection,
+worker execution and ordered Interceptors.
 
-`chttp_interceptor` identifies an ACE-owned Bean with typed before/after/error
-hooks. Hooks execute in declaration order and unwind in reverse order through
-the upstream ACE chain. A before hook may explicitly reject using
-`chttp_exchange_reject()` and `proceed=false`. Unhandled callback failure
-preserves the protocol engine's HTTP 500 behavior. Hooks surround dispatch;
-they do not indicate response-write or deferred completion. Generated RPC
-batch operations are below this HTTP dispatch boundary.
+`chttp_invocation_interceptor` resolves a Bean with before/after/error hooks.
+Global hooks precede local hooks (16 combined); ACE unwinds in reverse order.
+Before hooks reject with `chttp_invocation_reject`. Unhandled failure retains
+HTTP 500 behavior. Global hooks also wrap generated HTTP/RPC, assets and
+unmatched 404/405. Assets expose a framework operation; unmatched requests have
+NULL operation. Static security/CORS/JWT denial precedes the business chain.
 
-Global hooks also wrap static assets and SPA fallback: rejecting a request
-prevents file-response publication. Asset-only requests carry NULL operation
-metadata. Security headers and CORS preflight precede the application chain;
-CORS-handled preflight and earlier JWT/admission rejection do not enter it.
+Generated `http_methods` / `rpc_methods` supply immutable MethodPlans,
+binding/execution metadata and a matching codec. Init compiles owned input/output
+FormatPlans; the codec may then be destroyed. Configure HTTP binding and RPC
+capacities explicitly. DIRECT, CFLOW and PLUGIN execute on the owned pool without
+nested post/wait or a borrowed executor. CFlow uses its typed projection; Plugin
+retains its provider lease. Registries and canonical metadata outlive close.
+Method-specific hooks observe DTO calls, including RPC notifications, separately
+from the enclosing request hooks.
 
-For generated IDL, populate Controller `http_methods` / `rpc_methods` with
-immutable DataBind MethodPlan/native bindings. Native execution descriptors
-are copied and their context bound to the Controller before admission.
-Set `bindings.method_capacity` explicitly for HTTP MethodPlans and `rpc`
-capacities for RPC. Inline dispatch has no executor; deferred dispatch borrows
-a bounded executor. CFlow and Plugin dispatch use their producer-owned typed
-projection/capability and its own context/lease, not a forged Controller ABI.
-Unsupported combinations fail at initialization. Plans, native descriptors,
-executors and plugin registries must outlive Application close.
+Custom admission, asset policies, upload open/body/close/cleanup, source reads,
+SSE producers, WebSocket methods and terminal observers also run on workers.
+`chttp_admission` and `chttp_assets.policy` resolve reflected canonical Beans.
+`chttp_action.upload` transfers successful sinks through exactly-once cleanup.
+WebSocket opening explicitly accepts an upgrade; optional `ready` can send a
+greeting after handshake before serial events (`scope.event == NULL` for ready).
+Those scopes have no mutable Session and use generation-checked bounded sends.
 
-Controller `websockets` use `chttp_websocket_endpoint`; callbacks receive the
-same ACE-owned receiver. HTTP capacities, socket/placement policies, TLS,
-sessions, security, JWT and admission remain explicit Application inputs.
-`chttp_application_config_default()` provides bounded loopback H1/H2 defaults,
-an ephemeral port and no authentication/session policy. Production callers
-must supply their own policies and capacity limits.
+`config.workers` sets record/byte/reply/header limits. Defaults use one worker;
+multiple workers require thread-safe Beans and renderer ownership. Exhaustion
+rejects with 503 before business. HTTP capacities, TLS, socket/placement,
+Session, security, JWT and admission remain explicit policies.
+
+This is a source/ABI migration: rebuild consumers, install into a clean SDK
+prefix and replace Exchange/native response usage with Invocation. No public
+manual mount, borrowed executor or parallel legacy API is retained. See the
+[ownership and migration decision](../docs/HTTP_APPLICATION_DESIGN.md).
 
 Use `chttp_application_init/start/port/close` or C11
 `chttp_application_with`. The latter reports operation and cleanup status
@@ -138,7 +144,7 @@ the framework cannot preempt them. Metadata remains borrowed until close settles
 Application copies Security, CORS and asset policy structures during init, so a
 configuration builder may reuse those structures after returning. Their referenced
 strings, origin arrays, callback code and contexts remain borrowed and immutable
-until close settles. JWT validators and admission contexts also remain borrowed.
+until close settles. JWT validators remain borrowed; admission receivers belong to the ACE graph.
 
 C++17 `chttp::Application` is noncopyable/nonmovable and closes on destruction.
 Call `close()` explicitly to handle errors; an unhandled destructor cleanup
@@ -190,7 +196,7 @@ A Web application normally composes these pieces:
    request parameters, headers, session values, or HTMX state.
 6. Parse and bind bounded form input with the form APIs.
 7. Apply CSRF validation to cookie/session-authenticated mutation routes.
-8. Use deferred replies for blocking business work and SSE for event streams.
+8. Execute business on the Application pool and use worker sources/SSE for streams.
 9. Stop/drain the server and worker execution before destroying renderers.
 
 Templates are frozen into the renderer. Request-controlled filesystem template
@@ -218,7 +224,7 @@ anonymous browser
     |      -> safe local redirect / HX-Redirect
     |
     +-- protected route
-    |      -> chttp_web_auth_middleware
+    |      -> chttp_web_authorize
     |      -> Session principal
     |      -> optional application authorization callback
     |      -> page / fragment
@@ -255,8 +261,10 @@ treat principal views as request-scoped borrowed data.
 
 ### Protected routes and authorization
 
-`chttp_web_auth_middleware()` requires an authenticated Session principal and
-may invoke an application-owned authorization callback.
+`chttp_web_authorize(invocation, policy, proceed)` runs in an Invocation before
+hook. Handled denial stages a response, marks rejection and clears proceed;
+propagate every other error. Its authorization callback requires an
+authenticated Session principal.
 
 Callback semantics are explicit:
 
@@ -295,9 +303,10 @@ application does so before calling `chttp_web_principal_sign_in()`.
 
 ### Static assets and application shell
 
-`chttp_web_assets_use()` is a thin URL-to-file mapping layer over
-`chttp_server_serve_file()`; CHTTP remains the file streaming, conditional
-request, range, metadata, and async-I/O owner.
+Set `config.assets` to a `chttp_assets` descriptor with a mount and optional
+reflected worker policy. CHTTP retains native file streaming, conditional/range
+policy and terminal ownership. Init copies mount and hook rows; strings and
+canonical metadata remain borrowed through close.
 
 A mount:
 
@@ -353,6 +362,10 @@ progressive fragments.
 
 ## Reference applications
 
+These Web fixtures exercise private native engine adapters and shared helper
+semantics. Use the public Application examples above for new services; native
+registration/builders from these fixtures are not installed APIs.
+
 The repository keeps reference programs under `app/examples/`. They are part
 of the normal example build and must remain independently compilable.
 
@@ -363,22 +376,16 @@ of the normal example build and must remain independently compilable.
 | `chttp_web_crud_example.c` | Bounded in-memory CRUD, typed user sequence, ordinary form fallback, HTMX-compatible fragment mutation, session CSRF, conservative Web security policy |
 | `chttp_web_session_example.c` | Bounded form parsing, session-backed CSRF token lifecycle, mutation validation, flash messages |
 | `chttp_web_security_example.c` | Web security middleware composed with rate limiting, CORS, JWT bearer routes, explicit header override |
-| `chttp_web_deferred_example.c` | Owner-thread request-state copy, response defer, bounded Salts worker queue, worker-side render and generation-checked deferred reply |
+| `chttp_web_deferred_example.c` | Private engine defer/generation conformance with bounded worker rendering |
 | `chttp_web_form_upload_example.c` | Structured validation, ordinary + HTMX error UX, multipart upload staging, Session CSRF, flash/redirect success, hostile metadata escaping |
 | `chttp_web_authenticated_app.c` | Complete browser-authenticated flow: login, Session regeneration, principal/authz middleware, safe return targets, asset mount, Jinja full-page/fragment rendering, logout, stale-cookie and autoescape qualification |
 
 Configure with examples enabled and build the desired target:
 
 ```text
-cmake --preset linux-dev-user -DBUILD_EXAMPLES=ON
-cmake --build build/linux-gcc-debug --target chttp_web_example
-cmake --build build/linux-gcc-debug --target chttp_web_context_example
-cmake --build build/linux-gcc-debug --target chttp_web_crud_example
-cmake --build build/linux-gcc-debug --target chttp_web_session_example
-cmake --build build/linux-gcc-debug --target chttp_web_security_example
-cmake --build build/linux-gcc-debug --target chttp_web_deferred_example
-cmake --build build/linux-gcc-debug --target chttp_web_form_upload_example
-cmake --build build/linux-gcc-debug --target chttp_web_authenticated_app_example
+cmake --preset native-release-user
+cmake --build --preset native-release-user
+ctest --preset native-release-user --no-tests=error
 ```
 
 The repository presets require the same configured Salts, SaltsUtils, vcpkg,
@@ -520,10 +527,9 @@ Important limits and lifecycle rules:
 - part count, header count/bytes, field bytes, filename bytes, content-type
   bytes, and total body bytes are all explicit bounds;
 - request body bytes and part metadata views are callback-scoped;
-- application staging callbacks run synchronously on the CHTTP owner thread and
-  must not perform unbounded blocking;
-- disk/database/remote persistence must use application-owned bounded
-  queueing/worker policy when blocking work is required;
+- application staging callbacks run synchronously on Application workers and
+  must terminate for close to settle;
+- disk/database/remote persistence needs explicit worker/resource limits;
 - `part_end` closes only one staged part and never means final application
   commit;
 - the final commit happens only after the complete body, CSRF, and application
@@ -537,41 +543,19 @@ The full browser-oriented composition is
 slot pool and bounded in-memory staging deliberately; CHttp::App does not
 provide a hidden upload directory or persistence layer.
 
-## Deferred worker rendering
+## Worker rendering
 
-CHTTP route handlers run on the server owner thread and must not block on
-application work.
+Application runs Controller methods on its bounded pool. Render a typed model
+with `chttp_web_render_response(renderer, invocation, ...)`; output is copied
+before the renderer buffer is released. There is no public manual defer step.
 
-The supported pattern is:
+Use one renderer per serialized worker, independent instances for parallel
+workers, or explicit application synchronization. Invocation views cannot be
+retained by later producers. Cancellation preserves model/renderer lifetime
+until running business and native ownership settle.
 
-```text
-owner thread
-    |
-    +-- validate/authenticate
-    +-- copy only the request values the worker needs
-    +-- reserve bounded worker capacity
-    +-- chttp_server_response_defer()
-    |
-    v
-application worker
-    |
-    +-- business/database work
-    +-- build typed model
-    +-- chttp_web_deferred_render_reply()
-```
-
-`chttp_web_deferred_example.c` demonstrates this with a bounded
-`salts_threadpool`. It deliberately uses one renderer with one worker thread,
-which satisfies the renderer's synchronous non-reentrant ownership contract.
-Applications that need parallel rendering should give workers independent
-renderers or provide their own explicit serialization.
-
-Handler-scoped request, route-param, header, session, and JWT views must never
-be retained by a worker. Copy required values before returning from the owner
-thread callback.
-
-A stale/cancelled deferred handle fails through the existing generation-checked
-CHTTP deferred API; the Web helper does not retry or invent fallback state.
+The older `chttp_web_deferred_example.c` fixture directly tests private engine
+defer/generation contracts. It is not the public Application usage pattern.
 
 ## SSE route
 
@@ -583,15 +567,15 @@ A `GET /events` route should:
 1. keep caller-owned `chttp_web_sse_stream` state alive for the response;
 2. provide a synchronous bounded `next` callback;
 3. initialize the stream with `chttp_web_sse_stream_init()`;
-4. commit it with `chttp_web_sse_response()`;
+4. select it with `chttp_web_sse_response(invocation, stream, error)`;
 5. release application stream state from the exactly-once close callback.
 
 `app/tests/web/test_chttp_web_sse.c` is the executable protocol reference. It
 proves canonical event formatting, newline normalization, the same finite event
 sequence over HTTP/1.1 and HTTP/2, and exactly-once cleanup after disconnect.
 
-SSE and WebSocket are independent choices. WebSocket remains a CHTTP server
-capability and is not reimplemented by `CHttp::App`.
+SSE and WebSocket are independent choices. Application configures reflected opening/ready/event methods; the Server/CNet
+engine retains framing and transport ownership.
 
 ## Security deployment guidance
 
@@ -645,7 +629,6 @@ A renderer is synchronous and non-reentrant.
 
 Safe models include:
 
-- one renderer used only on the CHTTP owner thread;
 - one renderer owned by one application worker;
 - one renderer per parallel worker;
 - an externally serialized renderer when the application accepts that

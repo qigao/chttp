@@ -1,3 +1,4 @@
+#include "../../../src/chttp_web_engine.h"
 #include "../../../src/chttp_web_registration.h"
 #include "../../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
@@ -56,9 +57,9 @@ typedef struct auth_app {
   cmeta_data_desc model_desc;
 
   chttp_web_security_policy security;
-  chttp_web_asset_mount assets;
-  chttp_web_auth_policy dashboard_policy;
-  chttp_web_auth_policy admin_policy;
+  chttp_web_engine_asset_mount assets;
+  chttp_web_engine_auth_policy dashboard_policy;
+  chttp_web_engine_auth_policy admin_policy;
   chttp_server_middleware dashboard_middleware;
   chttp_server_middleware admin_middleware;
 
@@ -393,7 +394,7 @@ static int auth_app_render(
 
   model.return_to = vstr_from_cstr(return_to != NULL ? return_to : "");
   model.message = vstr_from_cstr(message != NULL ? message : "");
-  status = chttp_web_render_response(
+  status = chttp_web_engine_render_response(
       &app->renderer,
       response,
       template_name,
@@ -483,12 +484,12 @@ static int auth_app_login_post(
     return SALTS_EIO;
 
   if (chttp_web_request_is_htmx(request)) {
-    status = chttp_web_hx_redirect(response, return_to, &error);
+    status = chttp_web_engine_hx_redirect(response, return_to, &error);
     if (status != CHTTP_WEB_OK)
       return error.native_status != 0 ? error.native_status : SALTS_EIO;
     return chttp_server_reply(response, 200u, NULL, NULL, 0u);
   }
-  status = chttp_web_redirect(
+  status = chttp_web_engine_redirect(
       response, 303u, return_to, &error);
   return status == CHTTP_WEB_OK
              ? SALTS_OK
@@ -595,12 +596,12 @@ static int auth_app_logout_post(
   if (status != CHTTP_WEB_OK) return SALTS_EIO;
 
   if (chttp_web_request_is_htmx(request)) {
-    status = chttp_web_hx_redirect(response, "/login", &error);
+    status = chttp_web_engine_hx_redirect(response, "/login", &error);
     if (status != CHTTP_WEB_OK)
       return error.native_status != 0 ? error.native_status : SALTS_EIO;
     return chttp_server_reply(response, 200u, NULL, NULL, 0u);
   }
-  status = chttp_web_redirect(response, 303u, "/login", &error);
+  status = chttp_web_engine_redirect(response, 303u, "/login", &error);
   return status == CHTTP_WEB_OK
              ? SALTS_OK
              : (error.native_status != 0 ? error.native_status : SALTS_EIO);
@@ -614,7 +615,7 @@ static int auth_app_root(
   chttp_web_status status;
   (void)user;
   (void)request;
-  status = chttp_web_redirect(response, 303u, "/dashboard", &error);
+  status = chttp_web_engine_redirect(response, 303u, "/dashboard", &error);
   return status == CHTTP_WEB_OK
              ? SALTS_OK
              : (error.native_status != 0 ? error.native_status : SALTS_EIO);
@@ -694,14 +695,14 @@ static int auth_app_start(auth_app *app, const char *asset_root) {
 
   app->security = chttp_web_security_authenticated_policy();
   app->assets =
-      (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
+      (chttp_web_engine_asset_mount)CHTTP_WEB_ENGINE_ASSET_MOUNT_INIT;
   app->assets.url_prefix = "/assets";
   app->assets.filesystem_root = asset_root;
   app->assets.max_relative_path_bytes = 256u;
   app->assets.cache_control = "public, max-age=60";
 
   app->dashboard_policy =
-      (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+      (chttp_web_engine_auth_policy)CHTTP_WEB_ENGINE_AUTH_POLICY_INIT;
   app->dashboard_policy.login_path = "/login";
   app->dashboard_policy.include_return_target = true;
   app->dashboard_policy.max_return_target_bytes = AUTH_APP_RETURN_BYTES;
@@ -709,7 +710,7 @@ static int auth_app_start(auth_app *app, const char *asset_root) {
   app->dashboard_policy.authorize_user = app;
 
   app->admin_policy =
-      (chttp_web_auth_policy)CHTTP_WEB_AUTH_POLICY_INIT;
+      (chttp_web_engine_auth_policy)CHTTP_WEB_ENGINE_AUTH_POLICY_INIT;
   app->admin_policy.login_path = "/login";
   app->admin_policy.include_return_target = true;
   app->admin_policy.max_return_target_bytes = AUTH_APP_RETURN_BYTES;
@@ -719,9 +720,9 @@ static int auth_app_start(auth_app *app, const char *asset_root) {
   app->admin_policy.forbidden_user = app;
 
   app->dashboard_middleware = (chttp_server_middleware){
-      chttp_web_auth_middleware, &app->dashboard_policy};
+      chttp_web_engine_auth_middleware, &app->dashboard_policy};
   app->admin_middleware = (chttp_server_middleware){
-      chttp_web_auth_middleware, &app->admin_policy};
+      chttp_web_engine_auth_middleware, &app->admin_policy};
 
   dashboard_route = (chttp_server_route_options){
       .method = CHTTP_METHOD_GET,

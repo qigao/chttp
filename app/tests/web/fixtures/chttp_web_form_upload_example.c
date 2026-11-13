@@ -1,3 +1,4 @@
+#include "../../../src/chttp_web_engine.h"
 #include "../../../src/chttp_web_registration.h"
 #include "../../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
@@ -350,7 +351,7 @@ static int web_forms_render(
   model.upload_label = vstr_from_cstr(app->upload_label);
   model.upload_filename = vstr_from_cstr(app->upload_filename);
 
-  status = chttp_web_render_response(
+  status = chttp_web_engine_render_response(
       &app->renderer,
       response,
       template_name,
@@ -454,7 +455,7 @@ static int web_forms_profile_post(
 
   if (!validation.valid) {
     if (chttp_web_request_is_htmx(request)) {
-      status = chttp_web_hx_retarget(
+      status = chttp_web_engine_hx_retarget(
           response, "#profile", &error);
       if (status != CHTTP_WEB_OK) return SALTS_EIO;
       return web_forms_render(
@@ -470,10 +471,10 @@ static int web_forms_profile_post(
   memcpy(app->profile_note, note, strlen(note) + 1u);
 
   if (chttp_web_request_is_htmx(request)) {
-    status = chttp_web_hx_trigger(
+    status = chttp_web_engine_hx_trigger(
         response, "profile:saved", &error);
     if (status == CHTTP_WEB_OK)
-      status = chttp_web_hx_retarget(
+      status = chttp_web_engine_hx_retarget(
           response, "#profile", &error);
     if (status != CHTTP_WEB_OK) return SALTS_EIO;
     return web_forms_render(
@@ -486,7 +487,7 @@ static int web_forms_profile_post(
       request->session, &flash_config,
       "success", "profile saved", &error);
   if (status != CHTTP_WEB_OK) return SALTS_EIO;
-  status = chttp_web_redirect(
+  status = chttp_web_engine_redirect(
       response, 303u, "/forms", &error);
   return status == CHTTP_WEB_OK ? SALTS_OK : SALTS_EIO;
 }
@@ -773,7 +774,7 @@ static int web_forms_upload_post(
 
   if (status == CHTTP_WEB_VALIDATION) {
     if (chttp_web_request_is_htmx(request)) {
-      if (chttp_web_hx_retarget(
+      if (chttp_web_engine_hx_retarget(
               response, "#upload", &error) != CHTTP_WEB_OK)
         render_status = SALTS_EIO;
       else
@@ -797,10 +798,10 @@ static int web_forms_upload_post(
   }
 
   if (chttp_web_request_is_htmx(request)) {
-    status = chttp_web_hx_trigger(
+    status = chttp_web_engine_hx_trigger(
         response, "upload:saved", &error);
     if (status == CHTTP_WEB_OK)
-      status = chttp_web_hx_retarget(
+      status = chttp_web_engine_hx_retarget(
           response, "#upload", &error);
     if (status == CHTTP_WEB_OK)
       render_status = web_forms_render(
@@ -817,7 +818,7 @@ static int web_forms_upload_post(
       request->session, &flash_config,
       "success", "upload saved", &error);
   if (status == CHTTP_WEB_OK)
-    status = chttp_web_redirect(
+    status = chttp_web_engine_redirect(
         response, 303u, "/forms", &error);
   web_forms_release_upload_slot(slot);
   return status == CHTTP_WEB_OK ? SALTS_OK : SALTS_EIO;

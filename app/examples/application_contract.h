@@ -34,12 +34,12 @@ static const cmeta_object_interface_provider answer_interfaces = {
 
 /* Explicit demo rejection, not an authentication mechanism. The header makes
  * chain entry observable on successful, rejected and unmatched requests. */
-static cmeta_status before_dispatch(void *self, const chttp_exchange *exchange, bool *proceed) {
+static cmeta_status before_dispatch(void *self, const chttp_invocation *exchange, bool *proceed) {
   const DispatchPolicy *policy = (const DispatchPolicy *)self;
-  if (chttp_server_response_set_header(exchange->response, "X-Example-Interceptor", "ACE") != SALTS_OK)
+  if (chttp_invocation_set_header(exchange, "X-Example-Interceptor", "ACE") != SALTS_OK)
     return CMETA_CALLBACK_ERROR;
-  if (strcmp(exchange->request->path, "/reject") == 0) {
-    if (chttp_exchange_reject(exchange, (unsigned int)policy->rejected_status,
+  if (strcmp(chttp_invocation_request(exchange)->path, "/reject") == 0) {
+    if (chttp_invocation_reject(exchange, proceed, (unsigned int)policy->rejected_status,
         "text/plain", "Rejected", 8u) != SALTS_OK) return CMETA_CALLBACK_ERROR;
     *proceed = false;
   }

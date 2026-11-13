@@ -290,7 +290,7 @@ int chttp_web_sse_source_open(chttp_web_sse_stream *stream, chttp_body_source *s
   return SALTS_OK;
 }
 
-chttp_web_status chttp_web_sse_response(
+chttp_web_status chttp_web_engine_sse_response(
     chttp_server_response *response,
     chttp_web_sse_stream *stream,
     chttp_web_error *error) {

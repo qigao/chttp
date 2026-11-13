@@ -1088,10 +1088,12 @@ int chttp_websocket_client_connect(chttp_websocket_client *client,
     status = chttp_websocket_client_drain_output(impl, deadline);
     if (status != SALTS_OK) goto done;
   }
-  *out_http_status = impl->handshake_http_status;
   status = impl->phase == CHTTP_WEBSOCKET_CLIENT_OPEN ? SALTS_OK : impl->terminal_status;
 
 done:
+  /* A denial can arrive while request output is still draining. Preserve the
+   * parsed status on those error exits as well as on the normal handshake path. */
+  *out_http_status = impl->handshake_http_status;
   if (status != SALTS_OK && impl->phase != CHTTP_WEBSOCKET_CLIENT_OPEN) {
     if (impl->connection.generation != 0u && !impl->transport_terminal)
       (void)chttp_managed_stream_close(&impl->transport);

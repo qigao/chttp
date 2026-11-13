@@ -1,3 +1,4 @@
+#include "../../src/chttp_web_engine.h"
 #include "../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 #include "tinytest.h"
@@ -169,7 +170,7 @@ static int web_sse_handler(
       &app->stream, web_sse_next, web_sse_close, app,
       app->scratch, sizeof(app->scratch), &error);
   if (status != CHTTP_WEB_OK) return error.native_status;
-  status = chttp_web_sse_response(response, &app->stream, &error);
+  status = chttp_web_engine_sse_response(response, &app->stream, &error);
   return status == CHTTP_WEB_OK ? SALTS_OK : error.native_status;
 }
 

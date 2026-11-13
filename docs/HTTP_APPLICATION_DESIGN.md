@@ -1,972 +1,268 @@
-# Reflected HTTP Application migration
+# Reflected HTTP Application
 
-The application API replaces public callback registration and the standalone
-chttp_service owner. This is an intentional source-breaking migration.
-HTTP/1, H2, TLS, WebSocket, RPC, body limits and terminal ownership remain with
-the existing server engine. Its registration and lifecycle entry points become
-private. No compatibility header, fallback implementation or versioned API is added.
+## Public entry-point switch
+
+Application is the public server programming model. It owns one HTTP engine,
+one bounded worker pool and one CMeta ACE Configurator graph. Controllers bind
+reflected Invocation actions or generated DataBind HTTP/RPC methods; Services
+are injected through canonical CMeta Interfaces. Application init resolves
+receivers, validates exact ABIs and publishes every configured binding before
+start. Manual Server/service/worker registration remains private.
+
+This is an intentional source/ABI migration. Exchange actions, owner-thread
+business dispatch and borrowed per-method executors are removed from the public
+model. There is one programming model, with no compatibility alias, execution
+mode fallback or parallel versioned API. Rebuild native callers and install to
+a clean SDK prefix so old headers do not survive an overlay install. Rollback
+installs the preceding SDK and rebuilds those callers.
+
+The implementation reuses the existing Server, CMeta ACE, CFlow executor,
+SaltsBase thread pool, CNet/NativeIO and DataBind SDKs. It adds no dependency or
+second scheduler, parser, router, Session store or plugin lease authority.
 
 ## Chosen composition
 
-- One Application owns one bounded HTTP server, one ACE Configurator graph and
-  its immutable Controller/action/interceptor bindings. CMeta::ACE owns component
-  creation, dependency admission, activation rollback and reverse destruction.
-- Deployments explicitly select providers; there is no classpath scan, global
-  service locator or hidden singleton. A Controller identifies its component and
-  canonical DataDesc. Startup binds its native object once from the active graph.
-- HTTP annotations describe method/path separately from canonical CMeta Function
-  metadata. Exact native callback types and Function ABI are both checked before
-  publishing any route. A binding cannot manufacture lifecycle/provider authority.
-- Exchange actions expose callback-borrowed request/response views. DTO operations
-  reuse the generated DataBind HTTP/RPC plans and native execution contracts.
-  The old MethodPlan runtime becomes a private mechanism, not another service API.
-- Typed ACE Interceptor chains wrap dispatch in before/after/error order. Bean
-  objects and immutable metadata survive every request and deferred finalizer.
-  Dispatch hooks do not claim to observe eventual transport delivery.
-  Browser security headers and CORS protocol preflight run before this chain;
-  static assets and SPA fallback run inside it, before terminal route dispatch.
-  An Interceptor rejection cannot publish file-response work or expose bytes.
-  Application owns fixed-size Security, CORS and asset policy snapshots; their
-  strings, origin arrays and callback contexts remain borrowed until close.
-  Caller policy structures may be reused after init. File owners retain their
-  completion and drain obligations. Asset-only dispatch has no reflected
-  Controller operation and supplies NULL operation metadata to hooks.
-- Close stops admission, drains real I/O and deferred work, destroys the server
-  and MethodPlan records, then stops the component graph. Timeout/failure retains
-  live ownership for explicit close; it never zeros a live runtime.
-- C11 with-application execution returns operation and close errors. C++17 offers
-  a noncopyable RAII Application with checked close; an unhandled destructor
-  cleanup failure is fatal, rather than silently leaking or reporting success.
+- Explicit deployments select providers and Interface projections. ACE owns
+  dependency admission, creation, activation rollback and reverse destruction.
+  No global registry or request-time service lookup is added.
+- Each Controller names a Component stable ID and canonical receiver DataDesc.
+  Its native receiver is resolved once from the activated graph. Matching size
+  or a raw object pointer does not establish canonical identity or ownership.
+- `CHTTP_ACTION` declares `int(void *, const chttp_invocation *)` with canonical
+  Function ABI. C11 mappings and C++17 adapters validate metadata before routes
+  become reachable. Callback code and metadata remain live through close.
+- Global Invocation Interceptors wrap actions, generated HTTP/RPC and assets.
+  Per-action hooks follow global hooks, with a combined limit of 16. Generated
+  method hooks see each DTO operation separately, including RPC notifications.
+- The Server remains the protocol and native terminal owner. Static security,
+  JWT and CORS policy run before the business chain. Denied JWT, CORS preflight
+  and protocol failures need not execute business callbacks.
 
-Policy snapshots are copied on the control thread before activating Beans.
-Sized policy inputs must admit the known structure before copying it. Runtime
-callbacks borrow only Application-owned snapshots, which are immutable until
-HTTP/file completion drains and the Application is freed. No per-request copy,
-new allocation path, capacity policy or background policy mutation is introduced.
+Alternative designs were owner-thread business callbacks, a caller-supplied
+executor per binding, and nested worker submission around the old API. The first
+blocks protocol progress; the latter two split lifetime and capacity authority
+and allow post-and-wait deadlocks. One Application-owned pool gives every
+accepted request a charged record and a joined terminal. It also makes Bean
+concurrency explicit: the default one worker serializes business callbacks;
+multiple workers require thread-safe Services, Controllers and Interceptors.
+A Jinja renderer is synchronous and non-reentrant: use independent instances or
+explicit serialization when increasing worker count.
 
-Only static dependency construction is required here. Dynamic ServiceHost
-generation publication is an independent future capability, not a placeholder.
-NativeIO/CNet retain their sole execution/completion authority. Building a second
-HTTP runtime, interpreting erased native function pointers, and exposing both old
-and new business registration APIs were rejected.
+## Thread roles and request path
 
-## Migration and validation
-
-Public examples move to Application/Controller declarations. Historical handwritten
-apps that prove Session, CSRF, templates, uploads and generated bindings become
-module-owned formal fixtures; those behavior tests continue to run. No regression
-is replaced with a configure marker or independent consumer project.
-
-Application tests cover reflected ABI rejection, missing dependencies,
-startup rollback, ordered interceptors, native H1/H2 requests, generated DTO
-inline/deferred/CFlow binding, capacity, streamed-body receiver identity,
-deferred shutdown and C++ RAII. Existing engine suites cover concurrent requests,
-protocol source lifetimes and security. ACE owns graph-cycle/ambiguity admission.
-Existing official CTest and the published-SDK CI matrix remain the acceptance
-entry points. New public headers and installed exports expose only the new
-application registration path.
-
-Rollback requires reverting this migration as one change, restoring the old
-public headers and their callers together. It does not change wire formats or
-user data. No release is claimed until the complete implementation and its
-formal validation pass.
-
-## Typed C++ Bean admission
-
-Typed factories transfer exactly std::unique_ptr<T> into delete-T ownership.
-Constructor admission rejects custom/derived pointer result types; create checks
-canonical DataDesc validity and exact native size/alignment before any factory
-side effect. Explicit ACE providers own other deletion models. These checks
-protect the typed allocation/deletion boundary; callers still supply the correct
-semantic DataDesc identity for T. Borrowed Interface views gain no ownership.
-
-## Worker-dispatched Application (design and private implementation)
-
-This section specifies the next programming model. The implementation above is
-still the current contract: ordinary actions and the HTTP Interceptor chain run
-on the connection owner, while generated HTTP bindings may explicitly defer.
-None of the API changes below is available merely by configuring today's SDK.
-
-Evidence for the existing boundaries is in [Application bindings](../app/src/chttp_application.c),
-[generated deferred execution](../app/src/chttp_method_runtime.c),
-[public Application types](../app/include/chttp_app/application.h) and
-[HTTP deferred/source ownership](../http_server/include/http_server/http.h).
-The selected CMeta 0.1.6 worker provider wraps the SaltsBase thread pool; its
-[implementation](https://github.com/qigao/cmeta/blob/v0.1.6/cflow/src/executor.c)
-is the scheduler reuse point. These facts do not establish the proposed mode.
-
-### Internal implementation status
-
-The private `app/src/chttp_application_work.h` bridge now owns a bounded CFlow
-worker pool, deep-copied buffered request state and a copied response draft.
-Private Application bindings resolve Controller receivers from the same ACE
-graph; their methods, injected Service calls and typed Interceptor chain execute
-on workers. The private prototype rejects mixing legacy owner callbacks and
-is neither installed nor selected by the public Application API.
-
-Buffered deferred responses have an owner-side terminal ticket. Business
-finalization and native response completion/reset join before scheduling one
-worker completion observer, retaining snapshots, admission slots and Beans
-through observer finalization. H2 encoder stream closure is not native send
-completion: ready tickets move to the writing batch only when that batch is
-submitted, and settle when NativeIO reports it sent. Peer RST_STREAM(NO_ERROR)
-still means cancellation. Success establishes local native send completion,
-not consumption by the remote application.
-
-Generated synchronous direct, CFlow and Plugin HTTP methods can mount on that same private
-pool. The existing MethodPlan evaluator now writes through an internal output
-adapter: the published engine path retains its buffer publication semantics,
-while the worker path copies into the invocation draft before releasing the
-DataBind native frame and serializer buffer. Binding, validation, native method
-execution and output staging all stay on the worker; there is no nested executor
-post/wait. The method record and canonical ACE receiver remain retained through
-terminal finalization. CFlow compiles its producer-owned typed adapter once and
-evaluates the immutable Plan in that same task, without a borrowed executor or
-nested scheduling. Owned Plan output remains live through serialization, then
-is destroyed before the input frame. Plugin HTTP mounts resolve catalog/native
-execution under an existing mount-owned lease; Plugin RPC retains the producer's
-execution context and its own mount lease. Both execute on the same pool and
-keep provider code pinned through joined close. Private generated-method
-before/after/on_error hooks now surround bound native/Plan execution and outcome
-staging on that same pool, with canonical ACE hook receivers and bounded copied
-metadata. Native status, staging failure and explicit rejection remain distinct.
-Per-method completion now retains bounded frozen facts and uses the same joined
-worker notification after the enclosing native response terminal.
-
-Private generated RPC mounts use the same pool for the complete HTTP envelope.
-The Server registry exposes a private scheduler-neutral evaluator/output boundary;
-the owner adapter only snapshots and admits work. Existing bounded batch parsing,
-sequential method dispatch, protocol errors and notification suppression remain
-shared with the engine path. Pure notification batches preserve an empty 204
-without adding a Content-Type header. Server registry/frame pools and ACE receivers
-remain live until the worker invocation drains, including after an H2 handler
-deadline. Per-RPC-method business hooks have independent bound frames and unwind
-within each sequential call, including notifications and rejection.
-
-Private buffered worker bindings now also support detached, bounded Session
-snapshots and owner-side intent commits. Same-Session calls wait in the existing
-invocation pool and refresh in admission order without occupying a worker. The
-gate retires after business finalization joins owner commit/abort, independently
-of wire completion. Ordinary failed/canceled writes are discarded; explicit
-invalidation retains the existing fail-closed security contract, including after
-transport loss, and never clears a newer generation. H1/H2 tests exercise CSRF,
-login/logout, cookie flags, regeneration, capacity failures, stale queues,
-cancellation/drain and H2 flow-window backpressure. The public deferred API still
-rejects live Sessions; no partial public Application mode has been enabled.
-
-`chttp_application_worker_test` covers snapshot isolation, overload, real H1/H2
-deadlines, one/two-worker execution, hook unwinding, finite close and H2 flow
-control. `chttp_application_test` exercises actual ACE-injected Controller/Service
-dispatch and graph retention across a blocked completion observer;
-`chttp_application_binding_test` verifies H1/H2 generated success/validation/
-missing-input behavior, typed RPC, mixed/notification batches, protocol errors
-and canceled running native methods. The Server suite
-covers the zero-error reset. `chttp_application_plugin_test` exercises real DSO
-HTTP/RPC worker execution, provider context, lease rollback, stopped-provider
-admission, output failure/reuse and canceled running methods with finite close.
-`chttp_application_output_test` verifies bounded required record JSON output,
-typed-error mappings, integer/text fidelity, capacity rollback/reuse, mixed RPC
-batches and real DSO drain under canceled running methods. Method completion
-tests cover entered reverse ordering, completion-only hooks, immutable per-item
-facts, blocked-observer leases and H2 flow-window backpressure while the sole
-worker serves another method.
-`chttp_application_body_test` verifies required record JSON input across H1/H2
-and DIRECT/CFlow/real Plugin execution: native integer/text fidelity, nested
-validation, malformed/unknown/duplicate/missing inputs, media admission, bounded
-storage, single-record reuse and DTO/provider retention during finite close.
-Public Session/admission integration, stream/WS adaptation, remaining DTO ingress/
-state/collection representations and the public Invocation migration remain required
-before switching the programming model. No runtime feature switch was added.
-
-### Decision and alternatives
-
-The private CFlow migration admits a synchronous producer-owned typed adapter
-without an external executor. Mount compiles one immutable Plan using the same
-canonical type/effect/ABI checks as the engine path. The existing Application
-slot/byte admission owns the copied input and draft; its worker binds a bounded
-native frame, evaluates exactly one Plan input, serializes the owned result into
-the draft, and destroys that result before the frame. No second task, blocking
-post/wait, interpreter fallback or async-Plan emulation is allowed. Invalid
-projection/unsupported effects fail before publishing the route; evaluation or
-serialization failure yields the existing 500 response. The method record and
-borrowed code/captures remain live through joined native-terminal finalization,
-including when cancellation wins before a running projection returns. This is
-an internal step only; it does not change installed metadata or public defaults.
-The legacy engine path retains its explicitly borrowed executor contract.
-
-The private Plugin migration reuses the existing registry and mount-owned method
-lease. HTTP resolves its catalog/export and exact adapter at mount; RPC borrows
-the admitted provider execution context under its own registry lease, rather
-than replacing that context with a Controller pointer. Both use the same owned
-Application worker task for binding/invocation/serialization and require no
-borrowed executor. Failed mounts release their acquired lease before exposing
-a route. Stop closes new lease admission but does not revoke an admitted method;
-unload stays busy until workers, native response terminals, method/Server storage
-and provider-owned value cleanup have drained. The control-thread registry and
-all borrowed descriptors remain address-stable through Application close. No
-lease counter, loader, retry or scheduling layer is added. This remains private;
-the old engine's explicit executor behavior and public defaults are unchanged.
-
-The baseline is that application-supplied Controller actions, generated native
-Service methods, RPC methods and application Interceptor hooks execute on a
-bounded worker pool. Ordinary injected Service calls execute directly on the
-calling worker; injection does not add another queue hop. The HTTP owner never
-waits for a user method or executes one as a queue-full fallback.
-
-Reuse an Application-owned CFlow worker executor, created through
-`cflow_executor_worker_init_with_capacity`. Its implementation already uses the
-ordinary SaltsBase thread pool. Application owns initialization, admission and
-drain; the existing MethodPlan runtime borrows this same executor. Do not accept
-an arbitrary Manual/owner-driven executor as proof of worker execution. The
-initial implementation does not add an executor framework, LF backend, automatic
-backend selection, or upstream dependency.
-
-Rejected alternatives are synchronous owner dispatch (violates the requested
-baseline), one thread per request/unbounded queues (unbounded resources), and
-moving CNet or native endpoints to business workers (breaks progress ownership).
-Starting with coroutine-only business execution would also leave ordinary
-blocking libraries occupying coroutine shard threads. Pool dispatch comes first;
-cooperative suspension is a later explicit execution mode, never a fallback.
-
-This intentionally changes public execution/context semantics. Replace the
-callback-scoped Exchange/engine response exposure with one Application invocation
-contract; do not ship parallel old/new business APIs, version dispatch, or an
-inline compatibility path. Public signatures and canonical metadata must be
-reviewed before implementation. Old native/plugin bindings must fail admission,
-not accidentally pass because a pointer ABI retained its old spelling.
-
-### Thread roles and request path
-
-| Role | Work and restrictions |
+| Role | Ownership and work |
 | --- | --- |
-| Control thread | Create Components and workers, start ingress, close/drain. Never close/wait from a business callback. |
-| HTTP connection owner | CNet/NativeIO progress, H1/H2 parsing, TLS, stream/connection generations, wire flow control, bounded transport publication and real terminal observation. No user business method or blocking queue admission. |
-| Application worker | Custom admission/authorization, Controller/Service methods, HTTP/RPC business Interceptors, DTO conversion, rendering and application completion observers. No direct mutation of an engine request, response, Session store or endpoint. |
-| External async producer | Publish an owned result/status and signal its designated owner. It neither resumes a coroutine on the producer thread nor invokes business hooks there. |
-
-The logical path is:
+| Control thread | Activate Beans, configure/start ingress, close/drain. |
+| HTTP owner | CNet/NativeIO progress, H1/H2/TLS parsing, generations, native flow control, response publication and terminal observation. |
+| Application worker | Header admission, Controller/Service methods, request/method hooks, DTO binding/serialization, rendering, upload/source/WS callbacks and completion observers. |
 
 ```text
-owner: parse headers; built-in protocol/JWT checks; claim bounded invocation
-  -> worker: custom header admission, if configured
-  -> owner: admit/reject body; parse or incrementally receive within budgets
+owner: headers, built-in checks, bounded record claim
+  -> worker: optional custom header admission
+  -> owner: body admission and bounded reception
   -> worker: before -> Controller/Service -> after or on_error
-  -> owner: validate staged result; commit Session intent and response; send
-  -> owner: observe response terminal (success, cancellation, or error)
-  -> worker: after_completion; final release when all owners are settled
+  -> owner: commit Session intent and staged response; send
+  -> owner: observe native terminal
+  -> worker: completion observer; release only after every owner settles
 ```
 
-H1 retains at most one admitted invocation per connection and preserves ordered
-keep-alive/pipelined responses. H2 uses one bounded invocation per admitted stream;
-worker completion order across streams need not match arrival order. Each stream
-returns to its original connection owner; this design does not migrate endpoints.
-
-Built-in CORS preflight, protocol failures and JWT denial can terminate without
-calling application code. Every supplied admission callback uses the header-only
-worker stage; it must not receive a borrowed parser view. H1 does not send
-100 Continue before successful admission. H2 holds user delivery for that stream
-and bounds early DATA with existing native stream/body limits while other
-streams continue progressing. This
-requires an internal retained admission bridge; today's response_defer API is
-not valid at an arbitrary header callback.
-
-A one-worker default preserves serialized business execution. Worker count is
-independent of HTTP owner count. With multiple workers, Controller, Service and
-Interceptor Beans may be invoked concurrently. Their declared implementations
-must be safe for that topology; reflection and RAII provide no synchronization.
-Do not automatically put a global mutex around Beans. A non-reentrant Jinja
-renderer needs independent instances or explicit application serialization.
-
-### Invocation ownership and response staging
-
-The private worker draft adds copied response headers within explicit
-header_capacity/header_bytes limits. Zero limits admit no extra fields; the
-existing Content-Type response property keeps its reserved row and reply-byte
-budget. At admission, checked header-table/arena bytes count against the same
-retained-byte budget before defer or user code. There is no growing allocation,
-lazy expansion or allocation-failure fallback. Content-Type has one authoritative
-row: respond(type) and set_header(Content-Type) update that row in call order.
-Its strings and the body share the existing reply arena. Other fields use the
-bounded header arena and case-insensitive upsert; replacements preserve field
-position/name and consume bounded append-only string storage like the engine.
-
-The worker and Server share the same pure field grammar, reserved transport-name
-policy and checked wire measurement. Invalid fields/CRLF, reserved fields,
-count/byte exhaustion and arithmetic overflow fail before changing the draft.
-Body selection still seals only body/status; entered after hooks may update
-headers before publication finalizes the entire draft. Failed business discards
-all application headers with its partial body. A successful/rejected draft is
-copied by the established deferred submission, which merges original owner
-policy headers and enforces the Server's aggregate limits before publication.
-No engine builder or live Session store is passed to a worker.
-
-The owner still reserves managed Session Cookie storage before committing Session
-state. Its Set-Cookie upsert remains authoritative; the private setter does not
-introduce multiple-cookie append semantics or override that transaction. Header
-capacity failure must leave ordinary Session updates uncommitted. Header/draft
-memory remains owned through business/Session/native terminal and observer drain,
-including cancellation and finite-close failure. One worker writes one invocation;
-owner submission copies immutable fields before returning. This slice leaves
-public headers/defaults and streaming/admission/WS migration unchanged.
-
-The private handwritten Controller binding now adopts the buffered Invocation
-contract before the public swap. Its exact native action is
-`int(void *self, const chttp_invocation *)`; a nominal `chttp.invocation` type
-identity distinguishes it from the old Exchange even though both native
-arguments use an object-pointer carrier. CMeta admits effects, parameter/result
-ownership, canonical types and ABI before publishing a route. The old Exchange
-descriptor is rejected; no native function-pointer cast or erased invocation is
-used. The callback-only handle describes its real one-pointer borrowed layout,
-not an invented opaque value size. Neither it nor any accessor view may escape
-the callback or be retained by a background task.
-
-Invocation accessors borrow the existing owned request snapshot and detached
-Session intent view. Its request view clears the Session pointer; explicit
-Session access grants only the already-admitted staged request transaction.
-Respond copies into the existing bounded draft. Cancellation queries read the
-existing synchronized native-terminal state and report only observed failed
-terminal, not a guessed deadline or a second cancellation authority. Successful
-business return still requires a sealed response before success hooks unwind.
-Only before hooks can explicitly reject; entered after/error hooks retain the
-existing ACE ordering and one completion/finalization join.
-
-Controller hook descriptors resolve canonical Bean contexts and are copied at
-mount. Thin typed adapters construct a fresh callback-local Invocation over the
-same request/draft/result and reuse the existing worker ACE chain, rather than
-nesting a second chain or creating a task per hook. Completion still borrows the
-settled read-only snapshot/outcome after terminal; it never receives a writable
-Invocation. This adds no per-request allocation, queue, growing state or retention
-protocol. Copied hook rows occupy fixed control-plane metadata per route, with
-the existing route-capacity allocation's checked multiplication.
-The existing slot/retained/reply budgets, Session gate, cancellation and close
-joins remain authoritative. Frame/handle construction is on the worker; owner
-callbacks only perform the established snapshot/admission handoff.
-
-This is an internal replacement of the raw handwritten worker callback, not an
-installed parallel programming model. New headers are not installed; public
-Exchange defaults, streaming/admission/WS adapters and generated DTO native
-contracts are unchanged until their complete public migration. C++17 action
-adapters contain exceptions before returning through C worker frames and preserve
-ordinary RAII unwinding. Callback code, canonical metadata and hook Beans remain
-borrowed through Application drain. Rollback reverts the private binding and its
-formal callers together, without changing stored data or wire behavior.
-
-Application owns a finite set of address-stable invocation records. A record
-contains its slot/generation, immutable request snapshot, canonical operation,
-ACE/provider leases, active-stage deadline, cancellation state, worker-local DTO/frame
-storage, staged response and terminal-result storage. Its slot cannot be reused
-until business tasks, transport/source owners and completion observers settle.
-This Application lifecycle record does not replace CNet's authoritative native
-request/connection state machine.
-
-Header/route/query/body/JWT/peer-identity data are copied or explicitly retained
-into bounded immutable storage before the original owner callback returns.
-Do not shallow-copy the existing request struct: it contains borrowed pointers,
-a live Session context and body-sink context. Metadata remains borrowed from the
-admitted ACE graph, whose lifetime covers the whole invocation. Native/plugin
-frames retain their existing exact-once destructors and provider/module leases.
-
-The proposed action argument is an opaque Application invocation, with borrowed
-request accessors, an Application response writer and a cancellation query.
-Its accessors are valid only within the documented worker invocation/hook.
-A new canonical semantic identity must distinguish it from the old callback
-Exchange; remove the old public argument and rebuild native callers. No v2
-interface or runtime version switch is proposed.
-
-The worker response writer owns a bounded draft, not chttp_server_response.
-Returning from the user method seals it only after entered business Interceptors
-unwind. Interceptor rejection stages its own rejection without running the method.
-Owner-side commit validates and publishes one immutable result through the real
-HTTP engine. Worker success means business completion, not transport delivery.
-Publication of a copied or retained response may precede wire completion; it does
-not authorize recycling the invocation, source state or Bean/provider lifetime.
-
-No arbitrary background task may retain a raw Bean/request pointer after its
-invocation returns. Generated deferred/CFlow/plugin execution must keep its frame
-and lease until the producer's real terminal/finalizer. There is one business
-completion authority even when an external producer participates.
-
-### Interceptors, RPC and terminal outcomes
-
-The private JSON ingress slice admits one required, non-nullable record projected
-from the complete HTTP body, alongside existing scalar route/query/header/cookie
-inputs. The MethodPlan must explicitly select JSON; nonempty bodies require an
-application/json media type (case-insensitive, optional parameters), otherwise
-the worker stages 415 before entering method hooks. Missing/invalid JSON,
-native decode/validation failures and byte/depth/item/owned-value exhaustion
-retain the existing 400/422/413 ingress mapping. An over-limit transport body
-keeps its existing H1 413 or H2 stream reset. No content sniffing is used.
-
-At mount, the supplied MethodPlan codec compiles an immutable payload FormatPlan
-and verifies its canonical native record. All schema/name work stays there;
-codec storage can be released before start. Input fields admit scalar/string/
-enum/record/sequence shapes; the projected body root is still a record.
-Optional/null overlays, bytes, map/set, variants and
-multiple projected body fields remain rejected at mount until their complete
-representation contracts land. Nested non-identity
-name mappings remain governed by the SDK's FormatPlan admission.
-
-The existing Invocation snapshot owns bounded body bytes. A worker opens one
-explicit JSON provider lease and a canonical-name reader only during input
-binding. BindingPlan owns native decoding, nested validation and rollback; DTO
-strings use their canonical owning providers. The reader closes before
-method/hooks execute, on both success and failure. The published JSON provider
-builds a transient DOM; its storage scales with the admitted body and active
-workers, separately from the native owned-byte budget. The token reader/DTO
-storage retain the existing native depth, item and owned-byte budgets.
-No owner-affine body/reader escapes to user code, extra task/pool or unbounded
-input cache is introduced. Failed admission publishes no route; failed decoding
-enters no business hook and releases the same resources before response staging.
-
-The private sequence extension admits required sequence fields recursively
-inside that record. MessagePlan first verifies the finite native/schema graph;
-mount then follows the public CMeta element descriptor, rejecting unsupported
-element representations before publishing the route. The JSON provider forwards
-arrays directly to native decoding. Canonical CSTL collectors own initialized
-elements and their strings/records; no DOM view or shallow container copy crosses
-reader close, the worker task or a CFlow producer capture. Native item/depth/
-workspace bounds constrain container storage, and owned-byte bounds constrain
-element buffers. Decode/validation failure restores partial collections before
-the single invocation slot is reused. Output uses the same native encoder and
-bounded JSON transaction. Plugin leases cover container metadata and cleanup
-through finite-close drain. Map/set/bytes/variant and optional/null representations
-remain outside this sequence extension; there is no token coercion or fallback.
-
-The private structured-output migration takes the same codec used to compile
-the MethodPlan explicitly at worker mount. Control-plane schema introspection
-resolves a projected record field or a declared typed-error name; native
-MessagePlan admission and a JSON FormatPlan verify that payload before route
-publication. Method records own copied FormatPlans and borrow canonical native
-descriptors under the existing Bean/provider lifetime. The codec is borrowed
-only during mount, with no runtime schema lookup or transport format guessing.
-Supplying the same schema is a caller precondition: the current SDK exposes no
-MethodPlan schema fingerprint. Native admission rejects incompatible payload
-layouts but is not a substitute for schema identity.
-Legacy engine mounts retain their scalar contract.
-
-This slice admits required non-nullable record payloads whose FormatPlan needs
-no optional/null native state overlay or nested field-name rewriting. Existing
-scalar field projections keep their original raw HTTP/JSON-RPC representation.
-Unsupported payloads/formats fail mount, with no scalar or format fallback.
-HTTP emits structured JSON with application/json. RPC stages the same bounded
-JSON and opens the existing JSON reader before commit, then synchronously
-replays its exact integer/string/container tokens into the envelope writer.
-The reader and backing byte buffer are retained through result/error encoding;
-native DTO/error objects remain live through business-hook unwind and cleanup.
-
-The existing per-response/value byte limit bounds the JSON sink, and native
-depth/item/workspace limits still apply. RPC's temporary parser storage is
-proportional to that bounded document and its depth; the outer envelope/batch
-retains its own byte/depth limits. Each accepted worker/call slot owns at most
-one output transaction. Capacity, native encode, writer finish, reader open or
-envelope failure propagates without publishing partial output. FormatPlans
-are freed before Plugin leases, and all worker/terminal joins still precede
-method/Server/Bean destruction. No new dependency, parser, serializer framework,
-unbounded growth, public mode or installed ABI is introduced.
-RPC pays one bounded JSON parse to reuse the provider's exact token handling;
-a new token tape would add separate string/container ownership and admission
-rules. This choice makes no performance improvement claim.
-
-The private generated-method business slice uses one scheduler-neutral ACE
-chain shared by HTTP and RPC. Application resolves every hook context from its
-canonical ACE graph and mounts a copied array of at most 16 hooks. Only the
-worker composition admits these hooks; engine mounts cannot silently execute
-them on an owner. After successful input binding, before hooks enter forward;
-native/Plan execution and DataBind outcome staging form the target; successful
-after hooks or entered on_error hooks unwind in reverse before provider/native
-cleanup. Borrowed HTTP snapshots, canonical operation metadata, bound input and
-staged output views live only through that call. The request copy clears its
-mutable Session handle; a separate const Session view permits reads only.
-Method hooks may observe DTOs/results but cannot mutate frames or Session state;
-Session writes belong to the enclosing request transaction, not a batch item.
-CFlow's owned output stays live
-through unwinding. No hook can retain a frame or overwrite a published response.
-
-An explicit before rejection skips the target and maps to HTTP 403 or JSON-RPC
--32003 (Forbidden); a notification still emits no item. A malformed hook/failed
-callback maps to the existing internal-error path. Native status, typed business
-error and binding/serialization failure enter on_error with separate DataBind
-status/outcome facts; transport cancellation never reruns business on_error.
-Private worker mounts use the admitted FormatPlan for required record values
-and typed errors. Successful typed-error staging preserves the declared HTTP
-status / RPC code and live error frame during on_error. Staging failure still
-maps to HTTP 500 / RPC -32603 with DataBind outcome NONE; it never claims the
-business mapping after failed serialization. Scalar-only legacy engine mounts
-retain their existing behavior.
-Ingress failures have no entered method chain. RPC invokes a fresh chain for
-each bound batch item, preserving sequential order, method identity and
-notification/error suppression. No second task is posted. Hooks remain borrowed
-from the live graph through drain.
-
-The private completion slice retains per-method numeric outcomes for the
-enclosing HTTP terminal. Application admission reserves one record for HTTP,
-or at most the configured RPC max_batch_items when any RPC method has completion
-hooks. Checked record bytes count against the existing retained-byte budget
-before response defer or business side effects. Exhaustion rejects admission;
-there is no growing observer list, owner callback fallback or new executor queue.
-
-After successful input binding, reserve a record before entering the ACE chain.
-A bounded proxy records entered hook count while the upstream ACE chain remains
-the ordering/error authority. Completion runs entered hooks in reverse order,
-including the rejecting hook; unentered hooks and malformed/unknown/unbound
-methods get no notification. RPC records retain batch order and notification
-identity. Bind/execute/staging, interceptor status, response-adapter status and
-the request's business/publication/Session/transport results stay distinct.
-
-The existing Application join posts one worker notification only after business
-finalization, Session commit/abort and the real native response terminal settle.
-That notification visits method records, then the enclosing task observer, before
-task finalization and record/snapshot release. Native frames, CFlow results and
-RPC parser views are already destroyed: completion exposes immutable numeric
-facts, canonical operation/typed-error names, registry-owned RPC method identity
-and a read-only copied HTTP/Session view only. All borrowed metadata, hook Beans
-and Plugin method leases remain live until the whole notification drains.
-Cancellation is not completion and cannot observe a still-running method. A
-finite close timeout retains all ownership, including a blocked completion
-observer. Multiple workers may execute different invocation notifications
-concurrently; a single invocation has one business writer and one later reader,
-ordered through the existing executor/join synchronization.
-
-Reusing the bounded invocation join avoids a per-method task/queue and keeps
-transport settlement authoritative. Retaining DTOs until wire completion would
-pin native frames and managed values unnecessarily; replaying business hooks
-would duplicate side effects. Neither is part of this callback contract. This
-remains an internal migration and introduces no installed API or public mode.
-
-Use distinct stages with immutable, explicit outcomes:
-
-| Stage | Meaning and execution |
-| --- | --- |
-| before | Worker; declaration order. Can reject before business side effects. |
-| after / on_error | Worker; unwind entered hooks in reverse after the real business invocation ends. Never run merely because a task was queued. |
-| after_completion | Worker; exactly once after both business settlement and response terminal are known. Receives separate business, cancellation and transport results; cannot replace an already committed response. |
-
-A successful business return followed by a network reset remains business
-success plus transport failure; it does not trigger a second business on_error.
-A timeout cannot concurrently invoke on_error on a still-running invocation.
-An explicitly rejected request has no method execution, but can still have an
-observable response terminal. Pre-application protocol/JWT rejections have no
-entered application chain. Transport success does not prove that the peer's
-application processed the bytes.
-
-HTTP-request Interceptors run once for the HTTP envelope, including RPC batches.
-Add explicit RPC-method interception at the typed invocation boundary: method
-metadata, params, result/error and entered-hook state belong to each call.
-Selecting an HTTP or RPC-method scope is explicit; an HTTP hook is not silently
-replayed N times. Initial batch execution is sequential within one worker-owned
-batch invocation, preserving current behavior and bounding work by max_batch_items.
-It releases the worker on return; no nested task posting plus wait on the same
-pool. Notifications execute business hooks but emit no JSON-RPC result item;
-the batch aggregator preserves current empty/notification/error wire semantics.
-Each method unwinds its business hooks when it returns. Its response-completion
-observer sees the enclosing HTTP batch terminal, not a separate wire receipt for
-that JSON-RPC item; notification completion does not invent a response item.
-Parallel batch execution is outside this decision and needs its own bounded
-admission, result aggregation and ordering contract.
-
-### Capacity, task publication and errors
-
-Use these proposed Application inputs (names are design vocabulary, not public
-header declarations): worker_count W > 0, invocation_capacity J > 0, and an
-explicit finite retained-byte budget. Existing HTTP header/body/response and
-BindingPlan depth/item/frame bounds remain the per-request limits. The default
-config must fill valid bounded values, including W=1; init rejects invalid or
-overflowing explicit values. No CMake feature flag is added.
-
-The worker executor's queue capacity is derived from J. An invocation may have
-at most one queued worker stage at a time: admission, business, stream step, or
-completion notification. A stage that hands off to the owner must finish its
-frame and predecessor finalizer last-use publication before a successor can run.
-A run callback must not post its successor while its later finalize callback
-still needs the invocation; owner readiness and predecessor-finalized readiness
-must join before the single successor is scheduled. Transport events that
-arrive early record status; they do not schedule a second concurrent stage.
-There may be multiple owners waiting on a record, but never two mutable business
-stages for that record. Completed/result-waiting records still count against J.
-
-Consequently, when an admitted invocation schedules its next stage, at most J-1
-other records can occupy queue entries. The J-entry pool queue reserves capacity
-for that transition, including after_completion; no second unbounded queue,
-allocation on terminal, blocking post, inline fallback or notification drop is
-allowed. The chosen SDK's descriptor admission must be verified to honor this
-invariant under concurrent producers. Executor acceptance is transactional: a
-rejected post transfers no payload and invokes no cancel/finalize callback.
-
-The current task tail may still be returning when the next descriptor is claimed.
-Before posting that successor, release all mutable frame ownership and complete
-the current task's last access to the record; code after successful publication
-must not dereference it. Exactly-one scheduling/terminal arbitration uses the
-record's slot/generation and release/acquire state, not copied independent flags.
-Do not recycle a record while any predecessor callback can still access it.
-
-Only external ingress competes for free records/bytes. Refuse exhausted capacity
-with a bounded 503 before user execution; configured policy rate limits remain
-429. Invalid input uses its existing 4xx contract; startup config/ABI mismatches
-fail init. Queue wait time consumes the same absolute deadline for its stage;
-work does not reset it. Existing body_ms includes custom header-admission queue
-and execution plus body reception; handler_ms begins when the body is complete
-and includes the business queue, hooks and method, while response transfer retains
-its existing transport budget. This does not silently replace the three public
-phase budgets with a new whole-request timeout. Completion publication FULL/CLOSED
-after reservation is an invariant/lifecycle error, not ordinary overload: report
-the failure, stop new
-admission and retain unsettled ownership for control-plane diagnosis. Never
-report success or drop the callback. Do not shut the worker executor while
-accepted invocations can still need internal completion stages.
-
-Track retained bytes for snapshots, DTO/native frames, drafts, Session intents
-and pending notification state. Existing HTTP buffer capacity separately bounds
-protocol storage; moving/retaining memory requires explicit charge transfer or
-reservation, never an unaccounted second owner. Check every size/count product
-and sum. Required retained storage is bounded by J and the byte budget, plus
-known executor/task metadata and W worker stacks; request limits alone do not
-bound all concurrent retained bytes.
-
-### Cancellation, deadlines and close
-
-Cancellation is a request state, not proof that user code or external I/O ended.
-A queued stage checks cancellation before entering user code. A running method
-sees a cooperative cancellation query and may arrange cancellation with its
-external subsystem; CHTTP cannot kill a thread, undo a database write or invent
-an external completion. Disconnection/RST_STREAM makes the response target stale
-but leaves worker data, native frames and Bean leases alive until real settlement.
-No failed/late operation is automatically retried.
-
-The owner arbitrates one HTTP response outcome using the existing generation and
-terminal authority. If timeout wins before commit, apply the existing phase
-failure semantics (including H1 close/H2 stream cancellation); discard a later
-business response without executing the user method again. Keep business outcome
-and response/cancellation outcome distinct. Timeout while queued or running must
-not free worker-visible storage. after_completion waits for both sides and runs
-once, even if the response terminal happened before the worker returned.
-
-Close uses one absolute budget: stop ingress; cancel/mark pending application
-work as policy requires while owners and workers still progress; settle accepted
-HTTP/deferred/source terminals and business frames; execute reserved completion
-notifications; wait for invocation and callback/producer leases to reach zero;
-then close/drain/destroy the Application-owned worker executor and finally the
-ACE graph. Framework tasks must retain any required upstream executor/plugin
-until its admitted work actually settles. Do not wait on or destroy a borrowed
-shared executor or stop unrelated work on it. Blocking user code can prevent
-drain: finite close returns timeout/error with ownership retained. There is no
-forced free or successful close with a live task. External producers must be
-quiescent before the relevant executor is destroyed.
-
-### Session, files, streaming and WebSocket migration requirements
-
-Pre-body admission uses a separate short callback scope, not a response defer.
-It owns a copied header/params/JWT snapshot while using the same bounded worker
-slots, byte budget and executor as business Invocations. Its only output is a
-copied status/Retry-After decision. The task finalizer releases its snapshot and
-slot before publishing that value to the native owner; it never accesses the
-reusable record after publication. Body waiting buffers remain bounded by the
-existing native connection/stream and request-body limits. Business admission
-then reserves its ordinary Invocation credit and may return 503 before calling
-business code if full. Keeping a second header frame through the entire response
-was rejected because no user state is borrowed after this value-only callback.
-Private work telemetry counts these callback scopes and body Invocations, not
-HTTP requests; transport stats remain the HTTP request fact source.
-
-The native gate has the existing generation-checked per-request token. A closed
-pending header gate records cancellation and retains its native slot until its
-sole producer publishes; no callback scope or native owner is freed under that
-producer. The decision is consumed only on the native owner. JWT precedes the
-callback; 100 Continue/body_open/body delivery follow an allow decision. H1
-pauses at the header wire boundary, including zero-length requests; H2 buffers
-early DATA within existing limits and does not dispatch it to user callbacks.
-body_ms includes queue/callback time and is never restarted on continuation.
-The initial private slice supports ordinary H1/H2; upgrade/extended CONNECT
-remain with the later WebSocket adapter. Public synchronous admission is intact,
-and cannot be combined with this private gate. Removing the private registration
-restores ordinary owner admission without a fallback or new configuration flag.
-
-After protocol/deferred/file drain, the owner withdraws external wake ingress
-under the same Server mutex used by publishers before stopping NativeIO. The
-allocated CNet storage remains owned through stop/Manager cleanup/destroy;
-keeping storage alive alone does not permit waking a backend during close.
-The mutex is released before stop callbacks, which may acquire it themselves.
-
-The next private slice stages a raw file response, equivalent to the engine's
-response_file capability rather than conditional serve_file/asset routing.
-The worker copies the selected path and MIME into its existing checked reply
-arena before sealing the response; headers remain mutable through hook unwind.
-An admitted native deferred target borrows that immutable path under the existing
-invocation/native-terminal lease. The native owner opens/registers the file via
-the existing asynchronous file runtime before Session commit and serialization.
-It records preparation errors without rerunning business code or committing
-ordinary Session writes; cancellation before preparation never opens the file.
-Filesystem/open/read failures settle that request, not the worker executor.
-Native file retirement remains owned by the Server file runtime through drain;
-its resource callbacks never borrow a Bean or Invocation frame.
-
-For this private, handwritten binding the decision is
-`chttp_invocation_response_file(invocation, 200u, "application/octet-stream", selected_path)`.
-The selected path/type are copied; invalid scope/path/status/type, checked-size
-overflow, exhausted reply bytes and an already selected body fail explicitly.
-204/205/304 are not file-body statuses. A NULL type preserves the staged MIME;
-after hooks may update it. Success admits a decision, not a successful open:
-after_completion reports owner preparation in publication_status and later
-read/wire termination separately. Application file contents stay immutable
-through that native terminal; no user callback is moved onto the native owner.
-
-H1 must retain its active source-builder reference and parser pause through all
-file chunks and the final native send, including empty/HEAD and WAIT completion.
-H2 uses its established stream-local source and final END_STREAM terminal.
-Neither wire EOF nor cancellation permits early invocation/Bean reclamation;
-finite close keeps ownership until business, Session and native terminals join.
-The alternatives of worker-side engine/file-runtime mutation and buffering an
-entire file in reply_bytes are rejected for owner-affinity and bounded-memory
-reasons. Removing this private slice restores buffered-only staging; no public
-headers/defaults or existing synchronous source contracts change. Conditional
-assets, upload/source/SSE, admission and WebSocket adapters remain separate.
-
-The private Session implementation uses one charged, invocation-owned snapshot
-and staged mutation context, not the native request's live Session context.
-Existing Session accessors operate on that detached context; creation, ID
-regeneration and invalidation change intents only. The native owner validates
-the pinned original generation, reserves the cookie header, and commits the
-snapshot before response serialization. Business failure/cancellation discards
-ordinary write/regeneration intents. A later wire failure does not undo an
-already committed Session. Explicit invalidation is the security exception:
-the existing sign-in failure/logout contract must fail closed. A live owner
-expires the cookie even for a failed business result; if transport/cookie
-publication has failed, framework retirement reconciles invalidation under the
-store mutex before releasing the pin/gate. It clears only the admitted original
-generation, never a newer identity, and touches no native endpoint. Discarding
-all intents was rejected because it could preserve old authentication after
-the helper explicitly invalidated it. Transport/session errors remain visible;
-this cleanup does not synthesize a successful response or retry user code.
-Original owner-side Session mutations are rejected at handoff, rather than
-silently discarded. A generation invalidated while queued fails before business
-execution with HTTP 409 and no Set-Cookie, so a late stale response cannot replace
-the new generation's cookie. Owner commit/header/store failures retain their
-error and follow the existing deferred H1 close/H2 reset path.
-
-Session record pins prevent expiry/reuse before commit/abort; explicit
-invalidation or regeneration still makes an old generation stale. An existing
-Session's immutable record identity selects a FIFO logical gate within the
-Application's existing J slots. A waiting invocation is not posted to a worker.
-When both predecessor business finalization and owner commit/abort are known,
-the next waiter may run and refresh its snapshot from the authoritative store.
-This releases the gate before transport completion; an H2 flow-control stall
-must not block later same-Session business work. Canceled waiters are removed
-and settled without invoking user code. Completion observers still wait for
-the separate real response terminal, and cannot mutate sealed Session intents.
-
-All queue/gate scheduling uses the existing worker mutex; snapshot/store/pin
-operations use the existing short Session mutex. Neither lock is held across
-user methods, executor publication or native transport.
-During gate retirement, the lock order is worker then Session; native commit
-releases the Session mutex before signaling the worker join.
-No automatic retry, thread-per-Session, external runtime or unbounded waiting
-allocation is added.
-The ordinary public deferred API continues rejecting live Sessions; only the
-private owned worker bridge can attach this staged context. This remains an
-internal migration slice until the complete public replacement is ready.
-
-The worker baseline cannot be implemented by bypassing current unsupported
-cases. In particular, today's response_defer explicitly rejects Session-backed
-requests, WebSocket handshakes and deferred streaming bodies.
-
-- Session remains authoritative in the existing Server store. Replace worker
-  access to live chttp_session with a bounded snapshot plus staged mutations.
-  Serialize same-Session business invocations through a bounded logical gate,
-  coordinated under the existing short Session-store synchronization; never
-  hold its mutex during user execution, await or transport. A waiting Session
-  request holds an invocation slot, not a worker thread. Pin Session generation
-  through commit. Owner applies validated intents (including regenerate/CSRF/
-  principal/cookie transitions) before response headers; stale/invalidation or
-  cancelled commits fail explicitly, never rerun business code or claim database
-  rollback. Session read-only/write admission and existing Web helpers must be
-  migrated together; do not expose old live contexts to workers.
-- Static file selection and application authorization run on workers. File I/O
-  and file response terminal remain in the existing asynchronous file runtime.
-  File/source ownership survives method return and after hooks until terminal.
-  The private conditional-file adapter shares Server's metadata/ETag/date/range
-  planner with the synchronous helper, so protocol policy has one implementation.
-  It evaluates that plan on the worker snapshot and copies its response fields
-  into the configured header arena, with path/MIME in reply_bytes. All required
-  capacity and input checks precede draft mutation; after hooks can override
-  fields in their normal order. The retained native decision adds only a bounded
-  offset/length, not a file handle or copied file body. The owner opens that exact
-  range before Session commit; preparation and later I/O failures keep the existing
-  per-request publication/transport outcomes. Conditional no-body results need no
-  file open. Files must stay immutable from planning through terminal, as with
-  serve_file today. Directory mounting, asset classifiers and SPA dispatch remain
-  separate adapters; this step exposes no URL-to-filesystem mapping or public mode.
-  H1 source EOF preserves an existing stop/error close intent; its saved keep-alive
-  decision may only add a close, never reopen a connection during drain.
-  The private asset adapter registers one mount after worker preparation. Its
-  owner middleware only checks the validated asset/SPA namespace boundaries;
-  every matched request, including 404/405 paths, uses the existing bounded
-  Invocation admission and terminal lease. Unrelated paths continue dispatch.
-  Workers reuse the legacy mount's normalization, component-wise no-symlink/
-  reparse validation and reserved-namespace selection, then serve the copied
-  conditional-file decision. Both mounting modes share that selection code.
-  Root topology and files remain immutable through close, as before.
-
-  Asset hooks use ordinary canonical Invocation interceptors. Before rejection
-  prevents selection and user policy; after/error unwind and native-terminal
-  after_completion stay on workers. The optional asset policy is an exact
-  reflected, canonical Bean method returning status plus immutable/borrowed ETag
-  values. This single fallible callback replaces separate bool/pointer callbacks
-  in the private mode: exceptions become errors, never a false classification or
-  NULL-validator continuation. Borrowed policy output is consumed/copied before
-  any next user hook. Legacy owner callbacks/raw user contexts are rejected at
-  private registration, with no implicit adapter. The mount descriptor/hook rows
-  are copied; its strings, metadata and code borrow the live Application graph
-  through final drain. One heap-owned mount context stays address-stable until
-  native/worker shutdown completes, including failed finite close. Failed mount
-  registration publishes no middleware/context. Public defaults remain intact.
-- Upload sinks, SSE/source producers and WebSocket opening/events are user
-  callbacks and therefore need worker adapters too. Use bounded immutable chunk/
-  event messages and one sequential worker stage per stream/peer; keep engine
-  callbacks short and owner-affine. Preserve message ordering and generation
-  checks, and return credit/read demand only after consumption. An empty producer
-  queue requires an explicit WAIT/wake source contract; do not treat a synchronous
-  source's zero bytes as temporary emptiness instead of EOF. Closing settles every
-  admitted chunk/event and its cleanup, including explicit cancellation of work
-  not executed. Per-stream bytes/events remain independently bounded; waiting
-  streams/connections also consume retained Application capacity.
-  The private source bridge uses one copied descriptor and one chunk reserved
-  from the admitted Invocation's reply arena. It retains the same record/byte
-  credit and shared executor through native terminal, source cleanup and worker
-  notification. No producer queue or second pool is added. The native owner
-  requests at most one chunk; EMPTY -> REQUESTED -> RUNNING -> READY -> EMPTY
-  is synchronized by the worker mutex. Credit returns after the owner copies the
-  chunk. Only the internal owner adapter returns a distinct positive WAIT; a synchronous
-  user source still reports zero bytes as EOF and negative status as failure.
-  A lifecycle-locked owner waker signals READY, with Server storage retained
-  until the Application drains the worker pool. HEAD/cancellation/failed
-  publication mark CLOSED, never reclaim a running producer's storage. Cleanup
-  executes exactly once on a worker after business and any running read settle;
-  after_completion waits for cleanup and the actual native response terminal.
-  Source selection transfers its user resource only on success. That resource,
-  including SSE scratch, must remain live through cleanup; copied request and
-  Bean ownership remain with the Invocation/Application. Read failure after
-  headers terminates the stream rather than inventing a successful empty body.
-  Upload admission reserves its header snapshot, one input chunk and ordinary
-  reply/header budget on that same worker record before invoking user code.
-  The native route owns the input cursor; a copied chunk returns WAIT and no
-  further H1 read credit until worker consumption. H2 retains already received
-  DATA in its bounded stream input while withholding stream/connection credit;
-  sibling protocol/control progress remains owner-affine. Open, writes and body
-  close are sequential worker stages. EOF close preserves the staged resource
-  through the final Invocation and its cleanup. Only then can the record retire,
-  after joining the native request terminal, even if middleware bypasses the
-  final Controller. Header views stay immutable; the existing H1/H2 policy
-  rejects nonempty trailers. The parser's captured final keep-alive value is
-  copied only after body callbacks settle. Session state is admitted at final
-  dispatch and kept out of header/body callbacks; its extra snapshot bytes must
-  fit the same retained budget before response defer. Failure aborts this request without an inline
-  callback or second admission slot. Native cancellation never reclaims a
-  running body callback; finite close retains its Bean and chunk until drain.
-  The private WebSocket adapter reserves one shared record for the peer's full
-  lifetime. Opening is an ordinary reflected worker Invocation with detached
-  Session and entered hooks, but requires an explicit accept decision or copied
-  buffered rejection. Native H1 Upgrade/H2 Extended CONNECT validation remains
-  before it. The owner consumes that decision to commit Session and serialize
-  the actual handshake; worker code never touches a native peer/builder.
-  Event methods receive copied, callback-scoped request/session-id/event views
-  and reflected operation metadata on the same shared pool, serially per peer.
-  Events have a configured count and per-message byte bound reserved up front,
-  with a separate terminal Close slot. Overflow rejects the unadmitted event and
-  fails that peer explicitly; already admitted events settle in order. H1 read
-  demand pauses while events are pending. H2 keeps bounded queued stream input
-  and returns credit after its associated events drain; incomplete frame/message
-  assembly remains with the bounded native protocol storage so it can progress.
-  Public generation-checked WebSocket command admission remains the send path;
-  acceptance is not a native-send or peer-receipt acknowledgement.
-  Native peer reset first clears its bookkeeping binding, then reports producer
-  retirement after CNet callbacks quiesce. Worker completion joins that retirement,
-  the real transport terminal, opening settlement and all admitted events/Close.
-  A native terminal alone cannot free a record still borrowed by a peer callback.
-  A FAILED CNet engine deliberately emits no Close callback; after producer
-  retirement the adapter completes its accepted-peer event lifetime with an
-  abnormal Close notification (1006), retaining the native/business error.
-  This notification never sends 1006 on the wire or resumes a failed peer.
-  Session admission gates retire after handshake publication, not peer lifetime;
-  events cannot mutate the sealed handshake Session. Denied openings have no
-  accepted-peer event lifetime. Cancellation/finite close retain all live frames
-  and Beans. No per-peer thread, new transport runtime, automatic retry or inline
-  user-callback fallback is introduced. Public endpoint migration remains gated
-  on the complete adapter's formal native/TSan qualification.
-- Existing low-level engine source-cleanup callbacks still run on their owner
-  as nonblocking resource callbacks. The Application adapter records their
-  terminal and schedules the user's worker notification; it does not change the
-  low-level callback's thread or native ownership contract.
-
-These are required migration contracts, not claims of current support. Do not
-publish a new default mode that silently runs these user callbacks inline,
-turns features off, or exposes partially implemented public APIs.
-
-### Cooperative await extension
-
-After the pool baseline, an explicitly selected coroutine execution mode may
-reuse SaltsBase coro_executor_yield/await_begin/await/await_for/await_complete.
-It needs an admitted typed bridge to the Application invocation, not a cast of
-coro_executor_t to cflow_executor. Reuse the same owned input, staged result,
-terminal arbitration and Bean leases. An await suspends only the business
-coroutine, resumes only on its original shard, and preserves its context until
-external terminal/drain. A timeout result alone does not authorize freeing an
-external operation's still-borrowed payload. Blocking third-party functions
-still need a blocking worker pool or a genuine async driver; yield alone does
-not make them nonblocking. No C++20 co_await API or automatic coroutine conversion
-is part of this baseline.
-
-### Implementation and formal acceptance
-
-HIGH risks are borrowed-data escape, early slot/Bean/provider reclamation, native
-ABI mismatch, and changed Session/authorization/interceptor timing. The ownership
-and negative tests below are release gates. MED costs are extra bounded snapshot
-copying, worker queue latency and retained long-lived stream slots; benchmark them
-without claiming that moving work alone improves throughput.
-
-1. Specify/review canonical Invocation ABI, request accessors, response writer,
-   worker limits and hook stages. This is a public source/ABI migration; regenerate
-   bindings, update C/C++ examples and installed package documentation together.
-2. Build the worker bridge and retained response-terminal adapter internally,
-   using normal targets and existing module tests. Cover handwritten actions,
-   generated HTTP and sequential RPC batches first; retain the old public model
-   until the complete replacement is ready, rather than publishing a mixed mode.
-3. Migrate Session/browser helpers, assets, upload/source/SSE and WebSocket
-   adapters and their existing fixtures. Publish the worker-default replacement
-   only when every supported public business callback obeys the thread contract.
-4. Add cooperative await separately once pool-only semantics and drain are proven.
-
-Formal tests belong to app/tests/application_test.c, application_binding_test.c,
-application_invocation_test.c, application_cpp_test.cpp and the existing service/web suites; engine terminal
-and H1/H2 conformance remains in http_server/tests and http_common/tests.
-Use barriers/events and thread identity, not timing sleeps, to verify:
-
-- Controller/Service, all business hook stages and custom admission run on a
-  worker distinct from each HTTP owner for both H1 and H2; response transmission
-  and protocol progress retain their owner. One-worker execution is serialized;
-  explicit multi-worker concurrency obeys Bean ownership contracts.
-- Deliberately blocked user code leaves other owners/streams progressing.
-  Full record/byte budgets reject before business invocation without inline
-  execution; completion notification still runs when business admission is full.
-- Rejection and method success/error unwind exactly the entered hooks; early and
-  late response terminal, cancellation and notification scheduling each have one
-  winner. No hook concurrency or record reuse before predecessor last use.
-- Disconnect, H2 reset, queued/running timeout, response-copy failure, late
-  completion and finite-close failure preserve all frames and provider leases;
-  finalize/observer counts and retained bytes settle exactly once.
-- RPC named/positional params, batches, notifications, large arrays and bounded
-  errors preserve current wire behavior and add per-method hook identity.
-- Concurrent same-Session H1/H2 requests, regenerate/invalidate, CSRF/login/logout,
-  file/SSE/upload cleanup and ordered WS events retain existing security and
-  terminal behavior. Missing WAIT/wake support fails explicitly during development.
-- Existing C11/C++17 examples and formal suites pass against the selected
-  published SDKs; full native CI includes TSan. Android cross-build/install is
-  distinguished from actual device execution. No standalone validation project.
-
-Observe queue/admission/byte watermarks, outstanding and cancelled invocations,
-queue wait, business latency, response-terminal latency and close/drain state.
-Keep the owner/client/worker CPU benchmark scope separate; worker dispatch is a
-semantic/isolation choice, not an unmeasured throughput improvement claim.
-
-Rollback restores the preceding SDK/API and rebuilds consumers as one change.
-It is explicit operator action, never an automatic inline or old-SDK fallback.
-No user-data or wire-format migration is intended; thread placement, Interceptor
-completion timing and native binding ABI do change and require release notes.
+H1 retains ordered keep-alive/pipelined responses. H2 admits independent bounded
+stream records; their business completion order may differ from arrival order.
+The response always returns to the original owner. No business method waits on
+its own pool. `chttp_application_is_worker` exposes scope; closing from that pool
+returns `SALTS_EBUSY`.
+
+## Invocation ownership and response staging
+
+An Invocation and every accessor view borrow only the active worker callback.
+They cannot cross threads, escape into a later callback or be retained after
+return. Request headers, route parameters, body, target and JWT claims have
+owned snapshots. `request->session` and `chttp_invocation_session` expose the
+same detached intent view, never a live engine Session store.
+
+Responses use copied, bounded drafts. `respond` selects buffered status/type/body;
+`set_header` performs a copied case-insensitive upsert during before/action/after
+unwind. Content-Type has one authoritative row in the reply arena. Reserved
+transport fields fail with `EPERM`; malformed fields fail with `EINVAL`;
+count/byte exhaustion fails with `ENOBUFS` without mutation. Draft size exhaustion
+uses `EMSGSIZE`; selection seals the body, and a second selection is `EALREADY`.
+Failed business discards the draft rather than publishing partial success.
+
+Web rendering, redirect, HTMX and error helpers now take Invocation. They share
+the existing validators and renderer with private engine conformance fixtures.
+`chttp_web_authorize` belongs in a before hook. Anonymous requests stage a local
+303 redirect, or 200 with HX-Redirect for exact HTMX requests. Explicit denial
+marks rejection and clears proceed; other errors propagate fail-closed.
+
+Global hooks also surround ordinary 404/405 when configured. Those unmatched
+requests have no Controller operation. Without business hooks, the engine keeps
+its native 404/405 path and does not compete for worker records. Assets expose
+the framework asset operation. RPC request hooks see the envelope; method hooks
+see individual canonical methods.
+
+## Generated HTTP and RPC
+
+Controller method descriptors select synchronous DIRECT, CFLOW or PLUGIN
+execution on the same worker. There is no nested executor post/wait. Native
+execution context comes from the canonical Controller; CFlow uses its immutable
+producer-owned typed projection; Plugin uses its catalog/native capability and
+a mount-owned lease. Plugin registry/code and canonical metadata must outlive
+Application close. Borrowed execution descriptors are copied before publication.
+
+Every method supplies a codec matching its MethodPlan. Init compiles owned JSON
+input/output FormatPlans; the codec is borrowed only during init and may then
+be destroyed. HTTP binding limits and RPC batch/method capacities remain explicit.
+One required, non-null record can consume JSON body alongside scalar HTTP inputs.
+Nested required records and bounded sequences of supported scalar/record/sequence
+elements use SDK CMeta descriptors. Native bytes, map/set/variant/optional/null
+representations remain unsupported and fail at mount, including when nested.
+Nonempty body input requires application/json before method hooks run. String
+views are owned through native execution, not borrowed from parser storage.
+
+Native output remains live through method-hook unwind and serialization, then
+is destroyed before input storage. Failure releases partial nested conversions
+and leaves later invocations usable. RPC batches execute methods sequentially
+inside one worker envelope; invalid requests, notifications, per-method errors
+and notification-only 204 retain existing protocol semantics.
+
+Method hooks use a scheduler-neutral `chttp_method_call` and result. Its
+`http->session` is NULL, with a separate const detached Session for observation.
+Hooks cannot mutate the enclosing request transaction through that view.
+`chttp_method_call_reject` is before-only. Terminal observers receive frozen
+numeric method outcomes after input/output frames are gone. No DTO/parser/frame
+pointer escapes through completion facts.
+
+## Session, files, uploads, sources and WebSocket
+
+Session work has a charged snapshot and bounded mutation intents. Same-Session
+business methods serialize through the logical Session gate, while unrelated
+Sessions may run concurrently. The owner commits or aborts under the existing
+Session authority. Regeneration, invalidation, cookie publication and security
+helpers retain their contracts; stale Session views never outlive their record.
+The gate retires after business and Session settlement, not after a long-lived
+source or WS peer terminates. Completion observers do not get mutable Session
+authority.
+
+File selection stages copied paths/MIME/ETag/header decisions. Conditional/range
+metadata work runs on workers; native open/read/send remains with the Server.
+Owner preparation errors use publication_status; subsequent read/wire failures
+use transport_status. Files and asset-root topology must remain immutable through
+native completion. Asset mapping keeps bounded normalization, UTF-8 checks,
+traversal/encoded-separator rejection and component-wise no-symlink/reparse
+checks. SPA fallback has an explicit namespace; API/asset misses never silently
+become the shell. `chttp_assets.policy` is a reflected worker Bean method with
+status, immutable classification and an immediately copied ETag. There are no
+raw owner callbacks in the public asset mount.
+
+Uploads use a reflected open method, copied sink, serial worker writes, close,
+final Invocation and exactly-once cleanup. Failed open transfers nothing.
+Successful open transfers its resource through cleanup; close must preserve it
+for the final method. The final streamed request carries the copied sink user,
+byte count and trailers. Multipart validation/CSRF/commit or abort runs on the
+worker. Body pause/resume and byte budgets remain in the native owner. Cleanup
+waits for every admitted stage, including cancellation or a finite close failure.
+
+Sources reserve one chunk in the reply arena before ownership transfer. Reads
+and cleanup are serial worker callbacks, with zero bytes meaning EOF. Native
+flow control requests only bounded next chunks; a user error is not an internal
+WAIT. SSE uses this same source protocol and the existing canonical formatter.
+SSE scratch and user resources remain live through exactly-once cleanup.
+
+WebSocket opening is an Invocation: accept explicitly or stage a normal denial.
+Session intents and hooks settle before handshake publication. Once accepted,
+optional reflected `ready` executes on a worker before all events; its event
+pointer is NULL and its peer can send a greeting. Event request.operation names
+the ready or event method respectively. There is no mutable Session in either
+scope. Methods are serial per peer; payload/request views expire on return.
+The bounded queue includes its running event; Close has independent reserved
+storage. Ready requires only fixed record state and shares the same serial
+stage, so it cannot consume a data-event slot or run concurrently with Close.
+Native retirement plus all accepted events/ready/Close join before completion.
+A native failure that emits no Close produces one abnormal local notification;
+1006 is never sent on the wire. Cross-thread sends keep the existing bounded,
+generation-checked command API. Stale peer handles cannot reach a reused peer.
+
+## Capacity, task publication and errors
+
+`chttp_worker_config` requires positive workers, invocation capacity, retained
+bytes and reply bytes. Header count/bytes are either both zero or both positive.
+HTTP request limits and BindingPlan depth/item/frame bounds remain separate.
+The default is one worker, 16 records, 512 KiB retained, 8 KiB replies and
+32 copied headers in 4 KiB; configure product-specific limits explicitly.
+The retained budget bounds overlapping snapshots, drafts, Session intents,
+method reservation and source/WS storage; native protocol buffers and worker
+stacks have their own owners and limits. Size/count arithmetic is checked.
+
+Each record has at most one queued/running mutable stage. A successor is posted
+only after its predecessor's last-use finalizer and owner readiness join. The
+executor queue derives from record capacity, reserving room for admitted internal
+transitions and completion notifications. A rejected post transfers no payload.
+After a successful successor publication, the predecessor no longer touches
+record storage. Generations and terminal joins prevent recycling while a native
+producer, callback or frame still owns it.
+
+External record/byte exhaustion rejects admission with bounded 503; explicit
+rate limits remain 429. Invalid input follows existing 4xx semantics. Configuration
+or ABI errors fail init and roll back. An impossible internal completion-post
+failure stops admission and retains unsettled ownership for diagnosis; it never
+becomes a successful response, dropped callback or inline execution fallback.
+No failed operation is automatically retried.
+
+## Cancellation, deadlines and close
+
+Queue waiting consumes the existing phase deadline. body_ms includes custom
+header admission and body reception; handler_ms starts after body completion and
+covers business queue/hooks/method. Response transfer retains its native budget.
+The migration does not invent a new whole-request timeout or extend those limits.
+
+Cancellation does not establish completion. Queued business skips user code after
+an observed failed native terminal. Running methods may query cancellation but
+cannot be killed safely. Timeout/RST/disconnect invalidates response publication;
+it does not release worker-visible data or undo external side effects. A late
+response is discarded without re-executing its method.
+
+Completion runs once after business, Session/publication and native transport
+settlement, plus source/upload/WS resource and producer joins. Business,
+publication, Session and transport statuses remain distinct. Native send success
+means local I/O completion, not remote application consumption.
+
+Close uses one absolute budget: stop ingress, settle native and worker owners,
+run reserved completion callbacks, drain the pool, destroy protocol/DTO storage,
+then stop the ACE graph. A finite timeout retains every live owner for an
+explicit later close. Zero waits indefinitely. A fully cleaned operational error
+can return with impl NULL; callers must inspect status. C11 `with` reports
+operation and close separately and never closes a preexisting owner.
+
+C++17 Application is noncopyable/nonmovable and terminates if an unhandled
+fallible destructor close cannot settle. Explicit close lets callers handle the
+status. Bean factories return exactly unique_ptr<T>; derived/custom-deleter
+ownership cannot be erased into delete T. Exact canonical DataDesc identity,
+size and alignment are checked. Throwing action/admission/policy/event/source/
+sink adapters unwind C++ locals before translating to SALTS_EIO; lifecycle,
+Interceptors and cleanup callbacks follow the no-throw/longjmp contract.
+
+## Migration and formal acceptance
+
+C11/C++17 Application examples and the OpenAPI UI use public descriptors only.
+Application tests verify public init, injected Service execution on workers,
+global hooks, Web helpers, assets, uploads and WebSocket greeting. Private
+registration fixtures additionally exercise transactional ABI rejection, copied
+bindings, malformed frames, capacity, cancellation, partial conversions,
+finite close and real native terminals. Native Web fixtures remain internal
+protocol conformance tests, not an alternative public programming model.
+
+Build the complete graph and run formal CTest with the existing user preset;
+installation uses the project's normal install step. No separate consumer or
+smoke project is introduced. CI qualifies all existing OS/compiler/sanitizer
+matrix configurations and its TSan profile. ASan/UBSan require separate
+configured runs. Actual run results belong
+in the PR; this design does not claim an unexecuted check passed.
+
+## Cooperative await extension
+
+This baseline invokes synchronous user methods on the pool. It does not promise
+stackful yield, arbitrary suspension of a C stack or unlimited concurrent blocking
+calls. A future async contract must give external completion/cancellation handles
+explicit ownership, bound suspended work and resume only on the designated
+worker, with formal race and shutdown tests before exposing an API. CFlow
+executor primitives alone do not establish those Application guarantees.

@@ -1018,3 +1018,53 @@
 - Complete native-release-user build, 121/121 formal CTests and install passed:
   migration-worker-sequences-final-{build,ctest,install}.log. The fresh local
   preset has benchmarks off; CI retains its full benchmark-enabled graph.
+
+
+## Public worker entry points (2026-11-13)
+
+- Application init now owns worker preparation and all Controller/HTTP/RPC,
+  admission, asset, upload and WS registration. Public Invocation headers are
+  installed; internal registration moved to app/src/chttp_application_registration.h.
+  New product code must use configuration descriptors, not internal mounts.
+- Invocation request.session now equals the worker-affine detached intent view.
+  Header admission/upload-open and WS events/ready still have no Session; method
+  hooks expose a separate const Session. When migrating assertions, preserve
+  those distinct scopes rather than erasing Session checks globally.
+- CHTTP_ACTION now declares Invocation. Negative ABI fixtures must describe a
+  genuinely different canonical argument (the native request/admission ABI),
+  otherwise the supposed legacy fixture has become valid after this migration.
+- No business hooks means native 404/405 does not consume worker capacity. With
+  global hooks, a private fallback submits through the ordinary worker record.
+  The old global native middleware is gone; middleware-full tests explicitly
+  configure a real static security policy to occupy that slot.
+- WS ready is an optional reflected worker method with event == NULL, serialized
+  before data/Close and retained through finite close. H2 peer completion tests
+  destroy the client before waiting for final Server notification, as the
+  existing native terminal contract requires.
+- Complete native-release-user build and 121/121 formal CTests passed; evidence:
+  build/migration-public-entry-final-build.log and
+  build/migration-public-entry-verified-full.log. Initial failed migration
+  regressions remain in their original build logs; no runtime fallback or
+  TinyTest modification was introduced.
+- CI run 105's GCC profile exposed a one-record fixture race in sequential
+  JSON conversion cases: client receipt/destroy is not the Server terminal or
+  completion-finalizer join, so the following request can correctly get 503.
+  The sequential expect helper now waits within its existing 5-second bound
+  for public worker stats pending/retained_bytes == 0 before the next request.
+  This checks rollback release without changing runtime capacity, adding a
+  request retry or weakening native lifetime. Original failed job 131763092027
+  remains on run 43388598632; do not rerun that unchanged job.
+- Run 107's macOS profile exposed a second fixture ordering assumption: the H2
+  client send drains native output and propagates any observed peer terminal,
+  so an immediately failing event can reset it before send returns. The event
+  failure case now uses its existing hold/release condition to finish send
+  before allowing SALTS_EIO, then still verifies exactly one message, Close and
+  completion with the original business error. Failed job 131768681035 remains
+  on run 43390271574; no transport return code was weakened or retried.
+- Run 108's macOS C++ opening-exception case found a Client output bug: an H2
+  rejection parsed while connect drains request output takes the error cleanup
+  path before the old out_http_status assignment. Move that assignment to the
+  common exit, preserving the original error while returning the parsed status.
+  Client's existing formal socket suite adds H1/H2 403/500 denial cases. This is
+  a production output fix, not a looser exception assertion. Preserve failed
+  job 131771365280 on run 43391093568.

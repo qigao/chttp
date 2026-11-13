@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include <threads/threads.h>
@@ -27,10 +27,11 @@ typedef int ws_socket;
 typedef struct WsController { int marker; } WsController;
 cmeta_reflect_data(WsController, "test.WsController", cmeta_field(int, marker));
 cmeta_component_empty(WsComponent);
-CHTTP_INVOCATION_ACTION(ws_open);
+CHTTP_ACTION(ws_open);
 CHTTP_WEBSOCKET_EVENT_ACTION(ws_event);
+CHTTP_WEBSOCKET_EVENT_ACTION(ws_ready);
 CHTTP_ADMISSION_ACTION(ws_admit);
-CHTTP_INVOCATION_ACTION(ws_session);
+CHTTP_ACTION(ws_session);
 
 static struct {
   chttp_application app;
@@ -55,6 +56,7 @@ static struct {
   int connecting_destroy_status, connecting_done;
   unsigned int connecting_code;
   bool hold, hold_open, hold_close, release, entered, deny, fail_open, fail_event, gate;
+  bool hold_ready, ready_done;
   int opens, afters, events, messages, closes, completions, destroyed, active[2], admissions;
   uint16_t close_code;
   size_t bytes;
@@ -80,7 +82,7 @@ static cmeta_status ws_create(void *user, const cmeta_data_desc *data, const voi
   return status;
 }
 static void ws_worker(void *self) {
-  if (!chttp_application_worker_current(&ws.app) || !self || ((WsController *)self)->marker != 42)
+  if (!chttp_application_is_worker(&ws.app) || !self || ((WsController *)self)->marker != 42)
     atomic_fetch_add(&ws.invalid, 1);
 }
 int ws_admit(void *self, const chttp_server_request_view *request, chttp_server_admission_result *result) {
@@ -93,7 +95,7 @@ int ws_admit(void *self, const chttp_server_request_view *request, chttp_server_
 int ws_open(void *self, const chttp_invocation *invocation) {
   ws_worker(self);
   const chttp_server_request_view *request = chttp_invocation_request(invocation);
-  if (!request || request->operation != FunctionAbi(ws_open)->function || request->session ||
+  if (!request || request->operation != FunctionAbi(ws_open)->function || request->session != chttp_invocation_session(invocation) ||
       !chttp_server_request_param(request, "id")) return SALTS_EPROTO;
   if (ws.jwt.impl && (!request->jwt_claims || !request->jwt_claims->subject ||
       strcmp(request->jwt_claims->subject, "alice") != 0)) return SALTS_EPROTO;
@@ -120,6 +122,18 @@ static void ws_after(void *self, const chttp_invocation *invocation, const chttp
   (void)invocation; (void)result; ws_worker(self);
   sync_mutex_lock(&ws.mutex); ++ws.afters; sync_mutex_unlock(&ws.mutex);
 }
+int ws_ready(void *self, const chttp_application_websocket_event *scope) {
+  ws_worker(self);
+  if (scope->event || scope->request->session || scope->request->operation != FunctionAbi(ws_ready)->function)
+    atomic_fetch_add(&ws.invalid, 1);
+  sync_mutex_lock(&ws.mutex);
+  if (ws.afters != 1 || ws.events || ws.ready_done) atomic_fetch_add(&ws.invalid, 1);
+  ws.entered = true; sync_cond_broadcast(&ws.changed);
+  while (ws.hold_ready && !ws.release) sync_cond_wait(&ws.changed, &ws.mutex);
+  ws.ready_done = true;
+  sync_mutex_unlock(&ws.mutex);
+  return ws.hold_ready ? SALTS_OK : chttp_server_websocket_send_text(scope->peer, "ready", 5u);
+}
 int ws_event(void *self, const chttp_application_websocket_event *scope) {
   ws_worker(self);
   const chttp_websocket_event *event = scope->event;
@@ -129,6 +143,7 @@ int ws_event(void *self, const chttp_application_websocket_event *scope) {
   if (ws.jwt.impl && (!scope->request->jwt_claims || !scope->request->jwt_claims->subject ||
       strcmp(scope->request->jwt_claims->subject, "alice") != 0)) atomic_fetch_add(&ws.invalid, 1);
   sync_mutex_lock(&ws.mutex);
+  if (ws.binding.ready && !ws.ready_done) atomic_fetch_add(&ws.invalid, 1);
   const size_t slot = id && strcmp(id, "43") == 0 ? 1u : 0u;
   if (ws.active[slot]++) atomic_fetch_add(&ws.invalid, 1);
   if (ws.afters < ws.opens) atomic_fetch_add(&ws.invalid, 1);
@@ -170,8 +185,9 @@ static chttp_websocket_client_config ws_client_config(void) {
       .max_buffered_input_bytes = ws.binding.max_buffered_input_bytes, .max_handshake_header_bytes = 4096u, .event_capacity = 16u};
 }
 static void ws_start(void) {
+  ws.config.workers = ws.limits;
   check_equal(chttp_application_init(&ws.app, &ws.config), SALTS_OK);
-  check_equal(chttp_application_worker_prepare(&ws.app, &ws.limits), SALTS_OK);
+
   if (ws.gate) {
     const chttp_application_admission_binding gate = {"WsComponent", cmeta_reflected_data(WsController), FunctionAbi(ws_admit), ws_admit};
     check_equal(chttp_application_worker_admission(&ws.app, &gate), SALTS_OK);
@@ -301,6 +317,32 @@ spec("Application worker WebSocket") {
     check_equal(atomic_load(&ws.invalid), 0);
     sync_cond_destroy(&ws.changed); sync_mutex_destroy(&ws.mutex);
   }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    it("sends the ready greeting before serial events (protocol=%d)", protocol) {
+      ws.binding.ready = ws_ready; ws.binding.ready_abi = FunctionAbi(ws_ready);
+      ws_start(); unsigned int code = 0u;
+      check_equal(ws_connect(0, (chttp_protocol)protocol, &code), SALTS_OK);
+      chttp_websocket_event event = {0};
+      check_equal(chttp_websocket_client_receive(&ws.clients[0], 5000u, &event), SALTS_OK);
+      check_equal(event.size, 5u); check_equal(event.data, "ready", 5u);
+      check_equal(chttp_websocket_client_send_text(&ws.clients[0], "42", 2u, 5000u), SALTS_OK);
+      check_equal(chttp_websocket_client_receive(&ws.clients[0], 5000u, &event), SALTS_OK);
+      check_equal(event.size, 2u); check_equal(event.data, "42", 2u);
+      check_equal(chttp_websocket_client_close(&ws.clients[0], 1000u, NULL, 0u, 5000u), SALTS_OK);
+      check_equal(chttp_websocket_client_destroy(&ws.clients[0], 5000u), SALTS_OK);
+      ws_settled(1); check_true(ws.ready_done); check_equal(ws.closes, 1);
+    }
+    it("retains a blocked ready callback through finite close (protocol=%d)", protocol) {
+      ws.binding.ready = ws_ready; ws.binding.ready_abi = FunctionAbi(ws_ready); ws.hold_ready = true;
+      ws_start(); unsigned int code = 0u;
+      check_equal(ws_connect(0, (chttp_protocol)protocol, &code), SALTS_OK); ws_wait_entered();
+      check_equal(chttp_application_close(&ws.app, 5u), SALTS_ETIMEDOUT);
+      check_not_null(ws.app.impl); check_equal(ws.destroyed, 0);
+      ws_release();
+      check_equal(chttp_websocket_client_destroy(&ws.clients[0], 5000u), SALTS_OK);
+      ws_settled(1); check_true(ws.ready_done); check_equal(ws.closes, 1);
+    }
+  }
   it("commits the opening Session and releases its gate while the WS peer remains open") {
     ws.config.http.session_capacity = 4u; ws.config.http.session_entry_capacity = 4u;
     ws.config.http.max_session_key_bytes = 32u; ws.config.http.max_session_value_bytes = 64u;
@@ -322,12 +364,19 @@ spec("Application worker WebSocket") {
     ws_socket_close(ws.socket); ws.socket = WS_INVALID_SOCKET; ws_settled(1);
   }
   it("rejects invalid event ABI/capacity transactionally before mounting a valid endpoint") {
+    ws.config.workers = ws.limits;
     check_equal(chttp_application_init(&ws.app, &ws.config), SALTS_OK);
-    check_equal(chttp_application_worker_prepare(&ws.app, &ws.limits), SALTS_OK);
+
     chttp_application_websocket_binding binding = ws.binding;
     binding.event_abi = FunctionAbi(ws_open);
     check_equal(chttp_application_worker_websocket(&ws.app, &binding), SALTS_EINVAL);
     binding = ws.binding; binding.event_capacity = 0u;
+    check_equal(chttp_application_worker_websocket(&ws.app, &binding), SALTS_EINVAL);
+    binding = ws.binding; binding.ready = ws_ready;
+    check_equal(chttp_application_worker_websocket(&ws.app, &binding), SALTS_EINVAL);
+    binding.ready_abi = FunctionAbi(ws_open);
+    check_equal(chttp_application_worker_websocket(&ws.app, &binding), SALTS_EINVAL);
+    binding.ready = NULL; binding.ready_abi = FunctionAbi(ws_ready);
     check_equal(chttp_application_worker_websocket(&ws.app, &binding), SALTS_EINVAL);
     check_equal(chttp_application_worker_websocket(&ws.app, &ws.binding), SALTS_OK);
   }
@@ -516,9 +565,13 @@ spec("Application worker WebSocket") {
       check_equal(chttp_application_close(&ws.app, 5000u), SALTS_OK); check_equal(ws.opens, 0); check_equal(ws.admissions, 1);
     }
     it("fails a peer on an event error and joins its Close before completion (protocol=%d)", protocol) {
-      ws.fail_event = true; ws_start(); unsigned int code = 0u;
+      ws.fail_event = true; ws.hold = true; ws_start(); unsigned int code = 0u;
       check_equal(ws_connect(0, (chttp_protocol)protocol, &code), SALTS_OK);
       check_equal(chttp_websocket_client_send_text(&ws.clients[0], "fail", 4u, 5000u), SALTS_OK);
+      /* send drains native output and may observe a peer reset in the same
+       * call. Release the intentional business failure only after send has
+       * returned, so this case tests terminal/Close joining in a fixed order. */
+      ws_wait_entered(); ws_release();
       chttp_websocket_event event = {0};
       const int status = chttp_websocket_client_receive(&ws.clients[0], 5000u, &event);
       check_not_equal(status, SALTS_ETIMEDOUT);

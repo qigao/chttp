@@ -4,12 +4,12 @@
 #include <stdexcept>
 
 CHTTP_ACTION(greeting);
-int greeting(void *self, const chttp_exchange *exchange) {
+int greeting(void *self, const chttp_invocation *exchange) {
   auto& controller = *static_cast<GreetingController*>(self);
   char text[64];
   const int size = std::snprintf(text, sizeof(text), "{\"answer\":%d}", ExampleAnswer_value(&controller.answer));
   if (size < 0 || static_cast<size_t>(size) >= sizeof(text)) return SALTS_ERANGE;
-  return chttp_server_reply(exchange->response, 200u, "application/json", text, static_cast<size_t>(size));
+  return chttp_invocation_respond(exchange, 200u, "application/json", text, static_cast<size_t>(size));
 }
 
 int main() {
@@ -42,7 +42,7 @@ int main() {
   const chttp_action actions[] = {CHTTP_CPP_GET("/answer", greeting), CHTTP_CPP_GET("/reject", greeting)};
   const chttp_controller controller = {"GreetingComponent", cmeta_reflected_data(GreetingController),
       actions, 2u, nullptr, 0u, nullptr, 0u, nullptr, 0u};
-  const chttp_interceptor interceptor = {"PolicyComponent", cmeta_reflected_data(DispatchPolicy),
+  const chttp_invocation_interceptor interceptor = {"PolicyComponent", cmeta_reflected_data(DispatchPolicy),
       before_dispatch, nullptr, nullptr};
   auto config = chttp_application_config_default();
   config.components = components; config.component_count = 3u; config.dependency_capacity = 1u;

@@ -49,6 +49,14 @@ static int chttp_server_allow_header(chttp_server_response *response, unsigned i
   return chttp_server_response_set_header(response, "Allow", value);
 }
 
+int chttp_server_set_fallback(chttp_server *server, chttp_server_fallback_fn callback, void *user) {
+  chttp_server_impl *impl = server ? server->impl : NULL;
+  if (!impl || !callback) return SALTS_EINVAL;
+  if (impl->start_called) return SALTS_EBUSY;
+  if (impl->fallback) return SALTS_EALREADY;
+  impl->fallback = callback; impl->fallback_user = user;
+  return SALTS_OK;
+}
 static int chttp_server_chain_dispatch(chttp_server_chain *chain, size_t index) {
   const size_t global_count = chain->server->middleware_count;
   const size_t route_count = chain->route == NULL ? 0u : chain->route->middleware_count;
@@ -71,6 +79,8 @@ static int chttp_server_chain_dispatch(chttp_server_chain *chain, size_t index) 
     const int status = chttp_server_allow_header(chain->response, chain->allowed_methods);
     if (status != SALTS_OK) return status;
   }
+  if (chain->server->fallback)
+    return chain->server->fallback(chain->server->fallback_user, chain->request, chain->response, chain->fallback_status);
   return chttp_server_reply(chain->response, chain->fallback_status, "text/plain",
                             chain->fallback_status == 404u ? "Not Found" : "Method Not Allowed",
                             chain->fallback_status == 404u ? 9u : 18u);

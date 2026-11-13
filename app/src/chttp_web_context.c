@@ -1,4 +1,5 @@
 #include <chttp_app/web.h>
+#include "chttp_web_output.h"
 
 #include <core/error_codes.h>
 
@@ -573,14 +574,14 @@ const cmeta_data_desc *chttp_web_request_context_data(void) {
 }
 
 static chttp_web_status chttp_web_set_header(
-    chttp_server_response *response, const char *name, const char *value,
+    const chttp_web_output *response, const char *name, const char *value,
     chttp_web_error *error) {
   int status;
   if (response == NULL || name == NULL || value == NULL || value[0] == '\0')
     return chttp_web_context_fail(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0,
         "response header arguments are invalid");
-  status = chttp_server_response_set_header(response, name, value);
+  status = chttp_web_output_header(response, name, value);
   if (status != SALTS_OK)
     return chttp_web_context_fail(
         error, CHTTP_WEB_SERVER, status,
@@ -588,8 +589,8 @@ static chttp_web_status chttp_web_set_header(
   return chttp_web_context_fail(error, CHTTP_WEB_OK, 0, NULL);
 }
 
-chttp_web_status chttp_web_redirect(
-    chttp_server_response *response, unsigned int status_code,
+chttp_web_status chttp_web_output_redirect(
+    const chttp_web_output *response, unsigned int status_code,
     const char *location, chttp_web_error *error) {
   chttp_web_status status;
   int server_status;
@@ -603,7 +604,7 @@ chttp_web_status chttp_web_redirect(
   status = chttp_web_set_header(response, "Location", location, error);
   if (status != CHTTP_WEB_OK) return status;
 
-  server_status = chttp_server_reply(response, status_code, NULL, NULL, 0u);
+  server_status = chttp_web_output_reply(response, status_code, NULL, NULL, 0u);
   if (server_status != SALTS_OK)
     return chttp_web_context_fail(
         error, CHTTP_WEB_SERVER, server_status,
@@ -611,27 +612,27 @@ chttp_web_status chttp_web_redirect(
   return chttp_web_context_fail(error, CHTTP_WEB_OK, 0, NULL);
 }
 
-chttp_web_status chttp_web_hx_redirect(
-    chttp_server_response *response, const char *location,
+chttp_web_status chttp_web_output_hx_redirect(
+    const chttp_web_output *response, const char *location,
     chttp_web_error *error) {
   return chttp_web_set_header(response, "HX-Redirect", location, error);
 }
 
-chttp_web_status chttp_web_hx_trigger(
-    chttp_server_response *response, const char *trigger,
+chttp_web_status chttp_web_output_hx_trigger(
+    const chttp_web_output *response, const char *trigger,
     chttp_web_error *error) {
   return chttp_web_set_header(response, "HX-Trigger", trigger, error);
 }
 
-chttp_web_status chttp_web_hx_retarget(
-    chttp_server_response *response, const char *selector,
+chttp_web_status chttp_web_output_hx_retarget(
+    const chttp_web_output *response, const char *selector,
     chttp_web_error *error) {
   return chttp_web_set_header(response, "HX-Retarget", selector, error);
 }
 
-chttp_web_status chttp_web_render_error(
+chttp_web_status chttp_web_output_render_error(
     chttp_web_renderer *renderer,
-    chttp_server_response *response,
+    const chttp_web_output *response,
     unsigned int status_code,
     const char *template_name,
     const cmeta_data_desc *model_desc,
@@ -641,7 +642,7 @@ chttp_web_status chttp_web_render_error(
     return chttp_web_context_fail(
         error, CHTTP_WEB_INVALID_ARGUMENT, 0,
         "HTML error status must be in the 400..599 range");
-  return chttp_web_render_response(
+  return chttp_web_output_render_response(
       renderer, response, template_name, model_desc, model,
       status_code, NULL, error);
 }

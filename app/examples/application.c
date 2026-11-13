@@ -52,12 +52,12 @@ static cmeta_status greeting_create(void *context, const cmeta_data_desc *data,
 }
 
 CHTTP_ACTION(greeting);
-int greeting(void *self, const chttp_exchange *exchange) {
+int greeting(void *self, const chttp_invocation *exchange) {
   GreetingController *controller = self;
   char text[64];
   const int size = snprintf(text, sizeof(text), "{\"answer\":%d}", ExampleAnswer_value(&controller->answer));
   if (size < 0 || (size_t)size >= sizeof(text)) return SALTS_ERANGE;
-  return chttp_server_reply(exchange->response, 200u, "application/json", text, (size_t)size);
+  return chttp_invocation_respond(exchange, 200u, "application/json", text, (size_t)size);
 }
 
 static int run(chttp_application *app, void *context) {
@@ -84,7 +84,7 @@ int main(void) {
   const chttp_action actions[] = {CHTTP_GET("/answer", greeting), CHTTP_GET("/reject", greeting)};
   const chttp_controller controller = {.component_id = "GreetingComponent",
       .receiver = cmeta_reflected_data(GreetingController), .actions = actions, .action_count = 2u};
-  const chttp_interceptor interceptor = {"PolicyComponent", cmeta_reflected_data(DispatchPolicy),
+  const chttp_invocation_interceptor interceptor = {"PolicyComponent", cmeta_reflected_data(DispatchPolicy),
       before_dispatch, NULL, NULL};
   chttp_application_config config = chttp_application_config_default();
   config.components = components; config.component_count = 3u; config.dependency_capacity = 1u;

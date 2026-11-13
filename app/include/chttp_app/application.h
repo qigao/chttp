@@ -1,105 +1,137 @@
 #ifndef CHTTP_APPLICATION_H
 #define CHTTP_APPLICATION_H
-
-#include <http_server/http.h>
+#include <chttp_app/invocation.h>
 #include <http_server/rpc.h>
-#include <chttp_app/web.h>
 #include <cmeta/configurator.h>
-#include <cmeta/function.h>
-#include <cmeta/ace_interceptor.h>
 #include <cflow/function_projection.h>
-#include <cflow/executor.h>
 #include <data_bind_method_plan.h>
 #include <data_bind_native_binding.h>
 #include <cmeta/plugin.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 typedef struct chttp_application { void *impl; } chttp_application;
-
-typedef struct chttp_exchange_result {
-  int status;
-  bool rejected;
-} chttp_exchange_result;
-
-/** Borrowed for one dispatch only. Never retain the view. Generated deferred
- * invocation and retained response sources follow their own terminal ownership
- * contracts; arbitrary background work cannot retain an unowned Bean pointer. */
-typedef struct chttp_exchange {
-  const chttp_server_request_view *request;
-  chttp_server_response *response;
-  const cmeta_function_desc *operation;
-  chttp_exchange_result *result;
-} chttp_exchange;
-
-typedef int (*chttp_action_fn)(void *, const chttp_exchange *);
-/* Static metadata keeps C11 FunctionDecl initializers constant across DLLs.
- * CMeta compares the explicit semantic identity, never descriptor addresses. */
-static const cmeta_type_identity chttp_exchange_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.exchange");
-static const cmeta_type_desc chttp_exchange_type = {"chttp_exchange", sizeof(chttp_exchange),
-    CMETA_ALIGNOF(chttp_exchange), CMETA_T_OBJECT, NULL, NULL, &chttp_exchange_identity};
-static const cmeta_type_desc chttp_exchange_pointer_type = {"const chttp_exchange *",
-    sizeof(chttp_exchange *), CMETA_ALIGNOF(chttp_exchange *), CMETA_T_POINTER,
-    &chttp_exchange_type, NULL, NULL};
-
-/** Declare the native action and its canonical reflection from one signature.
- * The receiver is the ACE-owned Controller object; all arguments are borrowed. */
-#define CHTTP_ACTION(name_) \
+static const cmeta_type_identity chttp_admission_request_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.admission.request");
+static const cmeta_type_identity chttp_admission_result_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.admission.result");
+static const cmeta_type_desc chttp_admission_request_type = {"chttp_server_request_view", sizeof(chttp_server_request_view),
+    CMETA_ALIGNOF(chttp_server_request_view), CMETA_T_OBJECT, NULL, NULL, &chttp_admission_request_identity};
+static const cmeta_type_desc chttp_admission_result_type = {"chttp_server_admission_result", sizeof(chttp_server_admission_result),
+    CMETA_ALIGNOF(chttp_server_admission_result), CMETA_T_OBJECT, NULL, NULL, &chttp_admission_result_identity};
+static const cmeta_type_desc chttp_admission_request_pointer = {"const chttp_server_request_view *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_admission_request_type, NULL, NULL};
+static const cmeta_type_desc chttp_admission_result_pointer = {"chttp_server_admission_result *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_admission_result_type, NULL, NULL};
+#define CHTTP_ADMISSION_ACTION(name_) \
   FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
-    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, \
-      &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
-    (const chttp_exchange *, exchange, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, \
-      &chttp_exchange_pointer_type, CMETA_ABI_OBJECT_POINTER))
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER), \
+    (chttp_server_admission_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_admission_result_pointer, CMETA_ABI_OBJECT_POINTER))
 
+static const cmeta_type_identity chttp_upload_sink_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.upload.sink");
+static const cmeta_type_desc chttp_upload_sink_type = {"chttp_body_sink", sizeof(chttp_body_sink),
+    CMETA_ALIGNOF(chttp_body_sink), CMETA_T_OBJECT, NULL, NULL, &chttp_upload_sink_identity};
+static const cmeta_type_desc chttp_upload_sink_pointer = {"chttp_body_sink *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_upload_sink_type, NULL, NULL};
+#define CHTTP_UPLOAD_OPEN_ACTION(name_) \
+  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER), \
+    (chttp_body_sink *, sink, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_upload_sink_pointer, CMETA_ABI_OBJECT_POINTER))
+
+static const cmeta_type_identity chttp_websocket_event_scope_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.websocket.event-scope");
+static const cmeta_type_desc chttp_websocket_event_scope_type = {"chttp_websocket_event_view",
+    sizeof(chttp_websocket_event_view), CMETA_ALIGNOF(chttp_websocket_event_view),
+    CMETA_T_OBJECT, NULL, NULL, &chttp_websocket_event_scope_identity};
+static const cmeta_type_desc chttp_websocket_event_scope_pointer = {"const chttp_websocket_event_view *",
+    sizeof(void *), CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_websocket_event_scope_type, NULL, NULL};
+#define CHTTP_WEBSOCKET_EVENT_ACTION(name_) \
+  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const chttp_websocket_event_view *, event, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_websocket_event_scope_pointer, CMETA_ABI_OBJECT_POINTER))
+
+static const cmeta_type_identity chttp_asset_relative_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.asset.relative-char");
+static const cmeta_type_identity chttp_asset_relative_const_identity = CMETA_TYPE_ID_CONST_INIT(&chttp_asset_relative_identity);
+static const cmeta_type_identity chttp_asset_relative_pointer_identity = CMETA_TYPE_ID_POINTER_INIT(&chttp_asset_relative_const_identity);
+static const cmeta_type_identity chttp_asset_policy_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.asset.policy-result");
+static const cmeta_type_desc chttp_asset_relative_const_type = {"const char", sizeof(char), CMETA_ALIGNOF(char),
+    CMETA_T_INTEGER, NULL, NULL, &chttp_asset_relative_const_identity};
+static const cmeta_type_desc chttp_asset_relative_pointer = {"const char *", sizeof(const char *),
+    CMETA_ALIGNOF(const char *), CMETA_T_POINTER, &chttp_asset_relative_const_type, NULL, &chttp_asset_relative_pointer_identity};
+static const cmeta_type_desc chttp_asset_policy_type = {"chttp_asset_policy_result",
+    sizeof(chttp_asset_policy_result), CMETA_ALIGNOF(chttp_asset_policy_result),
+    CMETA_T_OBJECT, NULL, NULL, &chttp_asset_policy_identity};
+static const cmeta_type_desc chttp_asset_policy_pointer = {"chttp_asset_policy_result *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_asset_policy_type, NULL, NULL};
+#define CHTTP_ASSET_POLICY_ACTION(name_) \
+  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const char *, relative_path, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_asset_relative_pointer, CMETA_ABI_OBJECT_POINTER), \
+    (chttp_asset_policy_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_asset_policy_pointer, CMETA_ABI_OBJECT_POINTER))
+
+/* Reflected header-only worker callback on a canonical Bean. No Session/body;
+ * copied status/Retry-After decides admission. Errors propagate, never allow. */
+typedef struct chttp_admission {
+  const char *component_id;
+  const cmeta_data_desc *receiver;
+  const cmeta_function_abi_desc *abi;
+  chttp_admission_fn invoke;
+} chttp_admission;
+/* Reflected open and serial worker write/close/cleanup. Failed open transfers
+ * nothing. Successful open owns its sink through exactly-once cleanup; close
+ * must keep sink.user live for the final Invocation and cleanup. No throw/jump. */
+typedef struct chttp_upload {
+  const cmeta_function_abi_desc *open_abi;
+  chttp_upload_open_fn open;
+  void (*close)(void *, chttp_body_sink *, int);
+  void (*cleanup)(void *, chttp_body_sink *, const chttp_response_outcome *);
+} chttp_upload;
+/* Init copies descriptor/hook rows. Code, strings and canonical metadata stay
+ * borrowed through close. before/action/after share a scoped response draft;
+ * after_completion joins business, Session and native/resource terminals. */
 typedef struct chttp_action {
   chttp_method method;
   const char *path;
   const cmeta_function_abi_desc *abi;
-  chttp_action_fn invoke;
-  chttp_server_body_open_fn body_open;
-  chttp_server_body_close_fn body_close;
+  chttp_invocation_action_fn invoke;
+  chttp_completion_fn after_completion;
+  const chttp_invocation_interceptor *hooks;
+  size_t hook_count;
+  const chttp_upload *upload;
 } chttp_action;
 #define CHTTP_MAPPING(method_, path_, action_) \
-  {method_, path_, FunctionAbi(action_), action_, NULL, NULL}
+  {method_, path_, FunctionAbi(action_), action_, NULL, NULL, 0u, NULL}
 #define CHTTP_GET(path_, action_) CHTTP_MAPPING(CHTTP_METHOD_GET, path_, action_)
 #define CHTTP_POST(path_, action_) CHTTP_MAPPING(CHTTP_METHOD_POST, path_, action_)
-
-CMETA_INTERCEPTOR_TYPE(chttp_dispatch_chain, chttp_exchange, chttp_exchange_result);
-
-/** Each hook context is another explicitly selected ACE Bean. Hook code and
- * metadata are borrowed through complete Application shutdown. Global hooks
- * execute in declaration order and unwind in reverse, using ACE semantics.
- * They wrap static assets/SPA fallback as well as Controller dispatch, after
- * security headers and CORS preflight. Asset-only operation metadata is NULL. */
-typedef struct chttp_interceptor {
+/* Per bound DTO operation (including RPC notifications), separate from the
+ * enclosing request chain. Views expire on callback return; completion carries
+ * frozen facts only. All callbacks run on workers and must not throw/jump. */
+typedef struct chttp_application_method_interceptor {
   const char *component_id;
   const cmeta_data_desc *receiver;
-  chttp_dispatch_chain_before_fn before;
-  chttp_dispatch_chain_after_fn after;
-  chttp_dispatch_chain_error_fn on_error;
-} chttp_interceptor;
-
+  chttp_method_chain_before_fn before;
+  chttp_method_chain_after_fn after;
+  chttp_method_chain_error_fn on_error;
+  chttp_method_completion_fn after_completion;
+} chttp_application_method_interceptor;
 typedef enum chttp_dispatch {
-  CHTTP_DISPATCH_INLINE = 0,
-  CHTTP_DISPATCH_DEFERRED = 1,
-  CHTTP_DISPATCH_CFLOW = 2,
-  CHTTP_DISPATCH_PLUGIN = 3
+  CHTTP_DISPATCH_DIRECT = 0, CHTTP_DISPATCH_CFLOW = 2, CHTTP_DISPATCH_PLUGIN = 3
 } chttp_dispatch;
-
+/* DIRECT/CFLOW/PLUGIN run synchronously on the owned pool. No borrowed executor.
+ * Codec must match plan and is borrowed only at init; canonical metadata,
+ * plugin registry/code and projection captures remain live through close. */
 typedef struct chttp_http_method {
   const DataBindHttpMethodPlan *plan;
   const DataBindServiceNativeBinding *binding;
   const DataBindNativeExecution *execution;
   chttp_dispatch dispatch;
-  cflow_executor *executor;
   const cflow_function_typed_adapter_projection *projection;
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_ref plugin_ref;
   const char *plugin_export_id;
+  DataBind *codec; /* Same schema as plan; borrowed only during init. */
+  const chttp_application_method_interceptor *hooks;
+  size_t hook_count;
 } chttp_http_method;
-
 typedef struct chttp_rpc_method {
   const char *path;
   const DataBindRpcMethodPlan *plan;
@@ -107,19 +139,39 @@ typedef struct chttp_rpc_method {
   const DataBindNativeExecution *execution;
   cmeta_plugin_registry *plugin_registry;
   cmeta_plugin_ref plugin_ref;
+  DataBind *codec;
+  const chttp_application_method_interceptor *hooks;
+  size_t hook_count;
 } chttp_rpc_method;
-
-/** WebSocket endpoint on an ACE-owned Controller. Callback user is the Controller
- * receiver; capacities and callback lifetimes follow the HTTP WebSocket contract. */
+/* Opening must be GET, without upload. Explicit accept or buffered denial.
+ * Optional ready executes after acceptance, then events are serial per peer.
+ * ready/event use CHTTP_WEBSOCKET_EVENT_ACTION metadata and callback-scoped peer
+ * and request views, without mutable Session. Capacity includes running events;
+ * Close and ready use fixed reserved state. Errors close the peer and survive
+ * in the final completion outcome. All callbacks execute on workers. */
 typedef struct chttp_websocket_endpoint {
-  const char *path;
-  size_t max_frame_bytes;
-  size_t max_message_bytes;
-  size_t max_buffered_input_bytes;
-  chttp_websocket_open_fn on_open;
-  chttp_websocket_event_fn on_event;
+  chttp_action opening;
+  const cmeta_function_abi_desc *event_abi;
+  chttp_websocket_event_action_fn event;
+  size_t event_capacity, max_frame_bytes, max_message_bytes, max_buffered_input_bytes;
+  const cmeta_function_abi_desc *ready_abi;
+  chttp_websocket_event_action_fn ready; /* Optional, before events; scope.event is NULL. */
 } chttp_websocket_endpoint;
-
+/* Init copies mount/hook rows; root topology/files remain immutable until
+ * native completion. Optional reflected policy runs on its canonical Bean,
+ * with relative path borrowed for this call; its ETag is immediately copied
+ * from live storage. Returning an ETag pointer into dead stack storage is invalid.
+ * Init rejects missing/mismatched policy ABI or Bean; capacity fails explicitly. */
+typedef struct chttp_assets {
+  const chttp_web_asset_mount *mount;
+  const char *component_id;
+  const cmeta_data_desc *receiver;
+  const cmeta_function_abi_desc *policy_abi;
+  chttp_asset_policy_fn policy;
+  chttp_completion_fn after_completion;
+  const chttp_invocation_interceptor *hooks;
+  size_t hook_count;
+} chttp_assets;
 typedef struct chttp_controller {
   const char *component_id;
   const cmeta_data_desc *receiver;
@@ -132,7 +184,6 @@ typedef struct chttp_controller {
   const chttp_websocket_endpoint *websockets;
   size_t websocket_count;
 } chttp_controller;
-
 typedef struct chttp_binding_limits {
   size_t size;
   size_t method_capacity;
@@ -147,15 +198,13 @@ typedef struct chttp_binding_limits {
 #define CHTTP_BINDING_LIMITS_INIT \
   {sizeof(chttp_binding_limits), 0u, 1024u, 4096u, 65536u, 16384u, 16u, 256u, 65536u}
 
-/** All provider/Controller/Interceptor metadata remains borrowed until close
- * settles. Construction config_value is borrowed only by ACE create().
- * Limits and Security/CORS/asset policy structures are copied during init.
- * Their strings, arrays and callback contexts remain borrowed until close;
- * caller policy structures may be reused after init. JWT validator/admission
- * contexts remain borrowed. Objects are owned by the ACE graph,
- * whose lifetime covers HTTP terminal, streams and deferred task finalizers. */
+/* Configuration metadata/code borrows Application lifetime. Init resolves
+ * canonical Beans and copies policy/hook rows before listener start. Worker
+ * limits are mandatory; all request business callbacks run on that pool.
+ * Finite close failure retains every live owner for a later explicit close. */
 typedef struct chttp_application_config {
   chttp_server_config http;
+  chttp_worker_config workers;
   const salts_configurator_deployment *components;
   size_t component_count;
   const salts_configurator_selection *selections;
@@ -163,7 +212,7 @@ typedef struct chttp_application_config {
   size_t dependency_capacity;
   const chttp_controller *controllers;
   size_t controller_count;
-  const chttp_interceptor *interceptors;
+  const chttp_invocation_interceptor *interceptors;
   size_t interceptor_count; /* ACE hard limit: 16. */
   chttp_binding_limits bindings;
   chttp_server_rpc_config rpc;
@@ -174,10 +223,9 @@ typedef struct chttp_application_config {
   const chttp_server_websocket_transport_options *websocket_transport;
   const chttp_server_cors_options *cors;
   chttp_jwt_bearer_validator *jwt;
-  chttp_server_admission_fn admission;
-  void *admission_context;
+  const chttp_admission *admission;
   const chttp_web_security_policy *security;
-  const chttp_web_asset_mount *assets;
+  const chttp_assets *assets;
 } chttp_application_config;
 
 /** Bounded loopback development defaults, H1/H2 enabled, ephemeral port.
@@ -205,10 +253,9 @@ typedef struct chttp_application_outcome { int operation_status; int close_statu
 int chttp_application_with(chttp_application *owner, const chttp_application_config *,
     chttp_application_body_fn, void *, chttp_application_outcome *);
 
-/** Explicit handled rejection for an Interceptor before-hook. It must also set
- * proceed=false. ACE unwinds entered error hooks; HTTP retains this response. */
-int chttp_exchange_reject(const chttp_exchange *, unsigned int status_code,
-    const char *content_type, const void *body, size_t body_size);
+/* Worker telemetry and scope query; neither drives protocol progress. */
+int chttp_application_worker_stats(chttp_application *, chttp_worker_stats *);
+int chttp_application_is_worker(const chttp_application *);
 
 #ifdef __cplusplus
 }

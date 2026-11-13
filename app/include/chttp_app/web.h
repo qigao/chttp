@@ -12,6 +12,7 @@
 extern "C" {
 #endif
 
+struct chttp_invocation;
 typedef enum chttp_web_status {
   CHTTP_WEB_OK = 0,
   CHTTP_WEB_INVALID_ARGUMENT = -1,
@@ -140,7 +141,7 @@ typedef struct chttp_web_auth_policy {
   size_t max_return_target_bytes;
   chttp_web_authorize_fn authorize;
   void *authorize_user;
-  chttp_server_handler_fn forbidden;
+  int (*forbidden)(void *, const chttp_server_request_view *, const struct chttp_invocation *);
   void *forbidden_user;
 } chttp_web_auth_policy;
 
@@ -153,11 +154,6 @@ enum {
   CHTTP_WEB_ASSET_RELATIVE_HARD_MAX = 4096
 };
 
-typedef bool (*chttp_web_asset_immutable_fn)(
-    void *user, const char *relative_path);
-typedef const char *(*chttp_web_asset_etag_fn)(
-    void *user, const char *relative_path);
-
 /**
  * Borrowed static-asset mount policy.
  *
@@ -167,11 +163,9 @@ typedef const char *(*chttp_web_asset_etag_fn)(
  * until stop. Every generated relative component is checked without following
  * symlinks (and Windows reparse points) before CHTTP opens the final file.
  *
- * cache_control defaults to "no-cache" when NULL. immutable is an optional
- * application classifier for fingerprinted assets; when it returns true,
- * immutable_cache_control is used when non-NULL. etag may return one borrowed
- * quoted strong ETag for the normalized relative path, or NULL to reuse CHTTP
- * metadata validators. user is passed to both callbacks.
+ * cache_control defaults to "no-cache" when NULL. The Application asset policy
+ * runs on a worker and selects immutable_cache_control and an optional strong
+ * ETag. No callback executes during owner-thread file publication.
  *
  * SPA fallback is opt-in and scoped only to spa_url_prefix. Asset-prefix
  * misses never fall through to the SPA fallback, and unrelated namespaces
@@ -184,16 +178,12 @@ typedef struct chttp_web_asset_mount {
   size_t max_relative_path_bytes;
   const char *cache_control;
   const char *immutable_cache_control;
-  chttp_web_asset_immutable_fn immutable;
-  chttp_web_asset_etag_fn etag;
-  void *user;
   const char *spa_url_prefix;
   const char *spa_fallback_relative_path;
 } chttp_web_asset_mount;
 
 #define CHTTP_WEB_ASSET_MOUNT_INIT \
-  {sizeof(chttp_web_asset_mount), NULL, NULL, 0u, NULL, NULL, NULL, NULL, \
-   NULL, NULL, NULL}
+  {sizeof(chttp_web_asset_mount), NULL, NULL, 0u, NULL, NULL, NULL, NULL}
 
 const cmeta_data_desc *chttp_web_principal_data(void);
 
@@ -218,7 +208,7 @@ typedef struct chttp_web_sse_event {
    0u, false, false, false, false}
 
 /**
- * Produces the next event synchronously on the CHTTP owner thread.
+ * Produces the next event synchronously on an Application worker.
  *
  * Return SALTS_OK with out_event populated, SALTS_ENOENT for normal EOF, or a
  * negative Salts status to fail the response. Returned views must remain valid
@@ -613,8 +603,9 @@ typedef struct chttp_web_upload_request {
 
 /**
  * Initializes one upload request from the active multipart request and
- * publishes an owner-thread body sink whose user pointer is this upload.
- * All callbacks are synchronous and must not perform unbounded blocking.
+ * produces a sink whose user pointer is this upload. Configure it from the
+ * Application upload open method; writes/close/finalize run serially on workers.
+ * Callbacks are synchronous and must terminate for close to settle.
  */
 chttp_web_status chttp_web_upload_open(
     chttp_web_upload_request *upload,
@@ -763,7 +754,7 @@ chttp_web_status chttp_web_sse_stream_init(
  * owned by CHTTP for both HTTP/1.1 and HTTP/2.
  */
 chttp_web_status chttp_web_sse_response(
-    chttp_server_response *response,
+    const struct chttp_invocation *response,
     chttp_web_sse_stream *stream,
     chttp_web_error *error);
 
@@ -792,12 +783,10 @@ chttp_web_status chttp_web_renderer_init(
  * On success, *out_html is malloc-owned, NUL-terminated, and may contain
  * embedded NUL bytes before its terminator; *out_size is authoritative.
  * On failure, *out_html is NULL and *out_size is zero. No partial output is
- * published. The owned buffer is suitable for cross-thread deferred reply:
- * chttp_server_deferred_reply() copies it before returning.
+ * published. Invocation respond() copies it before returning.
  *
- * model_desc/model are borrowed only for this call. Handler-scoped request,
- * route-param, header, session, and JWT views must be copied before leaving
- * the owner-thread callback and may not be retained by a worker.
+ * model_desc/model are borrowed only for this call. Invocation request,
+ * route-param, header, Session and JWT views expire with the worker callback.
  */
 chttp_web_status chttp_web_render(
     chttp_web_renderer *renderer,
@@ -815,29 +804,7 @@ chttp_web_status chttp_web_render(
  */
 chttp_web_status chttp_web_render_response(
     chttp_web_renderer *renderer,
-    chttp_server_response *response,
-    const char *template_name,
-    const cmeta_data_desc *model_desc,
-    const void *model,
-    unsigned int status_code,
-    const char *content_type,
-    chttp_web_error *error);
-
-/**
- * Worker-oriented terminal helper for a previously deferred response.
- *
- * Renders completely into CHttp::App-owned temporary output, then calls the
- * thread-safe generation-checked chttp_server_deferred_reply(). The server
- * copies the body before this function frees the render buffer. A zero status
- * selects 200; NULL content_type selects "text/html; charset=utf-8".
- *
- * Success consumes the deferred handle. Server-side stale/cancelled/bounds
- * failures return CHTTP_WEB_SERVER with error->native_status preserving the
- * Salts status; the helper never retries or cancels implicitly.
- */
-chttp_web_status chttp_web_deferred_render_reply(
-    chttp_web_renderer *renderer,
-    chttp_server_deferred *deferred,
+    const struct chttp_invocation *response,
     const char *template_name,
     const cmeta_data_desc *model_desc,
     const void *model,
@@ -924,19 +891,18 @@ chttp_web_status chttp_web_local_target_validate(
     chttp_web_error *error);
 
 /**
- * CHTTP-native browser authentication/authorization middleware.
+ * Browser authentication/authorization for an Invocation before hook.
  *
  * Anonymous ordinary requests receive a 303 local login redirect. Exact HTMX
  * requests receive the same destination in HX-Redirect on a 200 response so
  * HTMX processes the response header. Authenticated requests optionally invoke
  * the application authorize callback: SALTS_OK continues, SALTS_EPERM denies,
  * and every other error is propagated fail-closed.
+ * On handled denial, stages the response, marks rejection and clears proceed.
+ * The policy and nested callbacks borrow only this worker callback scope.
  */
-int chttp_web_auth_middleware(
-    void *user,
-    const chttp_server_request_view *request,
-    chttp_server_response *response,
-    chttp_server_next *next);
+int chttp_web_authorize(const struct chttp_invocation *invocation,
+    const chttp_web_auth_policy *policy, bool *proceed);
 
 /**
  * Performs the security transition after the application has verified
@@ -1054,29 +1020,29 @@ chttp_web_status chttp_web_form_bind_method_plan(
  * accepted. Location is copied by CHTTP before return.
  */
 chttp_web_status chttp_web_redirect(
-    chttp_server_response *response,
+    const struct chttp_invocation *response,
     unsigned int status_code,
     const char *location,
     chttp_web_error *error);
 
 /** Non-terminal HTMX response-header helpers; values are copied by CHTTP. */
 chttp_web_status chttp_web_hx_redirect(
-    chttp_server_response *response,
+    const struct chttp_invocation *response,
     const char *location,
     chttp_web_error *error);
 chttp_web_status chttp_web_hx_trigger(
-    chttp_server_response *response,
+    const struct chttp_invocation *response,
     const char *trigger,
     chttp_web_error *error);
 chttp_web_status chttp_web_hx_retarget(
-    chttp_server_response *response,
+    const struct chttp_invocation *response,
     const char *selector,
     chttp_web_error *error);
 
 /** Renders one HTML error page; status_code must be in the 400..599 range. */
 chttp_web_status chttp_web_render_error(
     chttp_web_renderer *renderer,
-    chttp_server_response *response,
+    const struct chttp_invocation *response,
     unsigned int status_code,
     const char *template_name,
     const cmeta_data_desc *model_desc,

@@ -1,3 +1,4 @@
+#include "../../../src/chttp_web_engine.h"
 #include "../../../src/chttp_web_registration.h"
 #include "../../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
@@ -348,7 +349,7 @@ static int web_crud_render(
 
   template_name =
       fragment || model.request.htmx ? "users.html" : "page.html";
-  status = chttp_web_render_response(
+  status = chttp_web_engine_render_response(
       &app->renderer,
       response,
       template_name,
@@ -377,13 +378,13 @@ static int web_crud_after_mutation(
   chttp_web_status status;
 
   if (!chttp_web_request_is_htmx(request)) {
-    status = chttp_web_redirect(response, 303u, "/users", &error);
+    status = chttp_web_engine_redirect(response, 303u, "/users", &error);
     return status == CHTTP_WEB_OK ? SALTS_OK : SALTS_EIO;
   }
 
-  status = chttp_web_hx_trigger(response, "users:changed", &error);
+  status = chttp_web_engine_hx_trigger(response, "users:changed", &error);
   if (status == CHTTP_WEB_OK)
-    status = chttp_web_hx_retarget(response, "#users", &error);
+    status = chttp_web_engine_hx_retarget(response, "#users", &error);
   if (status != CHTTP_WEB_OK)
     return SALTS_EIO;
 

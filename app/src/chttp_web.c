@@ -1,4 +1,5 @@
 #include <chttp_app/web.h>
+#include "chttp_web_output.h"
 
 #include <jinja_cmeta.h>
 #include <jinja_cmeta_runtime.h>
@@ -409,8 +410,8 @@ chttp_web_status chttp_web_render(
   return chttp_web_fail(error, CHTTP_WEB_OK, 0, NULL);
 }
 
-chttp_web_status chttp_web_render_response(
-    chttp_web_renderer *renderer, chttp_server_response *response,
+chttp_web_status chttp_web_output_render_response(
+    chttp_web_renderer *renderer, const chttp_web_output *response,
     const char *template_name, const cmeta_data_desc *model_desc,
     const void *model, unsigned int status_code, const char *content_type,
     chttp_web_error *error) {
@@ -431,7 +432,7 @@ chttp_web_status chttp_web_render_response(
   if (status_code == 0u) status_code = 200u;
   if (!content_type) content_type = default_content_type;
   server_status =
-      chttp_server_reply(response, status_code, content_type, html, html_size);
+      chttp_web_output_reply(response, status_code, content_type, html, html_size);
   free(html);
   if (server_status != SALTS_OK)
     return chttp_web_fail(error, CHTTP_WEB_SERVER, server_status,
@@ -439,7 +440,7 @@ chttp_web_status chttp_web_render_response(
   return chttp_web_fail(error, CHTTP_WEB_OK, 0, NULL);
 }
 
-chttp_web_status chttp_web_deferred_render_reply(
+chttp_web_status chttp_web_engine_deferred_render_reply(
     chttp_web_renderer *renderer, chttp_server_deferred *deferred,
     const char *template_name, const cmeta_data_desc *model_desc,
     const void *model, unsigned int status_code, const char *content_type,

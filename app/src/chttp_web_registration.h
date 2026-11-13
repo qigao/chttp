@@ -1,6 +1,7 @@
 #ifndef CHTTP_WEB_REGISTRATION_H
 #define CHTTP_WEB_REGISTRATION_H
 #include <chttp_app/web.h>
+#include "chttp_web_engine.h"
 enum { CHTTP_WEB_ASSET_FS_PATH_HARD_MAX =
     CHTTP_WEB_ASSET_ROOT_HARD_MAX + CHTTP_WEB_ASSET_RELATIVE_HARD_MAX + 2 };
 typedef enum chttp_web_asset_selection_kind {
@@ -25,7 +26,7 @@ int chttp_web_assets_select(const chttp_web_asset_mount *, const chttp_server_re
     chttp_web_asset_selection *);
 int chttp_web_assets_use(
     chttp_server *server,
-    const chttp_web_asset_mount *mount);
+    const chttp_web_engine_asset_mount *mount);
 
 int chttp_web_security_use(
     chttp_server *server,

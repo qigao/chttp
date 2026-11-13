@@ -1,5 +1,6 @@
 #include "../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
+#include "chttp_web_output.h"
 
 #include <core/error_codes.h>
 
@@ -320,17 +321,16 @@ static int chttp_web_auth_web_result(
 static int chttp_web_auth_forbidden(
     const chttp_web_auth_policy *policy,
     const chttp_server_request_view *request,
-    chttp_server_response *response) {
-  if (policy->forbidden != NULL)
-    return policy->forbidden(
-        policy->forbidden_user, request, response);
-  return chttp_server_reply(response, 403u, NULL, NULL, 0u);
+    const chttp_web_output *response) {
+  if (response->forbidden != NULL)
+    return response->forbidden(response->forbidden_context, policy, request, response);
+  return chttp_web_output_reply(response, 403u, NULL, NULL, 0u);
 }
 
 static int chttp_web_auth_unauthenticated(
     const chttp_web_auth_policy *policy,
     const chttp_server_request_view *request,
-    chttp_server_response *response) {
+    const chttp_web_output *response) {
   char destination_storage[CHTTP_WEB_LOGIN_DESTINATION_HARD_MAX + 1u];
   const char *destination = policy->login_path;
   chttp_web_error error = CHTTP_WEB_ERROR_INIT;
@@ -341,28 +341,28 @@ static int chttp_web_auth_unauthenticated(
         policy, request, destination_storage,
         sizeof(destination_storage), &error);
     if (status == CHTTP_WEB_AUTH || status == CHTTP_WEB_CAPACITY)
-      return chttp_server_reply(response, 400u, NULL, NULL, 0u);
+      return chttp_web_output_reply(response, 400u, NULL, NULL, 0u);
     if (status != CHTTP_WEB_OK)
       return chttp_web_auth_web_result(status, &error);
     destination = destination_storage;
   }
 
   if (chttp_web_request_is_htmx(request)) {
-    status = chttp_web_hx_redirect(response, destination, &error);
+    status = chttp_web_output_hx_redirect(response, destination, &error);
     if (status != CHTTP_WEB_OK)
       return chttp_web_auth_web_result(status, &error);
-    return chttp_server_reply(response, 200u, NULL, NULL, 0u);
+    return chttp_web_output_reply(response, 200u, NULL, NULL, 0u);
   }
 
-  status = chttp_web_redirect(response, 303u, destination, &error);
+  status = chttp_web_output_redirect(response, 303u, destination, &error);
   return chttp_web_auth_web_result(status, &error);
 }
 
-int chttp_web_auth_middleware(
+int chttp_web_output_authorize(
     void *user,
     const chttp_server_request_view *request,
-    chttp_server_response *response,
-    chttp_server_next *next) {
+    const chttp_web_output *response,
+    bool *proceed) {
   const chttp_web_auth_policy *policy =
       (const chttp_web_auth_policy *)user;
   chttp_web_principal principal = CHTTP_WEB_PRINCIPAL_INIT;
@@ -371,9 +371,10 @@ int chttp_web_auth_middleware(
   int status;
 
   if (!chttp_web_auth_policy_valid(policy) ||
-      request == NULL || response == NULL || next == NULL)
+      request == NULL || response == NULL || proceed == NULL)
     return SALTS_EINVAL;
 
+  *proceed = false;
   web_status = chttp_web_principal_get(request, &principal, &error);
   if (web_status != CHTTP_WEB_OK)
     return chttp_web_auth_web_result(web_status, &error);
@@ -391,7 +392,8 @@ int chttp_web_auth_middleware(
     if (status != SALTS_OK) return status;
   }
 
-  return chttp_server_next_call(next);
+  *proceed = true;
+  return SALTS_OK;
 }
 
 chttp_web_status chttp_web_principal_sign_in(

@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include <chttp_app/web.h>
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
@@ -68,7 +68,7 @@ static cmeta_status create(void *context, const cmeta_data_desc *data, const voi
   if (status != CMETA_OK) { (void)cmeta_object_release(out); free(self); }
   return status;
 }
-CHTTP_INVOCATION_ACTION(invoke);
+CHTTP_ACTION(invoke);
 int invoke(void *self, const chttp_invocation *invocation) {
   /* Existing browser helpers consume an explicit detached Session view; this
    * is not the engine's owner-affine request/Session context. */
@@ -81,7 +81,7 @@ int invoke(void *self, const chttp_invocation *invocation) {
       strcmp(request->path, "/large") == 0;
   sync_mutex_lock(&fixture.mutex);
   ++fixture.calls;
-  if (!chttp_application_worker_current(&fixture.app)) ++fixture.wrong_thread;
+  if (!chttp_application_is_worker(&fixture.app)) ++fixture.wrong_thread;
   if (strcmp(request->path, "/increment") == 0) ++fixture.increment_calls;
   if (hold) {
     ++fixture.held; sync_cond_broadcast(&fixture.changed);
@@ -170,18 +170,19 @@ static void completed(void *self, const chttp_server_request_view *request,
   const int mutation = chttp_session_set(request->session, "after", "forbidden");
   sync_mutex_lock(&fixture.mutex);
   if (mutation == SALTS_OK) ++fixture.readonly_violations;
-  if (!chttp_application_worker_current(&fixture.app)) ++fixture.wrong_thread;
+  if (!chttp_application_is_worker(&fixture.app)) ++fixture.wrong_thread;
   ++fixture.completed;
   if (strcmp(request->path, "/large") == 0) ++fixture.completed_large;
   fixture.last = *outcome;
   sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
 }
 static void start(void) {
-  check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-  const chttp_application_work_config work = {
+      const chttp_application_work_config work = {
       fixture.workers, fixture.slots, fixture.retained, fixture.reply_bytes,
       fixture.header_capacity, fixture.header_bytes};
-  check_equal(chttp_application_worker_prepare(&fixture.app, &work), SALTS_OK);
+  fixture.config.workers = work;
+  check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+
   static const char *const paths[] = {"/init", "/init-no-type", "/read", "/read-no-type",
       "/increment", "/hold", "/failure", "/regenerate", "/logout", "/csrf", "/large", "/principal"};
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {

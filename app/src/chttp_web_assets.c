@@ -263,12 +263,20 @@ int chttp_web_assets_select(const chttp_web_asset_mount *mount,
   return SALTS_OK;
 }
 
+static chttp_web_asset_mount engine_asset_config(const chttp_web_engine_asset_mount *mount) {
+  const chttp_web_asset_mount config = {sizeof(config), mount->url_prefix, mount->filesystem_root,
+      mount->max_relative_path_bytes, mount->cache_control, mount->immutable_cache_control,
+      mount->spa_url_prefix, mount->spa_fallback_relative_path};
+  return config;
+}
+
 static int chttp_web_assets_middleware(void *user, const chttp_server_request_view *request,
     chttp_server_response *response, chttp_server_next *next) {
-  const chttp_web_asset_mount *mount = user;
+  const chttp_web_engine_asset_mount *mount = user;
+  const chttp_web_asset_mount config = engine_asset_config(mount);
   if (!response || !next) return SALTS_EINVAL;
   chttp_web_asset_selection selection;
-  int status = chttp_web_assets_select(mount, request, &selection);
+  int status = chttp_web_assets_select(&config, request, &selection);
   if (status != SALTS_OK) return status;
   switch (selection.kind) {
   case CHTTP_WEB_ASSET_NEXT: return chttp_server_next_call(next);
@@ -333,9 +341,10 @@ int chttp_web_assets_validate(const chttp_web_asset_mount *mount) {
 
 int chttp_web_assets_use(
     chttp_server *server,
-    const chttp_web_asset_mount *mount) {
-  if (server == NULL) return SALTS_EINVAL;
-  const int status = chttp_web_assets_validate(mount);
+    const chttp_web_engine_asset_mount *mount) {
+  if (!server || !mount || mount->size != sizeof(*mount)) return SALTS_EINVAL;
+  const chttp_web_asset_mount config = engine_asset_config(mount);
+  const int status = chttp_web_assets_validate(&config);
   if (status != SALTS_OK) return status;
   return chttp_server_use(
       server, chttp_web_assets_middleware, (void *)mount);

@@ -96,9 +96,9 @@ static char *load_file_bounded(const char *path, size_t limit, size_t *out_size)
 }
 
 static int serve_file(void *user, const chttp_server_request_view *request,
-                      chttp_server_response *response) {
-    return chttp_server_serve_file(
-        response, request, (const chttp_server_file_options *)user);
+                      const chttp_invocation *response) {
+    return chttp_invocation_serve_file(
+        response, (const chttp_server_file_options *)user);
 }
 
 static oa_ui_sequence_view selected_view(const oa_ui_operation *operation) {
@@ -111,7 +111,7 @@ static oa_ui_sequence_view selected_view(const oa_ui_operation *operation) {
 }
 
 static int reply_render_failure(
-    chttp_server_response *response,
+    const chttp_invocation *response,
     chttp_web_status rendered,
     const chttp_web_error *error) {
     static const char body[] = "OpenAPI UI render failed\n";
@@ -121,7 +121,7 @@ static int reply_render_failure(
             error ? error->native_status : 0,
             error ? error->template_name : "",
             error ? error->message : "");
-    return chttp_server_reply(
+    return chttp_invocation_respond(
         response, 500u, "text/plain; charset=utf-8",
         body, sizeof(body) - 1u);
 }
@@ -130,7 +130,7 @@ static int reply_page(
     ui_app *app,
     const char *template_name,
     const oa_ui_document *page,
-    chttp_server_response *response) {
+    const chttp_invocation *response) {
     chttp_web_error error = CHTTP_WEB_ERROR_INIT;
     const chttp_web_status rendered = chttp_web_render_response(
         &app->renderer, response, template_name,
@@ -142,7 +142,7 @@ static int reply_page(
 }
 
 static int serve_docs(void *user, const chttp_server_request_view *request,
-                      chttp_server_response *response) {
+                      const chttp_invocation *response) {
     (void)request;
     ui_app *app = (ui_app *)user;
     oa_ui_document page = *app->document;
@@ -211,7 +211,7 @@ static int parse_search_query(
 
 static int serve_operation_list(
     void *user, const chttp_server_request_view *request,
-    chttp_server_response *response) {
+    const chttp_invocation *response) {
     static const char bad_query[] = "Invalid OpenAPI operation search query\n";
     static const char filter_failed[] = "OpenAPI UI filter failed\n";
     ui_app *app = (ui_app *)user;
@@ -223,7 +223,7 @@ static int serve_operation_list(
     int result;
 
     if (parse_search_query(request, query, &query_size) != SALTS_OK)
-        return chttp_server_reply(
+        return chttp_invocation_respond(
             response, 400u, "text/plain; charset=utf-8",
             bad_query, sizeof(bad_query) - 1u);
 
@@ -231,7 +231,7 @@ static int serve_operation_list(
         filter_storage = (oa_ui_operation *)calloc(
             app->document->operations.count, sizeof(*filter_storage));
         if (!filter_storage)
-            return chttp_server_reply(
+            return chttp_invocation_respond(
                 response, 500u, "text/plain; charset=utf-8",
                 filter_failed, sizeof(filter_failed) - 1u);
     }
@@ -242,7 +242,7 @@ static int serve_operation_list(
             &filtered, &filter_error)) {
         fprintf(stderr, "OpenAPI UI filter failed: %s\n", filter_error.message);
         free(filter_storage);
-        return chttp_server_reply(
+        return chttp_invocation_respond(
             response, 500u, "text/plain; charset=utf-8",
             filter_failed, sizeof(filter_failed) - 1u);
     }
@@ -257,7 +257,7 @@ static int serve_operation_list(
 
 static int serve_operation_detail(
     void *user, const chttp_server_request_view *request,
-    chttp_server_response *response) {
+    const chttp_invocation *response) {
     static const char not_found[] = "OpenAPI operation not found\n";
     ui_app *app = (ui_app *)user;
     const char *key = chttp_server_request_param(request, "key");
@@ -266,7 +266,7 @@ static int serve_operation_detail(
                   app->document, vstr_from_cstr(key))
             : NULL;
     if (!operation)
-        return chttp_server_reply(
+        return chttp_invocation_respond(
             response, 404u, "text/plain; charset=utf-8",
             not_found, sizeof(not_found) - 1u);
 
@@ -326,23 +326,23 @@ static cmeta_status ui_create(void *context, const cmeta_data_desc *data,
     return status;
 }
 CHTTP_ACTION(ui_docs);
-int ui_docs(void *self, const chttp_exchange *exchange) {
-    return serve_docs(((UiController *)self)->app, exchange->request, exchange->response);
+int ui_docs(void *self, const chttp_invocation *exchange) {
+    return serve_docs(((UiController *)self)->app, chttp_invocation_request(exchange), exchange);
 }
 CHTTP_ACTION(ui_list);
-int ui_list(void *self, const chttp_exchange *exchange) {
-    return serve_operation_list(((UiController *)self)->app, exchange->request, exchange->response);
+int ui_list(void *self, const chttp_invocation *exchange) {
+    return serve_operation_list(((UiController *)self)->app, chttp_invocation_request(exchange), exchange);
 }
 CHTTP_ACTION(ui_detail);
-int ui_detail(void *self, const chttp_exchange *exchange) {
-    return serve_operation_detail(((UiController *)self)->app, exchange->request, exchange->response);
+int ui_detail(void *self, const chttp_invocation *exchange) {
+    return serve_operation_detail(((UiController *)self)->app, chttp_invocation_request(exchange), exchange);
 }
 CHTTP_ACTION(ui_file);
-int ui_file(void *self, const chttp_exchange *exchange) {
+int ui_file(void *self, const chttp_invocation *exchange) {
     UiController *controller = self;
     for (int i = 0; i < controller->file_count; ++i)
-        if (strcmp(exchange->request->path, controller->paths[i]) == 0)
-            return serve_file(&controller->files[i], exchange->request, exchange->response);
+        if (strcmp(chttp_invocation_request(exchange)->path, controller->paths[i]) == 0)
+            return serve_file(&controller->files[i], chttp_invocation_request(exchange), exchange);
     return SALTS_EINVAL;
 }
 
@@ -549,6 +549,8 @@ int main(int argc, char **argv) {
         .action_count = sizeof(actions) / sizeof(actions[0])};
     chttp_application_config application = chttp_application_config_default();
     application.http = config;
+    application.workers = (chttp_worker_config){1u, UI_CONNECTIONS, UI_BUFFER_CAPACITY_BYTES,
+        UI_FILE_BYTES, UI_HEADERS, UI_HEADER_BYTES};
     application.components = &deployment; application.component_count = 1u;
     application.controllers = &controller; application.controller_count = 1u;
     application.security = &security;

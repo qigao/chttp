@@ -76,3 +76,9 @@ int chttp_invocation_reject(const chttp_invocation *invocation, bool *proceed, u
   if (status == SALTS_OK) *proceed = false;
   return status;
 }
+int chttp_invocation_mark_rejected(const chttp_invocation *invocation, bool *proceed) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  if (!state || !state->before_result || !proceed) return SALTS_EINVAL;
+  state->before_result->rejected = true; *proceed = false;
+  return SALTS_OK;
+}

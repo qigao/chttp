@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include "chttp_service_plugin_probe.h"
 #include "chttp_worker_body.service_native.h"
 #include "chttp_worker_body_native.h"
@@ -65,7 +65,7 @@ static cmeta_status create(void *context, const cmeta_data_desc *data, const voi
   return status;
 }
 static bool observe(void *context) {
-  if (context != &fixture || !chttp_application_worker_current(&fixture.app)) atomic_fetch_add(&fixture.invalid, 1);
+  if (context != &fixture || !chttp_application_is_worker(&fixture.app)) atomic_fetch_add(&fixture.invalid, 1);
   sync_mutex_lock(&fixture.mutex); ++fixture.calls; sync_cond_broadcast(&fixture.changed);
   while (fixture.block && !fixture.release) sync_cond_wait(&fixture.changed, &fixture.mutex);
   sync_mutex_unlock(&fixture.mutex);
@@ -80,7 +80,7 @@ static bool batch_records(const Batch_t *batch, cmeta_data_collection_view *view
 }
 static cmeta_status before(void *self, const chttp_method_call *call, bool *proceed) {
   (void)proceed;
-  if (!self || ((BodyController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((BodyController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !call->http || call->http->session || !call->input || !call->input->params[0]) {
     atomic_fetch_add(&fixture.invalid, 1); return CMETA_TYPE_MISMATCH;
   }
@@ -112,7 +112,7 @@ static void after(void *self, const chttp_method_call *call, const chttp_method_
     const BatchRequest_t *input = call->input->params[0];
     const BatchResponse_t *output = result->output ? result->output->params[1] : NULL;
     cmeta_data_collection_view source = {0}, copy = {0};
-    if (!chttp_application_worker_current(&fixture.app) || !output ||
+    if (!chttp_application_is_worker(&fixture.app) || !output ||
         !batch_records(&input->payload, &source) || !batch_records(&output->payload, &copy) || source.count != copy.count)
       atomic_fetch_add(&fixture.invalid, 1);
     else if (source.count) {
@@ -127,7 +127,7 @@ static void after(void *self, const chttp_method_call *call, const chttp_method_
   }
   const Request_t *input = call->input->params[0];
   const Response_t *output = result->output ? result->output->params[1] : NULL;
-  if (!chttp_application_worker_current(&fixture.app) || !output || output->payload.id != input->payload.id ||
+  if (!chttp_application_is_worker(&fixture.app) || !output || output->payload.id != input->payload.id ||
       tstr_len(output->payload.note) != tstr_len(input->payload.note) ||
       (tstr_len(input->payload.note) && memcmp(output->payload.note, input->payload.note, tstr_len(input->payload.note))))
     atomic_fetch_add(&fixture.invalid, 1);
@@ -155,6 +155,19 @@ static void expect(const char *target, const char *body, const char *media, unsi
     check_equal(response.body, body, response.body_size);
   }
   chttp_response_destroy(&response);
+  /* Client receipt/destruction does not join the Server's native terminal or
+   * worker finalizer. This fixture has one record: settle it before testing
+   * the next conversion, and prove the rollback released its reservation. */
+  const uint64_t began = monotonic_ms();
+  chttp_worker_stats stats = {0};
+  for (;;) {
+    check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK);
+    check_equal(stats.publication_status, SALTS_OK);
+    if (!stats.pending || monotonic_ms() - began >= 5000u) break;
+    sleep_ms(1u);
+  }
+  check_equal(stats.pending, 0u);
+  check_equal(stats.retained_bytes, 0u);
 }
 static size_t leases(void) {
   cmeta_plugin_lifecycle_info info = {0};
@@ -216,8 +229,9 @@ static void initialize(int mode) {
     fixture.method.dispatch = CHTTP_DISPATCH_CFLOW;
     fixture.method.execution = NULL; fixture.method.projection = &fixture.projection;
   }
+  fixture.config.workers = fixture.work;
   check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-  check_equal(chttp_application_worker_prepare(&fixture.app, &fixture.work), SALTS_OK);
+
 }
 static int mount(void) {
   return chttp_application_worker_mount_http(&fixture.app, "BodyComponent", cmeta_reflected_data(BodyController),
@@ -288,7 +302,7 @@ spec("Application owned JSON body ingress") {
     sync_cond_destroy(&fixture.changed); sync_mutex_destroy(&fixture.mutex);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
-    static const int modes[] = {CHTTP_DISPATCH_INLINE, CHTTP_DISPATCH_CFLOW, CHTTP_DISPATCH_PLUGIN};
+    static const int modes[] = {CHTTP_DISPATCH_DIRECT, CHTTP_DISPATCH_CFLOW, CHTTP_DISPATCH_PLUGIN};
     for (size_t m = 0u; m < sizeof(modes) / sizeof(modes[0]); ++m) {
       const int mode = modes[m];
       it("decodes owned uint64, nested record and embedded NUL before hooks (protocol=%d provider=%d)", protocol, mode) {
@@ -347,7 +361,7 @@ spec("Application owned JSON body ingress") {
       }
     }
     it("rejects undeclared aliases and then accepts canonical names on protocol %d", protocol) {
-      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_INLINE);
+      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_DIRECT);
       chttp_response response = {0};
       check_equal(request("/echo/42", "{\"legacyId\":1,\"child\":{\"number\":1},\"note\":\"\"}", "application/json", &response), SALTS_OK);
       check_equal(response.status_code, 400u);
@@ -355,7 +369,7 @@ spec("Application owned JSON body ingress") {
       expect("/echo/42", EMPTY_NOTE, "application/json", 200u);
     }
     it("rejects non-JSON media before business and reuses its only record on protocol %d", protocol) {
-      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_INLINE);
+      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_DIRECT);
       static const char *media[] = {NULL, "text/plain", "application/jsonp", "application/problem+json"};
       for (size_t i = 0u; i < sizeof(media) / sizeof(media[0]); ++i) expect("/echo/42", BODY, media[i], 415u);
       check_equal(atomic_load(&fixture.before), 0); expect("/echo/42", BODY, "application/json", 200u);
@@ -390,7 +404,7 @@ spec("Application owned JSON body ingress") {
         if (limit == 1) fixture.config.bindings.native_max_owned_bytes = 1u;
         if (limit == 2) fixture.config.bindings.native_max_items = 4u;
         if (limit == 3) fixture.config.bindings.native_max_depth = 2u;
-        start(CHTTP_DISPATCH_INLINE);
+        start(CHTTP_DISPATCH_DIRECT);
         if (limit == 0 && protocol == CHTTP_HTTP_2) {
           chttp_response response = {0};
           check_equal(request("/echo/42", BODY, "application/json", &response), SALTS_EPROTO);
@@ -472,7 +486,7 @@ spec("Application owned JSON body ingress") {
       DataBindHttpMethodPlan *plan = NULL;
       check_equal(data_bind_http_method_plan_compile_service(fixture.codec, "RawProbe", sequence ? "SequenceSize" : "Size",
           &projection, &native, &plan, &diagnostic), DATA_BIND_OK);
-      initialize(CHTTP_DISPATCH_INLINE);
+      initialize(CHTTP_DISPATCH_DIRECT);
       const chttp_http_method method = {.plan = plan, .binding = &native,
           .execution = sequence ? databind_11_BodyIngress_8_RawProbe_12_SequenceSize__databind_execution() :
               databind_11_BodyIngress_8_RawProbe_4_Size__databind_execution()};

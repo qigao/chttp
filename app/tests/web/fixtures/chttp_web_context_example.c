@@ -1,3 +1,4 @@
+#include "../../../src/chttp_web_engine.h"
 #include "../../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 
@@ -155,9 +156,9 @@ static int web_context_users(
   }
 
   if (model.request.htmx) {
-    status = chttp_web_hx_trigger(response, "users:rendered", &error);
+    status = chttp_web_engine_hx_trigger(response, "users:rendered", &error);
     if (status == CHTTP_WEB_OK)
-      status = chttp_web_hx_retarget(response, "#users", &error);
+      status = chttp_web_engine_hx_retarget(response, "#users", &error);
     if (status != CHTTP_WEB_OK) {
       fprintf(stderr, "HX headers failed: status=%d native=%d message=%s\n",
               (int)error.status, error.native_status, error.message);
@@ -168,7 +169,7 @@ static int web_context_users(
     template_name = "page.html";
   }
 
-  status = chttp_web_render_response(
+  status = chttp_web_engine_render_response(
       app->renderer, response, template_name, app->model_desc, &model,
       200u, NULL, &error);
   if (status != CHTTP_WEB_OK) {
@@ -187,7 +188,7 @@ static int web_context_redirect(
   (void)user;
   (void)request;
 
-  status = chttp_web_redirect(response, 303u, "/users/redirected", &error);
+  status = chttp_web_engine_redirect(response, 303u, "/users/redirected", &error);
   if (status != CHTTP_WEB_OK) {
     fprintf(stderr, "redirect failed: status=%d native=%d message=%s\n",
             (int)error.status, error.native_status, error.message);
@@ -219,7 +220,7 @@ static int web_context_error(
   status = chttp_web_request_context_init(
       &model.request, request, &options, &error);
   if (status == CHTTP_WEB_OK)
-    status = chttp_web_render_error(
+    status = chttp_web_engine_render_error(
         app->renderer, response, 404u, "error.html",
         app->model_desc, &model, &error);
   if (status != CHTTP_WEB_OK) {
@@ -238,11 +239,11 @@ static int web_context_hx_headers(
   (void)user;
   (void)request;
 
-  status = chttp_web_hx_redirect(response, "/users/42", &error);
+  status = chttp_web_engine_hx_redirect(response, "/users/42", &error);
   if (status == CHTTP_WEB_OK)
-    status = chttp_web_hx_trigger(response, "users:refresh", &error);
+    status = chttp_web_engine_hx_trigger(response, "users:refresh", &error);
   if (status == CHTTP_WEB_OK)
-    status = chttp_web_hx_retarget(response, "#users", &error);
+    status = chttp_web_engine_hx_retarget(response, "#users", &error);
   if (status != CHTTP_WEB_OK) {
     fprintf(stderr, "HX helper failed: status=%d native=%d message=%s\n",
             (int)error.status, error.native_status, error.message);
@@ -268,12 +269,12 @@ static int web_context_hx_bounded(
             response, fill_names[i], "1") != SALTS_OK)
       return SALTS_EIO;
 
-  status = chttp_web_hx_redirect(response, "/users/42", &error);
+  status = chttp_web_engine_hx_redirect(response, "/users/42", &error);
   if (status != CHTTP_WEB_OK) return SALTS_EIO;
-  status = chttp_web_hx_trigger(response, "users:refresh", &error);
+  status = chttp_web_engine_hx_trigger(response, "users:refresh", &error);
   if (status != CHTTP_WEB_OK) return SALTS_EIO;
 
-  status = chttp_web_hx_retarget(response, "#users", &error);
+  status = chttp_web_engine_hx_retarget(response, "#users", &error);
   if (status != CHTTP_WEB_SERVER || error.native_status != SALTS_ENOBUFS) {
     fprintf(stderr,
             "expected bounded HX failure: status=%d native=%d message=%s\n",

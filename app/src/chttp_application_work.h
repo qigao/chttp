@@ -1,20 +1,15 @@
 #ifndef CHTTP_APPLICATION_WORK_H
 #define CHTTP_APPLICATION_WORK_H
-/* Private migration bridge. Not an installed Application execution mode.
- * Session state is a detached, staged snapshot. Public defaults switch only
- * after the complete buffered/streaming/WS migration is qualified. */
-#include <http_server/http.h>
+/* Internal worker bridge. Session state is a detached, staged snapshot. */
+#include <chttp_app/dispatch.h>
 #include <cmeta/ace_interceptor.h>
 #include "../../http_common/http/chttp_method_hooks.h"
 
 typedef struct chttp_application_work { void *impl; } chttp_application_work;
 typedef struct chttp_application_work_reply chttp_application_work_reply;
 struct chttp_server_admission_gate;
-/* Worker-only header callback; the public Server admission type remains
- * owner-affine. All input views borrow this short copied callback scope. */
-typedef int (*chttp_application_admission_fn)(void *, const chttp_server_request_view *,
-    chttp_server_admission_result *);
-typedef struct chttp_application_work_result { int status; bool rejected; } chttp_application_work_result;
+typedef chttp_admission_fn chttp_application_admission_fn;
+typedef chttp_invocation_result chttp_application_work_result;
 typedef struct chttp_application_work_exchange {
   const chttp_server_request_view *request;
   chttp_application_work_reply *response;
@@ -26,8 +21,7 @@ enum { CHTTP_APPLICATION_WORK_MAX_HOOKS = 16 };
 typedef int (*chttp_application_work_fn)(void *, const chttp_server_request_view *,
     chttp_application_work_reply *);
 typedef chttp_response_outcome chttp_application_work_outcome;
-typedef void (*chttp_application_work_completion_fn)(void *,
-    const chttp_server_request_view *, const chttp_application_work_outcome *);
+typedef chttp_completion_fn chttp_application_work_completion_fn;
 typedef struct chttp_application_work_task {
   chttp_application_work_fn run;
   void (*finalize)(void *);
@@ -40,7 +34,7 @@ typedef struct chttp_application_work_task {
   /* Request-owned method records, charged to retained_bytes before defer. */
   size_t method_capacity;
 } chttp_application_work_task;
-typedef int (*chttp_application_upload_open_fn)(void *, const chttp_server_request_view *, chttp_body_sink *);
+typedef chttp_upload_open_fn chttp_application_upload_open_fn;
 typedef struct chttp_application_upload_callbacks {
   chttp_application_upload_open_fn open;
   void (*close)(void *, chttp_body_sink *, int);
@@ -50,39 +44,18 @@ typedef struct chttp_application_upload_callbacks {
 
 /* Each event view expires when its worker method returns. The captured peer
  * value uses the existing bounded, generation-checked send command API. */
-typedef struct chttp_application_websocket_event {
-  const chttp_server_request_view *request;
-  const chttp_server_websocket_session *peer;
-  const chttp_websocket_event *event;
-} chttp_application_websocket_event;
-typedef int (*chttp_application_websocket_event_fn)(void *, const chttp_application_websocket_event *);
+typedef chttp_websocket_event_view chttp_application_websocket_event;
+typedef chttp_websocket_event_action_fn chttp_application_websocket_event_fn;
 typedef struct chttp_application_websocket_callbacks {
   chttp_application_websocket_event_fn event;
   const cmeta_function_desc *operation;
   void *user;
   size_t capacity;
+  chttp_application_websocket_event_fn ready;
+  const cmeta_function_desc *ready_operation;
 } chttp_application_websocket_callbacks;
-typedef struct chttp_application_work_config {
-  size_t workers;
-  size_t capacity;
-  size_t retained_bytes;
-  size_t reply_bytes;
-  /* Extra fields only. Both zero select no extras; Content-Type shares the
-   * reply arena and its reserved metadata row. All bytes count at admission. */
-  size_t header_capacity;
-  size_t header_bytes;
-} chttp_application_work_config;
-typedef struct chttp_application_work_stats {
-  size_t pending;
-  size_t retained_bytes;
-  size_t session_waiting;
-  /* Lifetime telemetry saturates; capacity/byte accounting never saturates. */
-  uint64_t accepted;
-  uint64_t rejected;
-  uint64_t completed;
-  uint64_t cancelled;
-  int publication_status;
-} chttp_application_work_stats;
+typedef chttp_worker_config chttp_application_work_config;
+typedef chttp_worker_stats chttp_application_work_stats;
 
 #ifdef __cplusplus
 extern "C" {
