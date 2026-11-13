@@ -4,7 +4,7 @@
 
 The former Salts/SaltsUtils prerelease composition mixed platform primitives,
 metadata, transport and utility ownership. CHttp now selects installed
-SaltsBase, CMeta, SaltsCore (from salts-cnet) and SaltsUtils releases explicitly.
+SaltsBase, CMeta, SaltsCNet and SaltsUtils SDKs explicitly.
 Their versions and roots come from the environment, with matching local dotenv
 examples and repository CI variables. `VCPKG_CACHE_VERSION` selects the shared
 infrastructure and published dependency trees; product configuration performs
@@ -19,7 +19,7 @@ failure at the owning boundary.
 
 - SaltsBase owns Core clocks, threads, files, buffers, NativeIO and parsers.
 - CMeta owns `CMeta::CMeta`, `CMeta::CFlow`, CSTL and plugin targets.
-- SaltsCore owns `Salts::CNet` and `Salts::Crypto`; its repository is salts-cnet.
+- SaltsCNet owns `Salts::CNet` and `Salts::Crypto`; its repository is salts-cnet.
 - SaltsUtils owns DataBind, IDL, bindings and Jinja targets under `Salts::`.
 - CHttp retains request/response, HTTP/RPC/S3, authentication policy, connection
   placement, cancellation and stop/drain contracts. This migration must not
@@ -130,3 +130,25 @@ Rollback explicitly restores the previous code revision and its matching
 environment/SDK pair, followed by a fresh configure and rebuild. Never mix an
 old monolithic SDK into the new roots, alter an existing release archive, or
 reuse binaries from an incompatible compiler/profile.
+
+## Plain CMake and current SDK composition
+
+CMake resolves explicit SDK roots without upstream version arguments. Project
+version metadata remains ordinary CMake package metadata; shared targets have no
+VERSION/SOVERSION properties. GNUInstallDirs, exported targets and the existing
+source/target helpers follow SaltsCNet's CMake layout. Installed consumers load
+the selected upstream packages before Chttp; ChttpConfig only imports targets.
+
+The selected composition is Base 0.1.8, SaltsCNet 0.1.12, Utils 0.1.4 and CMeta
+0.1.6 at ref 679710f7e3312811efdd92494744a2499286a6a5. Utils declares the CMeta
+source SDK build against Base 0.1.8; its release helper is the primary target/host
+SDK flow. The old Base 0.1.6 CMeta binary is not part of this composition.
+Restoration still verifies original release manifests, producer/tree identity,
+asset size and SHA-256 before extraction. Product configuration performs no SDK
+restoration, version selection, package-feed access or dependency repair.
+
+Historical CHttp GitHub Releases and its CHttp.Native GitHub package were removed
+at the maintainer's request. Product distribution uses CMake install trees.
+No historical release workflow or NuGet publication is restored. Changes to SDK
+filenames require a clean install prefix and downstream rebuild; rollback uses
+an explicitly selected previous source/SDK composition.

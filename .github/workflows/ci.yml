@@ -9,7 +9,7 @@ env:
   SALTS_BASE_VERSION: ${{ vars.SALTS_BASE_VERSION }}
   CMETA_REF: ${{ vars.CMETA_REF }}
   CMETA_VERSION: ${{ vars.CMETA_VERSION }}
-  SALTS_CORE_VERSION: ${{ vars.SALTS_CORE_VERSION }}
+  SALTS_CNET_VERSION: ${{ vars.SALTS_CNET_VERSION }}
   SALTS_UTILS_VERSION: ${{ vars.SALTS_UTILS_VERSION }}
 jobs:
   prepare:
@@ -96,6 +96,12 @@ jobs:
       with:
         name: chttp-shared-inputs-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/ci-inputs
+    - uses: actions/checkout@v4
+      with:
+        repository: qigao/salts-utils
+        ref: v${{ env.SALTS_UTILS_VERSION }}
+        path: build/upstream/salts-utils
+        persist-credentials: false
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
@@ -160,6 +166,11 @@ jobs:
         & $openssl version
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         "CHTTP_TEST_OPENSSL=$openssl" >> $env:GITHUB_ENV
+    - name: Build the declared CMeta host SDK
+      if: '!matrix.test'
+      run: build/upstream/salts-utils/.github/ci/build-cmeta-sdk.ps1 -Preset llvm-native-release-user -HostSdk
+    - name: Build the declared CMeta target SDK
+      run: build/upstream/salts-utils/.github/ci/build-cmeta-sdk.ps1 -Preset $env:CI_PRESET
     - name: Configure the complete CHttp graph
       run: |
         $options = @('--preset', $env:CI_PRESET)
@@ -197,8 +208,9 @@ jobs:
         @{schema=1; source=$env:GITHUB_SHA; profile='${{ matrix.sdk }}';
           preset=$env:CI_PRESET; base_version=$env:SALTS_BASE_VERSION;
           base=(Get-Content "$env:SALTS_BASE_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
-          cmeta=(Get-Content "$env:CMETA_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
-          core=(Get-Content "$env:SALTS_CORE_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
+          cmeta=@{version=$env:CMETA_VERSION; source=$env:CMETA_REF;
+            provision='declared source SDK'; base_version=$env:SALTS_BASE_VERSION};
+          cnet=(Get-Content "$env:SALTS_CNET_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
           utils=(Get-Content "$env:SALTS_UTILS_ROOT/sdk-restore-receipt.json" -Raw | ConvertFrom-Json);
           vcpkg_cache_version=$env:VCPKG_CACHE_VERSION; native_tests='${{ matrix.test }}'} |
           ConvertTo-Json -Depth 5 | Set-Content "build/$env:CI_PRESET/stage/chttp-sdk-manifest.json" -Encoding utf8

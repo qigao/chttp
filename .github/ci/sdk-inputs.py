@@ -1,7 +1,8 @@
 """Prepare published split SDKs once, then restore only verified original TARs.
 
 Base, vcpkg and compiler inputs use the immutable CMeta preparation entry point.
-This file supplies CHttp's three additional release manifests, not a downloader.
+This file supplies CHttp's CNet and Utils release manifests, not a downloader.
+CMeta uses the source SDK composition declared by the selected Utils release.
 """
 import argparse
 import hashlib
@@ -17,16 +18,16 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('phase', choices=('prepare', 'restore'))
 parser.add_argument('--profile')
 parser.add_argument('--prefix', default='')
-parser.add_argument('--package', choices=('cmeta', 'salts-cnet', 'salts-utils'))
+parser.add_argument('--package', choices=('salts-cnet', 'salts-utils'))
 args = parser.parse_args()
 root = Path.cwd()
 inputs = root / 'build/ci-inputs'
 infra = Path(os.environ['VCPKG_CACHE_REPOSITORY_ROOT'])
-packages = [('cmeta', 'CMETA', 'CMeta'), ('salts-cnet', 'SALTS_CORE', 'SaltsCore'),
+packages = [('salts-cnet', 'SALTS_CNET', 'SaltsCNet'),
             ('salts-utils', 'SALTS_UTILS', 'SaltsUtils')]
 if args.package:
     packages = [package for package in packages if package[0] == args.package]
-core_profiles = {'windows-llvm-mingw-x64':'windows-x64', 'linux-clang-x64':'linux-x64',
+cnet_profiles = {'windows-llvm-mingw-x64':'windows-x64', 'linux-clang-x64':'linux-x64',
                  'linux-clang-x64-tsan':'linux-x64-tsan', 'macos-clang-arm64':'macos-arm64'}
 
 
@@ -55,14 +56,15 @@ def github(repo, path):
 
 
 def sdk_entry(repo, manifest, platform):
-    field = 'profile' if repo != 'cmeta' else 'platform'
+    field = 'profile'
     matches = [sdk for sdk in manifest['sdks'] if sdk[field] == platform]
     if len(matches) != 1:
         raise ValueError(repo + ' must publish exactly one SDK for ' + platform)
     sdk = matches[0]
-    if repo != 'cmeta':
-        return {'file': sdk['asset'], 'sha256': sdk['sha256']}
-    return sdk
+    entry = {'file': sdk['asset'], 'sha256': sdk['sha256']}
+    if repo == 'salts-utils':
+        entry['size'] = sdk['sizeBytes']
+    return entry
 
 
 if args.phase == 'prepare':
@@ -87,33 +89,38 @@ if args.phase == 'prepare':
             raise ValueError('Expected published stable SDK: ' + repo)
         metadata = asset(release, f'{repo}-{version}-manifest.json')
         manifest = read(acquire(metadata))
-        if repo != 'cmeta':
-            if (manifest['schema'] != 1 or manifest['version'] != version
-                    or manifest['repository'] != 'qigao/' + repo):
-                raise ValueError('Unqualified release manifest')
-            tag = github(repo, f'git/ref/tags/v{version}')['object']
-            if tag['type'] != 'commit' or tag['sha'] != manifest['commit']:
-                raise ValueError('Manifest commit disagrees with release tag')
-            producer = github(repo, f"actions/runs/{manifest['producer_run']}")
-            if producer['conclusion'] != 'success' or producer['html_url'] != manifest['producer_url']:
-                raise ValueError('Release producer did not qualify')
-            sources = {manifest['commit'], *(sdk['sdk_manifest']['source'] for sdk in manifest['sdks'])}
-            for source in sources:
-                if github(repo, f'git/commits/{source}')['tree']['sha'] != manifest['tree']:
-                    raise ValueError('Release and SDK source trees differ')
-        elif (manifest['schemaVersion'] != 1 or manifest['version'] != version
-                or manifest['cmakePackage'] != package or manifest['tag'] != release['tag_name']
-                or manifest['repository'] != f'https://github.com/qigao/{repo}'
-                or manifest['ci']['conclusion'] != 'success'):
-            raise ValueError('Unqualified release manifest: ' + repo)
+        if (manifest['schema'] != 1 or manifest['version'] != version
+                or manifest['repository'] != 'qigao/' + repo
+                or manifest['cmake_package'] != package):
+            raise ValueError('Unqualified release manifest')
+        tag = github(repo, f'git/ref/tags/v{version}')['object']
+        if tag['type'] != 'commit' or tag['sha'] != manifest['commit']:
+            raise ValueError('Manifest commit disagrees with release tag')
+        producer = github(repo, f"actions/runs/{manifest['producer_run']}")
+        if producer['conclusion'] != 'success' or producer['html_url'] != manifest['producer_url']:
+            raise ValueError('Release producer did not qualify')
+        sources = {manifest['commit'], *(sdk['sdk_manifest']['source'] for sdk in manifest['sdks'])}
+        for source in sources:
+            if github(repo, f'git/commits/{source}')['tree']['sha'] != manifest['tree']:
+                raise ValueError('Release and SDK source trees differ')
+        if repo == 'salts-utils':
+            required = {'SaltsBase': os.environ['SALTS_BASE_VERSION'], 'CMeta': os.environ['CMETA_VERSION'],
+                        'cmetaCommit': os.environ['CMETA_REF'], 'vcpkg-cache': os.environ['VCPKG_CACHE_VERSION']}
+            if any(manifest['dependencies'][k] != v for k, v in required.items()):
+                raise ValueError('Utils dependency composition differs from selected SDK inputs')
+        if repo == 'salts-cnet' and any(
+                sdk['sdk_manifest']['base_version'] != os.environ['SALTS_BASE_VERSION']
+                or sdk['sdk_manifest']['cache_version'] != os.environ['VCPKG_CACHE_VERSION']
+                for sdk in manifest['sdks']):
+            raise ValueError('CNet dependency composition differs from selected SDK inputs')
         selected = []
         for profile in profiles:
-            platform = core_profiles.get(profile, profile) if key == 'SALTS_CORE' else profile
+            platform = cnet_profiles.get(profile, profile) if key == 'SALTS_CNET' else profile
             sdk = sdk_entry(repo, manifest, platform)
             value = asset(release, sdk['file'])
             if value['digest'] != 'sha256:' + sdk['sha256']:
                 raise ValueError('SDK manifest/asset mismatch: ' + sdk['file'])
-            if repo == 'cmeta' and value['size'] != sdk['sizeBytes']:
+            if repo == 'salts-utils' and value['size'] != sdk['size']:
                 raise ValueError('SDK manifest/asset mismatch: ' + sdk['file'])
             acquire(value)
             selected.append({'profile': profile, 'size': value['size']})
@@ -131,7 +138,7 @@ else:
         manifest = read(original)
         if manifest['version'] != os.environ[key + '_VERSION']:
             raise ValueError('Prepared version disagrees with selected environment: ' + repo)
-        platform = core_profiles.get(args.profile, args.profile) if key == 'SALTS_CORE' else args.profile
+        platform = cnet_profiles.get(args.profile, args.profile) if key == 'SALTS_CNET' else args.profile
         sdk = sdk_entry(repo, manifest, platform)
         selected = next(s for s in record['selected'] if s['profile'] == args.profile)
         archive = inputs / 'blobs' / sdk['sha256']
@@ -141,7 +148,7 @@ else:
         destination.mkdir(parents=True)
         with tarfile.open(archive) as source:
             source.extractall(destination, filter='data')
-        producer = manifest['producer_run'] if repo != 'cmeta' else manifest['ci']['runId']
+        producer = manifest['producer_run']
         receipt = {'version':manifest['version'],'source':manifest['commit'], 'sha256':sdk['sha256'],
                    'producer':producer, 'root':destination.as_posix(), 'profile':args.profile}
         write(destination / 'sdk-restore-receipt.json', receipt)

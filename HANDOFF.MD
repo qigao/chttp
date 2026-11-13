@@ -1068,3 +1068,32 @@
   Client's existing formal socket suite adds H1/H2 403/500 denial cases. This is
   a production output fix, not a looser exception assertion. Preserve failed
   job 131771365280 on run 43391093568.
+
+
+## Plain CMake and matching Base 0.1.8 composition (2026-11-13)
+
+- Maintainer-directed cleanup removed all 19 historical CHttp GitHub Releases
+  and their assets, and CHttp.Native with all 19 package versions. Both lists
+  were verified empty; unrelated repositories/packages were outside the scope.
+  Local receipt: build/chttp-release-cleanup-receipt.jsonl.
+- CHttp shared targets no longer set VERSION/SOVERSION. Standard install/export
+  rules and source/target helpers follow SaltsCNet. Product find_package uses
+  SDK roots without upstream version arguments; presets no longer redeclare
+  version environment variables. Package consumers resolve upstreams explicitly.
+- Select Base 0.1.8, SaltsCNet 0.1.12 and Utils 0.1.4. Rename the old SaltsCore
+  CMake package/root inputs to SaltsCNet / SALTS_CNET_ROOT. Restoration still
+  uses version variables and validates original published manifests/assets;
+  CMake itself neither restores dependencies nor selects release versions.
+- Utils 0.1.4 explicitly declares CMeta 0.1.6 source ref
+  679710f7e3312811efdd92494744a2499286a6a5 built against Base 0.1.8.
+  Reuse Utils' released build-cmeta-sdk.ps1 for target and Android-host SDKs.
+  The old released CMeta binary requires Base 0.1.6 and is a different
+  composition; no SDK metadata is patched and no binary fallback is used.
+- CNet's release schema supplies archive digest but not sizeBytes; acquire its
+  exact size from the release asset API. Utils supplies sizeBytes as well.
+  Validate each schema's actual contract without guessing alternative fields.
+- Native LLVM-MinGW source SDK build, fresh CHttp configure, complete build,
+  121/121 formal CTests and install passed. Logs are
+  migration-plain-cmake-cmeta-sdk.log and
+  migration-plain-cmake-base018-{configure,build,ctest,install}.log in build/.
+  No independent consumer project or TinyTest change was introduced.

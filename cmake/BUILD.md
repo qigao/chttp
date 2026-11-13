@@ -3,7 +3,8 @@
 ## Dependency inputs
 
 Use the exact versions and root variables in [`.env.example`](../.env.example).
-CMake reads the parent environment and does not parse `.env`. Load it with your
+CMake reads SDK roots from the parent environment without upstream version
+arguments and does not parse `.env`. Version variables control restoration. Load it with your
 existing environment manager, preserving credentials and unrelated settings.
 Use absolute forward-slash paths. Only the matching vcpkg profile belongs in
 `CMAKE_PREFIX_PATH`; first-party packages use their own configured roots.
@@ -17,8 +18,11 @@ Product presets consume preinstalled packages without an outer toolchain.
 First-party SDKs come from published release manifests. Verify repository,
 package/version, platform, producer CI, asset size and SHA-256 before extracting
 the original archive into a fresh directory. `.github/ci/sdk-inputs.py` selects
-the CMeta/Core/Utils release assets and uses vcpkg-cache download transport.
+the CNet/Utils release assets and uses vcpkg-cache download transport.
 CI reuses the immutable CMeta entry point for Base/cache/compiler/host tools.
+CMeta itself uses the source SDK flow declared by Utils 0.1.4, at immutable ref
+679710f7e3312811efdd92494744a2499286a6a5 with Base 0.1.8. The target and host
+builds reuse Utils' release helper; no alternative binary is selected on failure.
 Missing inputs stop before product configuration; no alternate feed, SDK root,
 toolchain, source build or disabled module is selected after a failure.
 
@@ -57,7 +61,7 @@ installation do not prove device execution; CI has no Android device runner.
 ## CI variables
 
 Set `VCPKG_CACHE_VERSION`, `SALTS_BASE_VERSION`, `CMETA_VERSION`,
-`SALTS_CORE_VERSION`, and `SALTS_UTILS_VERSION` to exact stable releases.
+`SALTS_CNET_VERSION`, and `SALTS_UTILS_VERSION` to exact stable releases.
 `CMETA_REF` selects the immutable preparation entry point, currently
 `a5fad1682fcf501160b8fc6662dd55724d7b740d`.
 
