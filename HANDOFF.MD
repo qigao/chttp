@@ -737,7 +737,7 @@
   existing file runtime opens that range before Session commit. No full-file
   buffering, new I/O runtime or URL mapping. Metadata failures are business
   errors; later open failures are publication outcomes. A 304 needs no open and
-  can commit Session changes; failed open leaves ordinary Session writes intact.
+  can commit Session changes; failed open preserves the original Session state.
 - The first full conditional-file run passed 119/120 CTests and reproduced a
   legacy H1 asset close timeout (migration-worker-conditional-qualified-ctest.log).
   Review found EOF assigning the source's original keep-alive decision over an
