@@ -17,11 +17,6 @@
 #include <windows.h>
 #endif
 
-enum {
-  CHTTP_WEB_ASSET_FS_PATH_HARD_MAX =
-      CHTTP_WEB_ASSET_ROOT_HARD_MAX + CHTTP_WEB_ASSET_RELATIVE_HARD_MAX + 2
-};
-
 static int chttp_web_asset_bounded_length(
     const char *value, size_t limit, size_t *out_size) {
   size_t size;
@@ -244,83 +239,51 @@ static int chttp_web_asset_method_not_allowed(
              : status;
 }
 
-static int chttp_web_asset_serve_relative(
-    const chttp_web_asset_mount *mount,
-    const chttp_server_request_view *request,
-    chttp_server_response *response,
-    const char *relative) {
-  char filesystem_path[CHTTP_WEB_ASSET_FS_PATH_HARD_MAX + 1u];
-  chttp_server_file_options options = {0};
-  const char *cache_control =
-      mount->cache_control != NULL ? mount->cache_control : "no-cache";
-  int status;
-
-  status = chttp_web_asset_resolve_file(
-      mount, relative, filesystem_path);
-  if (status != SALTS_OK)
-    return chttp_web_asset_not_found(response);
-
-  if (mount->immutable != NULL &&
-      mount->immutable(mount->user, relative) &&
-      mount->immutable_cache_control != NULL)
-    cache_control = mount->immutable_cache_control;
-
-  status = chttp_server_response_set_header(
-      response, "Cache-Control", cache_control);
-  if (status != SALTS_OK) return status;
-
-  options.path = filesystem_path;
-  options.etag =
-      mount->etag != NULL ? mount->etag(mount->user, relative) : NULL;
-  status = chttp_server_serve_file(response, request, &options);
-  return status;
+bool chttp_web_assets_matches(const chttp_web_asset_mount *mount, const char *path) {
+  return chttp_web_asset_prefix_matches(mount->url_prefix, path) ||
+      (mount->spa_url_prefix && chttp_web_asset_prefix_matches(mount->spa_url_prefix, path));
 }
 
-static int chttp_web_assets_middleware(
-    void *user,
-    const chttp_server_request_view *request,
-    chttp_server_response *response,
-    chttp_server_next *next) {
-  const chttp_web_asset_mount *mount =
-      (const chttp_web_asset_mount *)user;
-  char relative[CHTTP_WEB_ASSET_RELATIVE_HARD_MAX + 1u];
-  int status;
-
-  if (mount == NULL || request == NULL || response == NULL ||
-      next == NULL || request->path == NULL)
-    return SALTS_EINVAL;
-
-  if (chttp_web_asset_prefix_matches(
-          mount->url_prefix, request->path)) {
-    const size_t prefix_size = strlen(mount->url_prefix);
-    const char *raw_relative = request->path + prefix_size;
-    if (request->method != CHTTP_METHOD_GET &&
-        request->method != CHTTP_METHOD_HEAD)
-      return chttp_web_asset_method_not_allowed(response);
-    status = chttp_web_asset_normalize_relative(
-        raw_relative, mount->max_relative_path_bytes, 1, relative);
-    if (status != SALTS_OK)
-      return chttp_web_asset_not_found(response);
-    return chttp_web_asset_serve_relative(
-        mount, request, response, relative);
+int chttp_web_assets_select(const chttp_web_asset_mount *mount,
+    const chttp_server_request_view *request, chttp_web_asset_selection *out) {
+  if (!mount || !request || !request->path || !out) return SALTS_EINVAL;
+  *out = (chttp_web_asset_selection){.kind = CHTTP_WEB_ASSET_NEXT};
+  const bool asset = chttp_web_asset_prefix_matches(mount->url_prefix, request->path);
+  if (!asset && (!mount->spa_url_prefix || !chttp_web_asset_prefix_matches(mount->spa_url_prefix, request->path)))
+    return SALTS_OK;
+  if (request->method != CHTTP_METHOD_GET && request->method != CHTTP_METHOD_HEAD) {
+    out->kind = CHTTP_WEB_ASSET_METHOD_NOT_ALLOWED;
+    return SALTS_OK;
   }
+  const char *relative = asset ? request->path + strlen(mount->url_prefix) : mount->spa_fallback_relative_path;
+  int status = chttp_web_asset_normalize_relative(relative, mount->max_relative_path_bytes, asset, out->relative);
+  if (status == SALTS_OK) status = chttp_web_asset_resolve_file(mount, out->relative, out->path);
+  /* Preserve the mount's existing 404 boundary for rejected/missing paths. */
+  out->kind = status == SALTS_OK ? CHTTP_WEB_ASSET_FILE : CHTTP_WEB_ASSET_NOT_FOUND;
+  return SALTS_OK;
+}
 
-  if (mount->spa_url_prefix != NULL &&
-      chttp_web_asset_prefix_matches(
-          mount->spa_url_prefix, request->path)) {
-    if (request->method != CHTTP_METHOD_GET &&
-        request->method != CHTTP_METHOD_HEAD)
-      return chttp_web_asset_method_not_allowed(response);
-    status = chttp_web_asset_normalize_relative(
-        mount->spa_fallback_relative_path,
-        mount->max_relative_path_bytes, 0, relative);
-    if (status != SALTS_OK)
-      return chttp_web_asset_not_found(response);
-    return chttp_web_asset_serve_relative(
-        mount, request, response, relative);
+static int chttp_web_assets_middleware(void *user, const chttp_server_request_view *request,
+    chttp_server_response *response, chttp_server_next *next) {
+  const chttp_web_asset_mount *mount = user;
+  if (!response || !next) return SALTS_EINVAL;
+  chttp_web_asset_selection selection;
+  int status = chttp_web_assets_select(mount, request, &selection);
+  if (status != SALTS_OK) return status;
+  switch (selection.kind) {
+  case CHTTP_WEB_ASSET_NEXT: return chttp_server_next_call(next);
+  case CHTTP_WEB_ASSET_NOT_FOUND: return chttp_web_asset_not_found(response);
+  case CHTTP_WEB_ASSET_METHOD_NOT_ALLOWED: return chttp_web_asset_method_not_allowed(response);
+  case CHTTP_WEB_ASSET_FILE: break;
   }
-
-  return chttp_server_next_call(next);
+  const char *cache = mount->cache_control ? mount->cache_control : "no-cache";
+  if (mount->immutable && mount->immutable(mount->user, selection.relative) && mount->immutable_cache_control)
+    cache = mount->immutable_cache_control;
+  status = chttp_server_response_set_header(response, "Cache-Control", cache);
+  if (status != SALTS_OK) return status;
+  const chttp_server_file_options options = {selection.path, NULL,
+      mount->etag ? mount->etag(mount->user, selection.relative) : NULL};
+  return chttp_server_serve_file(response, request, &options);
 }
 
 static int chttp_web_asset_mount_valid(
@@ -364,11 +327,16 @@ static int chttp_web_asset_mount_valid(
   return 1;
 }
 
+int chttp_web_assets_validate(const chttp_web_asset_mount *mount) {
+  return chttp_web_asset_mount_valid(mount) ? SALTS_OK : SALTS_EINVAL;
+}
+
 int chttp_web_assets_use(
     chttp_server *server,
     const chttp_web_asset_mount *mount) {
-  if (server == NULL || !chttp_web_asset_mount_valid(mount))
-    return SALTS_EINVAL;
+  if (server == NULL) return SALTS_EINVAL;
+  const int status = chttp_web_assets_validate(mount);
+  if (status != SALTS_OK) return status;
   return chttp_server_use(
       server, chttp_web_assets_middleware, (void *)mount);
 }

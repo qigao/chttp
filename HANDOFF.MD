@@ -760,3 +760,27 @@
   migration-worker-conditional-close-intent-fixed-build.log and
   migration-worker-conditional-final-{ctest,install}.log. Private migration only;
   asset mounting/classifiers/SPA, upload/source/SSE and WS remain separate work.
+
+- Private asset/SPA mounting now uses the same bounded Invocation pool, request
+  snapshot, detached Session and native-terminal lease as Controllers. The
+  owner checks namespace boundaries only; workers share the legacy path/symlink/
+  reparse selector and conditional-file planner. Reserved asset misses stay 404,
+  SPA handles its own namespace, and unrelated paths continue route dispatch.
+  One stable mount context survives finite-close timeout until final drain.
+  Canonical Bean policy and entered interceptors run on workers. The policy
+  returns status plus immutable/borrowed ETag output, copied before after hooks;
+  C++ exceptions become EIO without consuming partial output. Legacy callbacks
+  and raw user contexts are rejected by the private adapter. Public defaults
+  remain unchanged; upload/source/SSE and WebSocket adapters remain separate.
+- The first asset ABI tests rejected an invalid consumer const-char pointer
+  descriptor (migration-worker-assets-cases-ctest.log). A POINTER identity must
+  describe the pointer and match its const-qualified pointee identity; an ATOM
+  identity on a pointer is invalid. Corrected the descriptor and added formal
+  descriptor/FunctionAbi admission assertions. No upstream CMeta change or
+  relaxed validation. Full native-release-user build, 120/120 CTests including
+  benchmarks, and install passed: migration-worker-assets-qualified-*.log.
+  Later Session and registration test additions rebuilt and passed the formal
+  asset CTest: migration-worker-assets-session-{build,ctest}.log. Coverage includes
+  H1/H2 conditional/range/HEAD/SPA, hook ordering and copied policy output, JWT,
+  Session cookies/304 commit, two workers/owners, slot/byte/header exhaustion,
+  policy exceptions/RAII, cancellation/finite close and transactional registration.

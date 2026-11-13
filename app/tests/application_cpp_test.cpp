@@ -64,6 +64,9 @@ struct InvocationCppContext {
   bool fail = false, worker = false, reflected = false, legacy_rejected = false, header_copied = false;
   bool admission_fail = false, admission_worker = false, admission_values = false;
   int admission_unwound = 0;
+  const char *asset_root = nullptr;
+  bool asset_fail = false, asset_worker = false;
+  int asset_unwound = 0;
   unsigned int code = 0;
 };
 struct InvocationCppController {
@@ -75,6 +78,15 @@ struct InvocationCppController {
 cmeta_reflect_data(InvocationCppController, "test.InvocationCppController", cmeta_field(int, value));
 CHTTP_INVOCATION_ACTION(cpp_invocation);
 CHTTP_ADMISSION_ACTION(cpp_admission);
+CHTTP_ASSET_POLICY_ACTION(cpp_asset_policy);
+int cpp_asset_policy(void *self, const char *path, chttp_application_asset_policy_result *result) {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.asset_unwound};
+  context.asset_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  *result = {true, "\"cpp-v1\""};
+  if (context.asset_fail) throw std::runtime_error("asset policy failure");
+  return path && std::strcmp(path, "answer.txt") == 0 ? SALTS_OK : SALTS_EPROTO;
+}
 int cpp_admission(void *self, const chttp_server_request_view *request, chttp_server_admission_result *result) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.admission_unwound};
@@ -104,13 +116,23 @@ static_assert(std::is_convertible_v<decltype(&cpp_invocation), chttp_invocation_
 static_assert(!std::is_convertible_v<decltype(&cpp_throw), chttp_invocation_action_fn>, "old Exchange native type must be rejected");
 static int cpp_invocation_body(chttp_application *app, void *user) {
   auto& context = *static_cast<InvocationCppContext*>(user); context.app = app;
-  const chttp_application_work_config limits{1u, 2u, 8192u, 128u, 1u, 32u};
+  const chttp_application_work_config limits{1u, 2u, 8192u, context.asset_root ? 512u : 128u,
+      context.asset_root ? 4u : 1u, context.asset_root ? 256u : 32u};
   int status = chttp_application_worker_prepare(app, &limits);
   if (status != SALTS_OK) return status;
   const chttp_application_admission_binding admission{"CppComponent", cmeta_reflected_data(InvocationCppController),
       FunctionAbi(cpp_admission), chttp::detail::admission_action<cpp_admission>};
-  status = chttp_application_worker_admission(app, &admission);
-  if (status != SALTS_OK) return status;
+  if (!context.asset_root) {
+    status = chttp_application_worker_admission(app, &admission);
+    if (status != SALTS_OK) return status;
+  } else {
+    chttp_web_asset_mount mount = CHTTP_WEB_ASSET_MOUNT_INIT;
+    mount.url_prefix = "/static"; mount.filesystem_root = context.asset_root; mount.max_relative_path_bytes = 128u;
+    const chttp_application_asset_binding assets{&mount, "CppComponent", cmeta_reflected_data(InvocationCppController),
+        FunctionAbi(cpp_asset_policy), chttp::detail::asset_policy_action<cpp_asset_policy>, nullptr, nullptr, 0u};
+    status = chttp_application_worker_assets(app, &assets);
+    if (status != SALTS_OK) return status;
+  }
   chttp_application_worker_binding binding{};
   binding.component_id = "CppComponent"; binding.receiver = cmeta_reflected_data(InvocationCppController);
   binding.method = CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_throw);
@@ -125,11 +147,13 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   const chttp_client_config config{chttp_application_config_default().http.network, 1u, 256u, 16u, 4096u, 8192u, 8192u, 4u};
   status = chttp_client_init(&client, &config); if (status != SALTS_OK) return status;
   char uri[64]; std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", static_cast<unsigned>(port));
-  chttp_options options{}; options.connection_uri = uri; options.authority = "cpp.test"; options.target = "/cpp";
+  chttp_options options{}; options.connection_uri = uri; options.authority = "cpp.test";
+  options.target = context.asset_root ? "/static/answer.txt" : "/cpp";
   options.protocol = context.protocol; options.timeout_ms = 5000u;
   status = chttp_get(&client, &options, &response, &error); context.code = response.status_code;
-  const char *field = chttp_response_header(&response, "X-Cpp");
-  context.header_copied = context.fail || context.admission_fail ? field == nullptr : field && std::strcmp(field, "cpp") == 0;
+  const char *field = chttp_response_header(&response, context.asset_root ? "ETag" : "X-Cpp");
+  context.header_copied = context.fail || context.admission_fail || context.asset_fail ? field == nullptr :
+      field && std::strcmp(field, context.asset_root ? "\"cpp-v1\"" : "cpp") == 0;
   chttp_response_destroy(&response); const int closed = chttp_client_destroy(&client, 5000u);
   return status == SALTS_OK ? closed : status;
 }
@@ -152,6 +176,38 @@ static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 2; ++failure) {
+    it("admits C++ asset policy and contains exceptions before file selection (protocol=%d failure=%d)", protocol, failure) {
+      char *root = tt_make_temp_dir("chttp-cpp-worker-assets-"); check_not_null(root);
+      char path[1024]; std::snprintf(path, sizeof(path), "%s/answer.txt", root);
+      check_equal(tt_write_file(path, "42", 2u), 0);
+      InvocationCppContext context; context.asset_root = root; context.asset_fail = failure != 0;
+      context.protocol = static_cast<chttp_protocol>(protocol); context.control = sync_thread_current_token();
+      auto factory = [&context](const cmeta_data_desc*, const void*, const salts_configurator_dependency*, size_t) {
+        return std::make_unique<InvocationCppController>(&context);
+      };
+      chttp::Bean<InvocationCppController, decltype(factory)> bean(cmeta_component_meta(CppComponent),
+          cmeta_reflected_data(InvocationCppController), factory);
+      const auto deployment = bean.deployment();
+      chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
+      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      config.controllers = &controller; config.controller_count = 1u;
+      int operation = SALTS_EIO, closed = SALTS_EIO;
+      {
+        chttp_application app{};
+        struct Close {
+          chttp_application *owner; int& status;
+          ~Close() noexcept { status = chttp_application_close(owner, 0u); if (owner->impl) std::terminate(); }
+        } close{&app, closed};
+        operation = chttp_application_init(&app, &config);
+        if (operation == SALTS_OK) operation = cpp_invocation_body(&app, &context);
+      }
+      check_equal(tt_remove_tree(root), 0); std::free(root);
+      check_equal(operation, SALTS_OK); check_equal(closed, SALTS_OK); check_equal(context.code, failure ? 500u : 200u);
+      check_true(context.asset_worker); check_equal(context.asset_unwound, 1); check_equal(destroyed, 1);
+      check_true(context.header_copied); check_false(context.worker); check_equal(unwound, 0);
+    }
+  }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure <= 3; ++failure) {
     it("admits C++17 header/action callbacks and contains exceptions (protocol=%d failure=%d)", protocol, failure) {
       InvocationCppContext context; context.protocol = static_cast<chttp_protocol>(protocol);

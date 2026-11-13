@@ -748,6 +748,28 @@ requests, WebSocket handshakes and deferred streaming bodies.
   separate adapters; this step exposes no URL-to-filesystem mapping or public mode.
   H1 source EOF preserves an existing stop/error close intent; its saved keep-alive
   decision may only add a close, never reopen a connection during drain.
+  The private asset adapter registers one mount after worker preparation. Its
+  owner middleware only checks the validated asset/SPA namespace boundaries;
+  every matched request, including 404/405 paths, uses the existing bounded
+  Invocation admission and terminal lease. Unrelated paths continue dispatch.
+  Workers reuse the legacy mount's normalization, component-wise no-symlink/
+  reparse validation and reserved-namespace selection, then serve the copied
+  conditional-file decision. Both mounting modes share that selection code.
+  Root topology and files remain immutable through close, as before.
+
+  Asset hooks use ordinary canonical Invocation interceptors. Before rejection
+  prevents selection and user policy; after/error unwind and native-terminal
+  after_completion stay on workers. The optional asset policy is an exact
+  reflected, canonical Bean method returning status plus immutable/borrowed ETag
+  values. This single fallible callback replaces separate bool/pointer callbacks
+  in the private mode: exceptions become errors, never a false classification or
+  NULL-validator continuation. Borrowed policy output is consumed/copied before
+  any next user hook. Legacy owner callbacks/raw user contexts are rejected at
+  private registration, with no implicit adapter. The mount descriptor/hook rows
+  are copied; its strings, metadata and code borrow the live Application graph
+  through final drain. One heap-owned mount context stays address-stable until
+  native/worker shutdown completes, including failed finite close. Failed mount
+  registration publishes no middleware/context. Public defaults remain intact.
 - Upload sinks, SSE/source producers and WebSocket opening/events are user
   callbacks and therefore need worker adapters too. Use bounded immutable chunk/
   event messages and one sequential worker stage per stream/peer; keep engine

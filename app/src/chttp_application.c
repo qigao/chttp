@@ -13,6 +13,8 @@
 CHTTP_ACTION(chttp_expected_action);
 CHTTP_INVOCATION_ACTION(chttp_expected_invocation);
 CHTTP_ADMISSION_ACTION(chttp_expected_admission);
+CHTTP_ASSET_POLICY_ACTION(chttp_expected_asset_policy);
+CHTTP_INVOCATION_ACTION(chttp_application_asset_invoke);
 
 typedef struct application_invocation_hook { chttp_invocation_chain_hook hook; } application_invocation_hook;
 typedef struct application_worker_action {
@@ -26,6 +28,17 @@ typedef struct application_worker_action {
   chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
 } application_worker_action;
 
+typedef struct application_worker_assets {
+  chttp_application_work *work;
+  chttp_web_asset_mount mount;
+  chttp_application_asset_policy_fn policy;
+  void *receiver;
+  chttp_application_work_completion_fn completed;
+  chttp_application_work_task task;
+  application_invocation_hook invocation_hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+  chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
+} application_worker_assets;
+
 typedef struct application_action { const chttp_action *action; void *receiver; } application_action;
 typedef struct application_impl {
   chttp_server server;
@@ -36,6 +49,7 @@ typedef struct application_impl {
   bool worker_rpc_ready;
   size_t worker_rpc_completion_capacity;
   application_worker_action *worker_actions;
+  application_worker_assets *worker_assets;
   size_t worker_action_count;
   size_t worker_route_capacity;
   bool worker_prototype_allowed;
@@ -206,6 +220,23 @@ int chttp_application_worker_admission(chttp_application *owner,
   app->admission_invoke = binding->invoke; app->admission_receiver = receiver;
   return SALTS_OK;
 }
+static int application_worker_hooks(application_impl *app,
+    const chttp_invocation_interceptor *sources, size_t count,
+    application_invocation_hook *records, chttp_application_work_chain_hook *hooks) {
+  if (count > CHTTP_APPLICATION_WORK_MAX_HOOKS || (count && !sources)) return SALTS_EINVAL;
+  for (size_t i = 0u; i < count; ++i) {
+    const chttp_invocation_interceptor *source = &sources[i];
+    if (!source->before && !source->after && !source->on_error) return SALTS_EINVAL;
+    void *receiver = NULL;
+    const int status = application_receiver(app, source->component_id, source->receiver, &receiver);
+    if (status != SALTS_OK) return status;
+    records[i].hook = (chttp_invocation_chain_hook){receiver, source->before, source->after, source->on_error};
+    hooks[i] = (chttp_application_work_chain_hook){&records[i],
+        source->before ? application_invocation_before : NULL, source->after ? application_invocation_after : NULL,
+        source->on_error ? application_invocation_error : NULL};
+  }
+  return SALTS_OK;
+}
 int chttp_application_worker_mount(chttp_application *owner,
     const chttp_application_worker_binding *binding) {
   application_impl *app = owner ? owner->impl : NULL;
@@ -215,10 +246,6 @@ int chttp_application_worker_mount(chttp_application *owner,
   if (app->configuration_closed) return SALTS_EBUSY;
   if (!cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_invocation), binding->abi))
     return SALTS_EINVAL;
-  for (size_t i = 0u; i < binding->hook_count; ++i) {
-    if (!binding->hooks[i].before && !binding->hooks[i].after && !binding->hooks[i].on_error)
-      return SALTS_EINVAL;
-  }
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
   int status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
@@ -229,21 +256,90 @@ int chttp_application_worker_mount(chttp_application *owner,
       .task = {.run = application_invocation_run, .user = action,
                .after_completion = binding->after_completion ? application_invocation_completed : NULL,
                .hooks = action->hooks, .hook_count = binding->hook_count}};
-  for (size_t i = 0u; i < binding->hook_count; ++i) {
-    const chttp_invocation_interceptor *source = &binding->hooks[i];
-    void *hook_receiver = NULL;
-    status = application_receiver(app, source->component_id, source->receiver, &hook_receiver);
-    if (status != SALTS_OK) return status;
-    action->invocation_hooks[i].hook = (chttp_invocation_chain_hook){hook_receiver, source->before, source->after, source->on_error};
-    action->hooks[i] = (chttp_application_work_chain_hook){&action->invocation_hooks[i],
-        source->before ? application_invocation_before : NULL, source->after ? application_invocation_after : NULL,
-        source->on_error ? application_invocation_error : NULL};
-  }
+  status = application_worker_hooks(app, binding->hooks, binding->hook_count, action->invocation_hooks, action->hooks);
+  if (status != SALTS_OK) return status;
   const chttp_server_route_options route = {.method = binding->method, .path = binding->path,
       .handler = application_worker_dispatch, .user = action, .operation = binding->abi->function};
   status = chttp_server_route_with(&app->server, &route);
   if (status == SALTS_OK) ++app->worker_action_count;
   return status;
+}
+
+int chttp_application_asset_invoke(void *self, const chttp_invocation *invocation) {
+  application_worker_assets *assets = self;
+  chttp_web_asset_selection selected;
+  int status = chttp_web_assets_select(&assets->mount, chttp_invocation_request(invocation), &selected);
+  if (status != SALTS_OK) return status;
+  switch (selected.kind) {
+  case CHTTP_WEB_ASSET_NEXT: return SALTS_EPROTO; /* Matched before admission. */
+  case CHTTP_WEB_ASSET_NOT_FOUND:
+    return chttp_invocation_respond(invocation, 404u, "text/plain", "Not Found", 9u);
+  case CHTTP_WEB_ASSET_METHOD_NOT_ALLOWED:
+    status = chttp_invocation_set_header(invocation, "Allow", "GET, HEAD");
+    return status == SALTS_OK ? chttp_invocation_respond(invocation, 405u, NULL, NULL, 0u) : status;
+  case CHTTP_WEB_ASSET_FILE: break;
+  }
+  chttp_application_asset_policy_result policy = {0};
+  if (assets->policy) {
+    status = assets->policy(assets->receiver, selected.relative, &policy);
+    if (status != SALTS_OK) return status;
+  }
+  const char *cache = assets->mount.cache_control ? assets->mount.cache_control : "no-cache";
+  if (policy.immutable && assets->mount.immutable_cache_control) cache = assets->mount.immutable_cache_control;
+  status = chttp_invocation_set_header(invocation, "Cache-Control", cache);
+  if (status != SALTS_OK) return status;
+  const chttp_server_file_options file = {selected.path, NULL, policy.etag};
+  return chttp_invocation_serve_file(invocation, &file);
+}
+static int application_assets_run(void *user, const chttp_server_request_view *request,
+    chttp_application_work_reply *reply) {
+  const chttp_invocation_state state = chttp_invocation_state_make(request, reply, NULL);
+  const chttp_invocation invocation = {&state};
+  return chttp_application_asset_invoke(user, &invocation);
+}
+static void application_assets_completed(void *user, const chttp_server_request_view *request,
+    const chttp_application_work_outcome *outcome) {
+  const application_worker_assets *assets = user;
+  assets->completed(assets->receiver, request, outcome);
+}
+static int application_assets_dispatch(void *user, const chttp_server_request_view *request,
+    chttp_server_response *response, chttp_server_next *next) {
+  application_worker_assets *assets = user;
+  if (!chttp_web_assets_matches(&assets->mount, request->path)) return chttp_server_next_call(next);
+  chttp_server_request_view snapshot = *request;
+  snapshot.operation = FunctionAbi(chttp_application_asset_invoke)->function;
+  const int status = chttp_application_work_submit(assets->work, &snapshot, response, &assets->task);
+  return chttp_application_work_admission_response(response, status);
+}
+int chttp_application_worker_assets(chttp_application *owner, const chttp_application_asset_binding *binding) {
+  application_impl *app = owner ? owner->impl : NULL;
+  if (!app || !binding || !app->workers.impl) return SALTS_EINVAL;
+  if (app->configuration_closed) return SALTS_EBUSY;
+  if (app->worker_assets) return SALTS_EALREADY;
+  int status = chttp_web_assets_validate(binding->mount);
+  if (status != SALTS_OK) return status;
+  if (binding->mount->immutable || binding->mount->etag || binding->mount->user ||
+      (binding->policy != NULL) != (binding->policy_abi != NULL)) return SALTS_EINVAL;
+  if (binding->policy && !cmeta_function_abi_contract_compatible(
+      FunctionAbi(chttp_expected_asset_policy), binding->policy_abi)) return SALTS_EINVAL;
+  void *receiver = NULL;
+  if (binding->policy || binding->after_completion || binding->component_id || binding->receiver) {
+    status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
+    if (status != SALTS_OK) return status;
+  }
+  application_worker_assets *assets = calloc(1u, sizeof(*assets));
+  if (!assets) return SALTS_ENOMEM;
+  assets->work = &app->workers; assets->mount = *binding->mount;
+  assets->receiver = receiver; assets->policy = binding->policy; assets->completed = binding->after_completion;
+  status = application_worker_hooks(app, binding->hooks, binding->hook_count, assets->invocation_hooks, assets->hooks);
+  if (status != SALTS_OK) { free(assets); return status; }
+  assets->task = (chttp_application_work_task){.run = application_assets_run, .user = assets,
+      .hooks = assets->hooks, .hook_count = binding->hook_count,
+      .after_completion = binding->after_completion ? application_assets_completed : NULL};
+  status = chttp_server_use(&app->server, application_assets_dispatch, assets);
+  if (status != SALTS_OK) { free(assets); return status; }
+  app->worker_assets = assets;
+  return SALTS_OK;
 }
 
 static int application_worker_rpc_output(void *user, unsigned int code, const char *type,
@@ -650,6 +746,7 @@ int chttp_application_close(chttp_application *owner, uint32_t timeout_ms) {
   if (app->graph.state == SALTS_CONFIGURATOR_CONTEXT_FAILED && app->graph.instances != NULL)
     return SALTS_EBUSY;
   const int result = app->shutdown_status;
+  free(app->worker_assets);
   free(app->worker_actions);
   free(app->actions); free(app->executions); free(app->dependencies); free(app->instances); free(app->order);
   free(app); owner->impl = NULL;
