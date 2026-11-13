@@ -3,6 +3,8 @@ build*/
 /.codegraph/
 /.vs/
 /.idea/
+.openidea/
+
 *.log
 /packaging/nuget/bin/
 /packaging/nuget/obj/

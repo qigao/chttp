@@ -151,6 +151,11 @@ Windows requires `VSDEVCMD_BAT` and the selected compiler SDK. Linux/macOS use
 wrapper. Every module owns its tests. `BUILD_TESTS` and `BUILD_BENCHMARK` select
 the corresponding complete graphs; examples retain `BUILD_EXAMPLES`.
 
+Native TLS interoperability tests require an independent OpenSSL 3 executable
+on `PATH`. Linux sanitizer presets select `ENABLE_ASAN`, `ENABLE_UBSAN` and
+`ENABLE_TSAN`; TSan is exclusive with ASan/UBSan. Refresh existing build caches
+with the configure command above after migrating sanitizer option names.
+
 The [split SDK CI](.github/workflows/ci.yml) downloads release inputs once,
 verifies their manifests and SHA-256 digests, and shares locked original blobs
 with the matrix workers. Workers restore the selected profile, build the full
