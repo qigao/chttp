@@ -686,3 +686,44 @@
   affected Invocation/Session suites (2/2) and install passed:
   migration-worker-file-drain-{build,ctest,install}.log. Earlier failed logs
   remain preserved. The PR's full matrix is the cross-platform qualification.
+
+- Private pre-body admission now runs a canonical Bean callback on the same
+  bounded CFlow pool/slot/byte budget as body Invocations. Header/params/JWT/peer
+  views are copied; body and Session are absent. The value-only callback scope
+  releases its snapshot/credit before its finalizer publishes the copied
+  status/Retry-After decision. Native request storage remains generation-pinned
+  until that producer's last access. JWT stays before admission; 100 Continue,
+  body_open and user body delivery stay after allow. body_ms includes header
+  queue/callback time. Ordinary H1/H2 only; public default and WS/streaming/assets
+  migration remain separate. No extra pool, fallback, dependency or CMake flag.
+- The new H2 queued/running timeout regression exposed generic deferred cleanup
+  recycling a closed header gate before its producer completed (migration-worker-
+  admission-cases-ctest.log). Header states now bypass response-defer cleanup;
+  cancellation retains the slot through publication and finite-close failure.
+- A raw two-request H1 pipeline exposed lost Connection: close on a zero-body
+  request paused for admission: both file replies arrived with keep-alive and
+  the peer timed out waiting for EOF (migration-worker-admission-wire-diagnostic-
+  ctest.log). llhttp's actual message-complete event must capture framing before
+  its flags change; the delayed wrapper only dispatches that captured event.
+  Resume also preserves buffered pipelined input if the empty request immediately
+  starts another deferred/retained response. Formal parser HTTP/1.0 and HTTP/1.1
+  cases and the coalesced header/file-response pipeline cover this boundary.
+- Formal C/C++ admission cases cover one shared slot, record/byte saturation,
+  route/JWT snapshots, invalid decisions, Retry-After, no premature 100 Continue,
+  queued cancellation, late completion, same-pool close rejection, ABI/Bean
+  validation, exceptions and RAII. The initial byte-limit fixture allowed the
+  smaller H2 header snapshot; it now uses an explicit 16-byte limit. Failed logs
+  are retained. Full native-release-user build, 120/120 CTests (including the
+  existing benchmarks) and install passed: migration-worker-admission-framing-
+  build.log and migration-worker-admission-qualified-{ctest,install}.log.
+- CI 43343061469 passed the other seven configurations but Linux TSan reported
+  a real NativeIO close/wake race in the new running-header deadline/finite-close
+  case. The defect is CHttp's lifecycle boundary: publication held server->mutex
+  while waking, but owner cleanup stopped CNet outside that mutex and excluded
+  wakers only during destroy. Native storage lifetime did not keep the readiness
+  backend open. After protocol/deferred/file drain, owner cleanup now withdraws
+  external wake ingress under that mutex before stop; in-flight wakes finish
+  first, later wakes get ESHUTDOWN, and CNet storage stays owned through cleanup.
+  Never hold the mutex through stop callbacks. The original failed job and its
+  excerpt at build/ci-43343061469-tsan-admission-failure.log are preserved; no
+  retry, sanitizer suppression, upstream SDK change or timeout extension.

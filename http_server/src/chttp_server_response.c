@@ -354,6 +354,7 @@ static int response_defer(chttp_server_response *response,
 
   chttp_server_response_builder_reset(target->response_builder);
   target->file = (chttp_server_deferred_file){0};
+  target->admission = false;
   target->request = *builder->request;
   target->request.target = NULL;
   target->request.path = NULL;

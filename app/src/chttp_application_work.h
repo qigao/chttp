@@ -9,6 +9,11 @@
 
 typedef struct chttp_application_work { void *impl; } chttp_application_work;
 typedef struct chttp_application_work_reply chttp_application_work_reply;
+struct chttp_server_admission_gate;
+/* Worker-only header callback; the public Server admission type remains
+ * owner-affine. All input views borrow this short copied callback scope. */
+typedef int (*chttp_application_admission_fn)(void *, const chttp_server_request_view *,
+    chttp_server_admission_result *);
 typedef struct chttp_application_work_result { int status; bool rejected; } chttp_application_work_result;
 typedef struct chttp_application_work_exchange {
   const chttp_server_request_view *request;
@@ -61,6 +66,11 @@ typedef struct chttp_application_work_stats {
 extern "C" {
 #endif
 int chttp_application_work_init(chttp_application_work *, const chttp_application_work_config *);
+/* Value-only header scope. Uses the same slots/bytes/pool. Snapshot and credit
+ * retire before the finalizer publishes its copied decision; body waiting is
+ * owned by the bounded native parser/stream, not this callback scope. */
+int chttp_application_work_admit(chttp_application_work *, const chttp_server_request_view *,
+    struct chttp_server_admission_gate *, chttp_application_admission_fn, void *);
 /* Transactional until response_defer succeeds. Rejection invokes no callback.
  * Accepted work owns its snapshot and borrows task.user through finalize.
  * Metadata (operation) remains borrowed from the live Application graph.

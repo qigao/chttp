@@ -72,6 +72,7 @@ typedef struct chttp_server_parser_impl {
   bool paused;
   bool upgrade_stopped;
   bool headers_stopped;
+  bool headers_waiting, headers_message_complete, continue_pending;
   bool wire_previous_was_cr;
   chttp_server_wire_phase wire_phase;
 } chttp_server_parser_impl;
@@ -390,43 +391,8 @@ static int chttp_server_parser_normalize_target(chttp_server_parser_impl *parser
   return 0;
 }
 
-static int chttp_server_parser_on_headers_complete(llhttp_t *llparser) {
-  chttp_server_parser_impl *parser = chttp_server_parser_context(llparser);
-  size_t path_size;
-  const char *query;
-  bool wants_continue = false;
-  int status;
-  if (parser == NULL || parser->field_open || parser->value_open || !parser->target_terminated)
-    return chttp_server_parser_fail(parser, 400u);
-  parser->request.http_major = (unsigned int)llhttp_get_http_major(llparser);
-  parser->request.http_minor = (unsigned int)llhttp_get_http_minor(llparser);
-  if (parser->request.http_major != 1u || parser->request.http_minor > 1u)
-    return chttp_server_parser_fail(parser, 505u);
-  parser->request.method = chttp_server_parser_method(llparser);
-  if (parser->request.method == (chttp_method)0) return chttp_server_parser_fail(parser, 501u);
-  status = chttp_server_parser_validate_headers(parser, &wants_continue);
-  if (status != 0) return status;
-  status = chttp_server_parser_normalize_target(parser);
-  if (status != 0) return status;
-  query = (const char *)memchr(parser->request.target, '?', parser->target_size);
-  path_size = query == NULL ? parser->target_size : (size_t)(query - parser->request.target);
-  if (path_size == 0u) return chttp_server_parser_fail(parser, 400u);
-  memcpy(parser->path_storage, parser->request.target, path_size);
-  parser->path_storage[path_size] = '\0';
-  if ((llparser->flags & F_CONTENT_LENGTH) != 0u &&
-      llparser->content_length > (uint64_t)parser->max_body_bytes)
-    return chttp_server_parser_fail(parser, 413u);
-  if (status == 0 && parser->on_headers != NULL) {
-    chttp_server_parser_headers_action action = CHTTP_SERVER_HEADERS_CONTINUE;
-    status = parser->on_headers(parser->user, &parser->request, &action);
-    if (status != SALTS_OK) return chttp_server_parser_callback_fail(parser, status);
-    if (action == CHTTP_SERVER_HEADERS_STOP) {
-      parser->headers_stopped = true;
-      return HPE_PAUSED;
-    }
-    if (action != CHTTP_SERVER_HEADERS_CONTINUE)
-      return chttp_server_parser_callback_fail(parser, SALTS_EPROTO);
-  }
+static int chttp_server_parser_after_headers(chttp_server_parser_impl *parser, llhttp_t *llparser, bool wants_continue) {
+  int status = 0;
   if (status == 0 && wants_continue) {
     if (parser->on_continue == NULL) return chttp_server_parser_fail(parser, 417u);
     status = parser->on_continue(parser->user);
@@ -478,6 +444,54 @@ static int chttp_server_parser_on_headers_complete(llhttp_t *llparser) {
   return status;
 }
 
+static int chttp_server_parser_on_headers_complete(llhttp_t *llparser) {
+  chttp_server_parser_impl *parser = chttp_server_parser_context(llparser);
+  size_t path_size;
+  const char *query;
+  bool wants_continue = false;
+  int status;
+  if (parser == NULL || parser->field_open || parser->value_open || !parser->target_terminated)
+    return chttp_server_parser_fail(parser, 400u);
+  parser->request.http_major = (unsigned int)llhttp_get_http_major(llparser);
+  parser->request.http_minor = (unsigned int)llhttp_get_http_minor(llparser);
+  if (parser->request.http_major != 1u || parser->request.http_minor > 1u)
+    return chttp_server_parser_fail(parser, 505u);
+  parser->request.method = chttp_server_parser_method(llparser);
+  if (parser->request.method == (chttp_method)0) return chttp_server_parser_fail(parser, 501u);
+  status = chttp_server_parser_validate_headers(parser, &wants_continue);
+  if (status != 0) return status;
+  status = chttp_server_parser_normalize_target(parser);
+  if (status != 0) return status;
+  query = (const char *)memchr(parser->request.target, '?', parser->target_size);
+  path_size = query == NULL ? parser->target_size : (size_t)(query - parser->request.target);
+  if (path_size == 0u) return chttp_server_parser_fail(parser, 400u);
+  memcpy(parser->path_storage, parser->request.target, path_size);
+  parser->path_storage[path_size] = '\0';
+  if ((llparser->flags & F_CONTENT_LENGTH) != 0u &&
+      llparser->content_length > (uint64_t)parser->max_body_bytes)
+    return chttp_server_parser_fail(parser, 413u);
+  if (status == 0 && parser->on_headers != NULL) {
+    chttp_server_parser_headers_action action = CHTTP_SERVER_HEADERS_CONTINUE;
+    status = parser->on_headers(parser->user, &parser->request, &action);
+    if (status != SALTS_OK) return chttp_server_parser_callback_fail(parser, status);
+    if (action == CHTTP_SERVER_HEADERS_STOP) {
+      parser->headers_stopped = true;
+      return HPE_PAUSED;
+    }
+    if (action == CHTTP_SERVER_HEADERS_WAIT) {
+      if (llhttp_get_upgrade(llparser) != 0u)
+        return chttp_server_parser_callback_fail(parser, SALTS_ENOTSUP);
+      parser->headers_waiting = true;
+      parser->continue_pending = wants_continue;
+      parser->paused = true;
+      return 0;
+    }
+    if (action != CHTTP_SERVER_HEADERS_CONTINUE)
+      return chttp_server_parser_callback_fail(parser, SALTS_EPROTO);
+  }
+  return chttp_server_parser_after_headers(parser, llparser, wants_continue);
+}
+
 static int chttp_server_parser_on_body(llhttp_t *llparser, const char *at, size_t length) {
   chttp_server_parser_impl *parser = chttp_server_parser_context(llparser);
   size_t required;
@@ -511,12 +525,9 @@ static int chttp_server_parser_on_body(llhttp_t *llparser, const char *at, size_
   return 0;
 }
 
-static int chttp_server_parser_on_message_complete(llhttp_t *llparser) {
-  chttp_server_parser_impl *parser = chttp_server_parser_context(llparser);
+static int chttp_server_parser_finish_message(chttp_server_parser_impl *parser) {
   int status;
-  if (parser == NULL) return HPE_USER;
   chttp_server_parser_reset_wire(parser);
-  parser->request.protocol_keep_alive = llhttp_should_keep_alive(llparser);
   chttp_server_parser_close_body(parser, SALTS_OK);
   if (parser->upgrade_stopped) return 0;
   status = parser->on_request(parser->user, &parser->request);
@@ -526,6 +537,19 @@ static int chttp_server_parser_on_message_complete(llhttp_t *llparser) {
   }
   if (status != SALTS_OK) return chttp_server_parser_callback_fail(parser, status);
   return 0;
+}
+
+static int chttp_server_parser_on_message_complete(llhttp_t *llparser) {
+  chttp_server_parser_impl *parser = chttp_server_parser_context(llparser);
+  if (parser == NULL) return HPE_USER;
+  /* llhttp may clear framing flags after this callback even when the wrapper
+   * waits at an empty message's headers. Capture before that transition. */
+  parser->request.protocol_keep_alive = llhttp_should_keep_alive(llparser);
+  if (parser->headers_waiting) {
+    parser->headers_message_complete = true;
+    return 0;
+  }
+  return chttp_server_parser_finish_message(parser);
 }
 
 static int chttp_server_parser_on_chunk_header(llhttp_t *llparser) {
@@ -849,6 +873,21 @@ int chttp_server_parser_resume(chttp_server_parser *parser) {
   if (impl->terminal || impl->upgrade_stopped || impl->headers_stopped)
     return SALTS_ESHUTDOWN;
   impl->paused = false;
+  if (impl->headers_waiting) {
+    impl->headers_waiting = false;
+    int status = chttp_server_parser_after_headers(impl, &impl->parser, impl->continue_pending);
+    impl->continue_pending = false;
+    if (status == 0 && impl->headers_message_complete) {
+      impl->headers_message_complete = false;
+      status = chttp_server_parser_finish_message(impl);
+    }
+    if (status != 0) {
+      impl->terminal = true;
+      const int failure = impl->callback_status != SALTS_OK ? impl->callback_status : SALTS_EPROTO;
+      chttp_server_parser_close_body(impl, failure);
+      return failure;
+    }
+  }
   return SALTS_OK;
 }
 
@@ -863,6 +902,9 @@ int chttp_server_parser_reset(chttp_server_parser *parser) {
   impl->paused = false;
   impl->upgrade_stopped = false;
   impl->headers_stopped = false;
+  impl->headers_waiting = false;
+  impl->headers_message_complete = false;
+  impl->continue_pending = false;
   chttp_server_parser_reset_message(impl);
   chttp_server_parser_reset_wire(impl);
   return SALTS_OK;

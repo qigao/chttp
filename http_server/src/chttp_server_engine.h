@@ -21,6 +21,18 @@ typedef struct chttp_server_response_terminal {
 int chttp_server_response_observe(chttp_server_response *, chttp_server_response_terminal *);
 int chttp_server_response_unobserve(chttp_server_response *, chttp_server_response_terminal *);
 
+/* Move-only private pre-body gate, independent of response-defer ownership.
+ * Accepted begin moves/clears gate; rejection retains it and runs no callback.
+ * Complete is the sole producer's last native access. Closed pending requests
+ * retain the native slot until completion, including finite stop. */
+typedef struct chttp_server_admission_gate { void *impl; uint32_t generation; } chttp_server_admission_gate;
+typedef int (*chttp_server_admission_begin_fn)(void *, const chttp_server_request_view *,
+    chttp_server_admission_gate *);
+int chttp_server_set_admission_async(chttp_server *, chttp_server_admission_begin_fn, void *);
+int chttp_server_admission_gate_complete(chttp_server_admission_gate *, int,
+    const chttp_server_admission_result *);
+int chttp_server_admission_gate_cancelled(const chttp_server_admission_gate *, bool *);
+
 /* Private detached Session transaction. Storage is caller-owned, malloc-aligned,
  * charged to its invocation and retained through owner terminal + worker drain.
  * The store/record remain Server-owned. The commit callback only records/signals;

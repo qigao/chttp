@@ -307,6 +307,7 @@ static void chttp_h2_server_stream_reset(chttp_h2_server_stream *stream) {
   chttp_server_request_state_reset(&stream->request_state);
   chttp_server_response_builder_reset(&stream->deferred_builder);
   stream->stream_builder = NULL;
+  stream->deferred_target.admission = false;
   chttp_server_buffer_release(stream->owner->connection->server, stream->body,
                               stream->body_capacity);
   stream->body = NULL;
@@ -411,6 +412,7 @@ static int chttp_h2_server_stream_init(chttp_h2_server_stream *stream,
                                      .response = &stream->deferred_response,
                                      .token = &stream->deferred_token,
                                      .kind = CHTTP_SERVER_DEFERRED_HTTP_2};
+  atomic_init(&stream->deferred_target.admission_canceled, false);
   stream->request_state.response_builder.connection = owner->connection;
   stream->request_state.response_builder.deferred_target = &stream->deferred_target;
   chttp_h2_server_stream_reset(stream);
@@ -1010,6 +1012,7 @@ static int chttp_h2_server_end_headers(void *user, int32_t stream_id, int end_st
     chttp_server_deadline_start(&stream->request_state, h2->connection->server->deadlines.body_ms);
     request = chttp_h2_server_request_view(stream);
     status = chttp_server_request_admit(&stream->request_state, &request, request.method);
+    if (status == CHTTP_SERVER_ADMISSION_PENDING) return 0;
     if (status == SALTS_EPERM) {
       chttp_server_response_builder_reset(&stream->request_state.response_builder);
       status = chttp_server_request_rejection_response(&stream->request_state);
@@ -1032,7 +1035,7 @@ static int chttp_h2_server_end_headers(void *user, int32_t stream_id, int end_st
                  : -1;
     }
   }
-  if (end_stream) return chttp_h2_server_dispatch_or_reset(stream);
+  if (end_stream && !stream->deferred_target.admission) return chttp_h2_server_dispatch_or_reset(stream);
   return stream->trailers ? -1 : 0;
 }
 
@@ -1111,7 +1114,7 @@ static int chttp_h2_server_data(void *user, int32_t stream_id, const uint8_t *da
         chttp_h2_proto_consume_connection(h2->protocol, size) != 0)
       return -1;
   }
-  if (chttp_h2_proto_remote_end_stream(h2->protocol, stream_id))
+  if (chttp_h2_proto_remote_end_stream(h2->protocol, stream_id) && !stream->deferred_target.admission)
     return chttp_h2_server_dispatch_or_reset(stream);
   return 0;
 }
@@ -1137,6 +1140,7 @@ static int chttp_h2_server_stream_close(void *user, int32_t stream_id, uint32_t 
   token = atomic_load_explicit(&stream->deferred_token, memory_order_acquire);
   for (;;) {
     const chttp_server_deferred_state state = chttp_server_deferred_token_state(token);
+    if (chttp_server_admission_abandon(&stream->deferred_target)) return 0;
     if (state == CHTTP_SERVER_DEFERRED_WRITING) return 0;
     if (state == CHTTP_SERVER_DEFERRED_IDLE ||
         atomic_compare_exchange_weak_explicit(
@@ -1241,6 +1245,7 @@ void chttp_h2_server_connection_release(chttp_h2_server_connection *h2) {
     stream->protocol_closed = true;
     for (;;) {
       const chttp_server_deferred_state state = chttp_server_deferred_token_state(token);
+      if (chttp_server_admission_abandon(&stream->deferred_target)) break;
       if (state == CHTTP_SERVER_DEFERRED_WRITING) break;
       if (state == CHTTP_SERVER_DEFERRED_IDLE ||
           atomic_compare_exchange_weak_explicit(
@@ -1297,6 +1302,15 @@ void chttp_h2_server_connection_deadlines(chttp_h2_server_connection *h2) {
     if (!stream->active || stream->protocol_closed ||
         !chttp_server_deadline_expired(&stream->request_state)) continue;
     uint_fast64_t token = atomic_load_explicit(&stream->deferred_token, memory_order_acquire);
+    if (stream->deferred_target.admission) {
+      (void)chttp_server_admission_abandon(&stream->deferred_target);
+      stream->request_state.deadline_ms = 0;
+      const int32_t id = stream->stream_id;
+      if (chttp_h2_proto_submit_rst_stream(h2->protocol, id, CHTTP_H2_ERR_CANCEL) != 0)
+        chttp_server_connection_close(h2->connection);
+      else (void)chttp_server_send_pending(h2->connection);
+      continue;
+    }
     if (chttp_server_deferred_token_state(token) != CHTTP_SERVER_DEFERRED_IDLE) {
       /* A worker that already claimed WRITING owns the terminal result and its storage. */
       if (chttp_server_deferred_token_state(token) == CHTTP_SERVER_DEFERRED_PENDING)
@@ -1358,6 +1372,45 @@ bool chttp_h2_server_connection_has_deferred(const chttp_h2_server_connection *h
   return false;
 }
 
+static int chttp_h2_server_admission_ready(chttp_h2_server_stream *stream, uint_fast64_t token) {
+  chttp_h2_server_connection *h2 = stream->owner;
+  chttp_server_deferred_target *target = &stream->deferred_target;
+  const chttp_server_admission_result decision = target->admission_result;
+  const int result = target->admission_status;
+  const bool canceled = atomic_load_explicit(&target->admission_canceled, memory_order_acquire);
+  target->admission = false;
+  atomic_store_explicit(target->token,
+      chttp_server_deferred_token(chttp_server_deferred_token_generation(token), CHTTP_SERVER_DEFERRED_IDLE), memory_order_release);
+  if (stream->protocol_closed || !h2->connection->active || !h2->connection->connected) {
+    chttp_h2_server_stream_reset(stream); stream->owner = h2; return SALTS_OK;
+  }
+  int status = canceled || chttp_server_deadline_expired(&stream->request_state) ? SALTS_ETIMEDOUT :
+      chttp_server_request_admission_apply(&stream->request_state, result, &decision);
+  if (status == SALTS_EPERM) {
+    chttp_server_response_builder_reset(&stream->request_state.response_builder);
+    status = chttp_server_request_rejection_response(&stream->request_state);
+    if (status == SALTS_OK) status = chttp_h2_server_submit_response(stream);
+  } else if (status == SALTS_OK) {
+    chttp_server_request_view request = chttp_h2_server_request_view(stream);
+    request.body = NULL; request.body_size = 0u;
+    chttp_body_sink sink = {0};
+    status = chttp_server_request_body_open(&stream->request_state, &request, &sink);
+    if (status == SALTS_OK && stream->body_size && chttp_server_request_body_streaming(&stream->request_state))
+      status = chttp_server_request_body_write(&stream->request_state, stream->body, stream->body_size);
+    if (status == SALTS_OK && chttp_h2_proto_remote_end_stream(h2->protocol, stream->stream_id))
+      status = chttp_h2_server_dispatch_or_reset(stream) == 0 ? SALTS_OK : SALTS_EPROTO;
+  }
+  if (status != SALTS_OK) {
+    const int32_t id = stream->stream_id;
+    chttp_server_request_body_close(&stream->request_state, status);
+    if (chttp_h2_proto_submit_rst_stream(h2->protocol, id,
+        status == SALTS_ETIMEDOUT ? CHTTP_H2_ERR_CANCEL : CHTTP_H2_ERR_INTERNAL_ERROR) != 0)
+      chttp_server_connection_close(h2->connection);
+  }
+  status = chttp_server_send_pending(h2->connection);
+  return status == SALTS_ENOBUFS || status == SALTS_EBUSY ? SALTS_OK : status;
+}
+
 int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2) {
   size_t index;
   if (h2 == NULL) return SALTS_OK;
@@ -1368,6 +1421,13 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
     const chttp_server_deferred_state state = chttp_server_deferred_token_state(token);
     int status;
     if (state == CHTTP_SERVER_DEFERRED_IDLE || state == CHTTP_SERVER_DEFERRED_WRITING) continue;
+    if (stream->deferred_target.admission) {
+      if (state == CHTTP_SERVER_DEFERRED_READY) {
+        const int admitted = chttp_h2_server_admission_ready(stream, token);
+        if (admitted != SALTS_OK) return admitted;
+      }
+      continue;
+    }
     if (stream->protocol_closed || !h2->connection->active || !h2->connection->connected) {
       if (!atomic_compare_exchange_strong_explicit(
               &stream->deferred_token, &token,

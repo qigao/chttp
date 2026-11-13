@@ -8,5 +8,11 @@ int invocation_action(void *self, const chttp_invocation *invocation) noexcept {
   try { return Action(self, invocation); }
   catch (...) { return SALTS_EIO; }
 }
+template<chttp_application_admission_fn Action>
+int admission_action(void *self, const chttp_server_request_view *request,
+    chttp_server_admission_result *result) noexcept {
+  try { return Action(self, request, result); }
+  catch (...) { return SALTS_EIO; }
+}
 }
 #endif

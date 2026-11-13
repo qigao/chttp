@@ -23,6 +23,7 @@ typedef struct chttp_server_parser_probe {
   int headers;
   int body_opens;
   int stop_at_headers;
+  int wait_at_headers, continue_status, body_open_status;
   chttp_method method;
   unsigned int http_major;
   unsigned int http_minor;
@@ -55,7 +56,7 @@ static int chttp_server_parser_test_request(void *user, const chttp_server_reque
 static int chttp_server_parser_test_continue(void *user) {
   chttp_server_parser_probe *probe = (chttp_server_parser_probe *)user;
   ++probe->continues;
-  return SALTS_OK;
+  return probe->continue_status;
 }
 
 static int chttp_server_parser_test_headers(void *user,
@@ -65,7 +66,7 @@ static int chttp_server_parser_test_headers(void *user,
   (void)request;
   ++probe->headers;
   *out_action = probe->stop_at_headers ? CHTTP_SERVER_HEADERS_STOP
-                                       : CHTTP_SERVER_HEADERS_CONTINUE;
+      : probe->wait_at_headers ? CHTTP_SERVER_HEADERS_WAIT : CHTTP_SERVER_HEADERS_CONTINUE;
   return SALTS_OK;
 }
 
@@ -76,7 +77,7 @@ static int chttp_server_parser_test_body_open(void *user,
   (void)request;
   ++probe->body_opens;
   *out_sink = (chttp_body_sink){0};
-  return SALTS_OK;
+  return probe->body_open_status;
 }
 
 static void chttp_server_parser_test_body_close(void *user, chttp_body_sink *sink, int status) {
@@ -536,6 +537,95 @@ spec("CHTTP server request parser") {
     chttp_server_parser_destroy(&parser);
   }
 
+  for (int body_kind = 0; body_kind < 3; ++body_kind) {
+    it("resumes header admission exactly once before body kind %d", body_kind) {
+      const char *headers = body_kind == 0 ? "GET /gate HTTP/1.1\r\nHost: x\r\n\r\n" : body_kind == 1 ?
+          "POST /gate HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n" :
+          "POST /gate HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nTransfer-Encoding: chunked\r\n\r\n";
+      const char *body = body_kind == 2 ? "4\r\ndata\r\n0\r\n\r\n" : body_kind == 1 ? "data" : "";
+      char wire[256]; snprintf(wire, sizeof(wire), "%s%s", headers, body);
+      chttp_server_parser_probe probe = {.wait_at_headers = 1};
+      chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+      config.on_headers = chttp_server_parser_test_headers; config.on_body_open = chttp_server_parser_test_body_open;
+      config.on_body_close = chttp_server_parser_test_body_close;
+      chttp_server_parser parser = {0}; size_t consumed = 0u; unsigned int code = 0u;
+      check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+      check_equal(chttp_server_parser_execute_consumed(&parser, wire, strlen(wire), &consumed, &code), SALTS_OK);
+      check_equal(consumed, strlen(headers)); check_equal(probe.headers, 1); check_equal(probe.continues, 0);
+      check_equal(probe.body_opens, 0); check_equal(probe.requests, 0);
+      size_t blocked = 1u;
+      check_equal(chttp_server_parser_execute_consumed(&parser, "x", 1u, &blocked, &code), SALTS_EBUSY);
+      check_equal(blocked, 0u);
+      check_equal(chttp_server_parser_resume(&parser), SALTS_OK);
+      check_equal(probe.body_opens, 1); check_equal(probe.continues, body_kind ? 1 : 0);
+      if (body_kind) check_equal(chttp_server_parser_execute(&parser, body, strlen(body), &code), SALTS_OK);
+      check_equal(probe.requests, 1); check_equal(probe.body_size, body_kind ? 4u : 0u);
+      if (body_kind) check_equal(probe.body, "data", 4u);
+      probe.wait_at_headers = 0;
+      static const char next[] = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+      check_equal(chttp_server_parser_execute(&parser, next, sizeof(next) - 1u, &code), SALTS_OK);
+      check_equal(probe.requests, 2); check_equal(probe.headers, 2); check_equal(probe.body_opens, 2);
+      check_equal(probe.continues, body_kind ? 1 : 0); chttp_server_parser_destroy(&parser);
+    }
+  }
+  it("discards a waiting header continuation on reset") {
+    const char *headers = "POST /gate HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n";
+    chttp_server_parser_probe probe = {.wait_at_headers = 1};
+    chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+    config.on_headers = chttp_server_parser_test_headers; config.on_body_open = chttp_server_parser_test_body_open;
+    config.on_body_close = chttp_server_parser_test_body_close;
+    chttp_server_parser parser = {0}; unsigned int code = 0u;
+    check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+    check_equal(chttp_server_parser_execute(&parser, headers, strlen(headers), &code), SALTS_OK);
+    check_equal(chttp_server_parser_reset(&parser), SALTS_OK); probe.wait_at_headers = 0;
+    const char *next = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    check_equal(chttp_server_parser_execute(&parser, next, strlen(next), &code), SALTS_OK);
+    check_equal(probe.continues, 0); check_equal(probe.body_opens, 1); check_equal(probe.requests, 1);
+    chttp_server_parser_destroy(&parser);
+  }
+  for (int minor = 0; minor < 2; ++minor) {
+    it("retains zero-body close framing while waiting at HTTP/1.%d headers", minor) {
+      const char *wire = minor ? "GET /gate HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" :
+          "GET /gate HTTP/1.0\r\n\r\n";
+      chttp_server_parser_probe probe = {.wait_at_headers = 1};
+      chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+      config.on_headers = chttp_server_parser_test_headers;
+      chttp_server_parser parser = {0}; unsigned int code = 0u;
+      check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+      check_equal(chttp_server_parser_test_execute(&parser, wire, &code), SALTS_OK);
+      check_equal(probe.requests, 0);
+      check_equal(chttp_server_parser_resume(&parser), SALTS_OK);
+      check_equal(probe.requests, 1); check_equal(probe.keep_alive, 0);
+      chttp_server_parser_destroy(&parser);
+    }
+  }
+  it("rejects asynchronous header waiting for an Upgrade before user delivery") {
+    const char *wire = "GET /gate HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
+    chttp_server_parser_probe probe = {.wait_at_headers = 1};
+    chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+    config.on_headers = chttp_server_parser_test_headers; config.on_upgrade = chttp_server_parser_test_upgrade;
+    chttp_server_parser parser = {0}; unsigned int code = 0u;
+    check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+    check_equal(chttp_server_parser_test_execute(&parser, wire, &code), SALTS_ENOTSUP);
+    check_equal(probe.requests, 0); check_equal(probe.upgrades, 0); check_equal(probe.body_opens, 0);
+    chttp_server_parser_destroy(&parser);
+  }
+  for (int callback = 0; callback < 2; ++callback) {
+    it("propagates resumed header callback %d failure before request delivery", callback) {
+      const char *headers = "POST /gate HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n";
+      chttp_server_parser_probe probe = {.wait_at_headers = 1, .continue_status = callback ? SALTS_OK : SALTS_EIO,
+          .body_open_status = callback ? SALTS_ENOMEM : SALTS_OK};
+      chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
+      config.on_headers = chttp_server_parser_test_headers; config.on_body_open = chttp_server_parser_test_body_open;
+      config.on_body_close = chttp_server_parser_test_body_close;
+      chttp_server_parser parser = {0}; unsigned int code = 0u;
+      check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
+      check_equal(chttp_server_parser_execute(&parser, headers, strlen(headers), &code), SALTS_OK);
+      check_equal(chttp_server_parser_resume(&parser), callback ? SALTS_ENOMEM : SALTS_EIO);
+      check_equal(probe.continues, 1); check_equal(probe.body_opens, callback); check_equal(probe.requests, 0);
+      chttp_server_parser_destroy(&parser);
+    }
+  }
   it("emits 100-continue before accepting a bounded request body") {
     static const char wire[] = "POST /upload HTTP/1.1\r\n"
                                "Host: example.test\r\n"
