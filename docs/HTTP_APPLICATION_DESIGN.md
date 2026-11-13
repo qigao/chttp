@@ -632,6 +632,12 @@ remain with the later WebSocket adapter. Public synchronous admission is intact,
 and cannot be combined with this private gate. Removing the private registration
 restores ordinary owner admission without a fallback or new configuration flag.
 
+After protocol/deferred/file drain, the owner withdraws external wake ingress
+under the same Server mutex used by publishers before stopping NativeIO. The
+allocated CNet storage remains owned through stop/Manager cleanup/destroy;
+keeping storage alive alone does not permit waking a backend during close.
+The mutex is released before stop callbacks, which may acquire it themselves.
+
 The next private slice stages a raw file response, equivalent to the engine's
 response_file capability rather than conditional serve_file/asset routing.
 The worker copies the selected path and MIME into its existing checked reply

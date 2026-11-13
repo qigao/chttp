@@ -6,6 +6,27 @@
 #include <threads/threads.h>
 
 #include <stdio.h>
+#include <stdatomic.h>
+
+typedef struct owner_wake_probe {
+  chttp_server_impl *server;
+  atomic_bool done, started;
+  atomic_int invalid;
+} owner_wake_probe;
+
+static void owner_wake_during_stop(void *user) {
+  owner_wake_probe *probe = user;
+  while (!atomic_load_explicit(&probe->done, memory_order_acquire)) {
+    sync_mutex_lock(&probe->server->mutex);
+    for (size_t i = 0u; i < probe->server->owner_count; ++i) {
+      const int status = chttp_server_owner_wake_locked(chttp_server_owner_at(probe->server, i));
+      if (status != SALTS_OK && status != SALTS_ESHUTDOWN) atomic_fetch_add(&probe->invalid, 1);
+    }
+    sync_mutex_unlock(&probe->server->mutex);
+    atomic_store_explicit(&probe->started, true, memory_order_release);
+    sync_thread_yield();
+  }
+}
 
 static cnet_client_config owner_topology_client_network(void) {
   const cnet_client_config config = {
@@ -420,6 +441,34 @@ spec("CHttp owner topology") {
     check_equal(wake_status, SALTS_ESHUTDOWN);
     check_equal(chttp_server_stop(&server, 0u), SALTS_OK);
 
+    check_equal(chttp_server_destroy(&server), SALTS_OK);
+  }
+
+  it("withdraws concurrent external wakes before stopping both native owners") {
+    chttp_server server = {0};
+    chttp_server_config config = owner_topology_config();
+    chttp_server_execution_options options = CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+    options.owner_count = 2u;
+    check_equal(chttp_server_init(&server, &config), SALTS_OK);
+    check_equal(chttp_server_set_execution_options(&server, &options), SALTS_OK);
+    check_equal(chttp_server_start(&server), SALTS_OK);
+    owner_wake_probe probe = {.server = server.impl};
+    atomic_init(&probe.done, false); atomic_init(&probe.started, false); atomic_init(&probe.invalid, 0);
+    sync_thread_t thread;
+    check_equal(sync_thread_create(&thread, owner_wake_during_stop, &probe), SALTS_OK);
+    const uint64_t deadline = monotonic_ms() + 5000u;
+    while (!atomic_load_explicit(&probe.started, memory_order_acquire) && monotonic_ms() < deadline)
+      sync_thread_yield();
+    const bool started = atomic_load_explicit(&probe.started, memory_order_acquire);
+    const int status = chttp_server_stop(&server, 0u);
+    atomic_store_explicit(&probe.done, true, memory_order_release);
+    check_equal(sync_thread_join(&thread), SALTS_OK);
+    check_true(started); check_equal(status, SALTS_OK); check_equal(atomic_load(&probe.invalid), 0);
+    sync_mutex_lock(&probe.server->mutex);
+    const int primary = chttp_server_owner_wake_locked(&probe.server->owner);
+    const int secondary = chttp_server_owner_wake_locked(&probe.server->additional_owners[0]);
+    sync_mutex_unlock(&probe.server->mutex);
+    check_equal(primary, SALTS_ESHUTDOWN); check_equal(secondary, SALTS_ESHUTDOWN);
     check_equal(chttp_server_destroy(&server), SALTS_OK);
   }
 

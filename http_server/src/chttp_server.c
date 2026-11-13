@@ -1968,7 +1968,7 @@ static void chttp_server_progress_shutdown(
 }
 
 int chttp_server_owner_wake_locked(chttp_server_owner_lane *owner) {
-  if (owner == NULL || !owner->network_initialized) return SALTS_ESHUTDOWN;
+  if (owner == NULL || !owner->wake_enabled) return SALTS_ESHUTDOWN;
   return cnet_client_wake(owner->network);
 }
 
@@ -2040,6 +2040,13 @@ static int chttp_server_owner_cleanup_network(
   network = chttp_server_owner_network_storage(server, owner);
   if (owner->network_initialized) {
     int stop_status;
+    /* The owner has finished protocol/file/deferred drain. Join the last
+     * publisher's wake tail and close wake ingress before NativeIO stop can
+     * close its backend. Stop callbacks may take server->mutex, so never hold
+     * it through cnet_client_stop(). Storage stays owned until destroy. */
+    sync_mutex_lock(&server->mutex);
+    owner->wake_enabled = false;
+    sync_mutex_unlock(&server->mutex);
     do {
       stop_status = cnet_client_stop(network, server->config.poll_slice_ms);
     } while (retry_timeouts && stop_status == SALTS_ETIMEDOUT);
@@ -2053,8 +2060,8 @@ static int chttp_server_owner_cleanup_network(
         if (manager_status != SALTS_OK)
           return first_status != SALTS_OK ? first_status : manager_status;
       }
-      /* Stop already drained callbacks. Exclude every cross-thread wake
-       * while destroying its target and withdrawing its published pointer. */
+      /* Stop already drained callbacks and wake ingress is closed. Withdraw
+       * the published network pointer under its existing synchronization. */
       sync_mutex_lock(&server->mutex);
       const int destroy_status = cnet_client_destroy(network);
       if (first_status == SALTS_OK && destroy_status != SALTS_OK)
@@ -2091,6 +2098,7 @@ static int chttp_server_owner_worker_startup(
   sync_mutex_lock(&server->mutex);
   owner->network = network;
   owner->network_initialized = true;
+  owner->wake_enabled = true;
   if (owner == &server->owner) server->network_initialized = true;
   sync_mutex_unlock(&server->mutex);
 

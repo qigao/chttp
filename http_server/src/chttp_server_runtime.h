@@ -367,6 +367,9 @@ struct chttp_server_owner_lane {
   atomic_int runtime_state;
   int terminal_status;
   bool network_initialized;
+  /* External wake ingress, protected by server->mutex. Withdraw before stop;
+   * network_initialized separately retains storage through cleanup failures. */
+  bool wake_enabled;
   bool thread_started;
   bool file_runtime_initialized;
 };

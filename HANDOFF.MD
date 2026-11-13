@@ -716,3 +716,14 @@
   are retained. Full native-release-user build, 120/120 CTests (including the
   existing benchmarks) and install passed: migration-worker-admission-framing-
   build.log and migration-worker-admission-qualified-{ctest,install}.log.
+- CI 43343061469 passed the other seven configurations but Linux TSan reported
+  a real NativeIO close/wake race in the new running-header deadline/finite-close
+  case. The defect is CHttp's lifecycle boundary: publication held server->mutex
+  while waking, but owner cleanup stopped CNet outside that mutex and excluded
+  wakers only during destroy. Native storage lifetime did not keep the readiness
+  backend open. After protocol/deferred/file drain, owner cleanup now withdraws
+  external wake ingress under that mutex before stop; in-flight wakes finish
+  first, later wakes get ESHUTDOWN, and CNet storage stays owned through cleanup.
+  Never hold the mutex through stop callbacks. The original failed job and its
+  excerpt at build/ci-43343061469-tsan-admission-failure.log are preserved; no
+  retry, sanitizer suppression, upstream SDK change or timeout extension.
