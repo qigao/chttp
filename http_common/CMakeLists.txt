@@ -20,7 +20,7 @@ target_include_directories(chttp_common PRIVATE
 target_link_libraries(chttp_common PRIVATE
   llhttp::llhttp_static Salts::CNet Salts::Core CMeta::CFlow CMeta::CMeta Salts::CSerde
   Salts::JsonCSerdeAdapter Salts::JsonParser chttp_cjwt chttp_digest)
-install(DIRECTORY include/http_common DESTINATION include)
+install(DIRECTORY include/http_common DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 if(BUILD_TESTS)
   add_subdirectory(tests)
