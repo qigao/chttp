@@ -2,6 +2,7 @@
 #include "../../http_server/src/chttp_server_engine.h"
 #include "../../http_common/http/chttp_response_fields.h"
 #include <cflow/executor.h>
+#include <cnet/websocket.h>
 #include <threads/threads.h>
 #include <core/clock.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@ struct chttp_application_work_reply {
   size_t size;
   int sealed;
   int finalized;
+  bool websocket_accept;
 };
 struct work_item {
   work_impl *owner;
@@ -72,6 +74,14 @@ struct work_item {
   int upload_status, upload_close_status;
   bool upload_active, upload_open_done, upload_opened, upload_pending, upload_ready;
   bool upload_closed, upload_close_done, upload_attached, upload_business_started;
+  chttp_application_websocket_callbacks websocket;
+  chttp_server_websocket_session websocket_peer;
+  chttp_websocket_event *websocket_events, websocket_close;
+  unsigned char *websocket_data, *websocket_close_data;
+  size_t websocket_stride, websocket_head, websocket_count;
+  int websocket_status;
+  bool websocket_opened, websocket_retired, websocket_active;
+  bool websocket_closing, websocket_close_done, websocket_running_close;
   chttp_server_admission_gate admission;
   chttp_application_admission_fn admission_fn;
   void *admission_user;
@@ -280,6 +290,7 @@ int chttp_application_work_set_header(chttp_application_work_reply *reply, const
 }
 int chttp_application_work_response_file(chttp_application_work_reply *reply, unsigned int code,
     const char *type, const char *path) {
+  if (chttp_application_work_reply_current(reply) && reply->item->websocket.event) return SALTS_ENOTSUP;
   if (!path || !path[0]) return SALTS_EINVAL;
   size_t bytes = 0u;
   int status = add_string(&bytes, path);
@@ -300,6 +311,7 @@ int chttp_application_work_response_source(chttp_application_work_reply *reply, 
   const int measured = add_string(&bytes, type);
   if (measured != SALTS_OK) return measured;
   work_item *item = reply->item;
+  if (item->websocket.event) return SALTS_ENOTSUP;
   if (bytes > item->owner->config.reply_bytes - reply->reply_used) return SALTS_EMSGSIZE;
   const int status = chttp_application_work_respond(reply, code, type, NULL, 0u);
   if (status != SALTS_OK) return status;
@@ -326,6 +338,7 @@ static int file_headers_fit(const chttp_application_work_reply *reply, const cht
   return SALTS_OK;
 }
 int chttp_application_work_serve_file(chttp_application_work_reply *reply, const chttp_server_file_options *options) {
+  if (chttp_application_work_reply_current(reply) && reply->item->websocket.event) return SALTS_ENOTSUP;
   if (!chttp_application_work_reply_current(reply)) return SALTS_EINVAL;
   if (reply->sealed || reply->finalized) return SALTS_EALREADY;
   chttp_server_file_plan plan;
@@ -425,7 +438,9 @@ static void publish(work_item *item, int business_status) {
       .length = draft->file_length, .bounded = draft->file_bounded};
   const chttp_server_worker_source source = {{source_native_read, item,
       item->source.content_length, item->source.content_length_known}, source_native_ready, source_native_cleanup};
-  int status = good && item->source_selected ?
+  int status = good && draft->websocket_accept ?
+      chttp_server_deferred_websocket_accept(&item->deferred, response.headers, response.header_count) :
+      good && item->source_selected ?
       chttp_server_deferred_response_source(&item->deferred, draft->status, response.headers, response.header_count, &source) :
       good && draft->file_path ?
       chttp_server_deferred_response_file(&item->deferred, response.headers, response.header_count, &file) :
@@ -511,6 +526,7 @@ static void release_work(void *arg) {
   free(item->methods);
   free(item->storage);
   free(item->upload_session_storage);
+  free(item->websocket_events);
   sync_mutex_lock(&impl->mutex);
   impl->stats.retained_bytes -= item->bytes;
   --impl->stats.pending;
@@ -550,6 +566,7 @@ static void completion_cancelled(void *arg) {
 static void business_finalized(void *arg);
 static void source_finalized(void *arg);
 static void upload_finalized(void *arg);
+static void websocket_finalized(void *arg);
 static void invariant_failure(work_impl *impl) {
   sync_mutex_lock(&impl->mutex);
   impl->accepting = 0;
@@ -616,6 +633,21 @@ static void upload_run(void *arg) {
   sync_mutex_unlock(&item->owner->mutex);
 }
 static void upload_cancelled(void *arg) { invariant_failure(((work_item *)arg)->owner); }
+static void websocket_run(void *arg) {
+  work_item *item = arg;
+  chttp_server_request_view request = item->request;
+  request.session = NULL; request.operation = item->websocket.operation;
+  const chttp_websocket_event *event = item->websocket_running_close ?
+      &item->websocket_close : &item->websocket_events[item->websocket_head];
+  const chttp_application_websocket_event scope = {&request, &item->websocket_peer, event};
+  int status = item->websocket.event(item->websocket.user, &scope);
+  if (status > SALTS_OK) status = SALTS_EPROTO;
+  sync_mutex_lock(&item->owner->mutex);
+  if (status != SALTS_OK && item->websocket_status == SALTS_OK) item->websocket_status = status;
+  if (status != SALTS_OK && item->outcome.business_status == SALTS_OK) item->outcome.business_status = status;
+  sync_mutex_unlock(&item->owner->mutex);
+}
+static void websocket_cancelled(void *arg) { invariant_failure(((work_item *)arg)->owner); }
 static bool session_queue_locked(work_impl *impl, work_item *item) {
   if (!item->session_key) return false;
   for (size_t i = 0u; i < impl->config.capacity; ++i)
@@ -640,13 +672,14 @@ static void unqueue_waiter(work_impl *impl, work_item *item) {
   }
 }
 enum work_event { WORK_BUSINESS_DONE, WORK_TRANSPORT_DONE, WORK_SESSION_DONE, WORK_SOURCE_PROGRESS, WORK_SOURCE_DONE,
-    WORK_UPLOAD_PROGRESS, WORK_UPLOAD_DONE };
+    WORK_UPLOAD_PROGRESS, WORK_UPLOAD_DONE, WORK_WEBSOCKET_PROGRESS, WORK_WEBSOCKET_DONE, WORK_WEBSOCKET_RETIRED };
 static void join_completion(work_item *item, enum work_event event, int status) {
   work_impl *impl = item->owner;
   work_item *launch = NULL;
   int notify = 0;
   bool source_post = false;
   bool upload_post = false;
+  bool websocket_post = false;
   chttp_server_owner_waker waker = {0};
   sync_mutex_lock(&impl->mutex);
   if (event == WORK_BUSINESS_DONE) item->business_done = 1;
@@ -674,6 +707,23 @@ static void join_completion(work_item *item, enum work_event event, int status) 
     else item->upload_close_done = true;
     if (item->upload_status != SALTS_OK && item->upload_pending) {
       item->upload_pending = false; item->upload_ready = true;
+    }
+  }
+  if (event == WORK_WEBSOCKET_DONE) {
+    item->websocket_active = false;
+    if (item->websocket_running_close) item->websocket_close_done = true;
+    else { item->websocket_head = (item->websocket_head + 1u) % item->websocket.capacity; --item->websocket_count; }
+    waker = item->waker;
+  }
+  if (event == WORK_WEBSOCKET_RETIRED) {
+    /* Publish the producer's last use and decide completion in one join.
+     * A separate flag/unlock/re-enter would let an event finalizer recycle
+     * the record before the retiring producer makes its final join call. */
+    item->websocket_retired = true;
+    if (item->websocket_opened && !item->websocket_closing) {
+      item->websocket_close = (chttp_websocket_event){.kind = CHTTP_WEBSOCKET_EVENT_CLOSE,
+          .close_code = CNET_WEBSOCKET_CLOSE_ABNORMAL};
+      item->websocket_closing = true;
     }
   }
   if (item->upload.open && item->upload_open_done && !item->upload_active && !item->upload_close_done) {
@@ -716,9 +766,16 @@ static void join_completion(work_item *item, enum work_event event, int status) 
       (item->source_closed || item->source_requested)) {
     item->source_active = true; item->source_cleaning = item->source_closed; source_post = true;
   }
+  if (item->business_done && item->websocket_opened && !item->websocket_active &&
+      (item->websocket_count || (item->websocket_closing && !item->websocket_close_done))) {
+    item->websocket_active = true; websocket_post = true;
+    item->websocket_running_close = item->websocket_count == 0u;
+  }
   if (item->business_done && item->transport_done && (!item->session || item->session_done) &&
       (!item->source_selected || item->source_cleaned) && !item->source_active &&
       !item->upload_active &&
+      (!item->websocket.event || (item->websocket_retired && !item->websocket_active && !item->websocket_count &&
+        (!item->websocket_opened || item->websocket_close_done))) &&
       !item->completion_queued) {
     item->completion_queued = 1; notify = 1;
   }
@@ -736,6 +793,11 @@ static void join_completion(work_item *item, enum work_event event, int status) 
         .finalize = upload_finalized, .user = item};
     if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
   }
+  if (websocket_post) {
+    const cflow_executor_task task = {.run = websocket_run, .cancel = websocket_cancelled,
+        .finalize = websocket_finalized, .user = item};
+    if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
+  }
   /* Each record has at most one queued stage. The gate adds no executor queue
    * or worker-blocking wait. Never access a record after successful posting. */
   if (launch && post_business(launch) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
@@ -749,6 +811,7 @@ static void business_finalized(void *arg) { join_completion(arg, WORK_BUSINESS_D
 static void source_progress(work_item *item) { join_completion(item, WORK_SOURCE_PROGRESS, SALTS_OK); }
 static void source_finalized(void *arg) { join_completion(arg, WORK_SOURCE_DONE, SALTS_OK); }
 static void upload_finalized(void *arg) { join_completion(arg, WORK_UPLOAD_DONE, SALTS_OK); }
+static void websocket_finalized(void *arg) { join_completion(arg, WORK_WEBSOCKET_DONE, SALTS_OK); }
 static void response_terminal(void *arg, int status) { join_completion(arg, WORK_TRANSPORT_DONE, status); }
 static void session_committed(void *arg, int status) { join_completion(arg, WORK_SESSION_DONE, status); }
 
@@ -909,23 +972,22 @@ static int allocate_work(work_impl *impl, const chttp_server_request_view *reque
   *out = item;
   return SALTS_OK;
 }
-int chttp_application_work_submit(chttp_application_work *owner,
-    const chttp_server_request_view *request, chttp_server_response *response,
-    const chttp_application_work_task *task) {
-  if (!owner || !owner->impl || !response) return SALTS_EINVAL;
-  work_impl *impl = owner->impl;
-  work_item *item = NULL;
-  int status = allocate_work(impl, request, task, 0u, &item);
-  if (status != SALTS_OK) return status;
-  status = chttp_server_response_waker(response, &item->waker);
-  if (status != SALTS_OK) { release_work(item); return status; }
+static void discard_work(work_item *item, chttp_websocket *websocket) {
+  if (websocket) (void)chttp_server_websocket_worker_bind(websocket, NULL);
+  release_work(item);
+}
+static int submit_work(work_item *item, chttp_server_response *response,
+    const chttp_application_work_task *task, chttp_websocket *websocket) {
+  work_impl *impl = item->owner;
+  int status = chttp_server_response_waker(response, &item->waker);
+  if (status != SALTS_OK) { discard_work(item, websocket); return status; }
   item->terminal = (chttp_server_response_terminal){.complete = response_terminal, .user = item};
   status = chttp_server_response_observe(response, &item->terminal);
-  if (status != SALTS_OK) { release_work(item); return status; }
+  if (status != SALTS_OK) { discard_work(item, websocket); return status; }
   status = chttp_server_response_defer_worker(response, &item->deferred, item->session);
   if (status != SALTS_OK) {
     const int detached = chttp_server_response_unobserve(response, &item->terminal);
-    if (detached == SALTS_OK) { release_work(item); return status; }
+    if (detached == SALTS_OK) { discard_work(item, websocket); return status; }
     sync_mutex_lock(&impl->mutex); impl->accepting = 0;
     impl->stats.publication_status = SALTS_EPROTO;
     sync_cond_broadcast(&impl->settled); sync_mutex_unlock(&impl->mutex);
@@ -954,6 +1016,119 @@ int chttp_application_work_submit(chttp_application_work *owner,
   publish(item, SALTS_EPROTO);
   business_finalized(item);
   return SALTS_EPROTO;
+}
+int chttp_application_work_submit(chttp_application_work *owner,
+    const chttp_server_request_view *request, chttp_server_response *response,
+    const chttp_application_work_task *task) {
+  if (!owner || !owner->impl || !response) return SALTS_EINVAL;
+  work_item *item = NULL;
+  const int status = allocate_work(owner->impl, request, task, 0u, &item);
+  return status == SALTS_OK ? submit_work(item, response, task, NULL) : status;
+}
+static int charge_work(work_item *item, size_t bytes) {
+  work_impl *impl = item->owner;
+  sync_mutex_lock(&impl->mutex);
+  int status = bytes > impl->config.retained_bytes - impl->stats.retained_bytes ? SALTS_ENOBUFS : SALTS_OK;
+  if (status == SALTS_OK) { item->bytes += bytes; impl->stats.retained_bytes += bytes; }
+  else count_event(&impl->stats.rejected);
+  sync_mutex_unlock(&impl->mutex);
+  return status;
+}
+int chttp_application_work_websocket_accept(chttp_application_work_reply *reply) {
+  if (!chttp_application_work_reply_current(reply) || !reply->item->websocket.event) return SALTS_EINVAL;
+  const int status = chttp_application_work_respond(reply, 200u, NULL, NULL, 0u);
+  if (status == SALTS_OK) reply->websocket_accept = true;
+  return status;
+}
+static int websocket_native_event(void *user, const chttp_websocket_event *event) {
+  work_item *item = user;
+  work_impl *impl = item->owner;
+  if (!event || (event->size && !event->data)) return SALTS_EINVAL;
+  int status = SALTS_OK;
+  sync_mutex_lock(&impl->mutex);
+  if (event->kind == CHTTP_WEBSOCKET_EVENT_CLOSE) {
+    if (event->size > CNET_WEBSOCKET_MAX_CONTROL_BYTES) status = SALTS_EMSGSIZE;
+    else if (!item->websocket_closing) {
+      item->websocket_close = *event;
+      if (event->size) memcpy(item->websocket_close_data, event->data, event->size);
+      item->websocket_close.data = event->size ? item->websocket_close_data : NULL;
+      item->websocket_closing = true;
+    }
+  } else if (item->websocket_closing || item->websocket_retired) status = SALTS_ESHUTDOWN;
+  else if (item->websocket_status != SALTS_OK) status = item->websocket_status;
+  else if (event->kind < CHTTP_WEBSOCKET_EVENT_MESSAGE || event->kind > CHTTP_WEBSOCKET_EVENT_PONG) status = SALTS_EINVAL;
+  else if (event->size > item->websocket_stride) status = SALTS_EMSGSIZE;
+  else if (item->websocket_count == item->websocket.capacity) status = SALTS_ENOBUFS;
+  else {
+    const size_t slot = (item->websocket_head + item->websocket_count) % item->websocket.capacity;
+    unsigned char *data = item->websocket_data + slot * item->websocket_stride;
+    item->websocket_events[slot] = *event;
+    if (event->size) memcpy(data, event->data, event->size);
+    item->websocket_events[slot].data = event->size ? data : NULL;
+    ++item->websocket_count;
+  }
+  if (status != SALTS_OK && item->websocket_status == SALTS_OK) item->websocket_status = status;
+  if (status != SALTS_OK && item->outcome.business_status == SALTS_OK) item->outcome.business_status = status;
+  sync_mutex_unlock(&impl->mutex);
+  join_completion(item, WORK_WEBSOCKET_PROGRESS, SALTS_OK);
+  return status;
+}
+static bool websocket_native_pending(void *user) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex);
+  const bool pending = !item->business_done || !item->websocket_opened || item->websocket_active || item->websocket_count;
+  sync_mutex_unlock(&item->owner->mutex);
+  return pending;
+}
+static int websocket_native_status(void *user) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex);
+  const int status = item->websocket_status;
+  sync_mutex_unlock(&item->owner->mutex);
+  return status;
+}
+static void websocket_native_opened(void *user) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex); item->websocket_opened = true; sync_mutex_unlock(&item->owner->mutex);
+  join_completion(item, WORK_WEBSOCKET_PROGRESS, SALTS_OK);
+}
+static void websocket_native_retire(void *user) {
+  /* A FAILED CNet engine deliberately emits no Close event. Complete this
+   * adapter's accepted-peer event lifetime with an abnormal notification after
+   * producer retirement; never send 1006 on the wire or replace failure status. */
+  join_completion(user, WORK_WEBSOCKET_RETIRED, SALTS_OK); /* last native use */
+}
+int chttp_application_work_websocket_open(chttp_application_work *owner, chttp_websocket *websocket,
+    const chttp_server_request_view *request, chttp_server_response *response,
+    const chttp_application_work_task *task, const chttp_application_websocket_callbacks *callbacks) {
+  if (!owner || !owner->impl || !response || !callbacks || !callbacks->event || !callbacks->capacity) return SALTS_EINVAL;
+  chttp_server_websocket_session peer = {0};
+  size_t stride = 0u;
+  int status = chttp_server_websocket_worker_capture(websocket, &peer, &stride);
+  if (status != SALTS_OK) return status;
+  if (stride < CNET_WEBSOCKET_MAX_CONTROL_BYTES) stride = CNET_WEBSOCKET_MAX_CONTROL_BYTES;
+  size_t bytes = CNET_WEBSOCKET_MAX_CONTROL_BYTES, metadata = 0u;
+  status = add_array(&bytes, callbacks->capacity, stride);
+  if (status == SALTS_OK) status = add_array(&metadata, callbacks->capacity, sizeof(chttp_websocket_event));
+  if (status != SALTS_OK) return status;
+  work_impl *impl = owner->impl;
+  work_item *item = NULL;
+  status = allocate_work(impl, request, task, bytes, &item);
+  if (status != SALTS_OK) return status;
+  status = charge_work(item, metadata);
+  if (status == SALTS_OK) {
+    item->websocket_events = calloc(callbacks->capacity, sizeof(*item->websocket_events));
+    if (!item->websocket_events) status = SALTS_ENOMEM;
+  }
+  if (status != SALTS_OK) { release_work(item); return status; }
+  item->websocket = *callbacks; item->websocket_peer = peer; item->websocket_stride = stride;
+  item->websocket_data = item->storage + item->storage_bytes - impl->config.reply_bytes - bytes;
+  item->websocket_close_data = item->websocket_data + bytes - CNET_WEBSOCKET_MAX_CONTROL_BYTES;
+  const chttp_server_worker_websocket binding = {websocket_native_event, websocket_native_pending,
+      websocket_native_status, websocket_native_opened, websocket_native_retire, item};
+  status = chttp_server_websocket_worker_bind(websocket, &binding);
+  if (status != SALTS_OK) { release_work(item); return status; }
+  return submit_work(item, response, task, websocket);
 }
 static int upload_native_write(void *user, const void *data, size_t bytes) {
   work_item *item = user;
@@ -1034,10 +1209,7 @@ int chttp_application_work_upload_finish(void *user, const chttp_server_request_
   size_t bytes = 0u;
   if (status == SALTS_OK && request->session) status = chttp_session_work_size(request->session, &bytes);
   if (status == SALTS_OK && bytes) {
-    sync_mutex_lock(&impl->mutex);
-    if (bytes > impl->config.retained_bytes - impl->stats.retained_bytes) status = SALTS_ENOBUFS;
-    else { item->bytes += bytes; impl->stats.retained_bytes += bytes; }
-    sync_mutex_unlock(&impl->mutex);
+    status = charge_work(item, bytes);
     if (status == SALTS_OK) {
       item->upload_session_storage = malloc(bytes);
       if (!item->upload_session_storage) status = SALTS_ENOMEM;

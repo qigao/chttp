@@ -31,6 +31,10 @@ int chttp_invocation_set_header(const chttp_invocation *invocation, const char *
   const chttp_invocation_state *state = invocation_state(invocation);
   return state ? chttp_application_work_set_header(state->reply, name, value) : SALTS_EINVAL;
 }
+int chttp_invocation_websocket_accept(const chttp_invocation *invocation) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  return state ? chttp_application_work_websocket_accept(state->reply) : SALTS_EINVAL;
+}
 int chttp_invocation_response_file(const chttp_invocation *invocation, unsigned int code,
     const char *type, const char *path) {
   const chttp_invocation_state *state = invocation_state(invocation);

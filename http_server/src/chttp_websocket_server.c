@@ -142,7 +142,7 @@ static void chttp_server_websocket_event(void *user, cnet_websocket *websocket,
   chttp_server_impl *previous_callback_server;
   chttp_websocket_event public_event;
   (void)websocket;
-  if (peer == NULL || event == NULL || peer->route == NULL || peer->route->websocket_event == NULL)
+  if (peer == NULL || event == NULL || peer->route == NULL)
     return;
   public_event =
       (chttp_websocket_event){.kind = (chttp_websocket_event_kind)event->kind,
@@ -150,6 +150,12 @@ static void chttp_server_websocket_event(void *user, cnet_websocket *websocket,
                               .data = event->data,
                               .size = event->size,
                               .close_code = event->close_code};
+  if (peer->worker.event) {
+    const int status = peer->worker.event(peer->worker.user, &public_event);
+    if (status != SALTS_OK && peer->worker_error == SALTS_OK) peer->worker_error = status < SALTS_OK ? status : SALTS_EPROTO;
+    return;
+  }
+  if (!peer->route->websocket_event) return;
   previous_callback_server = chttp_active_callback_server;
   chttp_active_callback_server = peer->server;
   peer->route->websocket_event(peer->route->websocket_user, &peer->handle, &public_event);
@@ -204,33 +210,53 @@ void chttp_server_websocket_peer_reset(chttp_server_websocket_peer *peer) {
     (void)cnet_websocket_transport_advance(&peer->bridge, 1u, &events);
     if (cnet_websocket_transport_destroy(&peer->bridge) != SALTS_OK) return;
   }
-  if (peer->engine.impl != NULL) (void)cnet_websocket_destroy(&peer->engine);
+  if (peer->engine.impl != NULL && cnet_websocket_destroy(&peer->engine) != SALTS_OK) return;
   if (peer->output_retained != NULL) mem_buffer_release(peer->output_retained);
   chttp_server_buffer_release(peer->server, peer->output, peer->output_capacity);
   chttp_server_buffer_release(peer->server, peer->opening_data, peer->opening_capacity);
+  const chttp_server_worker_websocket worker = peer->worker;
   *peer = (chttp_server_websocket_peer){0};
+  if (worker.retire) worker.retire(worker.user);
 }
 
 void chttp_server_websocket_peer_open(chttp_server_websocket_peer *peer) {
-  if (peer != NULL && peer->phase == CHTTP_SERVER_WEBSOCKET_HANDSHAKE)
+  if (peer != NULL && peer->phase == CHTTP_SERVER_WEBSOCKET_HANDSHAKE) {
     peer->phase = CHTTP_SERVER_WEBSOCKET_OPEN;
+    if (peer->worker.opened) peer->worker.opened(peer->worker.user);
+  }
+}
+bool chttp_server_websocket_worker_pending(const chttp_server_websocket_peer *peer) {
+  return peer && peer->worker.pending && peer->worker.pending(peer->worker.user);
+}
+int chttp_server_websocket_worker_status(const chttp_server_websocket_peer *peer) {
+  if (!peer) return SALTS_EINVAL;
+  return peer->worker_error != SALTS_OK ? peer->worker_error : peer->worker.status ? peer->worker.status(peer->worker.user) : SALTS_OK;
+}
+bool chttp_server_websocket_peer_retained(const chttp_server_websocket_peer *peer) {
+  return peer && (peer->bridge.impl || peer->engine.impl || peer->worker.retire);
 }
 
 int chttp_server_websocket_peer_feed(chttp_server_websocket_peer *peer, const void *data,
                                      size_t size) {
   if (peer == NULL || peer->phase != CHTTP_SERVER_WEBSOCKET_OPEN || peer->session == NULL)
     return SALTS_EINVAL;
-  return cnet_websocket_feed(peer->session, data, size);
+  int status = chttp_server_websocket_worker_status(peer);
+  if (status == SALTS_OK) status = cnet_websocket_feed(peer->session, data, size);
+  return status == SALTS_OK ? chttp_server_websocket_worker_status(peer) : status;
 }
 
 int chttp_server_websocket_peer_flush(chttp_server_websocket_peer *peer) {
   if (peer == NULL || peer->phase == CHTTP_SERVER_WEBSOCKET_NONE || peer->session == NULL)
     return SALTS_EINVAL;
+  const int worker_status = chttp_server_websocket_worker_status(peer);
+  if (worker_status != SALTS_OK) return worker_status;
   if (peer->bridge.impl != NULL) {
     size_t events = 0u;
-    return cnet_websocket_transport_advance(&peer->bridge, 1u, &events);
+    const int status = cnet_websocket_transport_advance(&peer->bridge, 1u, &events);
+    return status == SALTS_OK ? chttp_server_websocket_worker_status(peer) : status;
   }
-  return cnet_websocket_flush(peer->session);
+  const int status = cnet_websocket_flush(peer->session);
+  return status == SALTS_OK ? chttp_server_websocket_worker_status(peer) : status;
 }
 
 void chttp_server_websocket_peer_transport_closed(chttp_server_websocket_peer *peer) {
@@ -277,6 +303,7 @@ int chttp_server_websocket_route_open(chttp_server_websocket_peer *peer,
   routed_request.param_count = state->param_count;
   routed_request.session = peer->server->config.session_capacity == 0u ? NULL : &state->session;
   routed_request.jwt_claims = state->jwt_owner != NULL ? &state->jwt_claims : NULL;
+  routed_request.operation = route->operation;
   chttp_session_request_begin(state, &routed_request);
   chttp_server_response_builder_reset(&state->response_builder);
   open_context = (chttp_websocket_open_context){.peer = peer, .route = route};
@@ -289,15 +316,19 @@ int chttp_server_websocket_route_open(chttp_server_websocket_peer *peer,
                                .terminal_user = &open_context};
   previous_callback_server = chttp_active_callback_server;
   chttp_active_callback_server = peer->server;
+  state->response_builder.request = &routed_request;
+  chttp_server_deadline_start(state, peer->server->deadlines.handler_ms);
   status = chttp_server_chain_run(&chain);
+  state->response_builder.request = NULL;
   chttp_active_callback_server = previous_callback_server;
   if (status == SALTS_OK && !open_context.called && !state->response_builder.replied)
     status = SALTS_EPROTO;
-  if (status == SALTS_OK) status = chttp_session_request_finish(state);
+  if (status == SALTS_OK && !state->response_builder.deferred) status = chttp_session_request_finish(state);
   if (status != SALTS_OK) {
     chttp_session_request_abort(state);
     chttp_server_stats_handler_error(peer->server);
   }
+  if (!state->response_builder.deferred) state->deadline_ms = 0u;
   return status;
 }
 
@@ -345,6 +376,23 @@ static int chttp_server_websocket_handshake_serialize(const chttp_server_respons
   return status;
 }
 
+int chttp_server_websocket_deferred_h1(chttp_server_connection *connection, chttp_server_deferred_target *target) {
+  chttp_server_response_builder *builder = target->response_builder;
+  int status = chttp_session_request_finish_deferred(&connection->request_state, target->response);
+  if (status == SALTS_OK) status = chttp_server_connection_reserve_outbound(connection,
+      connection->server->max_response_wire_bytes);
+  if (status == SALTS_OK && target->websocket_accept) {
+    status = chttp_server_websocket_handshake_serialize(builder, connection->websocket_peer.accept,
+        connection->outbound, connection->outbound_capacity, &connection->outbound_size);
+  } else if (status == SALTS_OK) {
+    chttp_server_websocket_reset(connection);
+    status = chttp_server_response_serialize(builder, &target->request, connection->outbound,
+        connection->outbound_capacity, &connection->outbound_size);
+    connection->close_after_write = true; connection->deferred_response_writing = true;
+  }
+  if (status == SALTS_OK) chttp_server_stats_response(connection->server);
+  return status;
+}
 int chttp_server_websocket_upgrade(void *user, const chttp_server_request_view *request,
                                    chttp_server_parser_upgrade_action *out_action,
                                    unsigned int *out_http_status) {
@@ -386,6 +434,11 @@ int chttp_server_websocket_upgrade(void *user, const chttp_server_request_view *
     *out_http_status = 500u;
     return status;
   }
+  if (state->response_builder.deferred) {
+    memcpy(connection->websocket_peer.accept, accept, sizeof(accept));
+    *out_action = CHTTP_SERVER_UPGRADE_STOP;
+    return SALTS_OK;
+  }
   if (state->response_builder.replied) {
     if (state->response_builder.source_enabled) {
       chttp_server_response_builder_close_source(&state->response_builder, SALTS_ENOTSUP);
@@ -422,16 +475,22 @@ int chttp_server_websocket_input(chttp_server_connection *connection, const void
   int status;
   if (connection == NULL || connection->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_OPEN)
     return SALTS_EINVAL;
-  status = chttp_server_websocket_peer_feed(&connection->websocket_peer, data, size);
-  if (status != SALTS_EBUSY) return status;
-  if (!cnet_websocket_has_pending_output(connection->websocket_peer.session)) return status;
-  if (connection->websocket_upgrade_input_size != 0u) return SALTS_ENOBUFS;
+  const bool pending = chttp_server_websocket_worker_pending(&connection->websocket_peer);
+  if (!pending) {
+    status = chttp_server_websocket_peer_feed(&connection->websocket_peer, data, size);
+    if (status != SALTS_EBUSY) return status;
+    if (!cnet_websocket_has_pending_output(connection->websocket_peer.session)) return status;
+  }
+  const size_t used = connection->websocket_upgrade_input_size;
+  const size_t limit = connection->websocket_peer.worker.retire ? connection->websocket_peer.route->websocket_max_buffered_input_bytes :
+      connection->server->config.network.receive_buffer_bytes;
+  if (used > limit || size > limit - used) return SALTS_ENOBUFS;
   status = chttp_server_buffer_grow(connection->server, &connection->websocket_upgrade_input,
-                                    &connection->websocket_upgrade_input_capacity, size,
-                                    connection->server->config.network.receive_buffer_bytes, 0u);
+                                    &connection->websocket_upgrade_input_capacity, used + size, limit, used);
   if (status != SALTS_OK) return status;
-  if (size != 0u) memcpy(connection->websocket_upgrade_input, data, size);
-  connection->websocket_upgrade_input_size = size;
+  if (size != 0u) memcpy(connection->websocket_upgrade_input + used, data, size);
+  connection->websocket_upgrade_input_size += size;
+  connection->websocket_peer.receive_paused = true;
   return SALTS_OK;
 }
 
@@ -463,7 +522,7 @@ static int chttp_server_websocket_bind(chttp_server_connection *connection) {
   if (status != SALTS_OK) return status;
   status = cnet_websocket_transport_session(&peer->bridge, &peer->session);
   if (status != SALTS_OK) return status;
-  peer->phase = CHTTP_SERVER_WEBSOCKET_OPEN;
+  chttp_server_websocket_peer_open(peer);
   if (peer->opening_pending) {
     status = chttp_server_websocket_apply(peer,
         (chttp_server_websocket_command_kind)peer->opening_kind, peer->opening_code,
@@ -477,13 +536,50 @@ static int chttp_server_websocket_bind(chttp_server_connection *connection) {
   return SALTS_OK;
 }
 
+static void chttp_server_websocket_close_transport(chttp_server_connection *connection) {
+  chttp_server_websocket_peer *peer = &connection->websocket_peer;
+  cnet_websocket_state state = CNET_WEBSOCKET_FAILED;
+  int error = SALTS_OK;
+  /* Record the drained protocol decision before transport_closed can also
+   * turn an abnormal EOF into CLOSED. The actual socket terminal still owns
+   * observer completion; this flag does not publish an early success. */
+  peer->clean_close = cnet_websocket_state_get(peer->session, &state) == SALTS_OK &&
+      state == CNET_WEBSOCKET_CLOSED && cnet_websocket_last_error(peer->session, &error) == SALTS_OK && error == SALTS_OK;
+  chttp_server_connection_close(connection);
+}
 int chttp_server_websocket_progress(chttp_server_connection *connection) {
   chttp_server_websocket_peer *peer = &connection->websocket_peer;
   int status;
-  if (peer->bridge.impl == NULL) return SALTS_OK;
+  if (peer->bridge.impl == NULL && !peer->worker.retire) return SALTS_OK;
+  status = chttp_server_websocket_worker_status(peer);
+  if (status != SALTS_OK) return status;
+  if (peer->bridge.impl == NULL) {
+    if (chttp_server_websocket_peer_terminal(peer) && !connection->writing && !connection->outbound_size &&
+        connection->pending_action != CHTTP_SERVER_PENDING_SEND) {
+      chttp_server_websocket_close_transport(connection);
+      return SALTS_OK;
+    }
+    if (chttp_server_websocket_worker_pending(peer)) return SALTS_OK;
+    if (connection->websocket_upgrade_input_size && peer->phase == CHTTP_SERVER_WEBSOCKET_OPEN) {
+      status = chttp_server_websocket_peer_feed(peer, connection->websocket_upgrade_input, connection->websocket_upgrade_input_size);
+      if (status == SALTS_EBUSY) return SALTS_OK;
+      if (status != SALTS_OK) return status;
+      connection->websocket_upgrade_input_size = 0u;
+    }
+    if (peer->receive_paused && !chttp_server_websocket_worker_pending(peer) && !connection->close_after_write) {
+      peer->receive_paused = false;
+      return chttp_server_send_pending(connection);
+    }
+    return SALTS_OK;
+  }
   status = chttp_server_websocket_peer_flush(peer);
   if (status != SALTS_OK) return status;
   if (peer->tag_pending || cnet_websocket_has_pending_output(peer->session)) return SALTS_OK;
+  if (chttp_server_websocket_peer_terminal(peer)) {
+    chttp_server_websocket_close_transport(connection);
+    return SALTS_OK;
+  }
+  if (chttp_server_websocket_worker_pending(peer)) return SALTS_OK;
   chttp_server_websocket_profile_send_complete(connection);
   if (connection->websocket_upgrade_input_size != 0u) {
     status = chttp_server_websocket_peer_feed(peer, connection->websocket_upgrade_input,
@@ -498,7 +594,7 @@ int chttp_server_websocket_progress(chttp_server_connection *connection) {
   }
   if (peer->tag_pending || cnet_websocket_has_pending_output(peer->session)) return SALTS_OK;
   if (chttp_server_websocket_peer_terminal(peer)) {
-    chttp_server_connection_close(connection);
+    chttp_server_websocket_close_transport(connection);
   } else if (peer->receive_paused && !connection->close_after_write) {
     peer->receive_paused = false;
     status = chttp_server_send_pending(connection);
@@ -519,11 +615,13 @@ int chttp_server_websocket_send_complete(chttp_server_connection *connection) {
   chttp_server_websocket_peer_open(&connection->websocket_peer);
   status = chttp_server_websocket_peer_flush(&connection->websocket_peer);
   if (status != SALTS_OK) return status;
+  if (connection->websocket_peer.worker.retire && chttp_server_websocket_worker_pending(&connection->websocket_peer)) return SALTS_OK;
   if (connection->websocket_upgrade_input_size != 0u) {
     const size_t size = connection->websocket_upgrade_input_size;
-    connection->websocket_upgrade_input_size = 0u;
     status = chttp_server_websocket_peer_feed(&connection->websocket_peer,
                                               connection->websocket_upgrade_input, size);
+    if (status == SALTS_EBUSY && connection->websocket_peer.worker.retire) return SALTS_OK;
+    connection->websocket_upgrade_input_size = 0u;
     chttp_server_buffer_release(connection->server, connection->websocket_upgrade_input,
                                 connection->websocket_upgrade_input_capacity);
     connection->websocket_upgrade_input = NULL;
@@ -532,7 +630,7 @@ int chttp_server_websocket_send_complete(chttp_server_connection *connection) {
   if (status == SALTS_OK && chttp_server_websocket_peer_terminal(&connection->websocket_peer) &&
       !connection->writing && connection->outbound_size == 0u &&
       connection->pending_action == CHTTP_SERVER_PENDING_NONE)
-    chttp_server_connection_close(connection);
+    chttp_server_websocket_close_transport(connection);
   return status;
 }
 
@@ -646,6 +744,25 @@ int chttp_server_websocket_session_capture(const chttp_websocket *websocket,
                                                   .connection_generation =
                                                       peer->server_generation,
                                                   .stream_id = peer->stream_id};
+  return SALTS_OK;
+}
+int chttp_server_websocket_worker_capture(chttp_websocket *websocket,
+    chttp_server_websocket_session *session, size_t *max_message_bytes) {
+  chttp_server_websocket_peer *peer = chttp_websocket_peer(websocket);
+  if (!peer || !peer->route->worker_websocket || peer->phase != CHTTP_SERVER_WEBSOCKET_HANDSHAKE ||
+      chttp_active_callback_server != peer->server || !session || !max_message_bytes) return SALTS_EINVAL;
+  const int status = chttp_server_websocket_session_capture(websocket, session);
+  if (status == SALTS_OK) *max_message_bytes = peer->route->websocket_max_message_bytes;
+  return status;
+}
+int chttp_server_websocket_worker_bind(chttp_websocket *websocket, const chttp_server_worker_websocket *binding) {
+  chttp_server_websocket_peer *peer = chttp_websocket_peer(websocket);
+  if (!peer || !peer->route->worker_websocket || peer->phase != CHTTP_SERVER_WEBSOCKET_HANDSHAKE ||
+      chttp_active_callback_server != peer->server) return SALTS_EINVAL;
+  if (!binding) { peer->worker = (chttp_server_worker_websocket){0}; peer->worker_error = SALTS_OK; return SALTS_OK; }
+  if (!binding->event || !binding->pending || !binding->status || !binding->opened || !binding->retire) return SALTS_EINVAL;
+  if (peer->worker.retire) return SALTS_EALREADY;
+  peer->worker = *binding;
   return SALTS_OK;
 }
 

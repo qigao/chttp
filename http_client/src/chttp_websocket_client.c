@@ -559,6 +559,11 @@ static int chttp_websocket_client_drain_output(chttp_websocket_client_impl *clie
       status = chttp_websocket_client_h2_wire_flush(client);
       if (status != SALTS_OK) return status;
       if (!chttp_websocket_client_h2_output_pending(client)) break;
+      /* H2 output can be waiting for peer WINDOW_UPDATE. Every receive
+       * consumes its demand credit, so continue reading controls while drain
+       * waits; polling alone cannot observe credit after that first receive. */
+      status = chttp_websocket_client_receive_arm(client);
+      if (status != SALTS_OK) return status;
       status = chttp_websocket_client_poll(client, deadline);
       if (status != SALTS_OK) return status;
     } while (!client->transport_terminal && client->terminal_status == SALTS_OK);
@@ -1177,6 +1182,10 @@ int chttp_websocket_client_receive(chttp_websocket_client *client, uint32_t time
   while (impl->event_count == 0u && !impl->transport_terminal &&
          impl->terminal_status == SALTS_OK) {
     status = chttp_websocket_client_bridge_progress(impl);
+    /* A partial WS message can consume an entire H2 window without producing
+     * an application event. Publish its control credit before waiting again. */
+    if (status == SALTS_OK && impl->protocol == CHTTP_HTTP_2)
+      status = chttp_websocket_client_h2_wire_flush(impl);
     if (status != SALTS_OK || impl->event_count != 0u) break;
     status = chttp_websocket_client_receive_arm(impl);
     if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) status = SALTS_OK;

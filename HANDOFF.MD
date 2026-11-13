@@ -866,3 +866,79 @@
   when unauthorized, retaining strict 401/zero-open/zero-resource assertions.
   Its authorized control still streams data. Keep the original CI failure; no
   product change, retry or relaxation to accept transport errors as HTTP success.
+- Upload PR #304 merged as f45ef6f3627d4fbf5e28ce3f9fd93f44e6fb426e after CI
+  43363139443 passed all eight configurations and the aggregate at 306d808e.
+  Candidate merge and qualified head share tree 8092c8b17249b98641c268e741757dd67d06fd59.
+  Android remains build/install validation only.
+
+- Private worker WS mounting now resolves canonical reflected opening/event
+  methods and leases one shared Invocation record for the full peer lifetime.
+  Opening explicitly accepts or returns a copied buffered denial; detached
+  Session and ordinary Invocation hooks settle before native H1/H2 handshake.
+  Event payload slots plus an independent Close slot are reserved/charged at
+  admission. Events run serially per peer on the existing pool. Queue overflow
+  fails that peer and drains previously accepted events before Close/completion.
+  Owner callbacks only copy/signal bookkeeping; sends retain the existing
+  bounded generation-checked command path. Native producer retirement is a
+  separate join from transport terminal, preventing record reuse while peer
+  reset/CNet callbacks still borrow it. Finite close retains blocked frames/Beans.
+- WS header admission now composes with H1 Upgrade pause/resume and H2 Extended
+  CONNECT. H1 pauses read demand for pending events; H2 queues bounded raw input
+  and holds its credit until copied events settle. Partial native WS assembly
+  returns credit without requiring a complete logical event. Worker errors reset
+  only the H2 stream. Denials refund pre-handshake queued credit before response.
+- The first WS case build used a nonexistent Function() reflection accessor;
+  use FunctionAbi(action)->function. The first runtime fixture used brace-style
+  route parameters; the actual router uses /ws/:id. Later raw-socket cases
+  incorrectly initialized Windows' sin_addr union; use explicit address bytes,
+  matching the existing upload fixture. Preserve their failed build/CTest logs.
+- The 128 KiB H2 message regression exposed two existing Client progress gaps:
+  send drain polled after its initial receive demand was exhausted, and receive
+  waited for a complete WS event before flushing partial-message WINDOW_UPDATE.
+  Keep receive demand during send drain and flush actual H2 control bytes while
+  assembling an event. The original window-diagnostic and window-receive failures
+  remain recorded; no timeout extension/retry/fallback. Temporary byte/status
+  diagnostic output was removed after identifying the boundary.
+- Opening cancellation fixtures must destroy a WS Client on the same thread
+  that initialized/progressed it. The initial cross-thread cleanup returned
+  EPERM. H2 graceful stop drains active streams, so a finite stop timeout alone
+  does not prove opening cancellation; use the existing handler deadline and
+  wait for the client's observed terminal before releasing the blocked method.
+- Native full CTest run worker-ws-full was interrupted by the tool server restart
+  while starting the dedicated WS benchmark (43/123); no test failure or final
+  result was reported. No validation claim is based on that partial run.
+- A FAILED CNet engine suppresses its Close event. The private worker adapter
+  still owes an accepted peer one terminal event, so producer retirement emits
+  an abnormal Close notification without wire output or replacing failure status.
+  Malformed unmasked H1 frames exercise this boundary on ordinary/dedicated
+  transport. Control/close capacities reuse CNet's published constants.
+- The first completed full native run passed 121/123 CTests. Update the parser's
+  former ENOTSUP assertion to verify gated Upgrade delivery/resume, and read WS
+  route identity from the deferred target's canonical request_state. The latter
+  avoids dereferencing a builder-only backpointer absent from the valid isolated
+  deferred-token fixture. Preserve worker-ws-qualified-ctest.log with both failures.
+- Review found a last-producer race: setting retired, unlocking and re-entering
+  the completion join could let an event finalizer recycle the record before
+  that last join. Retirement now publishes its flag and decides completion in
+  one join critical section; all tail uses are captured owners/reserved stages.
+- H1 protocol Close must finish even when the worker Close method is blocked.
+  Owner progress now checks a fully drained native terminal before pausing user
+  event credit. Raw ordinary/dedicated tests require physical EOF while that
+  method remains blocked, then release it and join completion. The native
+  producer can retire before the worker event, while the record/Bean stay live.
+- A fully drained H1 WS Close now records its clean protocol decision before
+  socket closure and reports success only from the actual successful transport
+  terminal. An abnormal EOF can also make CNet CLOSED, so querying CLOSED after
+  transport_closed is insufficient. H2 keeps the existing real-send observer:
+  client END_STREAM receipt does not guarantee the Server already observed its
+  local send completion before the client's subsequent TCP close. Preserve
+  worker-ws-clean-terminal-cases.log with that fixture expectation failure.
+- Final native-release-user full graph build, 123/123 CTests (including three
+  benchmarks) and install passed: migration-worker-ws-release-{build,ctest,install}.log.
+  The subsequent test-only two-owner cases rebuilt and passed all 37 WS cases:
+  migration-worker-ws-multi-owner-{build,ctest}.log. The formal C++ suite includes
+  six H1/H2 opening/event exception/RAII cases. Coverage also includes worker-only
+  reflection, JWT/headers, Session gate release, raw early/coalesced input,
+  capacity overflow, protocol failure, H2 sibling survival and 128 KiB windows,
+  one-record reuse/stale handles, opening/event cancellation, blocked Close and
+  finite-close ownership. Public defaults/installed interfaces remain unchanged.

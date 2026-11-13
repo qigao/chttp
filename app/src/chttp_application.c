@@ -15,6 +15,7 @@ CHTTP_INVOCATION_ACTION(chttp_expected_invocation);
 CHTTP_ADMISSION_ACTION(chttp_expected_admission);
 CHTTP_ASSET_POLICY_ACTION(chttp_expected_asset_policy);
 CHTTP_UPLOAD_OPEN_ACTION(chttp_expected_upload_open);
+CHTTP_WEBSOCKET_EVENT_ACTION(chttp_expected_websocket_event);
 CHTTP_INVOCATION_ACTION(chttp_application_asset_invoke);
 
 typedef struct application_invocation_hook { chttp_invocation_chain_hook hook; } application_invocation_hook;
@@ -29,6 +30,7 @@ typedef struct application_worker_action {
   chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
   chttp_application_upload_callbacks upload;
   size_t upload_chunk_bytes;
+  chttp_application_websocket_callbacks websocket;
 } application_worker_action;
 
 typedef struct application_worker_assets {
@@ -255,8 +257,15 @@ static int application_upload_dispatch(void *user, const chttp_server_request_vi
   return chttp_application_work_admission_response(response,
       chttp_application_work_upload_finish(request->body_sink_user, request, response));
 }
+static int application_websocket_open(void *user, chttp_websocket *websocket,
+    const chttp_server_request_view *request, chttp_server_response *response) {
+  application_worker_action *action = user;
+  return chttp_application_work_admission_response(response, chttp_application_work_websocket_open(
+      action->work, websocket, request, response, &action->task, &action->websocket));
+}
 static int application_worker_mount(chttp_application *owner,
-    const chttp_application_worker_binding *binding, const chttp_application_upload_binding *upload) {
+    const chttp_application_worker_binding *binding, const chttp_application_upload_binding *upload,
+    const chttp_application_websocket_binding *websocket) {
   application_impl *app = owner ? owner->impl : NULL;
   if (!app || !binding || !binding->invoke || !binding->path || !app->workers.impl ||
       binding->hook_count > CHTTP_APPLICATION_WORK_MAX_HOOKS ||
@@ -266,6 +275,8 @@ static int application_worker_mount(chttp_application *owner,
     return SALTS_EINVAL;
   if (upload && (!upload->open || !upload->close || !upload->cleanup ||
       !cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_upload_open), upload->open_abi))) return SALTS_EINVAL;
+  if (websocket && (!websocket->event || !websocket->event_capacity || binding->method != CHTTP_METHOD_GET ||
+      !cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_websocket_event), websocket->event_abi))) return SALTS_EINVAL;
   if (app->worker_action_count >= app->worker_route_capacity) return SALTS_ENOBUFS;
   void *receiver = NULL;
   int status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
@@ -278,6 +289,17 @@ static int application_worker_mount(chttp_application *owner,
                .hooks = action->hooks, .hook_count = binding->hook_count}};
   status = application_worker_hooks(app, binding->hooks, binding->hook_count, action->invocation_hooks, action->hooks);
   if (status != SALTS_OK) return status;
+  if (websocket) {
+    action->websocket = (chttp_application_websocket_callbacks){websocket->event, websocket->event_abi->function,
+        receiver, websocket->event_capacity};
+    const chttp_server_websocket_options route = {.size = sizeof(route), .path = binding->path,
+        .max_frame_bytes = websocket->max_frame_bytes, .max_message_bytes = websocket->max_message_bytes,
+        .max_buffered_input_bytes = websocket->max_buffered_input_bytes,
+        .on_open = application_websocket_open, .user = action, .worker = true, .operation = binding->abi->function};
+    status = chttp_server_websocket_with(&app->server, &route);
+    if (status == SALTS_OK) ++app->worker_action_count;
+    return status;
+  }
   if (upload) {
     status = chttp_server_worker_body_chunk_bound(&app->server, &action->upload_chunk_bytes);
     if (status != SALTS_OK) return status;
@@ -293,10 +315,13 @@ static int application_worker_mount(chttp_application *owner,
   return status;
 }
 int chttp_application_worker_mount(chttp_application *owner, const chttp_application_worker_binding *binding) {
-  return application_worker_mount(owner, binding, NULL);
+  return application_worker_mount(owner, binding, NULL, NULL);
 }
 int chttp_application_worker_upload(chttp_application *owner, const chttp_application_upload_binding *binding) {
-  return binding ? application_worker_mount(owner, &binding->controller, binding) : SALTS_EINVAL;
+  return binding ? application_worker_mount(owner, &binding->controller, binding, NULL) : SALTS_EINVAL;
+}
+int chttp_application_worker_websocket(chttp_application *owner, const chttp_application_websocket_binding *binding) {
+  return binding ? application_worker_mount(owner, &binding->controller, NULL, binding) : SALTS_EINVAL;
 }
 
 int chttp_application_asset_invoke(void *self, const chttp_invocation *invocation) {

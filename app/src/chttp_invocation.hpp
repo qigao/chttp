@@ -35,5 +35,10 @@ int sink_write(void *user, const void *data, size_t size) noexcept {
   try { return Write(user, data, size); }
   catch (...) { return SALTS_EIO; }
 }
+template<chttp_application_websocket_event_fn Event>
+int websocket_event(void *self, const chttp_application_websocket_event *event) noexcept {
+  try { return Event(self, event); }
+  catch (...) { return SALTS_EIO; }
+}
 }
 #endif

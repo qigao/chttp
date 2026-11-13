@@ -156,7 +156,7 @@ int chttp_server_websocket_route_register(chttp_server_impl *server,
   size_t output_bytes;
   int status;
   if (server == NULL || options == NULL || options->size != sizeof(*options) ||
-      options->on_open == NULL || options->on_event == NULL ||
+      options->on_open == NULL || (!options->on_event && !options->worker) ||
       (options->middleware_count != 0u && options->middleware == NULL))
     return SALTS_EINVAL;
   if (server->config.network.max_send_bytes <= CNET_WEBSOCKET_MAX_HEADER_BYTES)
@@ -185,7 +185,7 @@ int chttp_server_websocket_route_register(chttp_server_impl *server,
                                                .path = options->path,
                                                .middleware = options->middleware,
                                                .middleware_count = options->middleware_count,
-                                               .handler = chttp_server_websocket_upgrade_required};
+                                               .handler = chttp_server_websocket_upgrade_required, .operation = options->operation};
   status = chttp_server_route_register(server, &route_options);
   if (status != SALTS_OK) return status;
   route = &server->routes[server->route_count - 1u];
@@ -196,6 +196,7 @@ int chttp_server_websocket_route_register(chttp_server_impl *server,
   route->websocket_max_buffered_input_bytes = max_buffered_input_bytes;
   route->websocket_user = options->user;
   route->websocket = true;
+  route->worker_websocket = options->worker;
   return SALTS_OK;
 }
 

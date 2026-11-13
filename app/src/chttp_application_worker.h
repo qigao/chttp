@@ -73,6 +73,24 @@ typedef struct chttp_application_upload_binding {
   void (*cleanup)(void *, chttp_body_sink *, const chttp_application_work_outcome *);
 } chttp_application_upload_binding;
 
+static const cmeta_type_identity chttp_websocket_event_scope_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.websocket.event-scope");
+static const cmeta_type_desc chttp_websocket_event_scope_type = {"chttp_application_websocket_event",
+    sizeof(chttp_application_websocket_event), CMETA_ALIGNOF(chttp_application_websocket_event),
+    CMETA_T_OBJECT, NULL, NULL, &chttp_websocket_event_scope_identity};
+static const cmeta_type_desc chttp_websocket_event_scope_pointer = {"const chttp_application_websocket_event *",
+    sizeof(void *), CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_websocket_event_scope_type, NULL, NULL};
+#define CHTTP_WEBSOCKET_EVENT_ACTION(name_) \
+  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const chttp_application_websocket_event *, event, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_websocket_event_scope_pointer, CMETA_ABI_OBJECT_POINTER))
+typedef struct chttp_application_websocket_binding {
+  chttp_application_worker_binding controller;
+  const cmeta_function_abi_desc *event_abi;
+  chttp_application_websocket_event_fn event;
+  size_t event_capacity; /* Required; includes the running event. Close has its own reserved slot. */
+  size_t max_frame_bytes, max_message_bytes, max_buffered_input_bytes;
+} chttp_application_websocket_binding;
+
 typedef struct chttp_application_asset_policy_result {
   bool immutable;
   const char *etag;
@@ -128,6 +146,13 @@ int chttp_application_worker_mount(chttp_application *, const chttp_application_
  * preserve it through final action/terminal. All user stages run on workers.
  * The copied sink user is exposed only to the final streamed request view. */
 int chttp_application_worker_upload(chttp_application *, const chttp_application_upload_binding *);
+/* One canonical Bean, worker-only opening Invocation and serial event methods.
+ * Opening explicitly accepts or returns an ordinary buffered denial. Events
+ * have copied payload/request metadata, no mutable Session and callback-scoped
+ * views. Queue storage is charged to the shared retained budget at admission.
+ * after_completion joins native terminal, native producer retirement and every
+ * admitted event including Close; metadata/code borrow Application lifetime. */
+int chttp_application_worker_websocket(chttp_application *, const chttp_application_websocket_binding *);
 /* One private asset/SPA mount before start, using the same bounded Invocation
  * pool and entered hooks as Controllers. Descriptor/hook rows are copied;
  * strings/code/metadata borrow Application lifetime. Legacy mount callbacks and

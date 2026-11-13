@@ -35,6 +35,7 @@ typedef struct chttp_h2_server_stream {
   size_t body_size;
   size_t body_capacity;
   size_t worker_body_buffered, worker_body_credit;
+  size_t worker_ws_buffered, worker_ws_credit;
   size_t response_header_capacity;
   size_t websocket_output_capacity;
   size_t websocket_output_size;
@@ -323,6 +324,7 @@ static void chttp_h2_server_stream_reset(chttp_h2_server_stream *stream) {
   stream->header_count = 0u;
   stream->body_size = 0u;
   stream->worker_body_buffered = 0u; stream->worker_body_credit = 0u;
+  stream->worker_ws_buffered = 0u; stream->worker_ws_credit = 0u;
   stream->websocket_output_size = 0u;
   stream->stream_id = 0;
   stream->method = (chttp_method)0;
@@ -876,8 +878,7 @@ static int chttp_h2_server_websocket_status(chttp_h2_server_stream *stream,
   return SALTS_OK;
 }
 
-static int chttp_h2_server_websocket_accept(chttp_h2_server_stream *stream) {
-  chttp_server_response_builder *builder = &stream->request_state.response_builder;
+static int chttp_h2_server_websocket_accept(chttp_h2_server_stream *stream, chttp_server_response_builder *builder) {
   size_t header_count = 0u;
   size_t index;
   char date[CHTTP_SERVER_DATE_CAPACITY];
@@ -912,22 +913,10 @@ static int chttp_h2_server_websocket_accept(chttp_h2_server_stream *stream) {
   return chttp_server_websocket_peer_flush(&stream->websocket_peer);
 }
 
-static int chttp_h2_server_websocket_dispatch(chttp_h2_server_stream *stream) {
-  chttp_server_request_view request;
+static int chttp_h2_server_websocket_open(chttp_h2_server_stream *stream) {
+  chttp_server_request_view request = chttp_h2_server_request_view(stream);
   chttp_server_route_record *route;
   int status;
-  if (!stream->extended_connect || !stream->protocol_seen || !stream->websocket_version_seen ||
-      stream->content_length_seen || stream->body_size != 0u)
-    return SALTS_EPROTO;
-  request = chttp_h2_server_request_view(stream);
-  status = chttp_server_request_admit(&stream->request_state, &request, CHTTP_METHOD_GET);
-  if (status == SALTS_EPERM) {
-    chttp_server_response_builder_reset(&stream->request_state.response_builder);
-    status = chttp_server_request_rejection_response(&stream->request_state);
-    if (status == SALTS_OK) status = chttp_h2_server_submit_response(stream);
-    return status;
-  }
-  if (status != SALTS_OK) return status;
   route = stream->request_state.admitted_route;
   if (route == NULL || !route->websocket) return chttp_h2_server_websocket_status(stream, 404u);
   status =
@@ -944,6 +933,7 @@ static int chttp_h2_server_websocket_dispatch(chttp_h2_server_stream *stream) {
     chttp_server_websocket_peer_reset(&stream->websocket_peer);
     return chttp_h2_server_websocket_status(stream, 500u);
   }
+  if (stream->request_state.response_builder.deferred) return SALTS_OK;
   if (stream->request_state.response_builder.replied) {
     if (stream->request_state.response_builder.source_enabled) {
       chttp_server_response_builder_close_source(&stream->request_state.response_builder,
@@ -954,7 +944,64 @@ static int chttp_h2_server_websocket_dispatch(chttp_h2_server_stream *stream) {
     chttp_server_websocket_peer_reset(&stream->websocket_peer);
     return chttp_h2_server_submit_response(stream);
   }
-  return chttp_h2_server_websocket_accept(stream);
+  return chttp_h2_server_websocket_accept(stream, &stream->request_state.response_builder);
+}
+
+static int chttp_h2_server_websocket_dispatch(chttp_h2_server_stream *stream) {
+  if (!stream->extended_connect || !stream->protocol_seen || !stream->websocket_version_seen ||
+      stream->content_length_seen || stream->body_size != 0u) return SALTS_EPROTO;
+  chttp_server_deadline_start(&stream->request_state, stream->owner->connection->server->deadlines.body_ms);
+  chttp_server_request_view request = chttp_h2_server_request_view(stream);
+  int status = chttp_server_request_admit(&stream->request_state, &request, CHTTP_METHOD_GET);
+  if (status == CHTTP_SERVER_ADMISSION_PENDING) return SALTS_OK;
+  if (status == SALTS_EPERM) {
+    chttp_server_response_builder_reset(&stream->request_state.response_builder);
+    status = chttp_server_request_rejection_response(&stream->request_state);
+    return status == SALTS_OK ? chttp_h2_server_submit_response(stream) : status;
+  }
+  return status == SALTS_OK ? chttp_h2_server_websocket_open(stream) : status;
+}
+
+static bool chttp_h2_server_worker_ws(const chttp_h2_server_stream *stream) {
+  return stream->extended_connect && stream->request_state.admitted_route &&
+      stream->request_state.admitted_route->worker_websocket;
+}
+/* DATA is either raw queued input or fed input awaiting copied-event consumption.
+ * Partial frame/message assembly with no event is bounded by CNet and releases
+ * credit immediately, so a logical message larger than one window can complete. */
+static int chttp_h2_server_worker_ws_credit(chttp_h2_server_stream *stream, size_t bytes) {
+  if (!bytes) return SALTS_OK;
+  return chttp_h2_proto_consume_stream(stream->owner->protocol, stream->stream_id, bytes) == 0 &&
+      chttp_h2_proto_consume_connection(stream->owner->protocol, bytes) == 0 ? SALTS_OK : SALTS_EPROTO;
+}
+static int chttp_h2_server_worker_ws_discard(chttp_h2_server_stream *stream) {
+  const size_t bytes = stream->worker_ws_buffered + stream->worker_ws_credit;
+  stream->worker_ws_buffered = stream->worker_ws_credit = 0u;
+  return chttp_h2_server_worker_ws_credit(stream, bytes);
+}
+static int chttp_h2_server_worker_ws_progress(chttp_h2_server_stream *stream) {
+  chttp_server_websocket_peer *peer = &stream->websocket_peer;
+  if (!stream->active || stream->protocol_closed || !chttp_h2_server_worker_ws(stream)) return SALTS_OK;
+  int status = chttp_server_websocket_worker_status(peer);
+  if (status != SALTS_OK) return status;
+  if (peer->phase != CHTTP_SERVER_WEBSOCKET_OPEN || chttp_server_websocket_worker_pending(peer)) return SALTS_OK;
+  if (stream->worker_ws_credit) {
+    const size_t bytes = stream->worker_ws_credit; stream->worker_ws_credit = 0u;
+    status = chttp_h2_server_worker_ws_credit(stream, bytes);
+    if (status != SALTS_OK) return status;
+  }
+  if (stream->worker_ws_buffered) {
+    const size_t bytes = stream->worker_ws_buffered;
+    status = chttp_server_websocket_peer_feed(peer, stream->body, bytes);
+    if (status == SALTS_EBUSY) return SALTS_OK; /* no input accepted */
+    if (status != SALTS_OK) return status;
+    stream->worker_ws_buffered = 0u;
+    if (chttp_server_websocket_worker_pending(peer)) stream->worker_ws_credit = bytes;
+    else status = chttp_h2_server_worker_ws_credit(stream, bytes);
+  }
+  if (status == SALTS_OK && chttp_h2_proto_remote_end_stream(stream->owner->protocol, stream->stream_id) &&
+      !stream->worker_ws_buffered) chttp_server_websocket_peer_transport_closed(peer);
+  return status;
 }
 
 static int chttp_h2_server_dispatch(chttp_h2_server_stream *stream) {
@@ -1105,6 +1152,24 @@ static int chttp_h2_server_data(void *user, int32_t stream_id, const uint8_t *da
     chttp_server_request_body_close(&stream->request_state, SALTS_ETIMEDOUT);
     return chttp_h2_proto_submit_rst_stream(h2->protocol, stream_id, CHTTP_H2_ERR_CANCEL) == 0 ? 0 : -1;
   }
+  if (chttp_h2_server_worker_ws(stream) && !stream->response_submitted &&
+      stream->request_state.admission_rejected) {
+    return chttp_h2_server_worker_ws_credit(stream, size) == SALTS_OK ? 0 : -1;
+  }
+  if (chttp_h2_server_worker_ws(stream) &&
+      (stream->deferred_target.admission || stream->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_NONE)) {
+    const size_t limit = stream->request_state.admitted_route->websocket_max_buffered_input_bytes;
+    int status = stream->worker_ws_buffered > limit || size > limit - stream->worker_ws_buffered ? SALTS_ENOBUFS : SALTS_OK;
+    if (status == SALTS_OK && size) status = chttp_server_buffer_grow(h2->connection->server,
+        &stream->body, &stream->body_capacity, stream->worker_ws_buffered + size, limit, stream->worker_ws_buffered);
+    if (status == SALTS_OK) {
+      if (size) memcpy(stream->body + stream->worker_ws_buffered, data, size);
+      stream->worker_ws_buffered += size;
+      status = chttp_h2_server_worker_ws_progress(stream);
+    } else if (size && chttp_h2_proto_consume_connection(h2->protocol, size) != 0) return -1;
+    if (status == SALTS_OK) return 0;
+    return chttp_h2_proto_submit_rst_stream(h2->protocol, stream_id, CHTTP_H2_ERR_INTERNAL_ERROR) == 0 ? 0 : -1;
+  }
   if (stream->websocket_peer.phase != CHTTP_SERVER_WEBSOCKET_NONE) {
     int websocket_status = SALTS_OK;
     if (size != 0u)
@@ -1192,8 +1257,9 @@ static int chttp_h2_server_stream_close(void *user, int32_t stream_id, uint32_t 
   chttp_h2_server_stream *stream = chttp_h2_server_stream_find(h2, stream_id);
   uint_fast64_t token;
   if (stream == NULL) return 0;
-  const size_t credit = stream->worker_body_buffered + stream->worker_body_credit;
+  const size_t credit = stream->worker_body_buffered + stream->worker_body_credit + stream->worker_ws_buffered + stream->worker_ws_credit;
   stream->worker_body_buffered = 0u; stream->worker_body_credit = 0u;
+  stream->worker_ws_buffered = 0u; stream->worker_ws_credit = 0u;
   if (credit && chttp_h2_proto_consume_connection(h2->protocol, credit) != 0) return -1;
   if (error_code != 0u) {
     chttp_server_request_terminal_notify(&stream->request_state,
@@ -1419,7 +1485,12 @@ static int chttp_h2_server_websockets_drive(chttp_h2_server_connection *h2) {
     }
     if (stream->websocket_output_size == 0u && !stream->websocket_end_submitted) {
       status = chttp_server_websocket_peer_flush(&stream->websocket_peer);
-      if (status != SALTS_OK) return status;
+      if (status != SALTS_OK) {
+        if (!stream->websocket_peer.worker.retire) return status;
+        const int32_t id = stream->stream_id;
+        if (chttp_h2_proto_submit_rst_stream(h2->protocol, id, CHTTP_H2_ERR_INTERNAL_ERROR) != 0) return SALTS_EPROTO;
+        continue;
+      }
     }
     if (!stream->websocket_end_submitted && stream->websocket_output_size == 0u &&
         !chttp_h2_proto_stream_output_pending(h2->protocol, stream->stream_id) &&
@@ -1458,9 +1529,13 @@ static int chttp_h2_server_admission_ready(chttp_h2_server_stream *stream, uint_
   int status = canceled || chttp_server_deadline_expired(&stream->request_state) ? SALTS_ETIMEDOUT :
       chttp_server_request_admission_apply(&stream->request_state, result, &decision);
   if (status == SALTS_EPERM) {
+    const int discarded = chttp_h2_server_worker_ws_discard(stream);
+    if (discarded != SALTS_OK) return discarded;
     chttp_server_response_builder_reset(&stream->request_state.response_builder);
     status = chttp_server_request_rejection_response(&stream->request_state);
     if (status == SALTS_OK) status = chttp_h2_server_submit_response(stream);
+  } else if (status == SALTS_OK && stream->extended_connect) {
+    status = chttp_h2_server_websocket_open(stream);
   } else if (status == SALTS_OK) {
     chttp_server_request_view request = chttp_h2_server_request_view(stream);
     request.body = NULL; request.body_size = 0u;
@@ -1491,8 +1566,12 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
   for (index = 0u; index < h2->stream_capacity; ++index) {
     chttp_h2_server_stream *stream = &h2->streams[index];
     const bool worker_body = chttp_h2_server_worker_body(stream);
+    const bool worker_ws = stream->active && chttp_h2_server_worker_ws(stream);
+    const int ws_status = chttp_h2_server_worker_ws_progress(stream);
+    if (ws_status != SALTS_OK && chttp_h2_proto_submit_rst_stream(h2->protocol, stream->stream_id,
+        CHTTP_H2_ERR_INTERNAL_ERROR) != 0) return SALTS_EPROTO;
     if (chttp_h2_server_worker_body_progress(stream) != 0) return SALTS_EPROTO;
-    if (worker_body) {
+    if (worker_body || worker_ws) {
       int flushed = chttp_h2_server_connection_flush(h2);
       if (flushed == SALTS_OK && h2->connection->outbound_size && !h2->connection->writing)
         flushed = chttp_server_send_pending(h2->connection);
@@ -1541,7 +1620,8 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
     }
     if (state != CHTTP_SERVER_DEFERRED_READY) continue;
     stream->request_state.deadline_ms = 0;
-    status = chttp_server_deferred_file_prepare(&stream->deferred_target);
+    const bool websocket = stream->deferred_target.websocket;
+    status = websocket ? SALTS_OK : chttp_server_deferred_file_prepare(&stream->deferred_target);
     if (status == SALTS_OK)
       status = chttp_session_request_finish_deferred(&stream->request_state,
           &stream->deferred_response);
@@ -1549,8 +1629,15 @@ int chttp_h2_server_connection_deferred_progress(chttp_h2_server_connection *h2)
                           chttp_server_deferred_token(chttp_server_deferred_token_generation(token),
                                                       CHTTP_SERVER_DEFERRED_IDLE),
                           memory_order_release);
-    if (status == SALTS_OK)
-      status = chttp_h2_server_submit_response_builder(stream, &stream->deferred_builder);
+    if (status == SALTS_OK && websocket && stream->deferred_target.websocket_accept)
+      status = chttp_h2_server_websocket_accept(stream, &stream->deferred_builder);
+    else if (status == SALTS_OK) {
+      if (websocket) {
+        status = chttp_h2_server_worker_ws_discard(stream);
+        chttp_server_websocket_peer_reset(&stream->websocket_peer);
+      }
+      if (status == SALTS_OK) status = chttp_h2_server_submit_response_builder(stream, &stream->deferred_builder);
+    }
     if (status != SALTS_OK) {
       chttp_h2_proto *protocol = h2->protocol;
       const int32_t stream_id = stream->stream_id;
