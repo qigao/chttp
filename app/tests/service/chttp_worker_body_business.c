@@ -12,3 +12,9 @@ int databind_11_BodyIngress_5_Probe_4_Echo(const Request_t *request, Response_t 
   response->payload.note = text;
   return 0;
 }
+
+int databind_11_BodyIngress_8_RawProbe_4_Size(const BinaryRequest_t *request, Length_t *response) {
+  if (!request || !response) return -1;
+  response->value = stl_byte_buffer_size(&request->payload.data);
+  return 0;
+}

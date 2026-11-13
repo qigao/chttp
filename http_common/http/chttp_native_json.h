@@ -118,6 +118,28 @@ failed:
   return status;
 }
 
+/* Called only after MessagePlan verifies this finite native/schema graph.
+ * This ingress slice admits scalar/string/enum/record fields. Bytes, container
+ * and variant inputs need their own complete projection contract. */
+static inline bool chttp_native_json_input_shape_supported(const cmeta_data_desc *data) {
+  switch (data->kind) {
+  case CMETA_DATA_BOOL:
+  case CMETA_DATA_SINT:
+  case CMETA_DATA_UINT:
+  case CMETA_DATA_FLOAT:
+  case CMETA_DATA_STRING:
+  case CMETA_DATA_ENUM:
+    return true;
+  case CMETA_DATA_STRUCT: {
+    const cmeta_data_struct_shape *shape = data->shape;
+    for (size_t i = 0u; i < shape->field_count; ++i)
+      if (!chttp_native_json_input_shape_supported(shape->fields[i].value)) return false;
+    return true;
+  }
+  default:
+    return false;
+  }
+}
 static inline DataBindStatus chttp_native_json_input_compile(DataBind *codec,
     const DataBindBindingPlan *binding, const DataBindServiceNativeBinding *native,
     const DataBindTransportPlan *transport, chttp_native_json_plan *out, DataBindError *error) {
@@ -131,7 +153,13 @@ static inline DataBindStatus chttp_native_json_input_compile(DataBind *codec,
     if (out->format || !entry.required || !data_bind_transport_plan_info(transport, &info) ||
         !info.ingress || !data_bind_format_plan_info(info.ingress, &format) || format.format != DATA_BIND_FORMAT_JSON)
       return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "One required record with declared JSON ingress is supported");
-    return chttp_native_json_projected_record_compile(codec, native->request->idl_type_name, &entry, out, error);
+    const DataBindStatus status = chttp_native_json_projected_record_compile(codec, native->request->idl_type_name, &entry, out, error);
+    if (status != DATA_BIND_OK) return status;
+    if (!chttp_native_json_input_shape_supported(entry.data)) {
+      data_bind_format_plan_free(out->format); *out = (chttp_native_json_plan){0};
+      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "JSON input requires scalar/string/enum/record fields");
+    }
+    return DATA_BIND_OK;
   }
   return DATA_BIND_OK;
 }

@@ -9,3 +9,7 @@ message Detail {
 message Request { Detail payload; @Min(1) uint32 tenant; }
 message Response { Detail payload; }
 service Probe { Echo: Request -> Response; }
+message BinaryBody { bytes data; }
+message BinaryRequest { BinaryBody payload; }
+message Length { uint64 value; }
+service RawProbe { Size: BinaryRequest -> Length; }

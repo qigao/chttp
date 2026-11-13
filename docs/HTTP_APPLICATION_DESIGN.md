@@ -399,15 +399,16 @@ keeps its existing H1 413 or H2 stream reset. No content sniffing is used.
 
 At mount, the supplied MethodPlan codec compiles an immutable payload FormatPlan
 and verifies its canonical native record. All schema/name work stays there;
-codec storage can be released before start. Optional/null overlays, collections
-as the projected root and multiple projected body fields remain rejected at
-mount until their complete representation contracts land. Nested non-identity
+codec storage can be released before start. Input fields admit scalar/string/
+enum/record shapes. Optional/null overlays, bytes, collections, variants and
+multiple projected body fields remain rejected at mount until their complete
+representation contracts land. Nested non-identity
 name mappings remain governed by the SDK's FormatPlan admission.
 
 The existing Invocation snapshot owns bounded body bytes. A worker opens one
 explicit JSON provider lease and a canonical-name reader only during input
 binding. BindingPlan owns native decoding, nested validation and rollback; DTO
-strings/bytes use their canonical owning providers. The reader closes before
+strings use their canonical owning providers. The reader closes before
 method/hooks execute, on both success and failure. The published JSON provider
 builds a transient DOM; its storage scales with the admitted body and active
 workers, separately from the native owned-byte budget. The token reader/DTO

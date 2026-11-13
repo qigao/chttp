@@ -321,4 +321,28 @@ spec("Application owned JSON body ingress") {
     check_equal(cmeta_plugin_registry_release(&fixture.registry, &fixture.discovery), CMETA_PLUGIN_OK);
     listen(); expect("/echo/42", BODY, "application/json", 200u);
   }
+  it("rejects a nested native bytes representation before publishing its route") {
+    DataBindNativeTypeBinding input = DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+    DataBindNativeTypeBinding output = DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+    DataBindServiceNativeBinding native = DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
+    DataBindError error = DATA_BIND_ERROR_INIT;
+    check_equal(databind_11_BodyIngress_8_RawProbe_4_Size__databind_native_binding(&input, &output, &native, &error), DATA_BIND_OK);
+    static const DataBindHttpFieldProjection fields[] = {
+        {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS, "payload", DATA_BIND_HTTP_BODY, "payload", 0u},
+        {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS, "value", DATA_BIND_HTTP_RESPONSE_BODY, "value", 0u}};
+    DataBindHttpProjectionConfig projection = DATA_BIND_HTTP_PROJECTION_CONFIG_INIT;
+    projection.method = "POST"; projection.route = "/raw"; projection.fields = fields; projection.field_count = 2u;
+    DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+    DataBindHttpMethodPlan *plan = NULL;
+    check_equal(data_bind_http_method_plan_compile_service(fixture.codec, "RawProbe", "Size", &projection, &native, &plan, &diagnostic), DATA_BIND_OK);
+    initialize(CHTTP_DISPATCH_INLINE);
+    const chttp_http_method method = {.plan = plan, .binding = &native,
+        .execution = databind_11_BodyIngress_8_RawProbe_4_Size__databind_execution()};
+    const int status = chttp_application_worker_mount_http(&fixture.app, "BodyComponent", cmeta_reflected_data(BodyController),
+        &method, fixture.codec, &fixture.hook, 1u);
+    /* Keep local native metadata live even if a regression publishes the route. */
+    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    data_bind_http_method_plan_free(plan);
+    check_equal(status, SALTS_ENOTSUP);
+  }
 }

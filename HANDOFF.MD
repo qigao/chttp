@@ -964,8 +964,14 @@
   accounting. An oversized transport body retains H1 413/H2 stream-reset behavior.
 - Full native-release-user graph build, 124/124 CTests (three benchmarks) and
   install passed: migration-worker-body-release-{build,ctest,install}.log.
-  Application-focused regression passed 11/11 suites; the new body suite has
+  Application-focused regression passed 11/11 suites; the initial body suite had
   27 cases across H1/H2 and DIRECT/CFlow/real Plugin execution, including
   malformed/unknown/duplicate/missing input, nested validation, exact uint64/
   embedded-NUL text, media/native budgets, one-slot reuse and blocked-method
   finite-close DTO/Bean/DSO retention. No public default switch is included.
+- Post-review regression exposed a native bytes field that mounted despite the
+  JSON reader having no bytes-token representation. Input mount now walks the
+  MessagePlan-admitted finite graph and permits only scalar/string/enum/record
+  fields; bytes, containers and variants await complete projection contracts.
+  Preserve migration-worker-body-byte-admission-cases.log (27 pass, 1 failure);
+  the corrected suite passes all 28 cases in worker-body-shape-cases.log.
