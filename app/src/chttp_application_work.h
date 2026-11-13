@@ -1,8 +1,8 @@
 #ifndef CHTTP_APPLICATION_WORK_H
 #define CHTTP_APPLICATION_WORK_H
 /* Private migration bridge. Not an installed Application execution mode.
- * Buffered requests only; Session state is a detached, staged snapshot. The public model switches after
- * Session/stream/WS and full response-terminal adapters pass their own tests. */
+ * Session state is a detached, staged snapshot. Public defaults switch only
+ * after the complete buffered/streaming/WS migration is qualified. */
 #include <http_server/http.h>
 #include <cmeta/ace_interceptor.h>
 #include "../../http_common/http/chttp_method_hooks.h"
@@ -47,6 +47,21 @@ typedef struct chttp_application_upload_callbacks {
   void (*cleanup)(void *, chttp_body_sink *, const chttp_application_work_outcome *);
   void *user;
 } chttp_application_upload_callbacks;
+
+/* Each event view expires when its worker method returns. The captured peer
+ * value uses the existing bounded, generation-checked send command API. */
+typedef struct chttp_application_websocket_event {
+  const chttp_server_request_view *request;
+  const chttp_server_websocket_session *peer;
+  const chttp_websocket_event *event;
+} chttp_application_websocket_event;
+typedef int (*chttp_application_websocket_event_fn)(void *, const chttp_application_websocket_event *);
+typedef struct chttp_application_websocket_callbacks {
+  chttp_application_websocket_event_fn event;
+  const cmeta_function_desc *operation;
+  void *user;
+  size_t capacity;
+} chttp_application_websocket_callbacks;
 typedef struct chttp_application_work_config {
   size_t workers;
   size_t capacity;
@@ -85,6 +100,10 @@ int chttp_application_work_admit(chttp_application_work *, const chttp_server_re
  * joins the real owner response terminal (success/reset/close). */
 int chttp_application_work_submit(chttp_application_work *, const chttp_server_request_view *,
     chttp_server_response *, const chttp_application_work_task *);
+int chttp_application_work_websocket_open(chttp_application_work *, chttp_websocket *,
+    const chttp_server_request_view *, chttp_server_response *, const chttp_application_work_task *,
+    const chttp_application_websocket_callbacks *);
+int chttp_application_work_websocket_accept(chttp_application_work_reply *);
 /* Private owner bookkeeping. Open copies headers/reserves one shared record;
  * positive WAIT accepts a whole copied chunk. Poll returns its consumption
  * result. Close seals body input; finish attaches final Session/response defer.

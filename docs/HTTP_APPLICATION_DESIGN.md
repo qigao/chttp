@@ -813,6 +813,36 @@ requests, WebSocket handshakes and deferred streaming bodies.
   fit the same retained budget before response defer. Failure aborts this request without an inline
   callback or second admission slot. Native cancellation never reclaims a
   running body callback; finite close retains its Bean and chunk until drain.
+  The private WebSocket adapter reserves one shared record for the peer's full
+  lifetime. Opening is an ordinary reflected worker Invocation with detached
+  Session and entered hooks, but requires an explicit accept decision or copied
+  buffered rejection. Native H1 Upgrade/H2 Extended CONNECT validation remains
+  before it. The owner consumes that decision to commit Session and serialize
+  the actual handshake; worker code never touches a native peer/builder.
+  Event methods receive copied, callback-scoped request/session-id/event views
+  and reflected operation metadata on the same shared pool, serially per peer.
+  Events have a configured count and per-message byte bound reserved up front,
+  with a separate terminal Close slot. Overflow rejects the unadmitted event and
+  fails that peer explicitly; already admitted events settle in order. H1 read
+  demand pauses while events are pending. H2 keeps bounded queued stream input
+  and returns credit after its associated events drain; incomplete frame/message
+  assembly remains with the bounded native protocol storage so it can progress.
+  Public generation-checked WebSocket command admission remains the send path;
+  acceptance is not a native-send or peer-receipt acknowledgement.
+  Native peer reset first clears its bookkeeping binding, then reports producer
+  retirement after CNet callbacks quiesce. Worker completion joins that retirement,
+  the real transport terminal, opening settlement and all admitted events/Close.
+  A native terminal alone cannot free a record still borrowed by a peer callback.
+  A FAILED CNet engine deliberately emits no Close callback; after producer
+  retirement the adapter completes its accepted-peer event lifetime with an
+  abnormal Close notification (1006), retaining the native/business error.
+  This notification never sends 1006 on the wire or resumes a failed peer.
+  Session admission gates retire after handshake publication, not peer lifetime;
+  events cannot mutate the sealed handshake Session. Denied openings have no
+  accepted-peer event lifetime. Cancellation/finite close retain all live frames
+  and Beans. No per-peer thread, new transport runtime, automatic retry or inline
+  user-callback fallback is introduced. Public endpoint migration remains gated
+  on the complete adapter's formal native/TSan qualification.
 - Existing low-level engine source-cleanup callbacks still run on their owner
   as nonblocking resource callbacks. The Application adapter records their
   terminal and schedules the user's worker notification; it does not change the

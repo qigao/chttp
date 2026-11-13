@@ -599,15 +599,18 @@ spec("CHTTP server request parser") {
       chttp_server_parser_destroy(&parser);
     }
   }
-  it("rejects asynchronous header waiting for an Upgrade before user delivery") {
+  it("waits before Upgrade delivery and stops the parser only after admission resumes") {
     const char *wire = "GET /gate HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
     chttp_server_parser_probe probe = {.wait_at_headers = 1};
     chttp_server_parser_config config = chttp_server_parser_test_config(&probe);
     config.on_headers = chttp_server_parser_test_headers; config.on_upgrade = chttp_server_parser_test_upgrade;
     chttp_server_parser parser = {0}; unsigned int code = 0u;
     check_equal(chttp_server_parser_init(&parser, &config), SALTS_OK);
-    check_equal(chttp_server_parser_test_execute(&parser, wire, &code), SALTS_ENOTSUP);
+    check_equal(chttp_server_parser_test_execute(&parser, wire, &code), SALTS_OK);
     check_equal(probe.requests, 0); check_equal(probe.upgrades, 0); check_equal(probe.body_opens, 0);
+    check_equal(chttp_server_parser_resume(&parser), SALTS_OK);
+    check_equal(probe.requests, 0); check_equal(probe.upgrades, 1); check_equal(probe.body_opens, 0);
+    check_equal(chttp_server_parser_execute(&parser, "frame", 5u, &code), SALTS_ESHUTDOWN);
     chttp_server_parser_destroy(&parser);
   }
   for (int callback = 0; callback < 2; ++callback) {

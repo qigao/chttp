@@ -455,8 +455,6 @@ int chttp_server_request_admission_apply(chttp_server_request_state *state, int 
 }
 static int chttp_server_admission_begin(chttp_server_request_state *state,
     const chttp_server_request_view *request) {
-  if (request->method == CHTTP_METHOD_CONNECT || chttp_server_request_header(request, "Upgrade"))
-    return SALTS_ENOTSUP;
   chttp_server_deferred_target *target = state->response_builder.deferred_target;
   uint_fast64_t token = atomic_load_explicit(target->token, memory_order_acquire);
   if (chttp_server_deferred_token_state(token) != CHTTP_SERVER_DEFERRED_IDLE) return SALTS_EBUSY;
@@ -753,6 +751,10 @@ static int chttp_server_connection_receive(chttp_server_connection *connection) 
   int status;
   if (connection == NULL || connection->close_after_write) return SALTS_ESHUTDOWN;
   if (connection->request_state.body_waiting) return SALTS_OK;
+  if (chttp_server_websocket_worker_pending(&connection->websocket_peer)) {
+    connection->websocket_peer.receive_paused = true;
+    return SALTS_OK;
+  }
   if (connection->websocket_peer.bridge.impl != NULL &&
       connection->websocket_peer.receive_pending) return SALTS_OK;
   if (connection->websocket_peer.bridge.impl != NULL &&
@@ -840,7 +842,9 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
     const chttp_server_deferred_state deferred_state = chttp_server_deferred_token_state(
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire));
     (void)chttp_server_admission_abandon(&connection->deferred_target);
-    chttp_server_request_terminal_notify(&connection->request_state, SALTS_ECONNRESET);
+    const int terminal_status = connection->websocket_peer.clean_close && state == CNET_CONNECTION_CLOSED &&
+        (!error || error->status == SALTS_OK) ? SALTS_OK : SALTS_ECONNRESET;
+    chttp_server_request_terminal_notify(&connection->request_state, terminal_status);
     chttp_server_websocket_transport_closed(connection);
     connection->active = false;
     chttp_server_manager_retire(connection->owner, connection);
@@ -1559,7 +1563,7 @@ int chttp_server_manager_progress(chttp_server_owner_lane *owner) {
   while (*next != NULL) {
     chttp_server_connection *connection = *next;
     if (connection->active ||
-        connection->websocket_peer.bridge.impl != NULL ||
+        chttp_server_websocket_peer_retained(&connection->websocket_peer) ||
         chttp_server_deferred_token_state(atomic_load_explicit(
             &connection->deferred_token, memory_order_acquire)) != CHTTP_SERVER_DEFERRED_IDLE ||
         chttp_h2_server_connection_has_deferred(connection->h2)) {
@@ -1591,7 +1595,7 @@ static chttp_server_connection *chttp_server_free_connection(
     return NULL;
   for (index = owner->connection_begin; index < end; ++index)
     if (!server->connections[index].active && server->connections[index].managed.slot == 0u &&
-        server->connections[index].websocket_peer.bridge.impl == NULL &&
+        !chttp_server_websocket_peer_retained(&server->connections[index].websocket_peer) &&
         chttp_server_deferred_token_state(atomic_load_explicit(
             &server->connections[index].deferred_token, memory_order_acquire)) ==
             CHTTP_SERVER_DEFERRED_IDLE &&
@@ -1858,6 +1862,15 @@ static int chttp_server_deferred_progress(
           memory_order_release);
       continue;
     }
+    if (connection->deferred_target.websocket) {
+      status = chttp_server_websocket_deferred_h1(connection, &connection->deferred_target);
+      connection->deferred_target.websocket = false;
+      atomic_store_explicit(&connection->deferred_token,
+          chttp_server_deferred_token(chttp_server_deferred_token_generation(deferred_token), CHTTP_SERVER_DEFERRED_IDLE), memory_order_release);
+      if (status != SALTS_OK) chttp_server_connection_close(connection);
+      else (void)chttp_server_send_pending(connection);
+      continue;
+    }
     status = chttp_server_deferred_file_prepare(&connection->deferred_target);
     if (status == SALTS_OK)
       status = chttp_session_request_finish_deferred(&connection->request_state,
@@ -1926,7 +1939,7 @@ int chttp_server_retry_pending(
     if (!connection->active) {
       /* Native terminal can precede the last logical callback. Do not recycle
        * this slot or its Manager context until the bridge actually releases. */
-      if (connection->websocket_peer.bridge.impl != NULL)
+      if (chttp_server_websocket_peer_retained(&connection->websocket_peer))
         chttp_server_websocket_reset(connection);
       continue;
     }
@@ -1963,7 +1976,7 @@ static bool chttp_server_connections_active(const chttp_server_impl *server,
     return false;
   for (index = owner->connection_begin; index < end; ++index)
     if (server->connections[index].active ||
-        server->connections[index].websocket_peer.bridge.impl != NULL ||
+        chttp_server_websocket_peer_retained(&server->connections[index].websocket_peer) ||
         chttp_server_deferred_token_state(atomic_load_explicit(
             &server->connections[index].deferred_token, memory_order_acquire)) !=
             CHTTP_SERVER_DEFERRED_IDLE ||

@@ -70,7 +70,7 @@ typedef struct chttp_server_parser_impl {
   bool body_sink_open;
   bool terminal;
   bool paused;
-  bool upgrade_stopped;
+  bool upgrade_stopped, upgrade_waiting;
   bool headers_stopped;
   bool headers_waiting, headers_message_complete, continue_pending, body_waiting;
   bool wire_previous_was_cr;
@@ -479,8 +479,6 @@ static int chttp_server_parser_on_headers_complete(llhttp_t *llparser) {
       return HPE_PAUSED;
     }
     if (action == CHTTP_SERVER_HEADERS_WAIT) {
-      if (llhttp_get_upgrade(llparser) != 0u)
-        return chttp_server_parser_callback_fail(parser, SALTS_ENOTSUP);
       parser->headers_waiting = true;
       parser->continue_pending = wants_continue;
       parser->paused = true;
@@ -644,6 +642,10 @@ static int chttp_server_parser_execute_llhttp(chttp_server_parser_impl *parser, 
   const llhttp_errno_t status = llhttp_execute(&parser->parser, data, size);
   if (status == HPE_OK) return SALTS_OK;
   if (status == HPE_PAUSED_UPGRADE && parser->upgrade_stopped) return SALTS_OK;
+  if (status == HPE_PAUSED_UPGRADE && parser->headers_waiting) {
+    parser->upgrade_waiting = true;
+    return SALTS_OK;
+  }
   if (status == HPE_PAUSED && parser->headers_stopped) return SALTS_OK;
   parser->terminal = true;
   if (parser->callback_status != SALTS_OK) {
@@ -886,6 +888,14 @@ int chttp_server_parser_resume(chttp_server_parser *parser) {
     impl->headers_waiting = false;
     int status = chttp_server_parser_after_headers(impl, &impl->parser, impl->continue_pending);
     impl->continue_pending = false;
+    if (status == 2 && impl->upgrade_stopped) {
+      impl->headers_message_complete = false;
+      return SALTS_OK;
+    }
+    if (status == 0 && impl->upgrade_waiting) {
+      llhttp_resume_after_upgrade(&impl->parser);
+      impl->upgrade_waiting = false;
+    }
     if (status == 0 && impl->headers_message_complete) {
       impl->headers_message_complete = false;
       status = chttp_server_parser_finish_message(impl);
@@ -910,6 +920,7 @@ int chttp_server_parser_reset(chttp_server_parser *parser) {
   impl->terminal = false;
   impl->paused = false;
   impl->upgrade_stopped = false;
+  impl->upgrade_waiting = false;
   impl->headers_stopped = false;
   impl->headers_waiting = false;
   impl->body_waiting = false;

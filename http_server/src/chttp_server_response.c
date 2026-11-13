@@ -356,6 +356,8 @@ static int response_defer(chttp_server_response *response,
   chttp_server_response_builder_reset(target->response_builder);
   target->file = (chttp_server_deferred_file){0};
   target->admission = false;
+  target->websocket = target->request_state->admitted_route && target->request_state->admitted_route->worker_websocket;
+  target->websocket_accept = false;
   target->request = *builder->request;
   target->request.target = NULL;
   target->request.path = NULL;
@@ -409,6 +411,7 @@ static int deferred_headers(chttp_server_deferred_target *target,
   int status = SALTS_OK;
   chttp_server_response_builder_reset(target->response_builder);
   target->file = (chttp_server_deferred_file){0};
+  target->websocket_accept = false;
   for (size_t i = 0u; status == SALTS_OK && i < base->header_count; ++i)
     status = chttp_server_response_set_header(target->response, base->headers[i].name, base->headers[i].value);
   for (size_t i = 0u; status == SALTS_OK && i < count; ++i)
@@ -447,6 +450,22 @@ int chttp_server_deferred_response_source(chttp_server_deferred *deferred, unsig
     return status;
   }
   target->response_builder->worker_source_ready = source->ready;
+  chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_READY);
+  return SALTS_OK;
+}
+int chttp_server_deferred_websocket_accept(chttp_server_deferred *deferred, const chttp_header *headers, size_t count) {
+  if (!deferred || !deferred->impl || !deferred->generation || (count && !headers)) return SALTS_EINVAL;
+  chttp_server_deferred_target *target = deferred->impl;
+  if (!target->websocket) return SALTS_ENOTSUP;
+  int status = chttp_server_deferred_claim(target->token, deferred->generation);
+  if (status != SALTS_OK) return status;
+  status = deferred_headers(target, headers, count);
+  if (status != SALTS_OK) {
+    atomic_store_explicit(target->token,
+        chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_PENDING), memory_order_release);
+    return status;
+  }
+  target->websocket_accept = true;
   chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_READY);
   return SALTS_OK;
 }
@@ -806,7 +825,8 @@ int chttp_server_response_observe(chttp_server_response *response,
   if (ticket->owner) return SALTS_EALREADY;
   chttp_server_response_builder *builder = response->impl;
   if (!builder->request_state || !builder->request || builder->source_enabled ||
-      builder->request->method == CHTTP_METHOD_CONNECT) return SALTS_ENOTSUP;
+      (builder->request->method == CHTTP_METHOD_CONNECT &&
+       (!builder->request_state->admitted_route || !builder->request_state->admitted_route->worker_websocket))) return SALTS_ENOTSUP;
   if (builder->replied || builder->deferred || builder->request_state->terminal)
     return SALTS_EALREADY;
   ticket->stream_id = 0;

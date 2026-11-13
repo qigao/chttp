@@ -71,6 +71,8 @@ struct InvocationCppContext {
   int source_unwound = 0, source_closed = 0;
   bool upload = false, upload_worker = false;
   int upload_failure = 0, upload_open_unwound = 0, upload_write_unwound = 0, upload_closed = 0, upload_cleaned = 0;
+  bool websocket_event_fail = false;
+  int websocket_unwound = 0, websocket_closed = 0;
   unsigned int code = 0;
 };
 struct InvocationCppController {
@@ -84,6 +86,58 @@ CHTTP_INVOCATION_ACTION(cpp_invocation);
 CHTTP_ADMISSION_ACTION(cpp_admission);
 CHTTP_ASSET_POLICY_ACTION(cpp_asset_policy);
 CHTTP_UPLOAD_OPEN_ACTION(cpp_upload_open);
+CHTTP_INVOCATION_ACTION(cpp_ws_open);
+CHTTP_WEBSOCKET_EVENT_ACTION(cpp_ws_event);
+int cpp_ws_open(void *self, const chttp_invocation *invocation) {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  struct Scope { ~Scope() noexcept { ++unwound; } } scope;
+  context.worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  if (context.fail) throw std::runtime_error("WS opening failure");
+  return chttp_invocation_websocket_accept(invocation);
+}
+int cpp_ws_event(void *self, const chttp_application_websocket_event *scope) {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  context.worker = context.worker && chttp_application_worker_current(context.app) && !scope->request->session;
+  if (scope->event->kind == CHTTP_WEBSOCKET_EVENT_CLOSE) { ++context.websocket_closed; return SALTS_OK; }
+  struct Scope { int& count; ~Scope() noexcept { ++count; } } unwind{context.websocket_unwound};
+  if (context.websocket_event_fail) throw std::runtime_error("WS event failure");
+  return chttp_server_websocket_send_text(scope->peer, scope->event->data, scope->event->size);
+}
+static int cpp_ws_perform(chttp_application *app, InvocationCppContext& context) {
+  context.app = app;
+  const chttp_application_work_config limits{1u, 2u, 131072u, 128u, 1u, 32u};
+  int status = chttp_application_worker_prepare(app, &limits);
+  if (status != SALTS_OK) return status;
+  chttp_application_websocket_binding binding{};
+  binding.controller.component_id = "CppComponent"; binding.controller.receiver = cmeta_reflected_data(InvocationCppController);
+  binding.controller.method = CHTTP_METHOD_GET; binding.controller.path = "/cpp";
+  binding.controller.abi = FunctionAbi(cpp_ws_open); binding.controller.invoke = chttp::detail::invocation_action<cpp_ws_open>;
+  binding.event_abi = FunctionAbi(cpp_ws_event); binding.event = chttp::detail::websocket_event<cpp_ws_event>;
+  binding.event_capacity = 2u; binding.max_frame_bytes = binding.max_message_bytes = 4096u; binding.max_buffered_input_bytes = 8192u;
+  status = chttp_application_worker_websocket(app, &binding);
+  if (status == SALTS_OK) status = chttp_application_start(app);
+  uint16_t port = 0u; if (status == SALTS_OK) status = chttp_application_port(app, &port);
+  if (status != SALTS_OK) return status;
+  chttp_websocket_client_config config{}; config.size = sizeof(config); config.network = chttp_application_config_default().http.network;
+  config.max_frame_bytes = config.max_message_bytes = 4096u; config.max_buffered_input_bytes = 8192u;
+  config.max_handshake_header_bytes = 4096u; config.event_capacity = 4u;
+  chttp_websocket_client client{}; status = chttp_websocket_client_init(&client, &config);
+  if (status != SALTS_OK) return status;
+  char uri[96]; std::snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/cpp", unsigned(port));
+  chttp_websocket_connect_options options{}; options.size = sizeof(options); options.uri = uri;
+  options.timeout_ms = 5000u; options.protocol = context.protocol;
+  status = chttp_websocket_client_connect(&client, &options, &context.code);
+  if (status == SALTS_OK) status = chttp_websocket_client_send_text(&client, "42", 2u, 5000u);
+  chttp_websocket_event event{};
+  if (status == SALTS_OK) status = chttp_websocket_client_receive(&client, 5000u, &event);
+  if (status == SALTS_OK && !context.websocket_event_fail) {
+    if (event.kind != CHTTP_WEBSOCKET_EVENT_MESSAGE || event.size != 2u || std::memcmp(event.data, "42", 2u) != 0)
+      status = SALTS_EPROTO;
+    else status = chttp_websocket_client_close(&client, 1000u, nullptr, 0u, 5000u);
+  }
+  const int closed = chttp_websocket_client_destroy(&client, 5000u);
+  return status == SALTS_OK ? closed : status;
+}
 static int cpp_upload_write(void *user, const void *data, size_t size) {
   auto& context = *static_cast<InvocationCppContext*>(user);
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.upload_write_unwound};
@@ -228,6 +282,29 @@ static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 3; ++failure) {
+    it("contains WS opening/event exceptions and drains worker RAII before Bean destruction (protocol=%d failure=%d)", protocol, failure) {
+      InvocationCppContext context; context.fail = failure == 1; context.websocket_event_fail = failure == 2;
+      context.protocol = static_cast<chttp_protocol>(protocol); context.control = sync_thread_current_token();
+      auto factory = [&context](const cmeta_data_desc*, const void*, const salts_configurator_dependency*, size_t) {
+        return std::make_unique<InvocationCppController>(&context);
+      };
+      chttp::Bean<InvocationCppController, decltype(factory)> bean(cmeta_component_meta(CppComponent),
+          cmeta_reflected_data(InvocationCppController), factory);
+      const auto deployment = bean.deployment();
+      chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
+      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      config.controllers = &controller; config.controller_count = 1u;
+      chttp_application app{}; check_equal(chttp_application_init(&app, &config), SALTS_OK);
+      const int called = cpp_ws_perform(&app, context);
+      check_equal(chttp_application_close(&app, 5000u), SALTS_OK);
+      if (failure == 1) { check_not_equal(called, SALTS_OK); check_equal(context.code, 500u); }
+      else if (failure == 2) check_not_equal(called, SALTS_ETIMEDOUT);
+      else check_equal(called, SALTS_OK);
+      check_true(context.worker); check_equal(unwound, 1); check_equal(destroyed, 1);
+      check_equal(context.websocket_unwound, failure == 1 ? 0 : 1); check_equal(context.websocket_closed, failure == 1 ? 0 : 1);
+    }
+  }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 4; ++failure) {
     it("unwinds upload open/body/action on a worker before resource cleanup (protocol=%d failure=%d)", protocol, failure) {
       InvocationCppContext context; context.upload = true; context.upload_failure = failure; context.fail = failure == 3;

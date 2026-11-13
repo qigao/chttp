@@ -1,15 +1,18 @@
 #ifndef CHTTP_WEBSOCKET_SERVER_INTERNAL_H
 #define CHTTP_WEBSOCKET_SERVER_INTERNAL_H
 
-#include <http_server/http.h>
+#include "chttp_server_engine.h"
 #include <cnet/websocket.h>
 #include <cnet/websocket_transport.h>
+#include "chttp_websocket_handshake.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct chttp_server_impl chttp_server_impl;
+typedef struct chttp_server_connection chttp_server_connection;
+typedef struct chttp_server_deferred_target chttp_server_deferred_target;
 typedef struct chttp_server_request_state chttp_server_request_state;
 typedef struct chttp_server_route_record chttp_server_route_record;
 
@@ -22,6 +25,10 @@ typedef enum chttp_server_websocket_phase {
 typedef int (*chttp_server_websocket_write_fn)(void *transport, const uint8_t *data, size_t size);
 
 typedef struct chttp_server_websocket_peer {
+  chttp_server_worker_websocket worker;
+  int worker_error;
+  bool clean_close;
+  char accept[CHTTP_WEBSOCKET_ACCEPT_CAPACITY];
   cnet_websocket engine;
   cnet_websocket *session;
   cnet_websocket_transport bridge;
@@ -64,6 +71,10 @@ int chttp_server_websocket_peer_feed(chttp_server_websocket_peer *peer, const vo
 int chttp_server_websocket_peer_flush(chttp_server_websocket_peer *peer);
 void chttp_server_websocket_peer_transport_closed(chttp_server_websocket_peer *peer);
 bool chttp_server_websocket_peer_terminal(const chttp_server_websocket_peer *peer);
+bool chttp_server_websocket_worker_pending(const chttp_server_websocket_peer *);
+int chttp_server_websocket_worker_status(const chttp_server_websocket_peer *);
+bool chttp_server_websocket_peer_retained(const chttp_server_websocket_peer *);
+int chttp_server_websocket_deferred_h1(chttp_server_connection *, chttp_server_deferred_target *);
 
 int chttp_server_websocket_route_open(chttp_server_websocket_peer *peer,
                                       chttp_server_request_state *state,

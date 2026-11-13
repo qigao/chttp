@@ -79,6 +79,20 @@ int chttp_server_response_waker(chttp_server_response *, chttp_server_owner_wake
 int chttp_server_owner_waker_signal(const chttp_server_owner_waker *);
 int chttp_server_deferred_response_source(chttp_server_deferred *, unsigned int,
     const chttp_header *, size_t, const chttp_server_worker_source *);
+int chttp_server_deferred_websocket_accept(chttp_server_deferred *, const chttp_header *, size_t);
+/* Native-owned producer binding. These functions only copy/signal bookkeeping.
+ * retire is the last native use, after clearing the binding and CNet quiescence;
+ * it is independent of the response/peer transport terminal. */
+typedef struct chttp_server_worker_websocket {
+  int (*event)(void *, const chttp_websocket_event *);
+  bool (*pending)(void *);
+  int (*status)(void *);
+  void (*opened)(void *);
+  void (*retire)(void *);
+  void *user;
+} chttp_server_worker_websocket;
+int chttp_server_websocket_worker_capture(chttp_websocket *, chttp_server_websocket_session *, size_t *);
+int chttp_server_websocket_worker_bind(chttp_websocket *, const chttp_server_worker_websocket *);
 
 enum { CHTTP_SERVER_DATE_BYTES = 29, CHTTP_SERVER_DATE_CAPACITY = CHTTP_SERVER_DATE_BYTES + 1,
        CHTTP_SERVER_FILE_ETAG_CAPACITY = 80, CHTTP_SERVER_FILE_RANGE_CAPACITY = 96,
@@ -139,6 +153,8 @@ typedef struct chttp_server_websocket_options {
   chttp_websocket_open_fn on_open;
   chttp_websocket_event_fn on_event;
   void *user;
+  bool worker;
+  const cmeta_function_desc *operation;
 } chttp_server_websocket_options;
 
 int chttp_server_next_call(chttp_server_next *next);

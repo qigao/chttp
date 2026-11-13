@@ -48,6 +48,9 @@ int chttp_invocation_cancelled(const chttp_invocation *, bool *);
 /* Same bounded copied draft/status/content-type contract as the worker engine.
  * EALREADY after sealing; EMSGSIZE leaves the draft unsealed and reusable. */
 int chttp_invocation_respond(const chttp_invocation *, unsigned int, const char *, const void *, size_t);
+/* Opening-only explicit acceptance. Normal buffered respond() rejects the
+ * upgrade. Session intents and entered hooks settle before native publication. */
+int chttp_invocation_websocket_accept(const chttp_invocation *);
 /* Copied case-insensitive upsert; valid through entered hook unwind, including
  * after respond(). Count/byte exhaustion returns ENOBUFS without mutation;
  * reserved transport fields return EPERM, invalid fields EINVAL. Content-Type

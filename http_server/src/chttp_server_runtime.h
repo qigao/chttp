@@ -74,6 +74,7 @@ typedef struct chttp_server_route_record {
   size_t websocket_max_buffered_input_bytes;
   void *websocket_user;
   bool websocket;
+  bool worker_websocket;
   bool dynamic;
 } chttp_server_route_record;
 
@@ -244,6 +245,7 @@ struct chttp_server_deferred_target {
   chttp_server_deferred_kind kind;
   chttp_server_deferred_file file;
   bool admission;
+  bool websocket, websocket_accept;
   atomic_bool admission_canceled;
   int admission_status;
   chttp_server_admission_result admission_result;
