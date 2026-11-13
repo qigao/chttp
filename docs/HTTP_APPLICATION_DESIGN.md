@@ -254,7 +254,8 @@ protocol conformance tests, not an alternative public programming model.
 Build the complete graph and run formal CTest with the existing user preset;
 installation uses the project's normal install step. No separate consumer or
 smoke project is introduced. CI qualifies all existing OS/compiler/sanitizer
-matrix configurations, including ASan/UBSan and TSan. Actual run results belong
+matrix configurations and its TSan profile. ASan/UBSan require separate
+configured runs. Actual run results belong
 in the PR; this design does not claim an unexecuted check passed.
 
 ## Cooperative await extension
