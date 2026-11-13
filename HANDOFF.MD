@@ -1046,3 +1046,11 @@
   build/migration-public-entry-verified-full.log. Initial failed migration
   regressions remain in their original build logs; no runtime fallback or
   TinyTest modification was introduced.
+- CI run 105's GCC profile exposed a one-record fixture race in sequential
+  JSON conversion cases: client receipt/destroy is not the Server terminal or
+  completion-finalizer join, so the following request can correctly get 503.
+  The sequential expect helper now waits within its existing 5-second bound
+  for public worker stats pending/retained_bytes == 0 before the next request.
+  This checks rollback release without changing runtime capacity, adding a
+  request retry or weakening native lifetime. Original failed job 131763092027
+  remains on run 43388598632; do not rerun that unchanged job.

@@ -155,6 +155,19 @@ static void expect(const char *target, const char *body, const char *media, unsi
     check_equal(response.body, body, response.body_size);
   }
   chttp_response_destroy(&response);
+  /* Client receipt/destruction does not join the Server's native terminal or
+   * worker finalizer. This fixture has one record: settle it before testing
+   * the next conversion, and prove the rollback released its reservation. */
+  const uint64_t began = monotonic_ms();
+  chttp_worker_stats stats = {0};
+  for (;;) {
+    check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK);
+    check_equal(stats.publication_status, SALTS_OK);
+    if (!stats.pending || monotonic_ms() - began >= 5000u) break;
+    sleep_ms(1u);
+  }
+  check_equal(stats.pending, 0u);
+  check_equal(stats.retained_bytes, 0u);
 }
 static size_t leases(void) {
   cmeta_plugin_lifecycle_info info = {0};
