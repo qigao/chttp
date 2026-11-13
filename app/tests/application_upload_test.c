@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include <threads/threads.h>
@@ -28,8 +28,8 @@ typedef struct UploadBean { int marker; } UploadBean;
 cmeta_reflect_data(UploadBean, "test.UploadBean", cmeta_field(int, marker));
 cmeta_component_empty(UploadComponent);
 CHTTP_UPLOAD_OPEN_ACTION(upload_open);
-CHTTP_INVOCATION_ACTION(upload_action);
-CHTTP_INVOCATION_ACTION(upload_session);
+CHTTP_ACTION(upload_action);
+CHTTP_ACTION(upload_session);
 CHTTP_ADMISSION_ACTION(upload_admit);
 typedef struct upload_resource {
   chttp_web_upload_request multipart; /* First member shares the sink-user address. */
@@ -90,7 +90,7 @@ int upload_admit(void *self, const chttp_server_request_view *request, chttp_ser
   sync_mutex_unlock(&uploads.mutex);
   *out = (chttp_server_admission_result){0}; return SALTS_OK;
 }
-static void upload_worker(void) { if (!chttp_application_worker_current(&uploads.app)) atomic_fetch_add(&uploads.invalid, 1); }
+static void upload_worker(void) { if (!chttp_application_is_worker(&uploads.app)) atomic_fetch_add(&uploads.invalid, 1); }
 static void upload_destroy(void *user, void *object) { (void)user; ++uploads.destroyed; free(object); }
 static const cmeta_object_lifecycle upload_lifecycle = {sizeof(upload_lifecycle), NULL, NULL, NULL, upload_destroy};
 static cmeta_status upload_create(void *user, const cmeta_data_desc *data, const void *config,
@@ -205,7 +205,8 @@ static void upload_after(void *self, const chttp_invocation *invocation, const c
 int upload_action(void *self, const chttp_invocation *invocation) {
   upload_worker(); const chttp_server_request_view *request = chttp_invocation_request(invocation);
   upload_resource *resource = request ? request->body_sink_user : NULL;
-  if (!resource || resource->bean != self || !resource->closed || !request->body_streamed || request->body || request->session || request->body_size != resource->bytes)
+  if (!resource || resource->bean != self || !resource->closed || !request->body_streamed || request->body ||
+      request->session != chttp_invocation_session(invocation) || request->body_size != resource->bytes)
     return SALTS_EPROTO;
   if (uploads.expect_trailer) {
     const char *proof = chttp_server_request_header(request, "X-Upload-Proof");
@@ -233,8 +234,9 @@ int upload_session(void *self, const chttp_invocation *invocation) {
   return chttp_invocation_respond(invocation, 200u, "text/plain", token, strlen(token));
 }
 static void upload_start(void) {
+  uploads.config.workers = uploads.limits;
   check_equal(chttp_application_init(&uploads.app, &uploads.config), SALTS_OK);
-  check_equal(chttp_application_worker_prepare(&uploads.app, &uploads.limits), SALTS_OK);
+
   if (uploads.admission) {
     const chttp_application_admission_binding binding = {"UploadComponent", cmeta_reflected_data(UploadBean), FunctionAbi(upload_admit), upload_admit};
     check_equal(chttp_application_worker_admission(&uploads.app, &binding), SALTS_OK);
@@ -497,8 +499,9 @@ spec("Application worker uploads") {
   }
   }
   it("validates the body ABI and canonical Bean before publishing a route") {
+    uploads.config.workers = uploads.limits;
     check_equal(chttp_application_init(&uploads.app, &uploads.config), SALTS_OK);
-    check_equal(chttp_application_worker_prepare(&uploads.app, &uploads.limits), SALTS_OK);
+
     check_true(cmeta_function_abi_desc_valid(FunctionAbi(upload_open)));
     uploads.binding.open_abi = FunctionAbi(upload_action); check_equal(chttp_application_worker_upload(&uploads.app, &uploads.binding), SALTS_EINVAL);
     uploads.binding.open_abi = FunctionAbi(upload_open);

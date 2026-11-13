@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include <threads/threads.h>
@@ -12,7 +12,7 @@
 typedef struct StreamController { int marker; } StreamController;
 cmeta_reflect_data(StreamController, "test.StreamController", cmeta_field(int, marker));
 cmeta_component_empty(StreamComponent);
-CHTTP_INVOCATION_ACTION(stream_action);
+CHTTP_ACTION(stream_action);
 typedef struct stream_call {
   chttp_protocol protocol;
   const char *path;
@@ -60,7 +60,7 @@ static cmeta_status stream_create(void *user, const cmeta_data_desc *data, const
   return status;
 }
 static void stream_worker(void) {
-  if (!chttp_application_worker_current(&streams.app)) atomic_fetch_add(&streams.invalid, 1);
+  if (!chttp_application_is_worker(&streams.app)) atomic_fetch_add(&streams.invalid, 1);
 }
 static int stream_read(void *user, void *buffer, size_t capacity, size_t *out) {
   if (user != &streams) atomic_fetch_add(&streams.invalid, 1);
@@ -120,8 +120,9 @@ int stream_action(void *self, const chttp_invocation *invocation) {
   return status == SALTS_OK && streams.fail_business ? SALTS_EPERM : status;
 }
 static void stream_start(void) {
+  streams.config.workers = streams.limits;
   check_equal(chttp_application_init(&streams.app, &streams.config), SALTS_OK);
-  check_equal(chttp_application_worker_prepare(&streams.app, &streams.limits), SALTS_OK);
+
   check_equal(chttp_application_worker_mount(&streams.app, &streams.binding), SALTS_OK);
   check_equal(chttp_application_start(&streams.app), SALTS_OK);
   uint16_t port = 0u; check_equal(chttp_application_port(&streams.app, &port), SALTS_OK);

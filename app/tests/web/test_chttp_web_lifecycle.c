@@ -1,3 +1,4 @@
+#include "../../src/chttp_web_engine.h"
 #include "../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 #include "tinytest.h"
@@ -153,7 +154,7 @@ static int web_lifecycle_handler(
     return SALTS_EINVAL;
 
   model.value = vstr_from_cstr(value);
-  status = chttp_web_render_response(
+  status = chttp_web_engine_render_response(
       app->renderer,
       response,
       "page.html",

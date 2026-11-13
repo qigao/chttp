@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include "chttp_service_plugin_probe.h"
 #include "chttp_worker_output.service_native.h"
 #include "chttp_worker_output_native.h"
@@ -81,7 +81,7 @@ static cmeta_status create(void *context, const cmeta_data_desc *data, const voi
   return status;
 }
 static bool observe(void *context) {
-  if (context != &fixture || !chttp_application_worker_current(&fixture.app)) atomic_fetch_add(&fixture.invalid, 1);
+  if (context != &fixture || !chttp_application_is_worker(&fixture.app)) atomic_fetch_add(&fixture.invalid, 1);
   sync_mutex_lock(&fixture.mutex); ++fixture.calls; sync_cond_broadcast(&fixture.changed);
   while (fixture.block && !fixture.release) sync_cond_wait(&fixture.changed, &fixture.mutex);
   sync_mutex_unlock(&fixture.mutex);
@@ -89,7 +89,7 @@ static bool observe(void *context) {
 }
 static cmeta_status before(void *self, const chttp_method_call *call, bool *proceed) {
   (void)proceed;
-  if (!self || ((OutputController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((OutputController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !call->input || !call->http || call->http->session) {
     atomic_fetch_add(&fixture.invalid, 1); return CMETA_TYPE_MISMATCH;
   }
@@ -98,14 +98,14 @@ static cmeta_status before(void *self, const chttp_method_call *call, bool *proc
 static void after(void *self, const chttp_method_call *call, const chttp_method_result *result) {
   (void)self; (void)call;
   const Envelope_t *output = result->output ? result->output->params[1] : NULL;
-  if (!chttp_application_worker_current(&fixture.app) || !output || output->payload.id != UINT64_MAX ||
+  if (!chttp_application_is_worker(&fixture.app) || !output || output->payload.id != UINT64_MAX ||
       !output->payload.note || result->outcome.kind != DATA_BIND_BINDING_OUTCOME_SUCCESS)
     atomic_fetch_add(&fixture.invalid, 1);
   atomic_fetch_add(&fixture.after, 1);
 }
 static void on_error(void *self, const chttp_method_call *call, cmeta_status status) {
   (void)self;
-  if (!chttp_application_worker_current(&fixture.app) || status == CMETA_OK ||
+  if (!chttp_application_is_worker(&fixture.app) || status == CMETA_OK ||
       (!call->result->invoked && !call->result->rejected && !fixture.fail_middle))
     atomic_fetch_add(&fixture.invalid, 1);
   if (call->result->outcome.kind == DATA_BIND_BINDING_OUTCOME_TYPED_ERROR) {
@@ -118,7 +118,7 @@ static void on_error(void *self, const chttp_method_call *call, cmeta_status sta
   atomic_fetch_add(&fixture.errors, 1);
 }
 static void completion_observe(int hook, void *self, const chttp_method_completion *completion) {
-  if (!self || ((OutputController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((OutputController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !completion->http || completion->http->session || !completion->http->target || !completion->http->path ||
       !cmeta_function_desc_valid(completion->method.operation)) atomic_fetch_add(&fixture.invalid, 1);
   const chttp_method_terminal *method = &completion->method;
@@ -234,8 +234,9 @@ static void initialize(int mode) {
     fixture.http[0].dispatch = CHTTP_DISPATCH_CFLOW;
     fixture.http[0].execution = NULL; fixture.http[0].projection = &fixture.projection;
   }
+  fixture.config.workers = fixture.work_config;
   check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-  check_equal(chttp_application_worker_prepare(&fixture.app, &fixture.work_config), SALTS_OK);
+
 }
 static int mount_http(size_t i, DataBind *codec) {
   return chttp_application_worker_mount_http(&fixture.app, "OutputComponent",
@@ -365,7 +366,7 @@ spec("Application bounded structured output") {
     sync_cond_destroy(&fixture.changed); sync_mutex_destroy(&fixture.mutex);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
-    static const int modes[] = {CHTTP_DISPATCH_INLINE, CHTTP_DISPATCH_CFLOW, CHTTP_DISPATCH_PLUGIN};
+    static const int modes[] = {CHTTP_DISPATCH_DIRECT, CHTTP_DISPATCH_CFLOW, CHTTP_DISPATCH_PLUGIN};
     for (size_t m = 0u; m < sizeof(modes) / sizeof(modes[0]); ++m) {
       const int mode = modes[m];
       it("publishes owned record JSON with exact uint64 and escaped text (protocol=%d provider=%d)", protocol, mode) {
@@ -385,7 +386,7 @@ spec("Application bounded structured output") {
     }
     for (int plugin = 0; plugin <= 1; ++plugin) {
       it("maps typed error names and preserves structured RPC values (protocol=%d Plugin=%d)", protocol, plugin) {
-        fixture.protocol = (chttp_protocol)protocol; start(plugin ? CHTTP_DISPATCH_PLUGIN : CHTTP_DISPATCH_INLINE);
+        fixture.protocol = (chttp_protocol)protocol; start(plugin ? CHTTP_DISPATCH_PLUGIN : CHTTP_DISPATCH_DIRECT);
         chttp_response response = {0}; check_equal(request("/fault/1", NULL, &response), SALTS_OK); check_equal(response.status_code, 409u);
         check_equal(chttp_response_header(&response, "Content-Type"), "application/json");
         json_value_t *root = parse(&response); check_equal(json_number(json_object_get(root, "fault_code")), 77.0);
@@ -405,7 +406,7 @@ spec("Application bounded structured output") {
     it("aborts overflowing JSON and reuses the transaction on protocol %d", protocol) {
       fixture.protocol = (chttp_protocol)protocol;
       fixture.config.bindings.max_response_body_bytes = 128u; fixture.config.rpc.max_output_value_bytes = 128u;
-      start(CHTTP_DISPATCH_INLINE); chttp_response response = {0};
+      start(CHTTP_DISPATCH_DIRECT); chttp_response response = {0};
       check_equal(request("/value/2", NULL, &response), SALTS_OK); check_equal(response.status_code, 500u); chttp_response_destroy(&response);
       check_equal(request("/value/1", NULL, &response), SALTS_OK); check_equal(response.status_code, 200u); chttp_response_destroy(&response);
       check_equal(request("/rpc", "{\"jsonrpc\":\"2.0\",\"method\":\"Probe.Get\",\"params\":[2],\"id\":1}", &response), SALTS_OK);
@@ -431,7 +432,7 @@ spec("Application bounded structured output") {
         fixture.protocol = (chttp_protocol)protocol;
         fixture.config.bindings.max_response_body_bytes = sizeof(EXPECTED_JSON) - 1u - short_by;
         fixture.config.rpc.max_output_value_bytes = fixture.config.bindings.max_response_body_bytes;
-        start(CHTTP_DISPATCH_INLINE); chttp_response response = {0};
+        start(CHTTP_DISPATCH_DIRECT); chttp_response response = {0};
         check_equal(request("/value/1", NULL, &response), SALTS_OK);
         check_equal(response.status_code, short_by ? 500u : 200u); chttp_response_destroy(&response);
         check_equal(request("/rpc", "{\"jsonrpc\":\"2.0\",\"method\":\"Probe.Get\",\"params\":[1],\"id\":1}", &response), SALTS_OK);
@@ -467,7 +468,7 @@ spec("Application bounded structured output") {
       check_equal(atomic_load(&fixture.last_kind), (int)DATA_BIND_BINDING_OUTCOME_TYPED_ERROR);
     }
     it("keeps structured mixed batches sequential and notifications silent on protocol %d", protocol) {
-      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_INLINE);
+      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_DIRECT);
       chttp_response response = {0};
       check_equal(request("/rpc", "[{\"jsonrpc\":\"2.0\",\"method\":\"Probe.Get\",\"params\":[1],\"id\":7},"
           "{\"jsonrpc\":\"2.0\",\"method\":\"Probe.Fail\",\"params\":[1],\"id\":8},"
@@ -500,7 +501,7 @@ spec("Application bounded structured output") {
       it("notifies only entered hooks in reverse order (protocol=%d RPC=%d disposition=%d)", protocol, rpc, disposition) {
         fixture.protocol = (chttp_protocol)protocol; fixture.hook_count = 3u;
         fixture.reject_middle = disposition == 1; fixture.fail_middle = disposition == 2;
-        start(CHTTP_DISPATCH_INLINE); chttp_response response = {0};
+        start(CHTTP_DISPATCH_DIRECT); chttp_response response = {0};
         check_equal(request(rpc ? "/rpc" : "/value/1", rpc ?
             "{\"jsonrpc\":\"2.0\",\"method\":\"Probe.Get\",\"params\":[1],\"id\":11}" : NULL, &response), SALTS_OK);
         check_equal(response.status_code, rpc ? 200u : disposition == 1 ? 403u : disposition == 2 ? 500u : 200u);
@@ -525,7 +526,7 @@ spec("Application bounded structured output") {
       }
     }
     it("does not notify methods that failed ingress or never resolved on protocol %d", protocol) {
-      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_INLINE);
+      fixture.protocol = (chttp_protocol)protocol; start(CHTTP_DISPATCH_DIRECT);
       chttp_response response = {0};
       check_equal(request("/value/bad", NULL, &response), SALTS_OK); check_equal(response.status_code, 400u); chttp_response_destroy(&response);
       check_equal(request("/rpc", "[{\"jsonrpc\":\"2.0\",\"method\":\"Probe.Get\",\"params\":[],\"id\":1},"
@@ -618,7 +619,7 @@ spec("Application bounded structured output") {
   }
   for (int nullable = 0; nullable <= 1; ++nullable) {
     it("rejects undeclared native presence/null state before mounting (nullable=%d)", nullable) {
-      initialize(CHTTP_DISPATCH_INLINE);
+      initialize(CHTTP_DISPATCH_DIRECT);
       char schema[256];
       snprintf(schema, sizeof(schema), "schema Output [version(1)]; message Child { uint32 number; } "
           "message Detail { uint64 id; Child child; %s string note; } message Envelope { Detail payload; }",

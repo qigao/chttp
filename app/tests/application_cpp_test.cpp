@@ -1,6 +1,6 @@
 #include <chttp_app/application.hpp>
-#include "chttp_application_worker.h"
-#include "chttp_invocation.hpp"
+#include "chttp_application_registration.h"
+#include <chttp_app/invocation.hpp>
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include <tinytest.hpp>
@@ -51,7 +51,7 @@ template<class T> static void rejects_storage(const cmeta_data_desc *data) {
   check_equal(calls, 0); check_equal(destroyed, 0);
 }
 CHTTP_ACTION(cpp_throw);
-int cpp_throw(void*, const chttp_exchange*) {
+int cpp_throw(void*, const chttp_invocation*) {
   struct Scope { ~Scope() noexcept { ++unwound; } } scope;
   throw std::runtime_error("action failure");
 }
@@ -82,32 +82,34 @@ struct InvocationCppController {
   ~InvocationCppController() noexcept { ++destroyed; }
 };
 cmeta_reflect_data(InvocationCppController, "test.InvocationCppController", cmeta_field(int, value));
-CHTTP_INVOCATION_ACTION(cpp_invocation);
+CHTTP_ACTION(cpp_invocation);
 CHTTP_ADMISSION_ACTION(cpp_admission);
 CHTTP_ASSET_POLICY_ACTION(cpp_asset_policy);
 CHTTP_UPLOAD_OPEN_ACTION(cpp_upload_open);
-CHTTP_INVOCATION_ACTION(cpp_ws_open);
+CHTTP_ACTION(cpp_ws_open);
 CHTTP_WEBSOCKET_EVENT_ACTION(cpp_ws_event);
 int cpp_ws_open(void *self, const chttp_invocation *invocation) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
   struct Scope { ~Scope() noexcept { ++unwound; } } scope;
-  context.worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.worker = chttp_application_is_worker(context.app) && sync_thread_current_token() != context.control;
   if (context.fail) throw std::runtime_error("WS opening failure");
   return chttp_invocation_websocket_accept(invocation);
 }
 int cpp_ws_event(void *self, const chttp_application_websocket_event *scope) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
-  context.worker = context.worker && chttp_application_worker_current(context.app) && !scope->request->session;
+  context.worker = context.worker && chttp_application_is_worker(context.app) && !scope->request->session;
   if (scope->event->kind == CHTTP_WEBSOCKET_EVENT_CLOSE) { ++context.websocket_closed; return SALTS_OK; }
   struct Scope { int& count; ~Scope() noexcept { ++count; } } unwind{context.websocket_unwound};
   if (context.websocket_event_fail) throw std::runtime_error("WS event failure");
   return chttp_server_websocket_send_text(scope->peer, scope->event->data, scope->event->size);
 }
+static chttp_worker_config cpp_worker_limits(const InvocationCppContext& context) {
+  return {1u, 2u, context.upload ? 256u * 1024u : 8192u, context.asset_root ? 512u : 128u,
+      context.asset_root ? 4u : 1u, context.asset_root ? 256u : 32u};
+}
 static int cpp_ws_perform(chttp_application *app, InvocationCppContext& context) {
   context.app = app;
-  const chttp_application_work_config limits{1u, 2u, 131072u, 128u, 1u, 32u};
-  int status = chttp_application_worker_prepare(app, &limits);
-  if (status != SALTS_OK) return status;
+  int status = SALTS_OK;
   chttp_application_websocket_binding binding{};
   binding.controller.component_id = "CppComponent"; binding.controller.receiver = cmeta_reflected_data(InvocationCppController);
   binding.controller.method = CHTTP_METHOD_GET; binding.controller.path = "/cpp";
@@ -141,30 +143,30 @@ static int cpp_ws_perform(chttp_application *app, InvocationCppContext& context)
 static int cpp_upload_write(void *user, const void *data, size_t size) {
   auto& context = *static_cast<InvocationCppContext*>(user);
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.upload_write_unwound};
-  context.upload_worker = context.upload_worker && chttp_application_worker_current(context.app);
+  context.upload_worker = context.upload_worker && chttp_application_is_worker(context.app);
   if (context.upload_failure == 2) throw std::runtime_error("upload write failure");
   return size == 2u && std::memcmp(data, "42", 2u) == 0 ? SALTS_OK : SALTS_EPROTO;
 }
 int cpp_upload_open(void *self, const chttp_server_request_view *request, chttp_body_sink *sink) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.upload_open_unwound};
-  context.upload_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.upload_worker = chttp_application_is_worker(context.app) && sync_thread_current_token() != context.control;
   *sink = {chttp::detail::sink_write<cpp_upload_write>, &context};
   if (context.upload_failure == 1) throw std::runtime_error("upload open failure");
   return request && !request->session && !request->body && !request->body_size ? SALTS_OK : SALTS_EPROTO;
 }
 static void cpp_upload_close(void *self, chttp_body_sink*, int) noexcept {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
-  context.upload_worker = context.upload_worker && chttp_application_worker_current(context.app); ++context.upload_closed;
+  context.upload_worker = context.upload_worker && chttp_application_is_worker(context.app); ++context.upload_closed;
 }
 static void cpp_upload_cleanup(void *self, chttp_body_sink*, const chttp_application_work_outcome*) noexcept {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
-  context.upload_worker = context.upload_worker && chttp_application_worker_current(context.app); ++context.upload_cleaned;
+  context.upload_worker = context.upload_worker && chttp_application_is_worker(context.app); ++context.upload_cleaned;
 }
 static int cpp_source_read(void *user, void *buffer, size_t capacity, size_t *out) {
   auto& context = *static_cast<InvocationCppContext*>(user);
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.source_unwound};
-  context.source_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.source_worker = chttp_application_is_worker(context.app) && sync_thread_current_token() != context.control;
   if (capacity < 2u) return SALTS_EMSGSIZE;
   *out = context.source_unwound ? 0u : 2u;
   if (*out) std::memcpy(buffer, "42", 2u);
@@ -175,7 +177,7 @@ static void cpp_source_close(void *user, int) noexcept { ++static_cast<Invocatio
 int cpp_asset_policy(void *self, const char *path, chttp_application_asset_policy_result *result) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.asset_unwound};
-  context.asset_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.asset_worker = chttp_application_is_worker(context.app) && sync_thread_current_token() != context.control;
   *result = {true, "\"cpp-v1\""};
   if (context.asset_fail) throw std::runtime_error("asset policy failure");
   return path && std::strcmp(path, "answer.txt") == 0 ? SALTS_OK : SALTS_EPROTO;
@@ -183,7 +185,7 @@ int cpp_asset_policy(void *self, const char *path, chttp_application_asset_polic
 int cpp_admission(void *self, const chttp_server_request_view *request, chttp_server_admission_result *result) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.admission_unwound};
-  context.admission_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.admission_worker = chttp_application_is_worker(context.app) && sync_thread_current_token() != context.control;
   context.admission_values = request && !request->body && !request->body_size && !request->session &&
       request->path && std::strcmp(request->path, "/cpp") == 0;
   if (context.admission_fail) throw std::runtime_error("Admission failure");
@@ -193,7 +195,7 @@ int cpp_invocation(void *self, const chttp_invocation *invocation) {
   auto& controller = *static_cast<InvocationCppController*>(self);
   auto& context = *controller.call_context;
   struct Scope { ~Scope() noexcept { ++unwound; } } scope;
-  context.worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.worker = chttp_application_is_worker(context.app) && sync_thread_current_token() != context.control;
   context.reflected = cmeta_function_desc_equal(chttp_invocation_operation(invocation), FunctionAbi(cpp_invocation)->function);
   char field[] = "cpp";
   const int header_status = chttp_invocation_set_header(invocation, "X-Cpp", field);
@@ -212,13 +214,11 @@ int cpp_invocation(void *self, const chttp_invocation *invocation) {
   return chttp_invocation_respond(invocation, 200u, "text/plain", "42", 2u);
 }
 static_assert(std::is_convertible_v<decltype(&cpp_invocation), chttp_invocation_action_fn>);
-static_assert(!std::is_convertible_v<decltype(&cpp_throw), chttp_invocation_action_fn>, "old Exchange native type must be rejected");
+static int cpp_wrong_native(void *, const chttp_server_request_view *) { return SALTS_OK; }
+static_assert(!std::is_convertible_v<decltype(&cpp_wrong_native), chttp_invocation_action_fn>);
 static int cpp_invocation_body(chttp_application *app, void *user) {
   auto& context = *static_cast<InvocationCppContext*>(user); context.app = app;
-  const chttp_application_work_config limits{1u, 2u, context.upload ? 256u * 1024u : 8192u, context.asset_root ? 512u : 128u,
-      context.asset_root ? 4u : 1u, context.asset_root ? 256u : 32u};
-  int status = chttp_application_worker_prepare(app, &limits);
-  if (status != SALTS_OK) return status;
+  int status = SALTS_OK;
   const chttp_application_admission_binding admission{"CppComponent", cmeta_reflected_data(InvocationCppController),
       FunctionAbi(cpp_admission), chttp::detail::admission_action<cpp_admission>};
   if (!context.asset_root) {
@@ -234,7 +234,7 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   }
   chttp_application_worker_binding binding{};
   binding.component_id = "CppComponent"; binding.receiver = cmeta_reflected_data(InvocationCppController);
-  binding.method = context.upload ? CHTTP_METHOD_POST : CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_throw);
+  binding.method = context.upload ? CHTTP_METHOD_POST : CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_admission);
   binding.invoke = chttp::detail::invocation_action<cpp_invocation>;
   context.legacy_rejected = chttp_application_worker_mount(app, &binding) == SALTS_EINVAL;
   if (!context.legacy_rejected) return SALTS_EPROTO;
@@ -293,8 +293,9 @@ spec("Application C++ RAII") {
           cmeta_reflected_data(InvocationCppController), factory);
       const auto deployment = bean.deployment();
       chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
-      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      auto config = chttp_application_config_default(); config.workers = cpp_worker_limits(context); config.components = &deployment; config.component_count = 1u;
       config.controllers = &controller; config.controller_count = 1u;
+      config.workers = {1u, 2u, 131072u, 128u, 1u, 32u};
       chttp_application app{}; check_equal(chttp_application_init(&app, &config), SALTS_OK);
       const int called = cpp_ws_perform(&app, context);
       check_equal(chttp_application_close(&app, 5000u), SALTS_OK);
@@ -316,7 +317,7 @@ spec("Application C++ RAII") {
           cmeta_reflected_data(InvocationCppController), factory);
       const auto deployment = bean.deployment();
       chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
-      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      auto config = chttp_application_config_default(); config.workers = cpp_worker_limits(context); config.components = &deployment; config.component_count = 1u;
       config.controllers = &controller; config.controller_count = 1u;
       chttp_application app{}; check_equal(chttp_application_init(&app, &config), SALTS_OK);
       const int called = cpp_invocation_body(&app, &context);
@@ -342,7 +343,7 @@ spec("Application C++ RAII") {
           cmeta_reflected_data(InvocationCppController), factory);
       const auto deployment = bean.deployment();
       chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
-      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      auto config = chttp_application_config_default(); config.workers = cpp_worker_limits(context); config.components = &deployment; config.component_count = 1u;
       config.controllers = &controller; config.controller_count = 1u;
       chttp_application app{};
       check_equal(chttp_application_init(&app, &config), SALTS_OK);
@@ -369,7 +370,7 @@ spec("Application C++ RAII") {
           cmeta_reflected_data(InvocationCppController), factory);
       const auto deployment = bean.deployment();
       chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
-      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      auto config = chttp_application_config_default(); config.workers = cpp_worker_limits(context); config.components = &deployment; config.component_count = 1u;
       config.controllers = &controller; config.controller_count = 1u;
       int operation = SALTS_EIO, closed = SALTS_EIO;
       {
@@ -398,7 +399,7 @@ spec("Application C++ RAII") {
           cmeta_reflected_data(InvocationCppController), factory);
       const auto deployment = bean.deployment();
       chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
-      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1;
+      auto config = chttp_application_config_default(); config.workers = cpp_worker_limits(context); config.components = &deployment; config.component_count = 1;
       config.controllers = &controller; config.controller_count = 1;
       int operation = SALTS_EIO, closed = SALTS_EIO;
       {

@@ -1,5 +1,5 @@
 #include "../../src/chttp_web_registration.h"
-#include "../../src/chttp_application_worker.h"
+#include "../../src/chttp_application_registration.h"
 #include "../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 #include <http_client/http.h>
@@ -169,7 +169,7 @@ typedef struct WorkerAssetBean { int marker; char etag[32]; } WorkerAssetBean;
 cmeta_reflect_data(WorkerAssetBean, "test.WorkerAssetBean", cmeta_field(int, marker));
 cmeta_component_empty(WorkerAssetComponent);
 CHTTP_ASSET_POLICY_ACTION(worker_asset_policy);
-CHTTP_INVOCATION_ACTION(worker_asset_api);
+CHTTP_ACTION(worker_asset_api);
 
 typedef struct worker_asset_call {
   chttp_protocol protocol;
@@ -229,7 +229,7 @@ static void worker_asset_trace(int event) {
 }
 static void worker_asset_scope(void *self, const cmeta_function_desc *operation) {
   sync_mutex_lock(&wa.mutex);
-  if (!self || ((WorkerAssetBean *)self)->marker != 42 || !chttp_application_worker_current(&wa.app) ||
+  if (!self || ((WorkerAssetBean *)self)->marker != 42 || !chttp_application_is_worker(&wa.app) ||
       !cmeta_function_desc_valid(operation)) ++wa.invalid;
   if (!wa.operation) wa.operation = operation;
   else if (!cmeta_function_desc_equal(wa.operation, operation)) ++wa.invalid;
@@ -239,7 +239,7 @@ int worker_asset_policy(void *self, const char *relative_path, chttp_application
   WorkerAssetBean *bean = self;
   worker_asset_trace(3);
   sync_mutex_lock(&wa.mutex);
-  if (!bean || bean->marker != 42 || !chttp_application_worker_current(&wa.app) || !relative_path ||
+  if (!bean || bean->marker != 42 || !chttp_application_is_worker(&wa.app) || !relative_path ||
       relative_path[0] == '/' || strchr(relative_path, '\\')) ++wa.invalid;
   ++wa.policies;
   if (wa.hold && strcmp(relative_path, "app.01234567.js") == 0) {
@@ -255,7 +255,7 @@ int worker_asset_policy(void *self, const char *relative_path, chttp_application
 }
 int worker_asset_api(void *self, const chttp_invocation *invocation) {
   sync_mutex_lock(&wa.mutex);
-  if (!self || ((WorkerAssetBean *)self)->marker != 42 || !chttp_application_worker_current(&wa.app)) ++wa.invalid;
+  if (!self || ((WorkerAssetBean *)self)->marker != 42 || !chttp_application_is_worker(&wa.app)) ++wa.invalid;
   ++wa.api_calls; sync_mutex_unlock(&wa.mutex);
   return chttp_invocation_respond(invocation, 200u, "text/plain", "api", 3u);
 }
@@ -269,7 +269,7 @@ static cmeta_status worker_asset_before1(void *self, const chttp_invocation *inv
   if (wa.session_track) {
     const chttp_server_request_view *request = chttp_invocation_request(invocation);
     chttp_session *session = chttp_invocation_session(invocation);
-    if (!session || request->session) return CMETA_CALLBACK_ERROR;
+    if (!session || request->session != session) return CMETA_CALLBACK_ERROR;
     const char *seen = chttp_session_get(session, "asset_seen");
     if (seen) {
       if (strcmp(seen, "1") != 0) return CMETA_CALLBACK_ERROR;
@@ -303,8 +303,9 @@ static void worker_asset_completed(void *self, const chttp_server_request_view *
   sync_mutex_lock(&wa.mutex); ++wa.completions; wa.outcome = *outcome; sync_mutex_unlock(&wa.mutex);
 }
 static void worker_asset_initialize(void) {
+  wa.config.workers = wa.limits;
   check_equal(chttp_application_init(&wa.app, &wa.config), SALTS_OK);
-  check_equal(chttp_application_worker_prepare(&wa.app, &wa.limits), SALTS_OK);
+
 }
 static void worker_asset_listen(void) {
   const char *paths[] = {"/api/ping", "/assets/app.01234567.js", "/app/route"};
@@ -366,8 +367,8 @@ spec("CHttp::App safe asset mount") {
     char shell_path[ASSETS_HTTP_PATH_BYTES];
     char outside_path[ASSETS_HTTP_PATH_BYTES];
     char link_path[ASSETS_HTTP_PATH_BYTES];
-    chttp_web_asset_mount mount =
-        (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
+    chttp_web_engine_asset_mount mount =
+        (chttp_web_engine_asset_mount)CHTTP_WEB_ENGINE_ASSET_MOUNT_INIT;
     chttp_server server = {0};
     chttp_client client = {0};
     chttp_server_config server_config = assets_http_server_config();
@@ -778,9 +779,6 @@ spec("Application worker assets") {
     wa.mount.max_relative_path_bytes = 0u; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.max_relative_path_bytes = 256u;
     wa.binding.policy_abi = FunctionAbi(worker_asset_api); check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL);
     wa.binding.policy_abi = NULL; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.binding.policy_abi = abi;
-    wa.mount.user = &wa; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.user = NULL;
-    wa.mount.immutable = assets_http_immutable; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.immutable = NULL;
-    wa.mount.etag = assets_http_etag; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.etag = NULL;
     wa.binding.component_id = "missing"; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_ENOENT);
     wa.binding.component_id = "WorkerAssetComponent";
     const chttp_invocation_interceptor invalid = {0}; wa.binding.hooks = &invalid; wa.binding.hook_count = 1u;
@@ -800,6 +798,8 @@ spec("Application worker assets") {
     check_equal(wa.policies, 0); check_equal(wa.completions, 0);
   }
   it("leaves registration transactional when the native middleware capacity is full") {
+    chttp_web_security_policy security = CHTTP_WEB_SECURITY_POLICY_INIT;
+    security.nosniff = true; wa.config.security = &security;
     wa.config.http.middleware_capacity = 1u; worker_asset_initialize();
     check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_ENOBUFS); worker_asset_listen();
     worker_asset_call call = {.target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);

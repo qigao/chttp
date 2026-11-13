@@ -1,3 +1,4 @@
+#include "../../src/chttp_web_engine.h"
 #include "../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 #include "tinytest.h"
@@ -180,7 +181,7 @@ static void web_deferred_worker(void *user) {
   job->web_status = chttp_web_renderer_init(
       &renderer, templates, 1u, &config, &error);
   if (job->web_status == CHTTP_WEB_OK)
-    job->web_status = chttp_web_deferred_render_reply(
+    job->web_status = chttp_web_engine_deferred_render_reply(
         &renderer, &job->deferred, "page.html", &desc, &model,
         200u, NULL, &error);
   job->native_status = error.native_status;
@@ -381,7 +382,7 @@ spec("CHttp::App deferred worker rendering") {
             &renderer, templates, 1u, &renderer_config, &error),
         CHTTP_WEB_OK);
     check_equal(
-        chttp_web_deferred_render_reply(
+        chttp_web_engine_deferred_render_reply(
             &renderer, &stale, "page.html", &desc, &model,
             200u, NULL, &error),
         CHTTP_WEB_SERVER);

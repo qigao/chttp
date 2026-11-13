@@ -1,5 +1,5 @@
 #include <chttp_app/app.h>
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include <http_client/http.h>
 #include <http_client/rpc_service.h>
 #include <cmeta/data_reflect.h>
@@ -22,8 +22,7 @@ cmeta_reflect_data(BindingController, "test.BindingController", cmeta_field(int,
 cmeta_component_empty(BindingComponent);
 static struct {
   chttp_application app;
-  cflow_executor executor;
-  bool executor_live, thread_live;
+  bool thread_live;
   sync_thread_t thread;
   _Atomic int entered, release;
   _Atomic int worker_calls;
@@ -55,7 +54,7 @@ static struct {
   salts_configurator_deployment deployment;
   chttp_http_method method;
   chttp_rpc_method rpc_method;
-  chttp_interceptor hook;
+  chttp_invocation_interceptor hook;
   _Atomic int before_calls, after_calls;
   chttp_controller controller;
   chttp_application_config config;
@@ -80,7 +79,7 @@ static cmeta_status create(void *context, const cmeta_data_desc *data, const voi
 static bool DATA_BIND_NATIVE_CALL invoke(void *context, void *result, void *const *params, size_t count) {
   BindingController *self = context;
   if (!self || self->marker != 42) return false;
-  if (chttp_application_worker_current(&fixture.app))
+  if (chttp_application_is_worker(&fixture.app))
     atomic_fetch_add_explicit(&fixture.worker_calls, 1, memory_order_relaxed);
   atomic_store_explicit(&fixture.entered, 1, memory_order_release);
   if (fixture.block)
@@ -91,8 +90,7 @@ static bool DATA_BIND_NATIVE_CALL invoke(void *context, void *result, void *cons
 }
 static bool flow_invoke(const cmeta_callable *self, void *result, const void *const *args) {
   (void)self;
-  if (!chttp_application_worker_current(&fixture.app) ||
-      cflow_executor_is_current(&fixture.executor)) return false;
+  if (!chttp_application_is_worker(&fixture.app)) return false;
   atomic_fetch_add_explicit(&fixture.worker_calls, 1, memory_order_relaxed);
   atomic_store_explicit(&fixture.entered, 1, memory_order_release);
   if (fixture.block)
@@ -115,7 +113,7 @@ static void method_trace(int event) {
 }
 static bool method_valid(void *self, const chttp_method_call *call) {
   return self && ((BindingController *)self)->marker == 42 &&
-      chttp_application_worker_current(&fixture.app) && call && call->http && !call->http->session &&
+      chttp_application_is_worker(&fixture.app) && call && call->http && !call->http->session &&
       cmeta_function_desc_equal(call->operation, fixture.binding.function) && call->input &&
       call->input->param_count == (fixture.typed_method ? 3u : 2u) &&
       call->input->params[0] && call->input->params[1] &&
@@ -190,7 +188,7 @@ static void setup_method_hooks(void) {
 static bool DATA_BIND_NATIVE_CALL typed_invoke(void *context, void *result,
     void *const *params, size_t count) {
   if (!context || ((BindingController *)context)->marker != 42 || count != 3u ||
-      !chttp_application_worker_current(&fixture.app)) return false;
+      !chttp_application_is_worker(&fixture.app)) return false;
   atomic_fetch_add(&fixture.worker_calls, 1);
   databind_7_FlowBad_4_Calc_7_Failing__error *error = params[2];
   if (databind_7_FlowBad_4_Calc_7_Failing__error_select(error,
@@ -253,7 +251,8 @@ static void request_thread(void *unused) {
 }
 static int start(chttp_dispatch dispatch) {
   fixture.method.dispatch = dispatch;
-  fixture.method.executor = dispatch == CHTTP_DISPATCH_INLINE ? NULL : &fixture.executor;
+  fixture.method.codec = fixture.contract;
+  fixture.rpc_method.codec = fixture.contract;
   int status = chttp_application_init(&fixture.app, &fixture.config);
   if (status == SALTS_OK) status = chttp_application_start(&fixture.app);
   uint16_t port = 0;
@@ -264,10 +263,10 @@ static int start(chttp_dispatch dispatch) {
 
 static int start_worker(void) {
   fixture.controller.http_methods = NULL; fixture.controller.http_method_count = 0u;
-  fixture.method.executor = NULL;
-  int status = chttp_application_init(&fixture.app, &fixture.config);
   const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
-  if (status == SALTS_OK) status = chttp_application_worker_prepare(&fixture.app, &limits);
+  fixture.config.workers = limits;
+  int status = chttp_application_init(&fixture.app, &fixture.config);
+
   if (status == SALTS_OK) status = chttp_application_worker_mount_http(&fixture.app,
       "BindingComponent", cmeta_reflected_data(BindingController), &fixture.method, fixture.contract,
       fixture.method_hooks, fixture.method_hook_count);
@@ -281,17 +280,17 @@ static int start_worker(void) {
   return status;
 }
 
-static cmeta_status rpc_before(void *self, const chttp_exchange *exchange, bool *proceed) {
+static cmeta_status rpc_before(void *self, const chttp_invocation *exchange, bool *proceed) {
   BindingController *controller = self;
   (void)proceed;
   if (controller->marker != 42) return CMETA_TYPE_MISMATCH;
-  if (strcmp(exchange->request->path, "/rpc") == 0) {
-    if (exchange->operation != NULL) return CMETA_TYPE_MISMATCH;
-  } else if (!cmeta_function_desc_valid(exchange->operation)) return CMETA_TYPE_MISMATCH;
+  if (strcmp(chttp_invocation_request(exchange)->path, "/rpc") == 0) {
+    if (chttp_invocation_operation(exchange) != NULL) return CMETA_TYPE_MISMATCH;
+  } else if (!cmeta_function_desc_valid(chttp_invocation_operation(exchange))) return CMETA_TYPE_MISMATCH;
   atomic_fetch_add(&fixture.before_calls, 1);
   return CMETA_OK;
 }
-static void rpc_after(void *self, const chttp_exchange *exchange, const chttp_exchange_result *result) {
+static void rpc_after(void *self, const chttp_invocation *exchange, const chttp_invocation_result *result) {
   (void)self; (void)exchange; (void)result;
   atomic_fetch_add(&fixture.after_calls, 1);
 }
@@ -310,7 +309,7 @@ static void setup_rpc(void) {
       .binding = &fixture.binding, .execution = &fixture.execution};
   fixture.controller.rpc_methods = &fixture.rpc_method; fixture.controller.rpc_method_count = 1u;
   fixture.config.rpc.method_capacity = 1u;
-  fixture.hook = (chttp_interceptor){"BindingComponent", cmeta_reflected_data(BindingController),
+  fixture.hook = (chttp_invocation_interceptor){"BindingComponent", cmeta_reflected_data(BindingController),
       rpc_before, rpc_after, NULL};
   fixture.config.interceptors = &fixture.hook; fixture.config.interceptor_count = 1u;
 }
@@ -355,7 +354,7 @@ static void rpc_request_thread(void *unused) {
 }
 static void exercise_rpc(chttp_protocol protocol) {
   setup_rpc();
-  check_equal(start(CHTTP_DISPATCH_INLINE), SALTS_OK);
+  check_equal(start(CHTTP_DISPATCH_DIRECT), SALTS_OK);
   chttp_client_rpc_outcome_kind kind = CHTTP_CLIENT_RPC_NONE;
   uint32_t sum = 0u;
   check_equal(rpc_request(protocol, &kind, &sum), SALTS_OK);
@@ -396,7 +395,7 @@ spec("Application generated MethodPlan bindings") {
         NULL, NULL, create, NULL, NULL};
     fixture.deployment = (salts_configurator_deployment){&fixture.provider, NULL, NULL};
     fixture.method = (chttp_http_method){.plan = fixture.plan, .binding = &fixture.binding,
-        .execution = &fixture.execution, .executor = &fixture.executor};
+        .execution = &fixture.execution, .codec = fixture.contract};
     fixture.controller = (chttp_controller){.component_id = "BindingComponent",
         .receiver = cmeta_reflected_data(BindingController), .http_methods = &fixture.method,
         .http_method_count = 1u};
@@ -408,23 +407,17 @@ spec("Application generated MethodPlan bindings") {
         .request_capacity = 1, .max_start_line_bytes = 256, .max_header_count = 16,
         .max_header_bytes = 4096, .max_request_body_bytes = 8192,
         .max_response_body_bytes = 8192, .max_informational_responses = 4};
-    fixture.executor_live = cflow_executor_worker_init_with_capacity(&fixture.executor, 1, 2);
-    check_true(fixture.executor_live);
   }
   after_each() {
     atomic_store_explicit(&fixture.release, 1, memory_order_release);
     if (fixture.thread_live) { sync_thread_join(&fixture.thread); fixture.thread_live = false; }
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     check_equal(atomic_load(&fixture.method_invalid), 0);
-    if (fixture.executor_live) {
-      check_true(cflow_executor_wait_idle(&fixture.executor));
-      cflow_executor_destroy(&fixture.executor);
-    }
     data_bind_rpc_method_plan_free(fixture.rpc_plan);
     data_bind_http_method_plan_free(fixture.plan); data_bind_free(fixture.contract);
   }
   it("binds canonical native execution to the ACE Controller and retains validation errors") {
-    check_equal(start(CHTTP_DISPATCH_INLINE), SALTS_OK);
+    check_equal(start(CHTTP_DISPATCH_DIRECT), SALTS_OK);
     unsigned int code = 0;
     check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
     check_equal(request("/generated-cflow/0?right=4", &code), SALTS_OK); check_equal(code, 422u);
@@ -525,18 +518,18 @@ spec("Application generated MethodPlan bindings") {
     it("rejects an invalid projection before route publication without consuming the slot") {
       setup_worker_flow();
       fixture.controller.http_methods = NULL; fixture.controller.http_method_count = 0u;
-      fixture.method.executor = NULL;
-      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
       const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
-      check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+      fixture.config.workers = limits;
+      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+
       fixture.projection.output_type = &cmeta_type_int;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
           cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, NULL, 0u), SALTS_EINVAL);
       fixture.projection.output_type = fixture.response.data->storage_type;
-      fixture.method.executor = &fixture.executor;
+      fixture.method.dispatch = (chttp_dispatch)99;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
           cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, NULL, 0u), SALTS_ENOTSUP);
-      fixture.method.executor = NULL;
+      fixture.method.dispatch = CHTTP_DISPATCH_CFLOW;
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
           cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, NULL, 0u), SALTS_OK);
       check_equal(chttp_application_start(&fixture.app), SALTS_OK);
@@ -565,10 +558,10 @@ spec("Application generated MethodPlan bindings") {
     it("prevalidates every canonical Bean hook and copies descriptors before publishing") {
       setup_method_hooks();
       fixture.controller.http_methods = NULL; fixture.controller.http_method_count = 0u;
-      fixture.method.executor = NULL;
-      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
       const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
-      check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+      fixture.config.workers = limits;
+      check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+
       fixture.method_hooks[1].component_id = "missing";
       check_equal(chttp_application_worker_mount_http(&fixture.app, "BindingComponent",
           cmeta_reflected_data(BindingController), &fixture.method, fixture.contract, fixture.method_hooks, 2u), SALTS_ENOENT);
@@ -759,8 +752,8 @@ spec("Application generated MethodPlan bindings") {
       }
     }
   }
-  it("executes deferred bindings and drains native finalizers before Bean destruction") {
-    check_equal(start(CHTTP_DISPATCH_DEFERRED), SALTS_OK);
+  it("executes worker bindings and drains native finalizers before Bean destruction") {
+    check_equal(start(CHTTP_DISPATCH_DIRECT), SALTS_OK);
     unsigned int code = 0;
     check_equal(request("/generated-cflow/3?right=4", &code), SALTS_OK); check_equal(code, 201u);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
@@ -778,7 +771,7 @@ spec("Application generated MethodPlan bindings") {
   }
   it("retains the owner and Beans when close times out with a real invocation in flight") {
     fixture.block = true;
-    check_equal(start(CHTTP_DISPATCH_DEFERRED), SALTS_OK);
+    check_equal(start(CHTTP_DISPATCH_DIRECT), SALTS_OK);
     check_equal(sync_thread_create(&fixture.thread, request_thread, NULL), SALTS_OK);
     fixture.thread_live = true;
     const uint64_t deadline = monotonic_ms() + 5000u;

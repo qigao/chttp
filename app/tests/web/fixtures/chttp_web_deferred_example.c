@@ -1,3 +1,4 @@
+#include "../../../src/chttp_web_engine.h"
 #include "../../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 
@@ -185,7 +186,7 @@ static void web_deferred_worker(void *user) {
 
   if (stage == WEB_DEFERRED_JOB_READY) {
     model.value = vstr_from_cstr(job->value);
-    web_status = chttp_web_deferred_render_reply(
+    web_status = chttp_web_engine_deferred_render_reply(
         &job->app->renderer,
         &job->deferred,
         "worker.html",

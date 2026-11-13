@@ -30,6 +30,8 @@ typedef struct chttp_service_method_record {
   chttp_method_runtime_execution_mode execution_mode;
   cflow_executor *executor;
   chttp_application_work *workers;
+  const chttp_application_work_chain_hook *request_hooks;
+  size_t request_hook_count;
   cflow_plan cflow_plan;
   chttp_native_json_plans json;
   chttp_native_json_plan input_json;
@@ -1831,6 +1833,7 @@ static int chttp_service_http_handler(
   if (record->workers) {
     const chttp_application_work_task task = {.run = chttp_service_http_worker_run,
         .finalize = chttp_service_http_worker_finalized, .user = record,
+        .hooks = record->request_hooks, .hook_count = record->request_hook_count,
         .method_capacity = chttp_method_hooks_have_completion(record->hooks, record->hook_count) ? 1u : 0u};
     atomic_fetch_add_explicit(&record->deferred_in_flight, 1u, memory_order_acq_rel);
     const int status = chttp_application_work_submit(record->workers, request, response, &task);
@@ -2027,6 +2030,7 @@ static int chttp_method_runtime_mount_http_impl(
   record->response_bytes = response_bytes;
   record->error_bytes = error_bytes;
   record->param_count = param_count;
+  record->request_hooks = mount->request_hooks; record->request_hook_count = mount->request_hook_count;
   if (mount->output_codec) {
     DataBindError error = DATA_BIND_ERROR_INIT;
     DataBindStatus compiled = chttp_native_json_plans_compile(mount->output_codec, binding, native,

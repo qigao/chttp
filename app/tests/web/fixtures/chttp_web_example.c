@@ -1,3 +1,4 @@
+#include "../../../src/chttp_web_engine.h"
 #include "../../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 
@@ -22,7 +23,6 @@ enum {
   WEB_EXAMPLE_BUFFER_CAPACITY_BYTES = 2 * 1024 * 1024,
   WEB_EXAMPLE_PATH_BYTES = 1024
 };
-
 
 static const cmeta_data_buffer_shape WEB_VSTR_SHAPE = {
   CMETA_DATA_BUFFER_BORROWED
@@ -89,7 +89,7 @@ static int web_example_page(
   chttp_web_status status;
   (void)request;
 
-  status = chttp_web_render_response(
+  status = chttp_web_engine_render_response(
       context->renderer, response, "page.html",
       context->model_desc, context->model, 200u, NULL, &error);
   if (status != CHTTP_WEB_OK) {

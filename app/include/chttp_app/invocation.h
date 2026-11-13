@@ -1,8 +1,8 @@
 #ifndef CHTTP_INVOCATION_H
 #define CHTTP_INVOCATION_H
-/* Private buffered Controller migration. Not installed. Only the runtime
- * constructs this borrowed handle; never retain it or its accessor views. */
-#include "chttp_application_work.h"
+/* Worker-scoped Controller invocation. Only the runtime constructs this
+ * borrowed handle; never retain it or its accessor views. */
+#include <chttp_app/dispatch.h>
 #include <chttp_app/web.h>
 #include <cmeta/function.h>
 
@@ -18,14 +18,13 @@ static const cmeta_type_desc chttp_invocation_type = {"chttp_invocation", sizeof
 static const cmeta_type_desc chttp_invocation_pointer_type = {"const chttp_invocation *",
     sizeof(chttp_invocation *), CMETA_ALIGNOF(chttp_invocation *), CMETA_T_POINTER,
     &chttp_invocation_type, NULL, NULL};
-#define CHTTP_INVOCATION_ACTION(name_) \
+#define CHTTP_ACTION(name_) \
   FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
     (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, \
       &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
     (const chttp_invocation *, invocation, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, \
       &chttp_invocation_pointer_type, CMETA_ABI_OBJECT_POINTER))
 
-typedef chttp_application_work_result chttp_invocation_result;
 CMETA_INTERCEPTOR_TYPE(chttp_invocation_chain, chttp_invocation, chttp_invocation_result);
 /* Hooks follow the SDK ACE no-throw/longjmp contract. Contexts come from the
  * selected canonical Bean, not an arbitrary raw callback receiver. */
@@ -38,7 +37,8 @@ typedef struct chttp_invocation_interceptor {
 } chttp_invocation_interceptor;
 
 /* Worker/callback scoped. Invalid or foreign-thread handles return NULL.
- * request has no mutable Session handle; session is the detached intent view. */
+ * request->session and session() expose the same detached intent view;
+ * neither exposes a live engine Session or may escape this callback. */
 const chttp_server_request_view *chttp_invocation_request(const chttp_invocation *);
 chttp_session *chttp_invocation_session(const chttp_invocation *);
 const cmeta_function_desc *chttp_invocation_operation(const chttp_invocation *);
@@ -66,7 +66,7 @@ int chttp_invocation_set_header(const chttp_invocation *, const char *, const ch
  * or conditional/range policy is added. Headers follow normal hook ordering. */
 int chttp_invocation_response_file(const chttp_invocation *, unsigned int,
     const char *, const char *);
-/* Private serve_file counterpart using the owned request snapshot. Metadata
+/* serve_file counterpart using the owned request snapshot. Metadata
  * and conditional/range policy run on the worker; path/MIME and response fields
  * are copied into reply/header budgets. EINVAL/ENOBUFS/EMSGSIZE and filesystem
  * errors leave the draft unchanged; EALREADY after response selection. Missing

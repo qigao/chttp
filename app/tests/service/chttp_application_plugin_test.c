@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include "chttp_service_plugin_probe.h"
 #include "chttp_service_plugin.http.h"
 #include "chttp_service_plugin.service_native.h"
@@ -67,7 +67,7 @@ static cmeta_status create(void *user, const cmeta_data_desc *data, const void *
 }
 /* Called from the actual generated Plugin business function in the loaded DSO. */
 static bool observe(void *user) {
-  const bool worker = user == &fixture && chttp_application_worker_current(&fixture.app);
+  const bool worker = user == &fixture && chttp_application_is_worker(&fixture.app);
   sync_mutex_lock(&fixture.mutex);
   ++fixture.entries;
   if (!worker) ++fixture.wrong_thread;
@@ -89,7 +89,7 @@ static bool DATA_BIND_NATIVE_CALL rpc_invoke(void *context, void *result,
 }
 static cmeta_status method_before(void *self, const chttp_method_call *call, bool *proceed) {
   (void)proceed;
-  if (!self || ((PluginController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((PluginController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !call->http || call->http->session || !call->input || !cmeta_function_desc_valid(call->operation)) {
     atomic_fetch_add(&fixture.hook_invalid, 1); return CMETA_TYPE_MISMATCH;
   }
@@ -97,13 +97,13 @@ static cmeta_status method_before(void *self, const chttp_method_call *call, boo
 }
 static void method_after(void *self, const chttp_method_call *call, const chttp_method_result *result) {
   (void)self; (void)call;
-  if (!chttp_application_worker_current(&fixture.app) || !result->output || !result->invoked ||
+  if (!chttp_application_is_worker(&fixture.app) || !result->output || !result->invoked ||
       result->outcome.kind != DATA_BIND_BINDING_OUTCOME_SUCCESS) atomic_fetch_add(&fixture.hook_invalid, 1);
   atomic_fetch_add(&fixture.hook_after, 1);
 }
 static void method_error(void *self, const chttp_method_call *call, cmeta_status status) {
   (void)self;
-  if (!chttp_application_worker_current(&fixture.app) || status == CMETA_OK || !call->result->invoked)
+  if (!chttp_application_is_worker(&fixture.app) || status == CMETA_OK || !call->result->invoked)
     atomic_fetch_add(&fixture.hook_invalid, 1);
   atomic_fetch_add(&fixture.hook_errors, 1);
 }
@@ -150,9 +150,10 @@ static void request_thread(void *unused) {
       request("/plugin/3?right=4", &fixture.response_status);
 }
 static void prepare(void) {
-  check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
   const chttp_application_work_config limits = {1u, 2u, 32768u, 8192u};
-  check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+  fixture.config.workers = limits;
+  check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+
 }
 static int mount_http(void) {
   return chttp_application_worker_mount_http(&fixture.app, "PluginComponent",

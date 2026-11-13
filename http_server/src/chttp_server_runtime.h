@@ -469,6 +469,8 @@ struct chttp_server_impl {
   size_t route_count;
   size_t middleware_count;
   size_t max_response_wire_bytes;
+  chttp_server_fallback_fn fallback;
+  void *fallback_user;
   chttp_server_connection *connections;
   chttp_session_record *sessions;
   chttp_session_entry *session_entries;

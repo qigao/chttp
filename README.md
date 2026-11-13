@@ -60,11 +60,16 @@ Server applications include `<chttp_app/app.h>` (C11) or
 the HTTP engine and a CMeta ACE Component graph. Controllers declare reflected
 actions or generated DataBind MethodPlans; Services are injected through
 canonical CMeta interfaces; ordered Interceptors surround HTTP dispatch.
+Application owns a bounded worker pool for Controller/Service methods, DTO
+conversion, Web rendering, upload/source/WS callbacks and terminal observers.
+Actions receive a scoped Invocation with copied response staging and detached
+Session intents while native owners continue protocol progress.
 
 The public programming model is Application / Controller / Service. Manual
 `chttp_service` mounting and Server route/middleware/RPC registration are now
 internal implementation APIs. This is a source-breaking migration: rebuild
-applications and replace manual registration with Controller descriptors.
+applications, install into a clean SDK prefix and replace manual registration
+and Exchange/native response access with Controller/Invocation descriptors.
 There are no compatibility aliases. Server remains the protocol engine and
 retains HTTP/1.1, HTTP/2, TLS, sessions, streaming, WebSocket and RPC semantics.
 

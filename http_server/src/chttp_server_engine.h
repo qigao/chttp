@@ -28,6 +28,10 @@ int chttp_server_response_unobserve(chttp_server_response *, chttp_server_respon
 typedef struct chttp_server_admission_gate { void *impl; uint32_t generation; } chttp_server_admission_gate;
 typedef int (*chttp_server_admission_begin_fn)(void *, const chttp_server_request_view *,
     chttp_server_admission_gate *);
+/* Native fallback retains routing/Allow semantics; Application adapts it to
+ * its ordinary worker task after static middleware. */
+typedef int (*chttp_server_fallback_fn)(void *, const chttp_server_request_view *, chttp_server_response *, unsigned int);
+int chttp_server_set_fallback(chttp_server *, chttp_server_fallback_fn, void *);
 int chttp_server_set_admission_async(chttp_server *, chttp_server_admission_begin_fn, void *);
 int chttp_server_admission_gate_complete(chttp_server_admission_gate *, int,
     const chttp_server_admission_result *);

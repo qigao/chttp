@@ -1,4 +1,4 @@
-#include "chttp_application_worker.h"
+#include "chttp_application_registration.h"
 #include <http_client/http.h>
 #include <cmeta/data_reflect.h>
 #include <threads/threads.h>
@@ -27,8 +27,10 @@ typedef int invocation_socket;
 typedef struct InvocationController { int marker; } InvocationController;
 cmeta_reflect_data(InvocationController, "test.InvocationController", cmeta_field(int, marker));
 cmeta_component_empty(InvocationComponent);
-CHTTP_INVOCATION_ACTION(invocation_echo);
-CHTTP_ACTION(invocation_legacy_contract);
+CHTTP_ACTION(invocation_echo);
+FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, invocation_legacy_contract,
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER),
+    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER));
 CHTTP_ADMISSION_ACTION(invocation_admission);
 typedef struct invocation_call {
   const char *target;
@@ -110,7 +112,7 @@ static void trace(int event) {
 }
 static void header_scope_check(void *self, const chttp_server_request_view *request) {
   const char *value = chttp_server_request_header(request, "X-Admission");
-  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !request || request->session || request->body || request->body_size || request->body_streamed ||
       !request->path || !request->target || !value || strcmp(value, "original") != 0)
     atomic_fetch_add(&fixture.invalid, 1);
@@ -141,7 +143,7 @@ int invocation_admission(void *self, const chttp_server_request_view *request, c
 }
 static void scope_check(void *self, const chttp_invocation *invocation) {
   const chttp_server_request_view *request = chttp_invocation_request(invocation);
-  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !request || request->session || chttp_invocation_session(invocation) ||
       !cmeta_function_desc_equal(chttp_invocation_operation(invocation), FunctionAbi(invocation_echo)->function))
     atomic_fetch_add(&fixture.invalid, 1);
@@ -260,16 +262,17 @@ static void error2(void *self, const chttp_invocation *invocation, cmeta_status 
   scope_check(self, invocation); if (status == CMETA_OK) atomic_fetch_add(&fixture.invalid, 1); trace(-2);
 }
 static void completed(void *self, const chttp_server_request_view *request, const chttp_application_work_outcome *outcome) {
-  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_is_worker(&fixture.app) ||
       !cmeta_function_desc_equal(request->operation, FunctionAbi(invocation_echo)->function)) atomic_fetch_add(&fixture.invalid, 1);
   trace(200); sync_mutex_lock(&fixture.mutex); ++fixture.completions; fixture.outcome = *outcome;
   sync_mutex_unlock(&fixture.mutex);
 }
 static void initialize(void) {
-  check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-  const chttp_application_work_config limits = {fixture.workers, fixture.capacity, fixture.retained_bytes, fixture.reply_bytes,
+      const chttp_application_work_config limits = {fixture.workers, fixture.capacity, fixture.retained_bytes, fixture.reply_bytes,
       fixture.header_capacity, fixture.header_bytes};
-  check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+  fixture.config.workers = limits;
+  check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
+
   if (fixture.admission_enabled) {
     const chttp_application_admission_binding binding = {"InvocationComponent", cmeta_reflected_data(InvocationController),
         FunctionAbi(invocation_admission), invocation_admission};
