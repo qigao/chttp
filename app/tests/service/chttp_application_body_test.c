@@ -18,6 +18,10 @@ cmeta_reflect_data(BodyController, "test.BodyController", cmeta_field(int, marke
 cmeta_component_empty(BodyComponent);
 static const char BODY[] = "{\"id\":18446744073709551615,\"child\":{\"number\":1},\"note\":\"a\\\"\\\\\\n\\u0000z\"}";
 static const char EMPTY_NOTE[] = "{\"id\":1,\"child\":{\"number\":1},\"note\":\"\"}";
+static const char SEQUENCE_BODY[] = "{\"records\":[{\"id\":18446744073709551615,\"child\":{\"number\":1},\"note\":\"a\\\"\\\\\\n\\u0000z\"}],"
+    "\"rows\":[[],[0,18446744073709551615]],\"labels\":[\"\",\"a\\\"\\\\\\n\\u0000z\"]}";
+static const char EMPTY_SEQUENCE[] = "{\"records\":[],\"rows\":[],\"labels\":[]}";
+static const char SHORT_SEQUENCE[] = "{\"records\":[],\"rows\":[[]],\"labels\":[\"x\"]}";
 static struct {
   chttp_application app;
   chttp_application_config config;
@@ -40,10 +44,10 @@ static struct {
   cmeta_plugin_lease discovery;
   sync_mutex_t mutex;
   sync_cond_t changed;
-  sync_thread_t thread;
-  bool block, release, thread_live, stopped;
-  int calls, destroyed, request_status;
-  _Atomic int invalid, before, after;
+  sync_thread_t thread, second_thread;
+  bool block, release, thread_live, second_thread_live, stopped, sequence;
+  int calls, destroyed;
+  _Atomic int invalid, before, after, request_status;
   char uri[64];
 } fixture;
 static void destroy(void *context, void *object) { (void)context; ++fixture.destroyed; free(object); }
@@ -67,17 +71,36 @@ static bool observe(void *context) {
   sync_mutex_unlock(&fixture.mutex);
   return true;
 }
+static bool batch_records(const Batch_t *batch, cmeta_data_collection_view *view) {
+  const cmeta_data_desc *data = NULL;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  if (Batch_cmeta_data(&data, &error) != DATA_BIND_OK) return false;
+  const cmeta_data_struct_shape *shape = data->shape;
+  return cmeta_data_collection_read(shape->fields[0].value, &batch->records, view) == CMETA_OK;
+}
 static cmeta_status before(void *self, const chttp_method_call *call, bool *proceed) {
   (void)proceed;
-  const Request_t *input = call->input ? call->input->params[0] : NULL;
   if (!self || ((BodyController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
-      !call->http || call->http->session || !input || input->tenant != 42u ||
-      input->payload.child.number != 1u) {
+      !call->http || call->http->session || !call->input || !call->input->params[0]) {
     atomic_fetch_add(&fixture.invalid, 1); return CMETA_TYPE_MISMATCH;
   }
-  if (input->payload.id == UINT64_MAX) {
+  const Detail_t *detail;
+  if (fixture.sequence) {
+    const BatchRequest_t *input = call->input->params[0];
+    cmeta_data_collection_view records = {0};
+    if (input->tenant != 42u || !batch_records(&input->payload, &records)) {
+      atomic_fetch_add(&fixture.invalid, 1); return CMETA_TYPE_MISMATCH;
+    }
+    detail = records.count ? records.data : NULL;
+  } else {
+    const Request_t *input = call->input->params[0];
+    if (input->tenant != 42u) { atomic_fetch_add(&fixture.invalid, 1); return CMETA_TYPE_MISMATCH; }
+    detail = &input->payload;
+  }
+  if (detail && detail->child.number != 1u) atomic_fetch_add(&fixture.invalid, 1);
+  if (detail && detail->id == UINT64_MAX) {
     static const char text[] = {'a', '"', '\\', '\n', '\0', 'z'};
-    if (tstr_len(input->payload.note) != sizeof(text) || memcmp(input->payload.note, text, sizeof(text)))
+    if (tstr_len(detail->note) != sizeof(text) || memcmp(detail->note, text, sizeof(text)))
       atomic_fetch_add(&fixture.invalid, 1);
   }
   atomic_fetch_add(&fixture.before, 1);
@@ -85,6 +108,23 @@ static cmeta_status before(void *self, const chttp_method_call *call, bool *proc
 }
 static void after(void *self, const chttp_method_call *call, const chttp_method_result *result) {
   (void)self;
+  if (fixture.sequence) {
+    const BatchRequest_t *input = call->input->params[0];
+    const BatchResponse_t *output = result->output ? result->output->params[1] : NULL;
+    cmeta_data_collection_view source = {0}, copy = {0};
+    if (!chttp_application_worker_current(&fixture.app) || !output ||
+        !batch_records(&input->payload, &source) || !batch_records(&output->payload, &copy) || source.count != copy.count)
+      atomic_fetch_add(&fixture.invalid, 1);
+    else if (source.count) {
+      const Detail_t *left = source.data, *right = copy.data;
+      const size_t size = tstr_len(left->note);
+      if (source.data == copy.data || left->id != right->id || size != tstr_len(right->note) ||
+          (size && (left->note == right->note || memcmp(left->note, right->note, size))))
+        atomic_fetch_add(&fixture.invalid, 1);
+    }
+    atomic_fetch_add(&fixture.after, 1);
+    return;
+  }
   const Request_t *input = call->input->params[0];
   const Response_t *output = result->output ? result->output->params[1] : NULL;
   if (!chttp_application_worker_current(&fixture.app) || !output || output->payload.id != input->payload.id ||
@@ -131,10 +171,18 @@ static void compile(DataBindFormat format) {
   projection.method = "POST"; projection.route = "/echo/{tenant}";
   projection.fields = fields; projection.field_count = 3u; projection.ingress_format = format;
   DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
-  const DataBindStatus status = data_bind_http_method_plan_compile_service(fixture.codec, "Probe", "Echo", &projection,
+  const DataBindStatus status = data_bind_http_method_plan_compile_service(fixture.codec, "Probe", fixture.sequence ? "Batch" : "Echo", &projection,
       &fixture.native, &fixture.plan, &diagnostic);
   check_equal(status, DATA_BIND_OK);
   fixture.method.plan = fixture.plan;
+}
+static void select_sequence(void) {
+  fixture.sequence = true;
+  DataBindError error = DATA_BIND_ERROR_INIT;
+  check_equal(databind_11_BodyIngress_5_Probe_5_Batch__databind_native_binding(
+      &fixture.input, &fixture.output, &fixture.native, &error), DATA_BIND_OK);
+  fixture.execution = *databind_11_BodyIngress_5_Probe_5_Batch__databind_execution();
+  compile(DATA_BIND_FORMAT_JSON);
 }
 static void initialize(int mode) {
   if (mode == CHTTP_DISPATCH_PLUGIN) {
@@ -150,14 +198,21 @@ static void initialize(int mode) {
         DATA_BIND_PLUGIN_CATALOG_CONTRACT_VERSION, 0u, data_bind_plugin_catalog_interface()), CMETA_PLUGIN_OK);
     DataBindPluginOperationBinding operation = DATA_BIND_PLUGIN_OPERATION_BINDING_INIT;
     DataBindError error = DATA_BIND_ERROR_INIT;
-    check_equal(data_bind_plugin_catalog_operation_at(catalog->value.interface.value, 0u, &operation, &error), DATA_BIND_OK);
-    check_equal(operation.operation_name, "Echo");
+    const char *name = fixture.sequence ? "Batch" : "Echo";
+    bool found = false;
+    const size_t count = data_bind_plugin_catalog_operation_count(catalog->value.interface.value);
+    for (size_t i = 0u; i < count; ++i) {
+      check_equal(data_bind_plugin_catalog_operation_at(catalog->value.interface.value, i, &operation, &error), DATA_BIND_OK);
+      if (strcmp(operation.operation_name, name) == 0) { found = true; break; }
+    }
+    check_true(found);
     fixture.method.dispatch = CHTTP_DISPATCH_PLUGIN;
     fixture.method.binding = NULL; fixture.method.execution = NULL;
     fixture.method.plugin_registry = &fixture.registry; fixture.method.plugin_ref = fixture.ref;
     fixture.method.plugin_export_id = operation.export_id;
   } else if (mode == CHTTP_DISPATCH_CFLOW) {
-    check_equal(databind_11_BodyIngress_5_Probe_4_Echo__databind_cflow_projection(&fixture.projection), CFLOW_FUNCTION_PROJECTION_OK);
+    check_equal(fixture.sequence ? databind_11_BodyIngress_5_Probe_5_Batch__databind_cflow_projection(&fixture.projection) :
+        databind_11_BodyIngress_5_Probe_4_Echo__databind_cflow_projection(&fixture.projection), CFLOW_FUNCTION_PROJECTION_OK);
     fixture.method.dispatch = CHTTP_DISPATCH_CFLOW;
     fixture.method.execution = NULL; fixture.method.projection = &fixture.projection;
   }
@@ -184,13 +239,14 @@ static void start(int mode) {
 }
 static void request_thread(void *unused) {
   (void)unused; chttp_response response = {0};
-  fixture.request_status = request("/echo/42", BODY, "application/json", &response);
+  fixture.request_status = request("/echo/42", fixture.sequence ? SEQUENCE_BODY : BODY, "application/json", &response);
   chttp_response_destroy(&response);
 }
 spec("Application owned JSON body ingress") {
   before_each() {
     memset(&fixture, 0, sizeof(fixture)); sync_mutex_init(&fixture.mutex); sync_cond_init(&fixture.changed);
     atomic_init(&fixture.invalid, 0); atomic_init(&fixture.before, 0); atomic_init(&fixture.after, 0);
+    atomic_init(&fixture.request_status, 0);
     DataBindError error = DATA_BIND_ERROR_INIT;
     check_equal(BodyIngress_codec_create(&fixture.codec, &error), DATA_BIND_OK);
     check_equal(databind_11_BodyIngress_5_Probe_4_Echo__databind_native_binding(
@@ -215,6 +271,7 @@ spec("Application owned JSON body ingress") {
   after_each() {
     sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
     if (fixture.thread_live) sync_thread_join(&fixture.thread);
+    if (fixture.second_thread_live) sync_thread_join(&fixture.second_thread);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     chttp_service_plugin_probe_set(NULL, NULL); check_equal(atomic_load(&fixture.invalid), 0);
     data_bind_http_method_plan_free(fixture.plan); data_bind_free(fixture.codec);
@@ -240,6 +297,53 @@ spec("Application owned JSON body ingress") {
         expect("/echo/42", EMPTY_NOTE, "application/json", 200u);
         check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
         check_equal(atomic_load(&fixture.before), 2); check_equal(atomic_load(&fixture.after), 2); check_equal(fixture.calls, 2);
+      }
+      it("owns nested sequence/record/string values across decoding and execution (protocol=%d provider=%d)", protocol, mode) {
+        fixture.protocol = (chttp_protocol)protocol; select_sequence(); start(mode);
+        expect("/echo/42", SEQUENCE_BODY, "application/json", 200u);
+        expect("/echo/42", EMPTY_SEQUENCE, "application/json", 200u);
+        expect("/echo/42", SHORT_SEQUENCE, "application/json", 200u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.before), 3); check_equal(atomic_load(&fixture.after), 3); check_equal(fixture.calls, 3);
+      }
+      it("rolls back partially decoded sequences and validates record elements (protocol=%d provider=%d)", protocol, mode) {
+        fixture.protocol = (chttp_protocol)protocol; select_sequence(); start(mode);
+        static const char *bad[] = {
+            "{\"records\":[],\"rows\":[],\"labels\":null}",
+            "{\"records\":[],\"rows\":[],\"labels\":[\"owned\",0]}",
+            "{\"records\":[],\"rows\":[[1],[-1]],\"labels\":[]}",
+            "{\"records\":[],\"rows\":[[1],[18446744073709551616]],\"labels\":[]}",
+            "{\"records\":[{}],\"rows\":[],\"labels\":[]}",
+            "{\"records\":[{\"id\":1,\"child\":{\"number\":1},\"note\":\"owned\"},{}],\"rows\":[],\"labels\":[]}",
+            "{\"records\":[],\"rows\":[],\"labels\":[\"owned\"],\"labels\":[]}",
+            "{\"records\":[],\"rows\":[],\"labels\":[\"owned\"],\"extra\":0}"};
+        for (size_t i = 0u; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+          expect("/echo/42", bad[i], "application/json", 400u);
+          check_equal(atomic_load(&fixture.before), (int)i);
+          expect("/echo/42", SEQUENCE_BODY, "application/json", 200u);
+        }
+        expect("/echo/42", "{\"records\":[{\"id\":1,\"child\":{\"number\":0},\"note\":\"owned\"}],\"rows\":[],\"labels\":[]}",
+            "application/json", 422u);
+        check_equal(atomic_load(&fixture.before), (int)(sizeof(bad) / sizeof(bad[0])));
+        expect("/echo/invalid", SEQUENCE_BODY, "application/json", 400u);
+        expect("/echo/42", EMPTY_SEQUENCE, "application/json", 200u);
+      }
+      it("isolates concurrent sequence frames and drains both workers (protocol=%d provider=%d)", protocol, mode) {
+        fixture.protocol = (chttp_protocol)protocol; select_sequence(); fixture.block = true;
+        fixture.work.workers = 2u; fixture.work.capacity = 2u; start(mode);
+        check_equal(sync_thread_create(&fixture.thread, request_thread, NULL), SALTS_OK); fixture.thread_live = true;
+        check_equal(sync_thread_create(&fixture.second_thread, request_thread, NULL), SALTS_OK); fixture.second_thread_live = true;
+        const uint64_t began = monotonic_ms();
+        sync_mutex_lock(&fixture.mutex);
+        while (fixture.calls < 2 && monotonic_ms() - began < 5000u)
+          (void)sync_cond_timedwait(&fixture.changed, &fixture.mutex, UINT64_C(10000000));
+        const int calls = fixture.calls; sync_mutex_unlock(&fixture.mutex); check_equal(calls, 2);
+        check_equal(chttp_application_close(&fixture.app, 1u), SALTS_ETIMEDOUT); check_equal(fixture.destroyed, 0);
+        sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
+        sync_thread_join(&fixture.thread); fixture.thread_live = false;
+        sync_thread_join(&fixture.second_thread); fixture.second_thread_live = false;
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(atomic_load(&fixture.before), 2); check_equal(atomic_load(&fixture.after), 2); check_equal(fixture.destroyed, 1);
       }
     }
     it("rejects undeclared aliases and then accepts canonical names on protocol %d", protocol) {
@@ -296,22 +400,52 @@ spec("Application owned JSON body ingress") {
         if (limit < 2) expect("/echo/42", EMPTY_NOTE, "application/json", 200u);
       }
     }
-    it("retains the DTO and Plugin lease while finite close meets a blocked method on protocol %d", protocol) {
-      fixture.protocol = (chttp_protocol)protocol; fixture.block = true; start(CHTTP_DISPATCH_PLUGIN);
-      check_equal(cmeta_plugin_registry_request_stop(&fixture.registry, fixture.ref), CMETA_PLUGIN_OK); fixture.stopped = true;
-      check_equal(sync_thread_create(&fixture.thread, request_thread, NULL), SALTS_OK); fixture.thread_live = true;
-      const uint64_t began = monotonic_ms();
-      sync_mutex_lock(&fixture.mutex);
-      while (!fixture.calls && monotonic_ms() - began < 5000u)
-        (void)sync_cond_timedwait(&fixture.changed, &fixture.mutex, UINT64_C(10000000));
-      const int calls = fixture.calls; sync_mutex_unlock(&fixture.mutex); check_equal(calls, 1);
-      check_equal(chttp_application_close(&fixture.app, 1u), SALTS_ETIMEDOUT);
-      check_equal(fixture.destroyed, 0); check_equal(leases(), 1u);
-      check_equal(cmeta_plugin_registry_unload(&fixture.registry, fixture.ref), CMETA_PLUGIN_BUSY);
-      sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
-      sync_thread_join(&fixture.thread); fixture.thread_live = false;
+    for (int limit = 0; limit < 2; ++limit) {
+      it("bounds aggregate sequence buffers/items and reuses the slot (protocol=%d limit=%d)", protocol, limit) {
+        fixture.protocol = (chttp_protocol)protocol; select_sequence();
+        if (limit == 0) fixture.config.bindings.native_max_owned_bytes = 8u;
+        else fixture.config.bindings.native_max_items = 32u;
+        start(CHTTP_DISPATCH_PLUGIN);
+        const char *body = SEQUENCE_BODY;
+        if (limit == 1) body = "{\"records\":[],\"rows\":[],\"labels\":["
+            "\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\","
+            "\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\","
+            "\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\","
+            "\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\",\"x\"]}";
+        expect("/echo/42", body, "application/json", 413u);
+        check_equal(atomic_load(&fixture.before), 0);
+        expect("/echo/42", SHORT_SEQUENCE, "application/json", 200u);
+        expect("/echo/42", EMPTY_SEQUENCE, "application/json", 200u);
+      }
+    }
+    it("aborts oversized sequence output without retaining its native containers on protocol %d", protocol) {
+      fixture.protocol = (chttp_protocol)protocol; select_sequence(); fixture.config.bindings.max_response_body_bytes = 128u;
+      start(CHTTP_DISPATCH_PLUGIN);
+      expect("/echo/42", SEQUENCE_BODY, "application/json", 500u);
+      expect("/echo/42", EMPTY_SEQUENCE, "application/json", 200u);
       check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
-      check_equal(fixture.destroyed, 1); check_equal(leases(), 0u); check_equal(atomic_load(&fixture.after), 1);
+      check_equal(fixture.calls, 2); check_equal(atomic_load(&fixture.after), 1);
+    }
+    for (int sequence = 0; sequence < 2; ++sequence) {
+      it("retains the DTO and Plugin lease during finite close (protocol=%d sequence=%d)", protocol, sequence) {
+        fixture.protocol = (chttp_protocol)protocol; fixture.block = true;
+        if (sequence) select_sequence();
+        start(CHTTP_DISPATCH_PLUGIN);
+        check_equal(cmeta_plugin_registry_request_stop(&fixture.registry, fixture.ref), CMETA_PLUGIN_OK); fixture.stopped = true;
+        check_equal(sync_thread_create(&fixture.thread, request_thread, NULL), SALTS_OK); fixture.thread_live = true;
+        const uint64_t began = monotonic_ms();
+        sync_mutex_lock(&fixture.mutex);
+        while (!fixture.calls && monotonic_ms() - began < 5000u)
+          (void)sync_cond_timedwait(&fixture.changed, &fixture.mutex, UINT64_C(10000000));
+        const int calls = fixture.calls; sync_mutex_unlock(&fixture.mutex); check_equal(calls, 1);
+        check_equal(chttp_application_close(&fixture.app, 1u), SALTS_ETIMEDOUT);
+        check_equal(fixture.destroyed, 0); check_equal(leases(), 1u);
+        check_equal(cmeta_plugin_registry_unload(&fixture.registry, fixture.ref), CMETA_PLUGIN_BUSY);
+        sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
+        sync_thread_join(&fixture.thread); fixture.thread_live = false;
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(fixture.destroyed, 1); check_equal(leases(), 0u); check_equal(atomic_load(&fixture.after), 1);
+      }
     }
   }
   it("rejects non-JSON at mount and rolls back a Plugin lease and the route slot") {
@@ -321,28 +455,33 @@ spec("Application owned JSON body ingress") {
     check_equal(cmeta_plugin_registry_release(&fixture.registry, &fixture.discovery), CMETA_PLUGIN_OK);
     listen(); expect("/echo/42", BODY, "application/json", 200u);
   }
-  it("rejects a nested native bytes representation before publishing its route") {
-    DataBindNativeTypeBinding input = DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
-    DataBindNativeTypeBinding output = DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
-    DataBindServiceNativeBinding native = DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
-    DataBindError error = DATA_BIND_ERROR_INIT;
-    check_equal(databind_11_BodyIngress_8_RawProbe_4_Size__databind_native_binding(&input, &output, &native, &error), DATA_BIND_OK);
-    static const DataBindHttpFieldProjection fields[] = {
-        {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS, "payload", DATA_BIND_HTTP_BODY, "payload", 0u},
-        {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS, "value", DATA_BIND_HTTP_RESPONSE_BODY, "value", 0u}};
-    DataBindHttpProjectionConfig projection = DATA_BIND_HTTP_PROJECTION_CONFIG_INIT;
-    projection.method = "POST"; projection.route = "/raw"; projection.fields = fields; projection.field_count = 2u;
-    DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
-    DataBindHttpMethodPlan *plan = NULL;
-    check_equal(data_bind_http_method_plan_compile_service(fixture.codec, "RawProbe", "Size", &projection, &native, &plan, &diagnostic), DATA_BIND_OK);
-    initialize(CHTTP_DISPATCH_INLINE);
-    const chttp_http_method method = {.plan = plan, .binding = &native,
-        .execution = databind_11_BodyIngress_8_RawProbe_4_Size__databind_execution()};
-    const int status = chttp_application_worker_mount_http(&fixture.app, "BodyComponent", cmeta_reflected_data(BodyController),
-        &method, fixture.codec, &fixture.hook, 1u);
-    /* Keep local native metadata live even if a regression publishes the route. */
-    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
-    data_bind_http_method_plan_free(plan);
-    check_equal(status, SALTS_ENOTSUP);
+  for (int sequence = 0; sequence < 2; ++sequence) {
+    it("rejects nested native bytes before publishing its route (sequence=%d)", sequence) {
+      DataBindNativeTypeBinding input = DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+      DataBindNativeTypeBinding output = DATA_BIND_NATIVE_TYPE_BINDING_INIT(NULL, NULL);
+      DataBindServiceNativeBinding native = DATA_BIND_SERVICE_NATIVE_BINDING_INIT(NULL, NULL, NULL);
+      DataBindError error = DATA_BIND_ERROR_INIT;
+      check_equal(sequence ? databind_11_BodyIngress_8_RawProbe_12_SequenceSize__databind_native_binding(&input, &output, &native, &error) :
+          databind_11_BodyIngress_8_RawProbe_4_Size__databind_native_binding(&input, &output, &native, &error), DATA_BIND_OK);
+      static const DataBindHttpFieldProjection fields[] = {
+          {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_INGRESS, "payload", DATA_BIND_HTTP_BODY, "payload", 0u},
+          {sizeof(DataBindHttpFieldProjection), DATA_BIND_BINDING_EGRESS, "value", DATA_BIND_HTTP_RESPONSE_BODY, "value", 0u}};
+      DataBindHttpProjectionConfig projection = DATA_BIND_HTTP_PROJECTION_CONFIG_INIT;
+      projection.method = "POST"; projection.route = "/raw"; projection.fields = fields; projection.field_count = 2u;
+      DataBindBindingPlanDiagnostic diagnostic = DATA_BIND_BINDING_PLAN_DIAGNOSTIC_INIT;
+      DataBindHttpMethodPlan *plan = NULL;
+      check_equal(data_bind_http_method_plan_compile_service(fixture.codec, "RawProbe", sequence ? "SequenceSize" : "Size",
+          &projection, &native, &plan, &diagnostic), DATA_BIND_OK);
+      initialize(CHTTP_DISPATCH_INLINE);
+      const chttp_http_method method = {.plan = plan, .binding = &native,
+          .execution = sequence ? databind_11_BodyIngress_8_RawProbe_12_SequenceSize__databind_execution() :
+              databind_11_BodyIngress_8_RawProbe_4_Size__databind_execution()};
+      const int status = chttp_application_worker_mount_http(&fixture.app, "BodyComponent", cmeta_reflected_data(BodyController),
+          &method, fixture.codec, &fixture.hook, 1u);
+      /* Keep local native metadata live even if a regression publishes the route. */
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      data_bind_http_method_plan_free(plan);
+      check_equal(status, SALTS_ENOTSUP);
+    }
   }
 }

@@ -992,3 +992,29 @@
   CTests and install passed: migration-workspace-cleanup-tools-fresh.log and
   migration-workspace-cleanup-{build,ctest,install}.log. This fresh preset leaves
   BUILD_BENCHMARK off; CI explicitly enables its three benchmark CTests.
+
+## Private worker JSON sequence fields
+
+- Required record bodies now admit recursively nested SEQUENCE fields through
+  CMeta's public static element descriptor, after MessagePlan verifies the
+  finite native/schema graph. JSON arrays feed the existing native collector;
+  canonical owning providers, native budgets, rollback and bounded output stay
+  responsible for container elements. Map/set/bytes/variant and optional/null
+  representations remain rejected; there is no token conversion or fallback.
+- The generated fixture covers list<Detail>, list<list<uint64>> and list<string>.
+  Business output copies through canonical cmeta_data_value_copy, and hooks
+  verify independent record/string storage. Real Plugin discovery selects the
+  declared operation by name, preserving each mount's own lease/metadata.
+- An initial list<bytes> negative fixture failed generation because the released
+  SDK lacks that canonical CSTL storage projection. Preserve
+  migration-worker-sequences-concurrency-build.log. The formal mount negative
+  uses the supported list<BinaryBody> native shape and proves rejection of its
+  nested bytes field; no replacement production parser/storage was introduced.
+- All 55 body cases passed via CTest in worker-sequences-qualified-cases.log:
+  H1/H2 DIRECT/CFlow/real Plugin round trips, empty and nested arrays, exact
+  integers/embedded-NUL strings, validation and partial-collection rollback,
+  aggregate item/owned-byte limits, output abort/reuse, finite-close leases and
+  two simultaneous worker frames. No public default switch is included.
+- Complete native-release-user build, 121/121 formal CTests and install passed:
+  migration-worker-sequences-final-{build,ctest,install}.log. The fresh local
+  preset has benchmarks off; CI retains its full benchmark-enabled graph.

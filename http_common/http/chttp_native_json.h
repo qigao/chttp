@@ -119,7 +119,7 @@ failed:
 }
 
 /* Called only after MessagePlan verifies this finite native/schema graph.
- * This ingress slice admits scalar/string/enum/record fields. Bytes, container
+ * Sequences recurse through their public element descriptor. Bytes, map/set
  * and variant inputs need their own complete projection contract. */
 static inline bool chttp_native_json_input_shape_supported(const cmeta_data_desc *data) {
   switch (data->kind) {
@@ -130,6 +130,10 @@ static inline bool chttp_native_json_input_shape_supported(const cmeta_data_desc
   case CMETA_DATA_STRING:
   case CMETA_DATA_ENUM:
     return true;
+  case CMETA_DATA_SEQUENCE: {
+    const cmeta_data_desc *element = cmeta_data_collection_element_data(data);
+    return element && chttp_native_json_input_shape_supported(element);
+  }
   case CMETA_DATA_STRUCT: {
     const cmeta_data_struct_shape *shape = data->shape;
     for (size_t i = 0u; i < shape->field_count; ++i)
@@ -157,7 +161,7 @@ static inline DataBindStatus chttp_native_json_input_compile(DataBind *codec,
     if (status != DATA_BIND_OK) return status;
     if (!chttp_native_json_input_shape_supported(entry.data)) {
       data_bind_format_plan_free(out->format); *out = (chttp_native_json_plan){0};
-      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "JSON input requires scalar/string/enum/record fields");
+      return chttp_native_json_error(error, DATA_BIND_ERR_SCHEMA, "JSON input requires scalar/string/enum/record/sequence fields");
     }
     return DATA_BIND_OK;
   }
