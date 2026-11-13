@@ -54,6 +54,14 @@ struct work_item {
   chttp_application_work_task task;
   chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
   chttp_application_work_reply reply;
+  chttp_server_owner_waker waker;
+  chttp_body_source source;
+  void (*source_cleanup)(void *, int);
+  unsigned char *source_chunk;
+  size_t source_capacity, source_request, source_size, source_offset;
+  int source_status, source_close_status;
+  bool source_selected, source_requested, source_ready, source_active;
+  bool source_closed, source_cleaned, source_cleaning;
   chttp_server_admission_gate admission;
   chttp_application_admission_fn admission_fn;
   void *admission_user;
@@ -272,6 +280,26 @@ int chttp_application_work_response_file(chttp_application_work_reply *reply, un
   }
   return status;
 }
+int chttp_application_work_response_source(chttp_application_work_reply *reply, unsigned int code,
+    const char *type, const chttp_body_source *source, void (*cleanup)(void *, int), size_t chunk_bytes) {
+  if (!chttp_application_work_reply_current(reply) || !source || !source->read || !chunk_bytes ||
+      (source->content_length_known != 0 && source->content_length_known != 1) ||
+      code == 204u || code == 205u || code == 304u) return SALTS_EINVAL;
+  if (reply->sealed || reply->finalized) return SALTS_EALREADY;
+  size_t bytes = chunk_bytes;
+  const int measured = add_string(&bytes, type);
+  if (measured != SALTS_OK) return measured;
+  work_item *item = reply->item;
+  if (bytes > item->owner->config.reply_bytes - reply->reply_used) return SALTS_EMSGSIZE;
+  const int status = chttp_application_work_respond(reply, code, type, NULL, 0u);
+  if (status != SALTS_OK) return status;
+  item->source = *source; item->source_cleanup = cleanup;
+  item->source_capacity = chunk_bytes;
+  item->source_chunk = item->storage + item->storage_bytes - item->owner->config.reply_bytes + reply->reply_used;
+  reply->reply_used += chunk_bytes;
+  sync_mutex_lock(&item->owner->mutex); item->source_selected = true; sync_mutex_unlock(&item->owner->mutex);
+  return SALTS_OK;
+}
 /* Planner fields are unique and exclude Content-Type. Simulate their shared
  * append/upsert arena costs before changing any row; commit uses set_header. */
 static int file_headers_fit(const chttp_application_work_reply *reply, const chttp_server_file_plan *plan) {
@@ -334,6 +362,43 @@ static void file_prepared(void *context, int status) {
   item->outcome.publication_status = status;
   sync_mutex_unlock(&item->owner->mutex);
 }
+static void source_progress(work_item *);
+static bool source_native_ready(void *user) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex);
+  const bool ready = item->source_ready && !item->source_active;
+  sync_mutex_unlock(&item->owner->mutex);
+  return ready;
+}
+static int source_native_read(void *user, void *buffer, size_t capacity, size_t *out) {
+  work_item *item = user;
+  *out = 0u;
+  sync_mutex_lock(&item->owner->mutex);
+  if (item->source_ready && !item->source_active) {
+    const int status = item->source_status;
+    if (status == SALTS_OK) {
+      const size_t remaining = item->source_size - item->source_offset;
+      *out = remaining < capacity ? remaining : capacity;
+      if (*out) memcpy(buffer, item->source_chunk + item->source_offset, *out);
+      item->source_offset += *out;
+      if (item->source_size && item->source_offset == item->source_size) item->source_ready = false;
+    }
+    sync_mutex_unlock(&item->owner->mutex);
+    return status;
+  }
+  item->source_requested = true;
+  item->source_request = capacity < item->source_capacity ? capacity : item->source_capacity;
+  sync_mutex_unlock(&item->owner->mutex);
+  source_progress(item);
+  return CHTTP_SERVER_WORKER_SOURCE_WAIT;
+}
+static void source_native_cleanup(void *user, int status) {
+  work_item *item = user;
+  sync_mutex_lock(&item->owner->mutex);
+  if (!item->source_closed) { item->source_closed = true; item->source_close_status = status; }
+  sync_mutex_unlock(&item->owner->mutex);
+  source_progress(item);
+}
 static void publish(work_item *item, int business_status) {
   chttp_application_work_reply *draft = &item->reply;
   const int good = (business_status == SALTS_OK || item->session_stale) && draft->sealed;
@@ -348,7 +413,11 @@ static void publish(work_item *item, int business_status) {
   const chttp_server_deferred_file file = {.path = draft->file_path, .status_code = draft->status,
       .prepared = file_prepared, .user = item, .offset = draft->file_offset,
       .length = draft->file_length, .bounded = draft->file_bounded};
-  int status = good && draft->file_path ?
+  const chttp_server_worker_source source = {{source_native_read, item,
+      item->source.content_length, item->source.content_length_known}, source_native_ready, source_native_cleanup};
+  int status = good && item->source_selected ?
+      chttp_server_deferred_response_source(&item->deferred, draft->status, response.headers, response.header_count, &source) :
+      good && draft->file_path ?
       chttp_server_deferred_response_file(&item->deferred, response.headers, response.header_count, &file) :
       chttp_server_deferred_reply(&item->deferred, &response);
   if (status != SALTS_OK && item->deferred.impl) {
@@ -358,6 +427,10 @@ static void publish(work_item *item, int business_status) {
   }
   work_impl *impl = item->owner;
   sync_mutex_lock(&impl->mutex);
+  if (item->source_selected && (!good || status != SALTS_OK)) {
+    item->source_closed = true;
+    item->source_close_status = business_status != SALTS_OK ? business_status : status;
+  }
   /* The owner may have already recorded file preparation failure after READY. */
   if (status != SALTS_OK) item->outcome.publication_status = status;
   if (status != SALTS_OK && status != SALTS_ENOENT && status != SALTS_EALREADY &&
@@ -458,6 +531,7 @@ static void completion_cancelled(void *arg) {
   sync_mutex_unlock(&item->owner->mutex);
 }
 static void business_finalized(void *arg);
+static void source_finalized(void *arg);
 static void invariant_failure(work_impl *impl) {
   sync_mutex_lock(&impl->mutex);
   impl->accepting = 0;
@@ -470,6 +544,34 @@ static cflow_admission_status post_business(work_item *item) {
       .finalize = business_finalized, .user = item};
   return cflow_executor_try_post_task(&item->owner->executor, &task);
 }
+static void source_run(void *arg) {
+  work_item *item = arg;
+  sync_mutex_lock(&item->owner->mutex);
+  const int close_status = item->source_close_status;
+  sync_mutex_unlock(&item->owner->mutex);
+  if (item->source_cleaning) {
+    if (item->source_cleanup) item->source_cleanup(item->source.user, close_status);
+    return;
+  }
+  sync_mutex_lock(&item->owner->mutex);
+  const bool closed = item->source_closed;
+  const size_t capacity = item->source_request;
+  sync_mutex_unlock(&item->owner->mutex);
+  size_t bytes = 0u;
+  int status = closed ? SALTS_ECANCELED : item->source.read(item->source.user, item->source_chunk, capacity, &bytes);
+  if (status > SALTS_OK) status = SALTS_EPROTO;
+  if (status == SALTS_OK && bytes > capacity) status = SALTS_EPROTO;
+  sync_mutex_lock(&item->owner->mutex);
+  item->source_status = status; item->source_size = bytes; item->source_offset = 0u;
+  sync_mutex_unlock(&item->owner->mutex);
+}
+static void source_cancelled(void *arg) {
+  work_item *item = arg;
+  sync_mutex_lock(&item->owner->mutex);
+  item->source_status = SALTS_ECANCELED;
+  sync_mutex_unlock(&item->owner->mutex);
+  invariant_failure(item->owner); /* Admitted cleanup must never be dropped. */
+}
 static void unqueue_waiter(work_impl *impl, work_item *item) {
   work_item **cursor = &impl->waiting_head, *previous = NULL;
   while (*cursor && *cursor != item) { previous = *cursor; cursor = &(*cursor)->wait_next; }
@@ -480,19 +582,30 @@ static void unqueue_waiter(work_impl *impl, work_item *item) {
     --impl->stats.session_waiting;
   }
 }
-enum work_event { WORK_BUSINESS_DONE, WORK_TRANSPORT_DONE, WORK_SESSION_DONE };
+enum work_event { WORK_BUSINESS_DONE, WORK_TRANSPORT_DONE, WORK_SESSION_DONE, WORK_SOURCE_PROGRESS, WORK_SOURCE_DONE };
 static void join_completion(work_item *item, enum work_event event, int status) {
   work_impl *impl = item->owner;
   work_item *launch = NULL;
   int notify = 0;
+  bool source_post = false;
+  chttp_server_owner_waker waker = {0};
   sync_mutex_lock(&impl->mutex);
   if (event == WORK_BUSINESS_DONE) item->business_done = 1;
   else if (event == WORK_SESSION_DONE) {
     item->session_done = 1; item->outcome.session_status = status;
-  } else {
+  } else if (event == WORK_TRANSPORT_DONE) {
     item->transport_done = 1; item->outcome.transport_status = status;
     if (item->business_waiting) {
       unqueue_waiter(impl, item); launch = item; /* canceled: skip all user code */
+    }
+  }
+  if (event == WORK_SOURCE_DONE) {
+    item->source_active = false;
+    if (item->source_cleaning) item->source_cleaned = true;
+    else {
+      item->source_requested = false;
+      item->source_ready = true;
+      waker = item->waker;
     }
   }
   if (item->business_done && item->session_done && item->gate_owned) {
@@ -507,11 +620,24 @@ static void join_completion(work_item *item, enum work_event event, int status) 
       }
     }
   }
+  if (item->business_done && item->source_selected && !item->source_active && !item->source_cleaned &&
+      (item->source_closed || item->source_requested)) {
+    item->source_active = true; item->source_cleaning = item->source_closed; source_post = true;
+  }
   if (item->business_done && item->transport_done && (!item->session || item->session_done) &&
+      (!item->source_selected || item->source_cleaned) && !item->source_active &&
       !item->completion_queued) {
     item->completion_queued = 1; notify = 1;
   }
   sync_mutex_unlock(&impl->mutex);
+  /* All tail operations use captured owners or an exclusively reserved stage.
+   * A successful post may finish/recycle the record before returning. */
+  if (waker.impl) (void)chttp_server_owner_waker_signal(&waker);
+  if (source_post) {
+    const cflow_executor_task task = {.run = source_run, .cancel = source_cancelled,
+        .finalize = source_finalized, .user = item};
+    if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
+  }
   /* Each record has at most one queued stage. The gate adds no executor queue
    * or worker-blocking wait. Never access a record after successful posting. */
   if (launch && post_business(launch) != CFLOW_ADMISSION_ACCEPTED) invariant_failure(impl);
@@ -522,6 +648,8 @@ static void join_completion(work_item *item, enum work_event event, int status) 
     invariant_failure(impl); /* retain unsettled ownership; never inline or drop */
 }
 static void business_finalized(void *arg) { join_completion(arg, WORK_BUSINESS_DONE, SALTS_OK); }
+static void source_progress(work_item *item) { join_completion(item, WORK_SOURCE_PROGRESS, SALTS_OK); }
+static void source_finalized(void *arg) { join_completion(arg, WORK_SOURCE_DONE, SALTS_OK); }
 static void response_terminal(void *arg, int status) { join_completion(arg, WORK_TRANSPORT_DONE, status); }
 static void session_committed(void *arg, int status) { join_completion(arg, WORK_SESSION_DONE, status); }
 
@@ -679,6 +807,8 @@ int chttp_application_work_submit(chttp_application_work *owner,
   }
   snapshot_copy(item, request);
   item->reply.item = item;
+  status = chttp_server_response_waker(response, &item->waker);
+  if (status != SALTS_OK) { release_work(item); return status; }
   item->terminal = (chttp_server_response_terminal){.complete = response_terminal, .user = item};
   status = chttp_server_response_observe(response, &item->terminal);
   if (status != SALTS_OK) { release_work(item); return status; }

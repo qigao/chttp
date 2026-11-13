@@ -70,6 +70,17 @@ int chttp_invocation_response_file(const chttp_invocation *, unsigned int,
  * response_file. The selected file must stay immutable through native terminal.
  * Headers retain before/action/after ordering. No URL mapping is performed. */
 int chttp_invocation_serve_file(const chttp_invocation *, const chttp_server_file_options *);
+/* Copies the synchronous source descriptor and reserves chunk_bytes in the
+ * existing reply arena. Success transfers user-resource lifetime through the
+ * worker cleanup callback; failure transfers nothing. Reads/cleanup are serial
+ * worker callbacks after action/hook unwind, with zero bytes meaning EOF.
+ * No native builder or Invocation scope may be retained by the source. */
+int chttp_invocation_response_source(const chttp_invocation *, unsigned int, const char *,
+    const chttp_body_source *, void (*cleanup)(void *, int), size_t chunk_bytes);
+/* SSE formatting/next/close reuse the web helper on workers. Scratch and user
+ * borrow the same successful source-selection lifetime through cleanup. */
+struct chttp_web_sse_stream;
+int chttp_invocation_sse_response(const chttp_invocation *, struct chttp_web_sse_stream *, size_t chunk_bytes);
 /* Before-only handled rejection; success seals the draft and clears proceed. */
 int chttp_invocation_reject(const chttp_invocation *, bool *, unsigned int, const char *, const void *, size_t);
 

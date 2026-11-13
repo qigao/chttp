@@ -780,6 +780,23 @@ requests, WebSocket handshakes and deferred streaming bodies.
   admitted chunk/event and its cleanup, including explicit cancellation of work
   not executed. Per-stream bytes/events remain independently bounded; waiting
   streams/connections also consume retained Application capacity.
+  The private source bridge uses one copied descriptor and one chunk reserved
+  from the admitted Invocation's reply arena. It retains the same record/byte
+  credit and shared executor through native terminal, source cleanup and worker
+  notification. No producer queue or second pool is added. The native owner
+  requests at most one chunk; EMPTY -> REQUESTED -> RUNNING -> READY -> EMPTY
+  is synchronized by the worker mutex. Credit returns after the owner copies the
+  chunk. Only the internal owner adapter returns a distinct positive WAIT; a synchronous
+  user source still reports zero bytes as EOF and negative status as failure.
+  A lifecycle-locked owner waker signals READY, with Server storage retained
+  until the Application drains the worker pool. HEAD/cancellation/failed
+  publication mark CLOSED, never reclaim a running producer's storage. Cleanup
+  executes exactly once on a worker after business and any running read settle;
+  after_completion waits for cleanup and the actual native response terminal.
+  Source selection transfers its user resource only on success. That resource,
+  including SSE scratch, must remain live through cleanup; copied request and
+  Bean ownership remain with the Invocation/Application. Read failure after
+  headers terminates the stream rather than inventing a successful empty body.
 - Existing low-level engine source-cleanup callbacks still run on their owner
   as nonblocking resource callbacks. The Application adapter records their
   terminal and schedules the user's worker notification; it does not change the

@@ -1,4 +1,5 @@
 #include "chttp_invocation_internal.h"
+#include "chttp_web_registration.h"
 
 static const chttp_invocation_state *invocation_state(const chttp_invocation *invocation) {
   const chttp_invocation_state *state = invocation ? invocation->impl : NULL;
@@ -38,6 +39,22 @@ int chttp_invocation_response_file(const chttp_invocation *invocation, unsigned 
 int chttp_invocation_serve_file(const chttp_invocation *invocation, const chttp_server_file_options *options) {
   const chttp_invocation_state *state = invocation_state(invocation);
   return state ? chttp_application_work_serve_file(state->reply, options) : SALTS_EINVAL;
+}
+int chttp_invocation_response_source(const chttp_invocation *invocation, unsigned int code,
+    const char *type, const chttp_body_source *source, void (*cleanup)(void *, int), size_t chunk_bytes) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  return state ? chttp_application_work_response_source(state->reply, code, type, source, cleanup, chunk_bytes) : SALTS_EINVAL;
+}
+int chttp_invocation_sse_response(const chttp_invocation *invocation, chttp_web_sse_stream *stream, size_t chunk_bytes) {
+  if (!invocation_state(invocation)) return SALTS_EINVAL;
+  chttp_body_source source;
+  int status = chttp_web_sse_source_open(stream, &source);
+  if (status != SALTS_OK) return status;
+  status = chttp_invocation_set_header(invocation, "Cache-Control", "no-cache");
+  if (status == SALTS_OK) status = chttp_invocation_response_source(invocation, 200u,
+      "text/event-stream", &source, chttp_web_sse_source_cleanup, chunk_bytes);
+  if (status != SALTS_OK) stream->active = false;
+  return status;
 }
 int chttp_invocation_reject(const chttp_invocation *invocation, bool *proceed, unsigned int code,
     const char *type, const void *body, size_t size) {

@@ -266,7 +266,7 @@ static int chttp_web_sse_source_read(
   return SALTS_OK;
 }
 
-static void chttp_web_sse_source_cleanup(void *user, int status) {
+void chttp_web_sse_source_cleanup(void *user, int status) {
   chttp_web_sse_stream *stream = (chttp_web_sse_stream *)user;
   chttp_web_sse_close_fn close;
   void *close_user;
@@ -279,6 +279,15 @@ static void chttp_web_sse_source_cleanup(void *user, int status) {
   stream->buffered_offset = 0u;
   stream->buffered_size = 0u;
   if (close != NULL) close(close_user, status);
+}
+
+int chttp_web_sse_source_open(chttp_web_sse_stream *stream, chttp_body_source *source) {
+  if (!stream || !source || stream->size != sizeof(*stream) || stream->active ||
+      !stream->next || !stream->scratch || !stream->scratch_capacity) return SALTS_EINVAL;
+  stream->buffered_offset = 0u; stream->buffered_size = 0u;
+  stream->terminal_status = SALTS_OK; stream->eof = false; stream->active = true;
+  *source = (chttp_body_source){chttp_web_sse_source_read, stream, 0u, 0};
+  return SALTS_OK;
 }
 
 chttp_web_status chttp_web_sse_response(
@@ -303,17 +312,8 @@ chttp_web_status chttp_web_sse_response(
         error, CHTTP_WEB_SERVER, status,
         "CHTTP rejected the SSE cache policy");
 
-  stream->buffered_offset = 0u;
-  stream->buffered_size = 0u;
-  stream->terminal_status = SALTS_OK;
-  stream->eof = false;
-  stream->active = true;
-
-  source = (chttp_body_source){
-      .read = chttp_web_sse_source_read,
-      .user = stream,
-      .content_length = 0u,
-      .content_length_known = 0};
+  status = chttp_web_sse_source_open(stream, &source);
+  if (status != SALTS_OK) return chttp_web_sse_fail(error, CHTTP_WEB_SERVER, status, "invalid SSE source");
   status = chttp_server_response_source_with_cleanup(
       response, 200u, "text/event-stream",
       &source, chttp_web_sse_source_cleanup, stream);

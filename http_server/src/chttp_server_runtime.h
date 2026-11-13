@@ -101,6 +101,7 @@ typedef struct chttp_server_response_builder {
   void (*source_cleanup)(void *user, int status);
   void *source_cleanup_user;
   chttp_file_transfer *file_transfer;
+  bool (*worker_source_ready)(void *);
   bool replied;
   bool source_enabled;
   bool deferred;

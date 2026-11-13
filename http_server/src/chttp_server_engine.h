@@ -64,6 +64,22 @@ typedef struct chttp_server_deferred_file {
 int chttp_server_deferred_response_file(chttp_server_deferred *, const chttp_header *, size_t,
     const chttp_server_deferred_file *);
 
+/* Private retained worker source. Only this adapter interprets the positive WAIT;
+ * public synchronous sources retain their negative-error/zero-EOF contract.
+ * ready/read/cleanup are framework bookkeeping, never application callbacks.
+ * Descriptor/user borrow the Invocation through native terminal. */
+typedef struct chttp_server_worker_source {
+  chttp_body_source source;
+  bool (*ready)(void *);
+  void (*cleanup)(void *, int);
+} chttp_server_worker_source;
+enum { CHTTP_SERVER_WORKER_SOURCE_WAIT = 1 };
+typedef struct chttp_server_owner_waker { void *impl; } chttp_server_owner_waker;
+int chttp_server_response_waker(chttp_server_response *, chttp_server_owner_waker *);
+int chttp_server_owner_waker_signal(const chttp_server_owner_waker *);
+int chttp_server_deferred_response_source(chttp_server_deferred *, unsigned int,
+    const chttp_header *, size_t, const chttp_server_worker_source *);
+
 enum { CHTTP_SERVER_DATE_BYTES = 29, CHTTP_SERVER_DATE_CAPACITY = CHTTP_SERVER_DATE_BYTES + 1,
        CHTTP_SERVER_FILE_ETAG_CAPACITY = 80, CHTTP_SERVER_FILE_RANGE_CAPACITY = 96,
        CHTTP_SERVER_FILE_HEADER_CAPACITY = 4 };

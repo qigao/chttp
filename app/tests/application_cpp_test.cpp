@@ -67,6 +67,8 @@ struct InvocationCppContext {
   const char *asset_root = nullptr;
   bool asset_fail = false, asset_worker = false;
   int asset_unwound = 0;
+  bool source = false, source_fail = false, source_worker = false;
+  int source_unwound = 0, source_closed = 0;
   unsigned int code = 0;
 };
 struct InvocationCppController {
@@ -79,6 +81,17 @@ cmeta_reflect_data(InvocationCppController, "test.InvocationCppController", cmet
 CHTTP_INVOCATION_ACTION(cpp_invocation);
 CHTTP_ADMISSION_ACTION(cpp_admission);
 CHTTP_ASSET_POLICY_ACTION(cpp_asset_policy);
+static int cpp_source_read(void *user, void *buffer, size_t capacity, size_t *out) {
+  auto& context = *static_cast<InvocationCppContext*>(user);
+  struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.source_unwound};
+  context.source_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  if (capacity < 2u) return SALTS_EMSGSIZE;
+  *out = context.source_unwound ? 0u : 2u;
+  if (*out) std::memcpy(buffer, "42", 2u);
+  if (context.source_fail) throw std::runtime_error("source failure");
+  return SALTS_OK;
+}
+static void cpp_source_close(void *user, int) noexcept { ++static_cast<InvocationCppContext*>(user)->source_closed; }
 int cpp_asset_policy(void *self, const char *path, chttp_application_asset_policy_result *result) {
   auto& context = *static_cast<InvocationCppController*>(self)->call_context;
   struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.asset_unwound};
@@ -110,6 +123,10 @@ int cpp_invocation(void *self, const chttp_invocation *invocation) {
   if (chttp_invocation_serve_file(invocation, nullptr) != SALTS_EINVAL) return SALTS_EPROTO;
   if (context.fail) throw std::runtime_error("Invocation failure");
   if (!chttp_invocation_request(invocation) || chttp_invocation_request(invocation)->session) return SALTS_EPROTO;
+  if (context.source) {
+    const chttp_body_source source{chttp::detail::source_read<cpp_source_read>, &context, 0u, 0};
+    return chttp_invocation_response_source(invocation, 200u, "text/plain", &source, cpp_source_close, 16u);
+  }
   return chttp_invocation_respond(invocation, 200u, "text/plain", "42", 2u);
 }
 static_assert(std::is_convertible_v<decltype(&cpp_invocation), chttp_invocation_action_fn>);
@@ -176,6 +193,30 @@ static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 2; ++failure) {
+    it("unwinds a C++ source on a worker before terminal cleanup (protocol=%d failure=%d)", protocol, failure) {
+      InvocationCppContext context; context.source = true; context.source_fail = failure != 0;
+      context.protocol = static_cast<chttp_protocol>(protocol); context.control = sync_thread_current_token();
+      auto factory = [&context](const cmeta_data_desc*, const void*, const salts_configurator_dependency*, size_t) {
+        return std::make_unique<InvocationCppController>(&context);
+      };
+      chttp::Bean<InvocationCppController, decltype(factory)> bean(cmeta_component_meta(CppComponent),
+          cmeta_reflected_data(InvocationCppController), factory);
+      const auto deployment = bean.deployment();
+      chttp_controller controller{}; controller.component_id = "CppComponent"; controller.receiver = cmeta_reflected_data(InvocationCppController);
+      auto config = chttp_application_config_default(); config.components = &deployment; config.component_count = 1u;
+      config.controllers = &controller; config.controller_count = 1u;
+      chttp_application app{};
+      check_equal(chttp_application_init(&app, &config), SALTS_OK);
+      const int called = cpp_invocation_body(&app, &context);
+      const int closed = chttp_application_close(&app, 0u);
+      check_equal(closed, SALTS_OK);
+      if (failure) { check_not_equal(called, SALTS_OK); check_not_equal(called, SALTS_ETIMEDOUT); }
+      else check_equal(called, SALTS_OK);
+      check_true(context.source_worker); check_equal(context.source_closed, 1); check_equal(context.source_unwound, failure ? 1 : 2);
+      check_equal(unwound, 1); check_equal(destroyed, 1);
+    }
+  }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure < 2; ++failure) {
     it("admits C++ asset policy and contains exceptions before file selection (protocol=%d failure=%d)", protocol, failure) {
       char *root = tt_make_temp_dir("chttp-cpp-worker-assets-"); check_not_null(root);

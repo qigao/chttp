@@ -20,5 +20,10 @@ int asset_policy_action(void *self, const char *path, chttp_application_asset_po
   try { return Action(self, path, result); }
   catch (...) { return SALTS_EIO; }
 }
+template<chttp_body_read_fn Read>
+int source_read(void *user, void *buffer, size_t capacity, size_t *out) noexcept {
+  try { return Read(user, buffer, capacity, out); }
+  catch (...) { return SALTS_EIO; }
+}
 }
 #endif

@@ -107,6 +107,7 @@ void chttp_server_response_builder_close_source(chttp_server_response_builder *b
   builder->source_cleanup = NULL;
   builder->source_cleanup_user = NULL;
   builder->file_transfer = NULL;
+  builder->worker_source_ready = NULL;
   if (cleanup != NULL) cleanup(cleanup_user, status);
 }
 
@@ -413,6 +414,41 @@ static int deferred_headers(chttp_server_deferred_target *target,
   for (size_t i = 0u; status == SALTS_OK && i < count; ++i)
     status = chttp_server_response_set_header(target->response, headers[i].name, headers[i].value);
   return status;
+}
+
+int chttp_server_response_waker(chttp_server_response *response, chttp_server_owner_waker *out) {
+  const chttp_server_response_builder *builder = response ? response->impl : NULL;
+  if (!builder || !builder->connection || !out) return SALTS_EINVAL;
+  out->impl = builder->connection->owner;
+  return SALTS_OK;
+}
+int chttp_server_owner_waker_signal(const chttp_server_owner_waker *waker) {
+  chttp_server_owner_lane *owner = waker ? waker->impl : NULL;
+  if (!owner) return SALTS_EINVAL;
+  sync_mutex_lock(&owner->server->mutex);
+  const int status = chttp_server_owner_wake_locked(owner);
+  sync_mutex_unlock(&owner->server->mutex);
+  return status;
+}
+int chttp_server_deferred_response_source(chttp_server_deferred *deferred, unsigned int code,
+    const chttp_header *headers, size_t count, const chttp_server_worker_source *source) {
+  if (!deferred || !deferred->impl || !deferred->generation || !source || !source->source.read ||
+      !source->ready || !source->cleanup || (count && !headers)) return SALTS_EINVAL;
+  chttp_server_deferred_target *target = deferred->impl;
+  int status = chttp_server_deferred_claim(target->token, deferred->generation);
+  if (status != SALTS_OK) return status;
+  status = deferred_headers(target, headers, count);
+  if (status == SALTS_OK) status = chttp_server_response_source_owned(target->response,
+      code, NULL, &source->source, source->cleanup, source->source.user);
+  if (status != SALTS_OK) {
+    chttp_server_response_builder_reset(target->response_builder);
+    atomic_store_explicit(target->token,
+        chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_PENDING), memory_order_release);
+    return status;
+  }
+  target->response_builder->worker_source_ready = source->ready;
+  chttp_server_deferred_publish(deferred, CHTTP_SERVER_DEFERRED_READY);
+  return SALTS_OK;
 }
 
 int chttp_server_deferred_response_file(chttp_server_deferred *deferred,
