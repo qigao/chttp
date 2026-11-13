@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { FILE_ETAG_CAPACITY = 80, FILE_RANGE_CAPACITY = 96, HTTP_DATE_INPUT_CAPACITY = 64,
+enum { HTTP_DATE_INPUT_CAPACITY = 64,
        MICROSECONDS_PER_SECOND = 1000000,
        MILLISECONDS_PER_SECOND = 1000, YEAR_BASE = 1900, CENTURY = 100, OBS_YEAR_WINDOW = 50 };
 
@@ -192,42 +192,41 @@ static const char *file_mime(const char *path) {
   return "application/octet-stream";
 }
 
-int chttp_server_serve_file(chttp_server_response *response,
-    const chttp_server_request_view *request, const chttp_server_file_options *options) {
+int chttp_server_file_plan_make(const chttp_server_request_view *request,
+    const chttp_server_file_options *options, chttp_server_file_plan *plan) {
   fs_stat_t metadata;
-  char generated_etag[FILE_ETAG_CAPACITY], modified[CHTTP_SERVER_DATE_CAPACITY];
-  char content_range[FILE_RANGE_CAPACITY];
   const char *etag, *condition;
   time_t condition_time;
   uint64_t offset = 0, length;
   unsigned int code = 200;
   int status, match;
-  if (response == NULL || response->impl == NULL || request == NULL || options == NULL ||
+  if (plan == NULL || request == NULL || options == NULL ||
       options->path == NULL || options->path[0] == '\0') return SALTS_EINVAL;
+  *plan = (chttp_server_file_plan){.status_code = 200u};
   if (request->method != CHTTP_METHOD_GET && request->method != CHTTP_METHOD_HEAD) {
-    status = chttp_server_response_set_header(response, "Allow", "GET, HEAD");
-    return status == SALTS_OK ? chttp_server_reply(response, 405, NULL, NULL, 0) : status;
+    plan->status_code = 405u;
+    plan->headers[plan->header_count++] = (chttp_header){"Allow", "GET, HEAD"};
+    return SALTS_OK;
   }
   status = fs_stat(options->path, &metadata);
   if (status != SALTS_OK) return status;
   if (!metadata.is_file) return SALTS_EISDIR;
   if (metadata.size > SIZE_MAX) return SALTS_EFBIG;
   length = metadata.size;
-  const int tag_size = snprintf(generated_etag, sizeof(generated_etag),
+  const int tag_size = snprintf(plan->etag, sizeof(plan->etag),
       "W/\"%" PRIx64 "-%" PRIx64 "-%" PRIx64 "\"", metadata.size, metadata.mtime, metadata.ctime);
-  if (tag_size < 0 || (size_t)tag_size >= sizeof(generated_etag)) return SALTS_ERANGE;
-  etag = options->etag != NULL ? options->etag : generated_etag;
+  if (tag_size < 0 || (size_t)tag_size >= sizeof(plan->etag)) return SALTS_ERANGE;
+  etag = options->etag != NULL ? options->etag : plan->etag;
   const char *tag_end = file_tag_end(etag);
   if (tag_end == NULL || *tag_end != '\0') return SALTS_EINVAL;
   const uint64_t now = realtime_ms() / MILLISECONDS_PER_SECOND;
   const uint64_t modified_seconds = metadata.mtime / MICROSECONDS_PER_SECOND;
   const time_t mtime = (time_t)(modified_seconds < now ? modified_seconds : now);
-  status = chttp_server_format_date(mtime, modified);
+  status = chttp_server_format_date(mtime, plan->modified);
   if (status != SALTS_OK) return status;
-  status = chttp_server_response_set_header(response, "ETag", etag);
-  if (status == SALTS_OK) status = chttp_server_response_set_header(response, "Last-Modified", modified);
-  if (status == SALTS_OK) status = chttp_server_response_set_header(response, "Accept-Ranges", "bytes");
-  if (status != SALTS_OK) return status;
+  plan->headers[plan->header_count++] = (chttp_header){"ETag", etag};
+  plan->headers[plan->header_count++] = (chttp_header){"Last-Modified", plan->modified};
+  plan->headers[plan->header_count++] = (chttp_header){"Accept-Ranges", "bytes"};
   match = file_request_tags(request, "If-Match", etag, true);
   if (match != -2) {
     if (match < 0) code = 400;
@@ -236,7 +235,7 @@ int chttp_server_serve_file(chttp_server_response *response,
     condition = file_single_header(request, "If-Unmodified-Since");
     if (condition != NULL && file_http_date(condition, &condition_time) && mtime > condition_time) code = 412;
   }
-  if (code != 200) return chttp_server_reply(response, code, NULL, NULL, 0);
+  if (code != 200) { plan->status_code = code; return SALTS_OK; }
   match = file_request_tags(request, "If-None-Match", etag, false);
   if (match != -2) {
     if (match < 0) code = 400;
@@ -245,7 +244,7 @@ int chttp_server_serve_file(chttp_server_response *response,
     condition = file_single_header(request, "If-Modified-Since");
     if (condition != NULL && file_http_date(condition, &condition_time) && mtime <= condition_time) code = 304;
   }
-  if (code != 200) return chttp_server_reply(response, code, NULL, NULL, 0);
+  if (code != 200) { plan->status_code = code; return SALTS_OK; }
   condition = file_single_header(request, "Range");
   const char *if_range = file_single_header(request, "If-Range");
   if (if_range == NULL && chttp_server_request_header(request, "If-Range") != NULL) condition = NULL;
@@ -253,20 +252,35 @@ int chttp_server_serve_file(chttp_server_response *response,
       (if_range == NULL || file_if_range_matches(if_range, etag))) {
     const int selected = file_range(condition, metadata.size, &offset, &length);
     if (selected < 0) {
-      (void)snprintf(content_range, sizeof(content_range), "bytes */%" PRIu64, metadata.size);
+      (void)snprintf(plan->range, sizeof(plan->range), "bytes */%" PRIu64, metadata.size);
       code = 416;
     } else if (selected > 0) {
-      (void)snprintf(content_range, sizeof(content_range), "bytes %" PRIu64 "-%" PRIu64 "/%" PRIu64,
+      (void)snprintf(plan->range, sizeof(plan->range), "bytes %" PRIu64 "-%" PRIu64 "/%" PRIu64,
                      offset, offset + length - 1, metadata.size);
       code = 206;
     }
     if (code != 200) {
-      status = chttp_server_response_set_header(response, "Content-Range", content_range);
-      if (status != SALTS_OK) return status;
-      if (code == 416) return chttp_server_reply(response, code, NULL, NULL, 0);
+      plan->headers[plan->header_count++] = (chttp_header){"Content-Range", plan->range};
+      if (code == 416) { plan->status_code = code; return SALTS_OK; }
     }
   }
-  return chttp_server_send_file(response, code,
-      options->content_type != NULL ? options->content_type : file_mime(options->path),
-      options->path, offset, (size_t)length, true);
+  plan->status_code = code; plan->offset = offset; plan->length = (size_t)length;
+  plan->content_type = options->content_type != NULL ? options->content_type : file_mime(options->path);
+  plan->send_file = true;
+  return SALTS_OK;
+}
+
+int chttp_server_serve_file(chttp_server_response *response,
+    const chttp_server_request_view *request, const chttp_server_file_options *options) {
+  if (response == NULL || response->impl == NULL) return SALTS_EINVAL;
+  chttp_server_file_plan plan;
+  int status = chttp_server_file_plan_make(request, options, &plan);
+  if (status != SALTS_OK) return status;
+  for (size_t i = 0u; i < plan.header_count; ++i) {
+    status = chttp_server_response_set_header(response, plan.headers[i].name, plan.headers[i].value);
+    if (status != SALTS_OK) return status;
+  }
+  return plan.send_file ? chttp_server_send_file(response, plan.status_code, plan.content_type,
+      options->path, plan.offset, plan.length, true) :
+      chttp_server_reply(response, plan.status_code, NULL, NULL, 0u);
 }

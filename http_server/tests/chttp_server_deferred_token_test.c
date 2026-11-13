@@ -134,6 +134,23 @@ spec("CHTTP deferred completion lifecycle") {
     sync_mutex_destroy(&terminal_fixture.server.mutex);
   }
 
+  it("rejects an overflowing file range without claiming its pending terminal") {
+    atomic_store(&terminal_fixture.connection.deferred_token,
+        chttp_server_deferred_token(1u, CHTTP_SERVER_DEFERRED_PENDING));
+    terminal_fixture.handle = (chttp_server_deferred){&terminal_fixture.connection.deferred_target, 1u};
+    chttp_server_deferred_file file = {.path = "deferred-file", .status_code = 206u,
+        .offset = UINT64_MAX, .length = 1u, .bounded = true};
+    check_equal(chttp_server_deferred_response_file(&terminal_fixture.handle, NULL, 0u, &file), SALTS_ERANGE);
+    check_not_null(terminal_fixture.handle.impl);
+    check_equal(chttp_server_deferred_token_state(atomic_load(&terminal_fixture.connection.deferred_token)),
+        CHTTP_SERVER_DEFERRED_PENDING);
+    file.offset = UINT64_MAX - 1u;
+    check_equal(chttp_server_deferred_response_file(&terminal_fixture.handle, NULL, 0u, &file), SALTS_OK);
+    check_null(terminal_fixture.handle.impl);
+    check_equal(chttp_server_deferred_token_state(atomic_load(&terminal_fixture.connection.deferred_token)),
+        CHTTP_SERVER_DEFERRED_READY);
+  }
+
   it("keeps terminal ownership until the shutdown lock admits publication and wake") {
     terminal_fixture.body = mem_get_buffer(mem_global(), 1u);
     check_not_null(terminal_fixture.body);

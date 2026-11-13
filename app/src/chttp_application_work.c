@@ -21,6 +21,9 @@ struct chttp_application_work_reply {
   size_t header_count, header_used, header_wire, reply_used;
   const void *body;
   const char *file_path;
+  uint64_t file_offset;
+  size_t file_length;
+  bool file_bounded;
   size_t size;
   int sealed;
   int finalized;
@@ -206,6 +209,29 @@ int chttp_application_work_respond(chttp_application_work_reply *reply, unsigned
   reply->status = code; reply->sealed = 1;
   return SALTS_OK;
 }
+typedef struct header_budget { size_t count, used, wire; } header_budget;
+/* Reserve one non-Content-Type upsert against a virtual budget. Multi-field
+ * callers supply distinct names so existing rows remain the lookup fact source. */
+static int reserve_header(const chttp_application_work_reply *reply, const char *name,
+    const chttp_response_field_size *measured, header_budget *budget, size_t *slot) {
+  const chttp_application_work_config *limits = &reply->item->owner->config;
+  size_t index = 0u, previous = 0u;
+  for (; index < reply->header_count; ++index) {
+    const chttp_header *field = &reply->headers[index + 1u];
+    if (chttp_response_ascii_equal(field->name, name)) {
+      previous = strlen(field->name) + strlen(field->value) + 4u; break;
+    }
+  }
+  const bool replacing = index < reply->header_count;
+  if ((!replacing && budget->count == limits->header_capacity) ||
+      measured->wire > limits->header_bytes - (budget->wire - previous)) return SALTS_ENOBUFS;
+  const size_t bytes = measured->value + 1u + (replacing ? 0u : measured->name + 1u);
+  if (bytes > limits->header_bytes - budget->used) return SALTS_ENOBUFS;
+  budget->used += bytes; budget->wire = budget->wire - previous + measured->wire;
+  if (!replacing) ++budget->count;
+  *slot = index;
+  return SALTS_OK;
+}
 int chttp_application_work_set_header(chttp_application_work_reply *reply, const char *name, const char *value) {
   if (!chttp_application_work_reply_current(reply)) return SALTS_EINVAL;
   chttp_response_field_size measured;
@@ -222,24 +248,16 @@ int chttp_application_work_set_header(chttp_application_work_reply *reply, const
     reply->headers[0] = (chttp_header){"Content-Type", copy}; reply->reply_used += bytes;
     return SALTS_OK;
   }
-  size_t index = 0u, previous = 0u;
-  for (; index < reply->header_count; ++index) {
-    const chttp_header *field = &reply->headers[index + 1u];
-    if (chttp_response_ascii_equal(field->name, name)) {
-      previous = strlen(field->name) + strlen(field->value) + 4u; break;
-    }
-  }
+  size_t index;
+  header_budget budget = {reply->header_count, reply->header_used, reply->header_wire};
+  const int reserved = reserve_header(reply, name, &measured, &budget, &index);
+  if (reserved != SALTS_OK) return reserved;
   const bool replacing = index < reply->header_count;
-  if ((!replacing && reply->header_count == limits->header_capacity) ||
-      measured.wire > limits->header_bytes - (reply->header_wire - previous)) return SALTS_ENOBUFS;
-  const size_t bytes = measured.value + 1u + (replacing ? 0u : measured.name + 1u);
-  if (bytes > limits->header_bytes - reply->header_used) return SALTS_ENOBUFS;
   unsigned char *next = (unsigned char *)reply->header_storage + reply->header_used;
   const char *name_copy = replacing ? reply->headers[index + 1u].name : copy_string(&next, name);
   const char *value_copy = copy_string(&next, value);
   reply->headers[index + 1u] = (chttp_header){name_copy, value_copy};
-  reply->header_used += bytes; reply->header_wire = reply->header_wire - previous + measured.wire;
-  if (!replacing) ++reply->header_count;
+  reply->header_used = budget.used; reply->header_wire = budget.wire; reply->header_count = budget.count;
   return SALTS_OK;
 }
 int chttp_application_work_response_file(chttp_application_work_reply *reply, unsigned int code,
@@ -253,6 +271,49 @@ int chttp_application_work_response_file(chttp_application_work_reply *reply, un
     reply->file_path = reply->body; reply->body = NULL; reply->size = 0u;
   }
   return status;
+}
+/* Planner fields are unique and exclude Content-Type. Simulate their shared
+ * append/upsert arena costs before changing any row; commit uses set_header. */
+static int file_headers_fit(const chttp_application_work_reply *reply, const chttp_server_file_plan *plan) {
+  header_budget budget = {reply->header_count, reply->header_used, reply->header_wire};
+  for (size_t i = 0u; i < plan->header_count; ++i) {
+    const chttp_header *field = &plan->headers[i];
+    chttp_response_field_size measured;
+    const int status = chttp_response_field_measure(field->name, field->value, false, &measured);
+    if (status != SALTS_OK) return status;
+    size_t slot;
+    const int reserved = reserve_header(reply, field->name, &measured, &budget, &slot);
+    if (reserved != SALTS_OK) return reserved;
+  }
+  return SALTS_OK;
+}
+int chttp_application_work_serve_file(chttp_application_work_reply *reply, const chttp_server_file_options *options) {
+  if (!chttp_application_work_reply_current(reply)) return SALTS_EINVAL;
+  if (reply->sealed || reply->finalized) return SALTS_EALREADY;
+  chttp_server_file_plan plan;
+  int status = chttp_server_file_plan_make(&reply->item->request, options, &plan);
+  if (status != SALTS_OK) return status;
+  status = file_headers_fit(reply, &plan);
+  if (status != SALTS_OK) return status;
+  size_t bytes = 0u;
+  if (plan.send_file) {
+    status = add_string(&bytes, options->path);
+    if (status != SALTS_OK) return status;
+  }
+  /* respond validates/copies path and MIME before mutation. Every metadata
+   * row was preflighted above; no allocation or external call follows sealing. */
+  status = chttp_application_work_respond(reply, plan.status_code, plan.content_type,
+      plan.send_file ? options->path : NULL, bytes);
+  if (status != SALTS_OK) return status;
+  if (plan.send_file) {
+    reply->file_path = reply->body; reply->body = NULL; reply->size = 0u;
+    reply->file_offset = plan.offset; reply->file_length = plan.length; reply->file_bounded = true;
+  }
+  for (size_t i = 0u; i < plan.header_count; ++i) {
+    status = chttp_application_work_set_header(reply, plan.headers[i].name, plan.headers[i].value);
+    if (status != SALTS_OK) return status;
+  }
+  return SALTS_OK;
 }
 static int reserve_method(void *context, chttp_method_completion_record **out) {
   work_item *item = context;
@@ -284,7 +345,9 @@ static void publish(work_item *item, int business_status) {
       good ? draft->status : 500u, good ? NULL : "text/plain",
       header_count ? draft->headers + first : NULL, header_count,
       good ? draft->body : "Internal Server Error", good ? draft->size : 21u};
-  const chttp_server_deferred_file file = {draft->file_path, draft->status, file_prepared, item};
+  const chttp_server_deferred_file file = {.path = draft->file_path, .status_code = draft->status,
+      .prepared = file_prepared, .user = item, .offset = draft->file_offset,
+      .length = draft->file_length, .bounded = draft->file_bounded};
   int status = good && draft->file_path ?
       chttp_server_deferred_response_file(&item->deferred, response.headers, response.header_count, &file) :
       chttp_server_deferred_reply(&item->deferred, &response);

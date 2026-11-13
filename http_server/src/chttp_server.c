@@ -1069,7 +1069,9 @@ static int chttp_server_response_stream_finish(chttp_server_connection *connecti
   chttp_server_response_builder_close_source(builder, status);
   connection->response_streaming = false;
   connection->stream_builder = NULL;
-  if (status == SALTS_OK) connection->close_after_write = connection->response_close_after_stream;
+  /* EOF must not reopen a connection already closing for stop/error while a
+   * send was pending. The source's keep-alive choice can only add a close. */
+  if (status == SALTS_OK) connection->close_after_write |= connection->response_close_after_stream;
   return status;
 }
 

@@ -727,3 +727,36 @@
   Never hold the mutex through stop callbacks. The original failed job and its
   excerpt at build/ci-43343061469-tsan-admission-failure.log are preserved; no
   retry, sanitizer suppression, upstream SDK change or timeout extension.
+
+- Private Invocation serve_file now shares the existing Server metadata/ETag/
+  date/range planner. The address-stable plan owns generated strings and borrows
+  other option strings only until synchronous consumption. Workers copy policy
+  fields into their header arena, and path/MIME into reply_bytes. Shared upsert
+  reservation preflights the complete unique field batch before any mutation.
+  The native retained decision adds only a checked bounded offset/length; the
+  existing file runtime opens that range before Session commit. No full-file
+  buffering, new I/O runtime or URL mapping. Metadata failures are business
+  errors; later open failures are publication outcomes. A 304 needs no open and
+  can commit Session changes; failed open leaves ordinary Session writes intact.
+- The first full conditional-file run passed 119/120 CTests and reproduced a
+  legacy H1 asset close timeout (migration-worker-conditional-qualified-ctest.log).
+  Review found EOF assigning the source's original keep-alive decision over an
+  existing close_after_write intent. The formal owner-state fixture seeds the
+  exact CLOSE-pending state at EOF and tests real peer EOF without an idle-read
+  deadline. It failed after 5 seconds before the fix, then passed when EOF was
+  changed to preserve an existing close intent. Logs: migration-worker-conditional-
+  close-intent-{red,fixed}-ctest.log. Earlier socket-backpressure fixture attempts
+  did not establish the intended pending-send precondition on Windows and remain
+  preserved as fixture failures. No production test hook, retry or timeout increase.
+  The original #290 log lacks a full owner event trace, so an identical historical
+  interleaving is not established by this deterministic state regression.
+- Formal H1/H2 worker tests cover copied options, repeated requests, validators,
+  date precedence, malformed/overflow/multipart Range handling, selected ranges,
+  empty/HEAD/304/400/405/412/416, exact/exhausted budgets, transactional input
+  rejection, after-hook ordering and C++ linkage. Session tests cover missing
+  post-plan files, 304 without open, 1 MiB files with a 512-byte reply budget,
+  nonzero-offset H1 transfer, H2 flow control, cancellation and finite-close drain.
+  Full native-release-user build, 120/120 CTests and install passed after the fix:
+  migration-worker-conditional-close-intent-fixed-build.log and
+  migration-worker-conditional-final-{ctest,install}.log. Private migration only;
+  asset mounting/classifiers/SPA, upload/source/SSE and WS remain separate work.

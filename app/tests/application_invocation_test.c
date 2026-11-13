@@ -40,10 +40,14 @@ typedef struct invocation_call {
   char draft[32], stage[32], after[32], type[64];
   bool after_present;
   bool head;
+  bool get;
+  const chttp_header *headers;
+  size_t header_count;
   int repeat;
   char length[24];
   char retry_after[24];
   bool expect_continue;
+  char etag[96], modified[40], range[96], allow[24], accept_ranges[24];
 } invocation_call;
 static struct {
   chttp_application app;
@@ -70,7 +74,8 @@ static struct {
   chttp_jwt_bearer_validator jwt;
   char *token;
   char *file_path;
-  bool file_removed, file_then_fail;
+  bool file_removed, file_then_fail, conditional_file, remove_after_plan;
+  const char *file_etag;
   const char *reply_type;
   int (*write_headers)(const chttp_invocation *);
   int (*before_headers)(const chttp_invocation *);
@@ -149,6 +154,7 @@ static void foreign_scope(void *context) {
       chttp_invocation_respond(invocation, 200u, NULL, "bad", 3u) != SALTS_EINVAL ||
       chttp_invocation_set_header(invocation, "X-Draft", "foreign") != SALTS_EINVAL ||
       chttp_invocation_response_file(invocation, 200u, NULL, "unused") != SALTS_EINVAL ||
+      chttp_invocation_serve_file(invocation, NULL) != SALTS_EINVAL ||
       chttp_invocation_reject(invocation, &proceed, 403u, NULL, NULL, 0u) != SALTS_EINVAL || !proceed)
     atomic_fetch_add(&fixture.invalid, 1);
 }
@@ -197,9 +203,24 @@ int invocation_echo(void *self, const chttp_invocation *invocation) {
     char path[512];
     if (strlen(fixture.file_path) >= sizeof(path)) return SALTS_EMSGSIZE;
     snprintf(path, sizeof(path), "%s", fixture.file_path);
-    const int status = chttp_invocation_response_file(invocation, 201u, fixture.reply_type, path);
+    char type[128] = {0}, etag[256] = {0};
+    if (fixture.reply_type) snprintf(type, sizeof(type), "%s", fixture.reply_type);
+    if (fixture.file_etag) snprintf(etag, sizeof(etag), "%s", fixture.file_etag);
+    const chttp_server_file_options options = {path, fixture.reply_type ? type : NULL, fixture.file_etag ? etag : NULL};
+    const int status = fixture.conditional_file ? chttp_invocation_serve_file(invocation, &options) :
+        chttp_invocation_response_file(invocation, 201u, fixture.reply_type, path);
+    fixture.header_status[0] = status;
     memset(path, '!', sizeof(path));
+    memset(type, '!', sizeof(type)); memset(etag, '!', sizeof(etag));
+    if (status != SALTS_OK && fixture.recover)
+      return chttp_invocation_respond(invocation, 201u, NULL, "recovered", 9u);
+    if (status == SALTS_OK && fixture.remove_after_plan) {
+      if (tt_remove_file(fixture.file_path) != 0) return SALTS_EIO;
+      fixture.file_removed = true;
+    }
     if (status == SALTS_OK && chttp_invocation_respond(invocation, 200u, NULL, NULL, 0u) != SALTS_EALREADY)
+      return SALTS_EPROTO;
+    if (status == SALTS_OK && chttp_invocation_serve_file(invocation, &options) != SALTS_EALREADY)
       return SALTS_EPROTO;
     return status == SALTS_OK && fixture.file_then_fail ? SALTS_EPERM : status;
   }
@@ -271,18 +292,20 @@ static void perform(void *context) {
   call->status = chttp_client_init(&client, &config);
   if (call->status != SALTS_OK) return;
   static const char body[] = {'a', '\0', 'z'};
-  chttp_header headers[3] = {{"X-Admission", "original"}}; size_t count = 1u;
+  chttp_header headers[8] = {{"X-Admission", "original"}}; size_t count = 1u;
   char authorization[1024];
   if (fixture.token) {
     snprintf(authorization, sizeof(authorization), "Bearer %s", fixture.token);
     headers[count++] = (chttp_header){"Authorization", authorization};
   }
   if (call->expect_continue) headers[count++] = (chttp_header){"Expect", "100-continue"};
+  for (size_t i = 0u; i < call->header_count; ++i) headers[count++] = call->headers[i];
   const chttp_options options = {.connection_uri = fixture.uri, .authority = "invocation.test", .target = call->target,
       .protocol = call->protocol, .timeout_ms = 5000u, .headers = headers, .header_count = count,
-      .body = call->head ? NULL : body, .body_size = call->head ? 0u : sizeof(body)};
+      .body = call->head || call->get ? NULL : body, .body_size = call->head || call->get ? 0u : sizeof(body)};
   for (int iteration = 0; iteration < (call->repeat ? call->repeat : 1); ++iteration) {
-    call->status = call->head ? chttp_head(&client, &options, &response, &error) : chttp_post(&client, &options, &response, &error);
+    call->status = call->head ? chttp_head(&client, &options, &response, &error) : call->get ?
+        chttp_get(&client, &options, &response, &error) : chttp_post(&client, &options, &response, &error);
     call->code = response.status_code; call->bytes = response.body_size;
     if (response.body_size <= sizeof(call->body) && response.body_size) memcpy(call->body, response.body, response.body_size);
     const char *value = chttp_response_header(&response, "X-Draft");
@@ -298,6 +321,11 @@ static void perform(void *context) {
     if (value) snprintf(call->length, sizeof(call->length), "%s", value);
     value = chttp_response_header(&response, "Retry-After");
     if (value) snprintf(call->retry_after, sizeof(call->retry_after), "%s", value);
+#define CAPTURE(name_, member_) do { value = chttp_response_header(&response, name_); \
+    snprintf(call->member_, sizeof(call->member_), "%s", value ? value : ""); } while (0)
+    CAPTURE("ETag", etag); CAPTURE("Last-Modified", modified); CAPTURE("Content-Range", range);
+    CAPTURE("Allow", allow); CAPTURE("Accept-Ranges", accept_ranges);
+#undef CAPTURE
     chttp_response_destroy(&response);
     if (call->status != SALTS_OK) break;
   }
@@ -393,6 +421,19 @@ static int replace_header(const chttp_invocation *invocation) {
   fixture.header_status[3] = chttp_invocation_set_header(invocation, "X-DRAFT", "q");
   return SALTS_OK;
 }
+static void prepare_conditional_file(void) {
+  fixture.conditional_file = true; fixture.reply_type = NULL; fixture.file_etag = "\"revision,one\"";
+  fixture.reply_bytes = 512u; fixture.header_capacity = 4u; fixture.header_bytes = 256u;
+  fixture.binding.method = CHTTP_METHOD_GET;
+  fixture.file_path = tt_make_temp_file("chttp-worker-conditional-", ".txt"); check_not_null(fixture.file_path);
+  check_equal(tt_write_file(fixture.file_path, "0123456789", 10u), 0);
+}
+static int before_etag(const chttp_invocation *invocation) {
+  return chttp_invocation_set_header(invocation, "ETag", "prior");
+}
+static int after_etag(const chttp_invocation *invocation) {
+  return chttp_invocation_set_header(invocation, "eTAG", "after");
+}
 
 spec("Application canonical buffered Invocation") {
   before_each() {
@@ -432,9 +473,126 @@ spec("Application canonical buffered Invocation") {
     check_equal(chttp_invocation_respond(&empty, 200u, NULL, NULL, 0u), SALTS_EINVAL);
     check_equal(chttp_invocation_set_header(&empty, "X-Draft", "bad"), SALTS_EINVAL);
     check_equal(chttp_invocation_response_file(&empty, 200u, NULL, "unused"), SALTS_EINVAL);
+    check_equal(chttp_invocation_serve_file(&empty, NULL), SALTS_EINVAL);
     check_equal(chttp_invocation_reject(&empty, &proceed, 403u, NULL, NULL, 0u), SALTS_EINVAL); check_true(proceed);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    static const struct {
+      const char *name, *value, *second_name, *second_value, *body, *range;
+      unsigned int code;
+    } file_cases[] = {
+      {NULL, NULL, NULL, NULL, "0123456789", "", 200u},
+      {"Range", "bytes=2-5", NULL, NULL, "2345", "bytes 2-5/10", 206u},
+      {"Range", "bytes=7-", NULL, NULL, "789", "bytes 7-9/10", 206u},
+      {"Range", "bytes=-3", NULL, NULL, "789", "bytes 7-9/10", 206u},
+      {"Range", "bytes=10-", NULL, NULL, "", "bytes */10", 416u},
+      {"Range", "bytes=0-1,4-5", NULL, NULL, "0123456789", "", 200u},
+      {"Range", "bytes=18446744073709551616-", NULL, NULL, "0123456789", "", 200u},
+      {"If-None-Match", "W/\"revision,one\"", NULL, NULL, "", "", 304u},
+      {"If-None-Match", "bad", NULL, NULL, "", "", 400u},
+      {"If-Match", "W/\"revision,one\"", NULL, NULL, "", "", 412u},
+      {"If-None-Match", "\"other\"", "if-none-match", "\"revision,one\"", "", "", 304u},
+      {"Range", "bytes=0-1", "If-Range", "\"revision,one\"", "01", "bytes 0-1/10", 206u},
+      {"Range", "bytes=0-1", "If-Range", "W/\"revision,one\"", "0123456789", "", 200u},
+      {"If-Unmodified-Since", "Sun, 06 Nov 1994 08:49:37 GMT", NULL, NULL, "", "", 412u},
+      {"If-None-Match", "\"other\"", "If-Modified-Since", "Sun, 06 Nov 2094 08:49:37 GMT", "0123456789", "", 200u}
+    };
+    for (size_t row = 0u; row < sizeof(file_cases) / sizeof(file_cases[0]); ++row) {
+      it("copies conditional file decision %zu through repeated native terminals (protocol=%d)", row, protocol) {
+        prepare_conditional_file(); start();
+        chttp_header headers[2] = {{file_cases[row].name, file_cases[row].value},
+            {file_cases[row].second_name, file_cases[row].second_value}};
+        invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true,
+            .headers = headers, .header_count = file_cases[row].second_name ? 2u : file_cases[row].name ? 1u : 0u, .repeat = 2};
+        perform(&call); check_equal(call.status, SALTS_OK); check_equal(call.code, file_cases[row].code);
+        check_equal(call.bytes, strlen(file_cases[row].body)); check_equal(call.body, file_cases[row].body);
+        check_equal(call.range, file_cases[row].range); check_equal(call.etag, "\"revision,one\"");
+        check_equal(call.accept_ranges, "bytes"); check_equal(strlen(call.modified), 29u);
+        if (call.bytes) check_equal(call.type, "text/plain; charset=utf-8");
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(fixture.calls, 2); check_equal(fixture.completions, 2);
+        check_equal(fixture.outcome.business_status, SALTS_OK); check_equal(fixture.outcome.publication_status, SALTS_OK);
+      }
+    }
+    it("retains generated ETag/date and HEAD semantics (protocol=%d)", protocol) {
+      prepare_conditional_file(); fixture.file_etag = NULL; start();
+      const chttp_header range = {"Range", "bytes=2-5"};
+      invocation_call head = {.target = "/echo", .protocol = (chttp_protocol)protocol, .head = true, .headers = &range, .header_count = 1u};
+      perform(&head); check_equal(head.status, SALTS_OK); check_equal(head.code, 200u);
+      check_equal(head.bytes, 0u); check_equal(head.length, "10"); check_equal(head.range, "");
+      check_equal(strncmp(head.etag, "W/\"", 3u), 0);
+      const chttp_header condition = {"If-None-Match", head.etag};
+      invocation_call cached = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true, .headers = &condition, .header_count = 1u};
+      perform(&cached); check_equal(cached.status, SALTS_OK); check_equal(cached.code, 304u); check_equal(cached.bytes, 0u);
+      const chttp_header modified = {"If-Modified-Since", head.modified};
+      cached.headers = &modified; perform(&cached); check_equal(cached.status, SALTS_OK); check_equal(cached.code, 304u);
+    }
+    it("keeps generated file headers in normal before/action/after order (protocol=%d)", protocol) {
+      prepare_conditional_file(); fixture.before_headers = before_etag; fixture.after_headers = after_etag; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 200u); check_equal(call.etag, "after");
+    }
+    it("uses exact metadata capacity and owns an explicit MIME (protocol=%d)", protocol) {
+      prepare_conditional_file(); fixture.before_headers = before_etag; fixture.header_capacity = 3u;
+      fixture.header_bytes = 90u; fixture.reply_type = "test/copied"; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 200u);
+      check_equal(call.etag, "\"revision,one\""); check_equal(call.type, "test/copied");
+    }
+    for (int ranged = 0; ranged < 2; ++ranged) {
+      it("handles an empty conditional file (protocol=%d ranged=%d)", protocol, ranged) {
+        prepare_conditional_file(); check_equal(tt_write_file(fixture.file_path, "", 0u), 0); start();
+        const chttp_header range = {"Range", "bytes=0-"};
+        invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true,
+            .headers = &range, .header_count = ranged ? 1u : 0u}; perform(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, ranged ? 416u : 200u); check_equal(call.bytes, 0u);
+        check_equal(call.range, ranged ? "bytes */0" : "");
+      }
+    }
+    it("returns 405 before reading metadata for an unsupported method (protocol=%d)", protocol) {
+      prepare_conditional_file(); fixture.binding.method = CHTTP_METHOD_POST;
+      check_equal(tt_remove_file(fixture.file_path), 0); fixture.file_removed = true; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 405u); check_equal(call.allow, "GET, HEAD");
+      check_equal(call.etag, ""); check_equal(call.bytes, 0u);
+    }
+    for (int invalid = 0; invalid < 2; ++invalid) {
+      it("rejects invalid conditional-file input before draft mutation (protocol=%d invalid=%d)", protocol, invalid) {
+        prepare_conditional_file(); fixture.before_headers = before_etag; fixture.recover = true;
+        if (invalid) fixture.reply_type = "text/plain\r\nInjected: value";
+        else fixture.file_etag = "invalid";
+        start(); invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true}; perform(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, 201u); check_equal(call.body, "recovered");
+        check_equal(fixture.header_status[0], SALTS_EINVAL); check_equal(call.etag, "prior"); check_equal(call.modified, "");
+      }
+    }
+    it("reports metadata failure as business failure without opening a native source (protocol=%d)", protocol) {
+      prepare_conditional_file(); check_equal(tt_remove_file(fixture.file_path), 0); fixture.file_removed = true; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 500u); check_equal(call.etag, "");
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_not_equal(fixture.outcome.business_status, SALTS_OK); check_equal(fixture.outcome.publication_status, SALTS_OK);
+    }
+    for (int budget = 0; budget < 3; ++budget) {
+      it("leaves the draft unchanged on conditional file budget failure %d (protocol=%d)", budget, protocol) {
+        prepare_conditional_file(); fixture.before_headers = before_etag; fixture.recover = true;
+        if (budget == 0) fixture.header_capacity = 2u;
+        if (budget == 1) fixture.header_bytes = 80u;
+        if (budget == 2) fixture.reply_bytes = 16u;
+        start(); invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true}; perform(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, 201u); check_equal(call.body, "recovered");
+        check_equal(call.etag, "prior"); check_equal(call.modified, ""); check_equal(call.accept_ranges, "");
+        check_equal(fixture.header_status[0], budget == 2 ? SALTS_EMSGSIZE : SALTS_ENOBUFS);
+      }
+    }
+    it("does not open a file for a conditional no-body result (protocol=%d)", protocol) {
+      prepare_conditional_file(); fixture.remove_after_plan = true; start();
+      const chttp_header condition = {"If-None-Match", "\"revision,one\""};
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .get = true, .headers = &condition, .header_count = 1u};
+      perform(&call); check_equal(call.status, SALTS_OK); check_equal(call.code, 304u); check_equal(call.bytes, 0u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(fixture.outcome.publication_status, SALTS_OK); check_equal(fixture.outcome.transport_status, SALTS_OK);
+    }
     it("shares the retained-byte limit with header snapshots (protocol=%d)", protocol) {
       fixture.admission_enabled = true; fixture.retained_bytes = fixture.reply_bytes = 16u; start();
       invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&call);

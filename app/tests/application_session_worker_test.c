@@ -18,6 +18,7 @@ typedef struct session_call {
   const char *cookie;
   bool post;
   const char *csrf;
+  const char *if_none_match, *range;
   int status;
   unsigned int code;
   char body[128], next_cookie[128], set_cookie[256];
@@ -39,7 +40,7 @@ static struct {
   bool invalidate_held;
   bool invalidate_before_failure;
   bool occupy_header, override_cookie;
-  bool file_for_increment, file_removed;
+  bool file_for_increment, file_removed, conditional_file, remove_after_plan;
   bool cancel_sink;
   char *file_path;
   char cookie[128];
@@ -147,8 +148,16 @@ int invoke(void *self, const chttp_invocation *invocation) {
     if (status != SALTS_OK) return status;
   }
   if (fixture.file_path && (strcmp(request->path, "/large") == 0 ||
-      (fixture.file_for_increment && strcmp(request->path, "/increment") == 0)))
-    return chttp_invocation_response_file(invocation, code, "text/plain", fixture.file_path);
+      (fixture.file_for_increment && strcmp(request->path, "/increment") == 0))) {
+    const chttp_server_file_options options = {fixture.file_path, "text/plain", "\"revision\""};
+    status = fixture.conditional_file ? chttp_invocation_serve_file(invocation, &options) :
+        chttp_invocation_response_file(invocation, code, "text/plain", fixture.file_path);
+    if (status == SALTS_OK && fixture.remove_after_plan) {
+      if (tt_remove_file(fixture.file_path) != 0) return SALTS_EIO;
+      fixture.file_removed = true;
+    }
+    return status;
+  }
   if (strcmp(request->path, "/large") == 0)
     return chttp_invocation_respond(invocation, code, "application/octet-stream",
         fixture.large_body, fixture.large_size);
@@ -214,10 +223,12 @@ static void perform(void *user) {
   call->status = chttp_client_init(&client, &config);
   if (call->status != SALTS_OK) return;
   char uri[64]; snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)fixture.port);
-  chttp_header headers[3]; size_t header_count = 0u;
+  chttp_header headers[5]; size_t header_count = 0u;
   if (call->cookie) headers[header_count++] = (chttp_header){"Cookie", call->cookie};
   if (call->post) headers[header_count++] = (chttp_header){"HX-Request", "true"};
   if (call->csrf) headers[header_count++] = (chttp_header){"X-CSRF-Token", call->csrf};
+  if (call->if_none_match) headers[header_count++] = (chttp_header){"If-None-Match", call->if_none_match};
+  if (call->range) headers[header_count++] = (chttp_header){"Range", call->range};
   const chttp_body_sink sink = {receive_large, NULL};
   const chttp_options options = {.connection_uri = uri, .authority = "session.test",
       .target = call->target, .protocol = call->protocol, .headers = headers,
@@ -262,7 +273,7 @@ static void release(void) {
   sync_mutex_lock(&fixture.mutex); fixture.release = 1; fixture.release_sink = 1;
   sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
 }
-static void prepare_large(bool file) {
+static void prepare_large(int file) {
   fixture.workers = 1u; fixture.large_size = 1024u * 1024u;
   fixture.large_body = malloc(fixture.large_size); check_true(fixture.large_body != NULL);
   memset(fixture.large_body, 'x', fixture.large_size);
@@ -270,6 +281,7 @@ static void prepare_large(bool file) {
     fixture.file_path = tt_make_temp_file("chttp-flow-file-", ".bin"); check_not_null(fixture.file_path);
     check_equal(tt_write_file(fixture.file_path, fixture.large_body, fixture.large_size), 0);
   }
+  if (file == 2) { fixture.conditional_file = true; fixture.header_capacity = 4u; fixture.header_bytes = 256u; }
   fixture.reply_bytes = file ? 512u : fixture.large_size + 64u;
   fixture.retained = file ? 32768u : fixture.large_size * 4u;
   fixture.config.http.max_response_body_bytes = fixture.large_size;
@@ -315,6 +327,27 @@ spec("Application staged worker Sessions") {
     sync_cond_destroy(&fixture.changed); sync_mutex_destroy(&fixture.mutex);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    for (int no_body = 0; no_body < 2; ++no_body) {
+      it("joins conditional-file preparation with Session commit (protocol=%d no_body=%d)", protocol, no_body) {
+        fixture.file_path = tt_make_temp_file("chttp-session-plan-", ".txt"); check_not_null(fixture.file_path);
+        check_equal(tt_write_file(fixture.file_path, "file", 4u), 0);
+        fixture.file_for_increment = true; fixture.conditional_file = true; fixture.remove_after_plan = true;
+        fixture.header_capacity = 4u; fixture.header_bytes = 256u;
+        start(); session_call init = {.target = "/init", .protocol = (chttp_protocol)protocol}; perform(&init);
+        check_equal(init.status, SALTS_OK); await_value(&fixture.completed, 1);
+        session_call file = {.target = "/increment", .protocol = (chttp_protocol)protocol, .cookie = init.next_cookie,
+            .if_none_match = no_body ? "\"revision\"" : NULL}; perform(&file);
+        if (no_body) { check_equal(file.status, SALTS_OK); check_equal(file.code, 304u); }
+        else { check_not_equal(file.status, SALTS_OK); check_not_equal(file.status, SALTS_ETIMEDOUT); }
+        await_value(&fixture.completed, 2);
+        sync_mutex_lock(&fixture.mutex); const chttp_application_work_outcome outcome = fixture.last; sync_mutex_unlock(&fixture.mutex);
+        check_equal(outcome.business_status, SALTS_OK);
+        if (no_body) check_equal(outcome.publication_status, SALTS_OK);
+        else check_not_equal(outcome.publication_status, SALTS_OK);
+        session_call read = {.target = "/read", .protocol = (chttp_protocol)protocol, .cookie = init.next_cookie}; perform(&read);
+        check_equal(read.status, SALTS_OK); check_equal(read.body, no_body ? "1" : "0");
+      }
+    }
     for (int cookie_full = 0; cookie_full < 2; ++cookie_full) {
       it("joins native file preparation with Session commit (protocol=%d cookie_full=%d)", protocol, cookie_full) {
         fixture.file_path = tt_make_temp_file("chttp-session-file-", ".txt"); check_not_null(fixture.file_path);
@@ -575,54 +608,58 @@ spec("Application staged worker Sessions") {
     session_call read = {.target = "/read", .cookie = init.next_cookie}; perform(&read);
     check_equal(read.status, SALTS_OK); check_equal(read.body, "0");
   }
-  it("retains a flow-controlled file through finite close until native file and wire drain") {
-    prepare_large(true); start();
-    session_call init = {.target = "/init"}; perform(&init); check_equal(init.status, SALTS_OK);
-    await_value(&fixture.completed, 1); snprintf(fixture.cookie, sizeof(fixture.cookie), "%s", init.next_cookie);
-    first_call = (session_call){.target = "/large", .protocol = CHTTP_HTTP_2, .cookie = fixture.cookie};
-    check_equal(sync_thread_create(&fixture.first, perform, &first_call), SALTS_OK); fixture.first_live = true;
-    await_value(&fixture.sink_entered, 1);
-    chttp_application_work_stats stats = {0};
-    check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK); check_equal(stats.pending, 1u);
-    check_not_equal(stats.retained_bytes, 0u);
-    sync_mutex_lock(&fixture.mutex); const int completed = fixture.completed_large; sync_mutex_unlock(&fixture.mutex);
-    check_equal(completed, 0);
-    check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT); check_not_null(fixture.app.impl);
-    check_equal(fixture.destroyed, 0);
-    check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK); check_equal(stats.pending, 1u);
-    release(); check_equal(sync_thread_join(&fixture.first), SALTS_OK); fixture.first_live = false;
-    check_equal(first_call.status, SALTS_OK); check_equal(fixture.received, fixture.large_size);
-    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_null(fixture.app.impl);
-    check_equal(fixture.destroyed, 1); check_equal(fixture.completed_large, 1);
-    check_equal(fixture.last.business_status, SALTS_OK); check_equal(fixture.last.publication_status, SALTS_OK);
-    check_equal(fixture.last.session_status, SALTS_OK); check_equal(fixture.last.transport_status, SALTS_OK);
+  for (int file_kind = 1; file_kind <= 2; ++file_kind) {
+    it("retains a flow-controlled file through finite close until native file and wire drain (kind=%d)", file_kind) {
+      prepare_large(file_kind); start();
+      session_call init = {.target = "/init"}; perform(&init); check_equal(init.status, SALTS_OK);
+      await_value(&fixture.completed, 1); snprintf(fixture.cookie, sizeof(fixture.cookie), "%s", init.next_cookie);
+      first_call = (session_call){.target = "/large", .protocol = CHTTP_HTTP_2, .cookie = fixture.cookie};
+      check_equal(sync_thread_create(&fixture.first, perform, &first_call), SALTS_OK); fixture.first_live = true;
+      await_value(&fixture.sink_entered, 1);
+      chttp_application_work_stats stats = {0};
+      check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK); check_equal(stats.pending, 1u);
+      check_not_equal(stats.retained_bytes, 0u);
+      sync_mutex_lock(&fixture.mutex); const int completed = fixture.completed_large; sync_mutex_unlock(&fixture.mutex);
+      check_equal(completed, 0);
+      check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT); check_not_null(fixture.app.impl);
+      check_equal(fixture.destroyed, 0);
+      check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK); check_equal(stats.pending, 1u);
+      release(); check_equal(sync_thread_join(&fixture.first), SALTS_OK); fixture.first_live = false;
+      check_equal(first_call.status, SALTS_OK); check_equal(fixture.received, fixture.large_size);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_null(fixture.app.impl);
+      check_equal(fixture.destroyed, 1); check_equal(fixture.completed_large, 1);
+      check_equal(fixture.last.business_status, SALTS_OK); check_equal(fixture.last.publication_status, SALTS_OK);
+      check_equal(fixture.last.session_status, SALTS_OK); check_equal(fixture.last.transport_status, SALTS_OK);
+    }
+    it("joins a canceled file source with its native terminal before Bean destruction (kind=%d)", file_kind) {
+      prepare_large(file_kind); fixture.cancel_sink = true; start();
+      session_call init = {.target = "/init"}; perform(&init); check_equal(init.status, SALTS_OK);
+      await_value(&fixture.completed, 1); snprintf(fixture.cookie, sizeof(fixture.cookie), "%s", init.next_cookie);
+      first_call = (session_call){.target = "/large", .protocol = CHTTP_HTTP_2, .cookie = fixture.cookie};
+      check_equal(sync_thread_create(&fixture.first, perform, &first_call), SALTS_OK); fixture.first_live = true;
+      await_value(&fixture.sink_entered, 1);
+      release(); check_equal(sync_thread_join(&fixture.first), SALTS_OK); fixture.first_live = false;
+      check_not_equal(first_call.status, SALTS_OK); check_not_equal(first_call.status, SALTS_ETIMEDOUT);
+      await_value(&fixture.completed_large, 1);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_null(fixture.app.impl);
+      check_equal(fixture.destroyed, 1); check_equal(fixture.last.business_status, SALTS_OK);
+      check_equal(fixture.last.publication_status, SALTS_OK); check_equal(fixture.last.session_status, SALTS_OK);
+      check_not_equal(fixture.last.transport_status, SALTS_OK);
+    }
+    it("streams a multichunk H1 file beyond the buffered reply budget (kind=%d)", file_kind) {
+      prepare_large(file_kind); fixture.release_sink = 1; start();
+      session_call file = {.target = "/large", .protocol = CHTTP_HTTP_1_1,
+          .range = file_kind == 2 ? "bytes=1024-8191" : NULL}; perform(&file);
+      check_equal(file.status, SALTS_OK); check_equal(file.code, file_kind == 2 ? 206u : 200u);
+      check_equal(fixture.received, file_kind == 2 ? 8192u - 1024u : fixture.large_size);
+      await_value(&fixture.completed_large, 1);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_null(fixture.app.impl);
+      check_equal(fixture.last.transport_status, SALTS_OK);
+    }
   }
-  it("joins a canceled file source with its native terminal before Bean destruction") {
-    prepare_large(true); fixture.cancel_sink = true; start();
-    session_call init = {.target = "/init"}; perform(&init); check_equal(init.status, SALTS_OK);
-    await_value(&fixture.completed, 1); snprintf(fixture.cookie, sizeof(fixture.cookie), "%s", init.next_cookie);
-    first_call = (session_call){.target = "/large", .protocol = CHTTP_HTTP_2, .cookie = fixture.cookie};
-    check_equal(sync_thread_create(&fixture.first, perform, &first_call), SALTS_OK); fixture.first_live = true;
-    await_value(&fixture.sink_entered, 1);
-    release(); check_equal(sync_thread_join(&fixture.first), SALTS_OK); fixture.first_live = false;
-    check_not_equal(first_call.status, SALTS_OK); check_not_equal(first_call.status, SALTS_ETIMEDOUT);
-    await_value(&fixture.completed_large, 1);
-    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_null(fixture.app.impl);
-    check_equal(fixture.destroyed, 1); check_equal(fixture.last.business_status, SALTS_OK);
-    check_equal(fixture.last.publication_status, SALTS_OK); check_equal(fixture.last.session_status, SALTS_OK);
-    check_not_equal(fixture.last.transport_status, SALTS_OK);
-  }
-  it("streams a multichunk H1 file beyond the buffered reply budget") {
-    prepare_large(true); fixture.release_sink = 1; start();
-    session_call file = {.target = "/large", .protocol = CHTTP_HTTP_1_1}; perform(&file);
-    check_equal(file.status, SALTS_OK); check_equal(file.code, 200u); check_equal(fixture.received, fixture.large_size);
-    await_value(&fixture.completed_large, 1);
-    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_null(fixture.app.impl);
-    check_equal(fixture.last.transport_status, SALTS_OK);
-  }
-  for (int file = 0; file < 2; ++file) {
+  for (int file = 0; file < 3; ++file) {
     it("releases the same-Session gate before H2 DATA flow control completes (file=%d)", file) {
-      prepare_large(file != 0);
+      prepare_large(file);
       start(); session_call init = {.target = "/init"}; perform(&init); check_equal(init.status, SALTS_OK);
       await_value(&fixture.completed, 1);
       snprintf(fixture.cookie, sizeof(fixture.cookie), "%s", init.next_cookie);

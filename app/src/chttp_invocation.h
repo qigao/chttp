@@ -62,6 +62,14 @@ int chttp_invocation_set_header(const chttp_invocation *, const char *, const ch
  * or conditional/range policy is added. Headers follow normal hook ordering. */
 int chttp_invocation_response_file(const chttp_invocation *, unsigned int,
     const char *, const char *);
+/* Private serve_file counterpart using the owned request snapshot. Metadata
+ * and conditional/range policy run on the worker; path/MIME and response fields
+ * are copied into reply/header budgets. EINVAL/ENOBUFS/EMSGSIZE and filesystem
+ * errors leave the draft unchanged; EALREADY after response selection. Missing
+ * metadata is a business error; subsequent native open/read outcomes follow
+ * response_file. The selected file must stay immutable through native terminal.
+ * Headers retain before/action/after ordering. No URL mapping is performed. */
+int chttp_invocation_serve_file(const chttp_invocation *, const chttp_server_file_options *);
 /* Before-only handled rejection; success seals the draft and clears proceed. */
 int chttp_invocation_reject(const chttp_invocation *, bool *, unsigned int, const char *, const void *, size_t);
 

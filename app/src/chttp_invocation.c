@@ -35,6 +35,10 @@ int chttp_invocation_response_file(const chttp_invocation *invocation, unsigned 
   const chttp_invocation_state *state = invocation_state(invocation);
   return state ? chttp_application_work_response_file(state->reply, code, type, path) : SALTS_EINVAL;
 }
+int chttp_invocation_serve_file(const chttp_invocation *invocation, const chttp_server_file_options *options) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  return state ? chttp_application_work_serve_file(state->reply, options) : SALTS_EINVAL;
+}
 int chttp_invocation_reject(const chttp_invocation *invocation, bool *proceed, unsigned int code,
     const char *type, const void *body, size_t size) {
   const chttp_invocation_state *state = invocation_state(invocation);
