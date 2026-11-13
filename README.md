@@ -14,27 +14,32 @@ plugins and CFlow execution; SaltsUtils supplies DataBind, IDL and Jinja.
 
 | Release input | CMake package | SDK root | Responsibility |
 | --- | --- | --- | --- |
-| `SALTS_BASE_VERSION=0.1.6` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
+| `SALTS_BASE_VERSION=0.1.8` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
 | `CMETA_VERSION=0.1.6` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
-| `SALTS_CORE_VERSION=0.1.4` | `SaltsCore` | `SALTS_CORE_ROOT` | CNet and Crypto |
-| `SALTS_UTILS_VERSION=0.1.3` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
+| `SALTS_CNET_VERSION=0.1.12` | `SaltsCNet` | `SALTS_CNET_ROOT` | CNet and Crypto |
+| `SALTS_UTILS_VERSION=0.1.4` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
 | `VCPKG_CACHE_VERSION=0.1.3` | preinstalled vcpkg profile | `VCPKG_INSTALLED_DIR` | Third-party packages and compiler contract |
 
 Versions come from the parent environment or a locally loaded `.env`, without
 the `v` prefix. CMake does not load dotenv files. Merge [`.env.example`](.env.example)
 into existing machine settings and keep credentials private. Each SDK root must
 match the compiler, architecture, configuration and selected release. Package
-discovery is exact and restricted to those roots; SDK roots are never added to
-`CMAKE_PREFIX_PATH`.
+discovery is restricted to those roots. CMake does not take upstream version
+arguments; version variables select SDK restoration only.
 
 The selected vcpkg profile alone supplies `CMAKE_PREFIX_PATH`, using the existing
 `VCPKG_INSTALLED_DIR`, preset-selected `VCPKG_TARGET_TRIPLET`, and configuration
 subdirectory. First-party packages use explicit required `find_package` calls
-with the release/root inputs above. After changing an SDK, compiler or triplet,
+with the SDK roots above. After changing an SDK, compiler or triplet,
 configure explicitly with `cmake --fresh --preset <user-preset>`; normal configure
 does not clear package caches or select another dependency source.
 
-SaltsUtils 0.1.3 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
+SaltsUtils 0.1.4 declares CMeta 0.1.6 source SDKs from immutable ref
+`679710f7e3312811efdd92494744a2499286a6a5`, built against Base 0.1.8.
+CI reuses that release's `build-cmeta-sdk.ps1` for target and Android host SDKs.
+The older published CMeta binary targets Base 0.1.6 and is a different composition.
+
+SaltsUtils 0.1.4 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
 private GmSSL/libecc adapter. HTTP and S3 use internal GmSSL digest helpers.
 Provider provenance and ownership are documented in
 [`vendor/cjwt/crypto/README.md`](vendor/cjwt/crypto/README.md).
@@ -168,16 +173,17 @@ graph, run native tests through CTest, and install/archive the SDK. Android
 uses a separately restored Linux host `salts-idlc` and its Base/CMeta runtime;
 cross-building and installation do not prove device execution.
 
-The current published SDK intersection contains eight profiles: Windows MSVC
-and LLVM-MinGW x64, Linux Clang and GCC x64, Linux Clang x64 TSan, macOS Clang
-ARM64, Android ARM64 and x64. CNet 0.1.4 has no published Linux ARM64 SDK, so
-the Base/CMeta/Utils ARM64 Linux lanes cannot be used for this composition.
-Missing assets and failed jobs stop their flows. There is no source-build
-fallback, floating NuGet selection or automatic retry.
+The checked-in matrix selects eight profiles: Windows MSVC and LLVM-MinGW x64,
+Linux GCC/Clang x64 plus Clang TSan, macOS ARM64, and Android ARM64/x64. Native
+profiles run formal CTest; Android profiles cross-build and install.
 
 ## Using CHTTP from CMake
 
 ```cmake
+find_package(SaltsBase CONFIG REQUIRED PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH)
+find_package(CMeta CONFIG REQUIRED PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsCNet CONFIG REQUIRED PATHS "$ENV{SALTS_CNET_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsUtils CONFIG REQUIRED PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 find_package(Chttp CONFIG REQUIRED
   PATHS "$ENV{CHTTP_ROOT}"
   NO_DEFAULT_PATH)
@@ -187,7 +193,8 @@ target_link_libraries(my_app PRIVATE CHttp::Client)
 
 Use `CHttp::Server` for protocol/server applications, `CHttp::App` for server-driven HTML applications, and `CHttp::S3` for S3 consumers.
 
-The package resolves SaltsBase, CMeta, SaltsCore and SaltsUtils through the explicitly configured matching profiles. The build is fail-fast and does not silently fall back to unrelated SDK roots.
+Consumers resolve the selected upstream packages before loading Chttp targets.
+The SDK roots must belong to the same compiler/profile composition.
 
 ## Runtime boundaries
 
@@ -213,3 +220,12 @@ and add regression coverage to the owning module's existing test suite.
 
 See [LICENSE](LICENSE), [NOTICE](NOTICE), and
 [third-party notices](THIRD_PARTY_NOTICES.md).
+
+## CMake installation
+
+Shared libraries use plain filenames without target VERSION/SOVERSION properties.
+Installation uses GNUInstallDirs and exports `CHttp::` targets. The package config
+loads those targets; consumers explicitly resolve their selected upstream CMake
+packages first, as shown in [App package use](app/README.md#package-use).
+After replacing an SDK or library naming scheme, install into a clean prefix and
+rebuild dependent applications. Historical CHttp NuGet publication is retired.

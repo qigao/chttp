@@ -14,7 +14,7 @@
       },
       "environment": {
         "LLVM_MINGW_TARGET": "x86_64-w64-mingw32",
-        "PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_CORE_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{CMETA_ROOT}/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{LLVM_MINGW_ROOT}/$env{LLVM_MINGW_TARGET}/bin${pathListSep}$env{LLVM_MINGW_ROOT}/bin${pathListSep}$penv{PATH}"
+        "PATH": "${sourceDir}/build/${presetName}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/$env{VCPKG_CONFIGURATION_SUBDIR}bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{VCPKG_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_CNET_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{CMETA_ROOT}/bin${pathListSep}$env{SALTS_BASE_ROOT}/bin${pathListSep}$env{LLVM_MINGW_ROOT}/$env{LLVM_MINGW_TARGET}/bin${pathListSep}$env{LLVM_MINGW_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {

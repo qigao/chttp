@@ -57,6 +57,10 @@ targets. See the [merge and migration decision](../README.md#app-entry-point).
 cmake_minimum_required(VERSION 3.25)
 project(my_web_app LANGUAGES C)
 
+find_package(SaltsBase CONFIG REQUIRED PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH)
+find_package(CMeta CONFIG REQUIRED PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsCNet CONFIG REQUIRED PATHS "$ENV{SALTS_CNET_ROOT}" NO_DEFAULT_PATH)
+find_package(SaltsUtils CONFIG REQUIRED PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH)
 find_package(Chttp CONFIG REQUIRED PATHS "$ENV{CHTTP_ROOT}" NO_DEFAULT_PATH)
 
 add_executable(my_web_app main.c)

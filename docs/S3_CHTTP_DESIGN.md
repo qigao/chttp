@@ -51,7 +51,7 @@ Salts::CNet -> private TLS provider -> NativeIO
 ```
 
 The installed C target is `CHttp::S3`; its implementation library is
-`chttp_s3`, version and SOVERSION 1. Public headers include CHTTP types but do not expose a crypto provider, llhttp, the XML engine, CoroNet, or H3 types. CHttp::S3 does not select or link OpenSSL/BoringSSL/GmSSL directly.
+`chttp_s3` uses an unversioned shared-library filename. Public headers include CHTTP types but do not expose a crypto provider, llhttp, the XML engine, CoroNet, or H3 types. CHttp::S3 does not select or link OpenSSL/BoringSSL/GmSSL directly.
 
 ## Public model
 

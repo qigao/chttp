@@ -6,6 +6,10 @@ project(
   VERSION 2.1.0
   LANGUAGES C CXX)
 
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+include(cmake/CmakeUtils.cmake)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -29,13 +33,13 @@ include(Sanitizers)
 list(PREPEND CMAKE_PREFIX_PATH
   "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$ENV{VCPKG_CONFIGURATION_SUBDIR}"
   "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
-find_package(SaltsBase "$ENV{SALTS_BASE_VERSION}" EXACT CONFIG REQUIRED
+find_package(SaltsBase CONFIG REQUIRED
   PATHS "$ENV{SALTS_BASE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(CMeta "$ENV{CMETA_VERSION}" EXACT CONFIG REQUIRED
+find_package(CMeta CONFIG REQUIRED
   PATHS "$ENV{CMETA_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsCore "$ENV{SALTS_CORE_VERSION}" EXACT CONFIG REQUIRED
-  PATHS "$ENV{SALTS_CORE_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-find_package(SaltsUtils "$ENV{SALTS_UTILS_VERSION}" EXACT CONFIG REQUIRED
+find_package(SaltsCNet CONFIG REQUIRED
+  PATHS "$ENV{SALTS_CNET_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+find_package(SaltsUtils CONFIG REQUIRED
   PATHS "$ENV{SALTS_UTILS_ROOT}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 find_package(llhttp CONFIG REQUIRED)
 find_package(GmSSL CONFIG REQUIRED)
@@ -56,21 +60,21 @@ if(MINGW)
   endforeach()
 endif()
 
-include(CMakePackageConfigHelpers)
+set(_chttp_package_dir "${CMAKE_INSTALL_LIBDIR}/cmake/Chttp")
 configure_package_config_file(
   cmake/ChttpConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
-  INSTALL_DESTINATION lib/cmake/Chttp
-  NO_SET_AND_CHECK_MACRO NO_CHECK_REQUIRED_COMPONENTS_MACRO)
+  INSTALL_DESTINATION "${_chttp_package_dir}")
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
   COMPATIBILITY ExactVersion)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfig.cmake"
               "${CMAKE_CURRENT_BINARY_DIR}/ChttpConfigVersion.cmake"
-        DESTINATION lib/cmake/Chttp)
+        DESTINATION "${_chttp_package_dir}")
 install(FILES LICENSE NOTICE THIRD_PARTY_NOTICES.md
-        DESTINATION share/licenses/Chttp)
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/Chttp)
 install(
   EXPORT ChttpTargets
+  FILE ChttpTargets.cmake
   NAMESPACE CHttp::
-  DESTINATION lib/cmake/Chttp)
+  DESTINATION "${_chttp_package_dir}")
