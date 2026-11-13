@@ -859,3 +859,10 @@
   (worker-upload-canceled-session-build); wait for test quiescence before any
   further build in that directory. The complete validation above ran after that
   test process exited. No TinyTest, upstream SDK or dependency changes.
+- Upload CI 43362263616 passed Linux GCC/Clang/TSan, Windows and Android, while
+  macOS hit EPIPE in the unauthorized H1 client before reading the header-stage
+  401: its unnecessary chunked body raced the Server's deliberate rejection/
+  close. The JWT-before-resource fixture now sends an explicit known empty body
+  when unauthorized, retaining strict 401/zero-open/zero-resource assertions.
+  Its authorized control still streams data. Keep the original CI failure; no
+  product change, retry or relaxation to accept transport errors as HTTP success.

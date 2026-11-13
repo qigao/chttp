@@ -345,7 +345,8 @@ spec("Application worker uploads") {
           check_equal(chttp_jwt_hs256_token_create(&claims, key, sizeof(key) - 1u, &uploads.token), SALTS_OK);
           snprintf(authorization, sizeof(authorization), "Bearer %s", uploads.token);
         }
-        upload_start(); upload_call call = {.protocol = (chttp_protocol)protocol, .size = 4096u, .authorization = authenticated ? authorization : NULL}; upload_perform(&call);
+        upload_start(); upload_call call = {.protocol = (chttp_protocol)protocol, .size = authenticated ? 4096u : 0u,
+            .known = true, .authorization = authenticated ? authorization : NULL}; upload_perform(&call);
         check_equal(call.status, SALTS_OK); check_equal(call.code, authenticated ? 201u : 401u);
         check_equal(chttp_application_close(&uploads.app, 5000u), SALTS_OK); check_equal(uploads.opens, authenticated); check_equal(uploads.cleanups, authenticated);
       }
