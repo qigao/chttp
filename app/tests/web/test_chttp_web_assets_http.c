@@ -1,4 +1,5 @@
 #include "../../src/chttp_web_registration.h"
+#include "../../src/chttp_application_worker.h"
 #include "../../../http_server/src/chttp_server_engine.h"
 #include <chttp_app/web.h>
 #include <http_client/http.h>
@@ -7,6 +8,9 @@
 
 #include <core/error_codes.h>
 #include <file/fs.h>
+#include <cmeta/data_reflect.h>
+#include <core/clock.h>
+#include <threads/threads.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -159,6 +163,188 @@ static int assets_http_call(
   default:
     return SALTS_EINVAL;
   }
+}
+
+typedef struct WorkerAssetBean { int marker; char etag[32]; } WorkerAssetBean;
+cmeta_reflect_data(WorkerAssetBean, "test.WorkerAssetBean", cmeta_field(int, marker));
+cmeta_component_empty(WorkerAssetComponent);
+CHTTP_ASSET_POLICY_ACTION(worker_asset_policy);
+CHTTP_INVOCATION_ACTION(worker_asset_api);
+
+typedef struct worker_asset_call {
+  chttp_protocol protocol;
+  chttp_method method;
+  const char *target;
+  const chttp_header *headers;
+  size_t header_count;
+  int status;
+  unsigned int code;
+  size_t bytes;
+  char body[128], cache[128], etag[96], type[96], range[96], allow[24], cookie[256];
+} worker_asset_call;
+static struct {
+  chttp_application app;
+  chttp_application_config config;
+  salts_configurator_provider_binding provider;
+  salts_configurator_deployment deployment;
+  chttp_controller controller;
+  chttp_web_asset_mount mount;
+  chttp_application_asset_binding binding;
+  chttp_invocation_interceptor hooks[2];
+  chttp_application_work_config limits;
+  char *root;
+  char *outside;
+  chttp_jwt_bearer_validator jwt;
+  char *token;
+  char uri[64];
+  sync_mutex_t mutex;
+  sync_cond_t changed;
+  sync_thread_t thread;
+  bool thread_live, hold, release, reject, fail, mutate_etag, override_cache, session_track;
+  int entered, policies, completions, api_calls, destroyed, invalid, session_reads;
+  int trace[256]; size_t trace_count;
+  const cmeta_function_desc *operation;
+  chttp_application_work_outcome outcome;
+  worker_asset_call background;
+} wa;
+static void worker_asset_destroy(void *user, void *object) { (void)user; ++wa.destroyed; free(object); }
+static const cmeta_object_lifecycle worker_asset_lifecycle = {sizeof(worker_asset_lifecycle), NULL, NULL, NULL, worker_asset_destroy};
+static cmeta_status worker_asset_create(void *user, const cmeta_data_desc *data, const void *config,
+    const salts_configurator_dependency *deps, size_t count, cmeta_object_ref *out) {
+  (void)user; (void)data; (void)config; (void)deps;
+  if (count) return CMETA_INVALID_ARGUMENT;
+  WorkerAssetBean *bean = malloc(sizeof(*bean));
+  if (!bean) return CMETA_OUT_OF_MEMORY;
+  bean->marker = 42; snprintf(bean->etag, sizeof(bean->etag), "\"asset-v1\"");
+  cmeta_status status = cmeta_object_borrow(out, bean, cmeta_reflected_data(WorkerAssetBean), NULL);
+  if (status == CMETA_OK) status = cmeta_object_take(out, &worker_asset_lifecycle);
+  if (status != CMETA_OK) { (void)cmeta_object_release(out); free(bean); }
+  return status;
+}
+static void worker_asset_trace(int event) {
+  sync_mutex_lock(&wa.mutex);
+  if (wa.trace_count < sizeof(wa.trace) / sizeof(wa.trace[0])) wa.trace[wa.trace_count++] = event;
+  else ++wa.invalid;
+  sync_mutex_unlock(&wa.mutex);
+}
+static void worker_asset_scope(void *self, const cmeta_function_desc *operation) {
+  sync_mutex_lock(&wa.mutex);
+  if (!self || ((WorkerAssetBean *)self)->marker != 42 || !chttp_application_worker_current(&wa.app) ||
+      !cmeta_function_desc_valid(operation)) ++wa.invalid;
+  if (!wa.operation) wa.operation = operation;
+  else if (!cmeta_function_desc_equal(wa.operation, operation)) ++wa.invalid;
+  sync_mutex_unlock(&wa.mutex);
+}
+int worker_asset_policy(void *self, const char *relative_path, chttp_application_asset_policy_result *out) {
+  WorkerAssetBean *bean = self;
+  worker_asset_trace(3);
+  sync_mutex_lock(&wa.mutex);
+  if (!bean || bean->marker != 42 || !chttp_application_worker_current(&wa.app) || !relative_path ||
+      relative_path[0] == '/' || strchr(relative_path, '\\')) ++wa.invalid;
+  ++wa.policies;
+  if (wa.hold && strcmp(relative_path, "app.01234567.js") == 0) {
+    ++wa.entered; sync_cond_broadcast(&wa.changed);
+    while (!wa.release) sync_cond_wait(&wa.changed, &wa.mutex);
+    if (strcmp(relative_path, "app.01234567.js") != 0) ++wa.invalid;
+  }
+  sync_mutex_unlock(&wa.mutex);
+  if (wa.fail) return SALTS_EPERM;
+  *out = (chttp_application_asset_policy_result){strcmp(relative_path, "app.01234567.js") == 0, NULL};
+  if (out->immutable) out->etag = bean->etag;
+  return SALTS_OK;
+}
+int worker_asset_api(void *self, const chttp_invocation *invocation) {
+  sync_mutex_lock(&wa.mutex);
+  if (!self || ((WorkerAssetBean *)self)->marker != 42 || !chttp_application_worker_current(&wa.app)) ++wa.invalid;
+  ++wa.api_calls; sync_mutex_unlock(&wa.mutex);
+  return chttp_invocation_respond(invocation, 200u, "text/plain", "api", 3u);
+}
+static cmeta_status worker_asset_before1(void *self, const chttp_invocation *invocation, bool *proceed) {
+  (void)proceed; worker_asset_scope(self, chttp_invocation_operation(invocation)); worker_asset_trace(1);
+  if (wa.jwt.impl) {
+    const chttp_server_request_view *request = chttp_invocation_request(invocation);
+    if (!request || !request->jwt_claims || !request->jwt_claims->subject || strcmp(request->jwt_claims->subject, "alice") != 0)
+      return CMETA_CALLBACK_ERROR;
+  }
+  if (wa.session_track) {
+    const chttp_server_request_view *request = chttp_invocation_request(invocation);
+    chttp_session *session = chttp_invocation_session(invocation);
+    if (!session || request->session) return CMETA_CALLBACK_ERROR;
+    const char *seen = chttp_session_get(session, "asset_seen");
+    if (seen) {
+      if (strcmp(seen, "1") != 0) return CMETA_CALLBACK_ERROR;
+      sync_mutex_lock(&wa.mutex); ++wa.session_reads; sync_mutex_unlock(&wa.mutex);
+    }
+    if (chttp_session_set(session, "asset_seen", "1") != SALTS_OK) return CMETA_CALLBACK_ERROR;
+  }
+  return CMETA_OK;
+}
+static cmeta_status worker_asset_before2(void *self, const chttp_invocation *invocation, bool *proceed) {
+  worker_asset_scope(self, chttp_invocation_operation(invocation)); worker_asset_trace(2);
+  return wa.reject && chttp_invocation_reject(invocation, proceed, 403u, "text/plain", "deny", 4u) != SALTS_OK ?
+      CMETA_CALLBACK_ERROR : CMETA_OK;
+}
+static void worker_asset_after1(void *self, const chttp_invocation *invocation, const chttp_invocation_result *result) {
+  (void)result; worker_asset_scope(self, chttp_invocation_operation(invocation)); worker_asset_trace(11);
+  if (wa.mutate_etag) snprintf(((WorkerAssetBean *)self)->etag, sizeof(((WorkerAssetBean *)self)->etag), "\"changed\"");
+  if (wa.override_cache && chttp_invocation_set_header(invocation, "Cache-Control", "private, max-age=0") != SALTS_OK) ++wa.invalid;
+}
+static void worker_asset_after2(void *self, const chttp_invocation *invocation, const chttp_invocation_result *result) {
+  (void)result; worker_asset_scope(self, chttp_invocation_operation(invocation)); worker_asset_trace(12);
+}
+static void worker_asset_error1(void *self, const chttp_invocation *invocation, cmeta_status status) {
+  (void)status; worker_asset_scope(self, chttp_invocation_operation(invocation)); worker_asset_trace(-1);
+}
+static void worker_asset_error2(void *self, const chttp_invocation *invocation, cmeta_status status) {
+  (void)status; worker_asset_scope(self, chttp_invocation_operation(invocation)); worker_asset_trace(-2);
+}
+static void worker_asset_completed(void *self, const chttp_server_request_view *request, const chttp_application_work_outcome *outcome) {
+  worker_asset_scope(self, request->operation); worker_asset_trace(200);
+  sync_mutex_lock(&wa.mutex); ++wa.completions; wa.outcome = *outcome; sync_mutex_unlock(&wa.mutex);
+}
+static void worker_asset_initialize(void) {
+  check_equal(chttp_application_init(&wa.app, &wa.config), SALTS_OK);
+  check_equal(chttp_application_worker_prepare(&wa.app, &wa.limits), SALTS_OK);
+}
+static void worker_asset_listen(void) {
+  const char *paths[] = {"/api/ping", "/assets/app.01234567.js", "/app/route"};
+  for (size_t i = 0u; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+    const chttp_application_worker_binding binding = {.component_id = "WorkerAssetComponent", .receiver = cmeta_reflected_data(WorkerAssetBean),
+        .method = CHTTP_METHOD_GET, .path = paths[i], .abi = FunctionAbi(worker_asset_api), .invoke = worker_asset_api};
+    check_equal(chttp_application_worker_mount(&wa.app, &binding), SALTS_OK);
+  }
+  check_equal(chttp_application_start(&wa.app), SALTS_OK);
+  uint16_t port = 0u; check_equal(chttp_application_port(&wa.app, &port), SALTS_OK);
+  snprintf(wa.uri, sizeof(wa.uri), "tcp://127.0.0.1:%u", (unsigned)port);
+}
+static void worker_asset_start(void) {
+  worker_asset_initialize(); check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_OK); worker_asset_listen();
+}
+static void worker_asset_call_run(void *user) {
+  worker_asset_call *call = user;
+  chttp_client client = {0}; chttp_response response = {0};
+  const chttp_client_config config = assets_http_client_config();
+  call->status = chttp_client_init(&client, &config);
+  if (call->status != SALTS_OK) return;
+  call->status = assets_http_call(&client, wa.uri, call->method ? call->method : CHTTP_METHOD_GET,
+      call->target, call->headers, call->header_count, call->protocol, &response);
+  call->code = response.status_code; call->bytes = response.body_size;
+  if (response.body_size < sizeof(call->body) && response.body_size) memcpy(call->body, response.body, response.body_size);
+#define ASSET_CAPTURE(field_, member_) do { const char *value = chttp_response_header(&response, field_); \
+  snprintf(call->member_, sizeof(call->member_), "%s", value ? value : ""); } while (0)
+  ASSET_CAPTURE("Cache-Control", cache); ASSET_CAPTURE("ETag", etag); ASSET_CAPTURE("Content-Type", type);
+  ASSET_CAPTURE("Content-Range", range); ASSET_CAPTURE("Allow", allow);
+  ASSET_CAPTURE("Set-Cookie", cookie);
+#undef ASSET_CAPTURE
+  chttp_response_destroy(&response);
+  const int closed = chttp_client_destroy(&client, ASSETS_HTTP_TIMEOUT_MS);
+  if (call->status == SALTS_OK) call->status = closed;
+}
+static void worker_asset_wait_entered(void) {
+  const uint64_t deadline = monotonic_ms() + ASSETS_HTTP_TIMEOUT_MS;
+  sync_mutex_lock(&wa.mutex);
+  while (!wa.entered && monotonic_ms() < deadline) sync_cond_timedwait(&wa.changed, &wa.mutex, UINT64_C(10000000));
+  const int entered = wa.entered; sync_mutex_unlock(&wa.mutex); check_equal(entered, 1);
 }
 
 spec("CHttp::App safe asset mount") {
@@ -381,5 +567,243 @@ spec("CHttp::App safe asset mount") {
     check_equal(tt_remove_tree(outside), 0);
     free(root);
     free(outside);
+  }
+}
+
+spec("Application worker assets") {
+  before_each() {
+    memset(&wa, 0, sizeof(wa)); sync_mutex_init(&wa.mutex); sync_cond_init(&wa.changed);
+    wa.root = tt_make_temp_dir("chttp-worker-assets-"); check_not_null(wa.root);
+    char path[ASSETS_HTTP_PATH_BYTES];
+    check_equal(assets_http_path(path, wa.root, "css"), SALTS_OK); check_equal(fs_mkdir(path, 0700), SALTS_OK);
+    check_equal(assets_http_path(path, wa.root, "css/app.css"), SALTS_OK); check_equal(assets_http_write(path, "body{}"), SALTS_OK);
+    check_equal(assets_http_path(path, wa.root, "app.01234567.js"), SALTS_OK); check_equal(assets_http_write(path, "console.log(1);"), SALTS_OK);
+    check_equal(assets_http_path(path, wa.root, "index.html"), SALTS_OK); check_equal(assets_http_write(path, "<main>shell</main>"), SALTS_OK);
+    wa.provider = (salts_configurator_provider_binding){sizeof(wa.provider), SALTS_CONFIGURATOR_PROVIDER_BINDING_ABI_VERSION,
+        cmeta_component_meta(WorkerAssetComponent), NULL, NULL, worker_asset_create, NULL, NULL};
+    wa.deployment = (salts_configurator_deployment){&wa.provider, NULL, NULL};
+    wa.controller = (chttp_controller){.component_id = "WorkerAssetComponent", .receiver = cmeta_reflected_data(WorkerAssetBean)};
+    wa.config = chttp_application_config_default(); wa.config.components = &wa.deployment; wa.config.component_count = 1u;
+    wa.config.controllers = &wa.controller; wa.config.controller_count = 1u;
+    wa.limits = (chttp_application_work_config){1u, 4u, 32768u, 512u, 6u, 512u};
+    wa.mount = (chttp_web_asset_mount)CHTTP_WEB_ASSET_MOUNT_INIT;
+    wa.mount.url_prefix = "/assets"; wa.mount.filesystem_root = wa.root; wa.mount.max_relative_path_bytes = 256u;
+    wa.mount.cache_control = "public, max-age=60"; wa.mount.immutable_cache_control = "public, max-age=31536000, immutable";
+    wa.mount.spa_url_prefix = "/app"; wa.mount.spa_fallback_relative_path = "index.html";
+    wa.hooks[0] = (chttp_invocation_interceptor){"WorkerAssetComponent", cmeta_reflected_data(WorkerAssetBean),
+        worker_asset_before1, worker_asset_after1, worker_asset_error1};
+    wa.hooks[1] = (chttp_invocation_interceptor){"WorkerAssetComponent", cmeta_reflected_data(WorkerAssetBean),
+        worker_asset_before2, worker_asset_after2, worker_asset_error2};
+    wa.binding = (chttp_application_asset_binding){&wa.mount, "WorkerAssetComponent", cmeta_reflected_data(WorkerAssetBean),
+        FunctionAbi(worker_asset_policy), worker_asset_policy, worker_asset_completed, wa.hooks, 2u};
+  }
+  after_each() {
+    sync_mutex_lock(&wa.mutex); wa.release = true; sync_cond_broadcast(&wa.changed); sync_mutex_unlock(&wa.mutex);
+    if (wa.thread_live) check_equal(sync_thread_join(&wa.thread), SALTS_OK);
+    check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK); check_equal(wa.invalid, 0);
+    chttp_jwt_token_destroy(wa.token); check_equal(chttp_jwt_bearer_validator_destroy(&wa.jwt), SALTS_OK);
+    if (wa.root) { check_equal(tt_remove_tree(wa.root), 0); free(wa.root); }
+    if (wa.outside) { check_equal(tt_remove_tree(wa.outside), 0); free(wa.outside); }
+    sync_cond_destroy(&wa.changed); sync_mutex_destroy(&wa.mutex);
+  }
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    it("uses detached Session state around worker assets and cached responses (protocol=%d)", protocol) {
+      wa.session_track = true;
+      wa.config.http.session_capacity = 4u; wa.config.http.session_entry_capacity = 4u;
+      wa.config.http.max_session_key_bytes = 32u; wa.config.http.max_session_value_bytes = 128u;
+      wa.config.http.session_idle_timeout_ms = 60000u; wa.config.http.session_cookie_name = "asset_sid";
+      worker_asset_start();
+      worker_asset_call first = {.protocol = (chttp_protocol)protocol, .target = "/assets/css/app.css"}; worker_asset_call_run(&first);
+      check_equal(first.status, SALTS_OK); check_equal(first.code, 200u); check_not_equal(first.cookie, "");
+      char *end = strchr(first.cookie, ';'); check_not_null(end); *end = '\0';
+      const chttp_header headers[] = {{"Cookie", first.cookie}, {"If-None-Match", "\"asset-v1\""}};
+      worker_asset_call cached = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js", .headers = headers, .header_count = 2u};
+      worker_asset_call_run(&cached); check_equal(cached.status, SALTS_OK); check_equal(cached.code, 304u);
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      check_equal(wa.session_reads, 1); check_equal(wa.completions, 2);
+      check_equal(wa.outcome.session_status, SALTS_OK);
+    }
+    for (int authenticated = 0; authenticated < 2; ++authenticated) {
+      it("validates global JWT before worker asset policy (protocol=%d authenticated=%d)", protocol, authenticated) {
+        static const unsigned char key[] = "0123456789abcdef0123456789abcdef";
+        const chttp_jwt_bearer_validator_options options = {.size = sizeof(options), .key = key, .key_size = sizeof(key) - 1u};
+        check_equal(chttp_jwt_bearer_validator_init(&wa.jwt, &options), SALTS_OK); wa.config.jwt = &wa.jwt;
+        chttp_header authorization = {"Authorization", NULL}; char value[1024];
+        if (authenticated) {
+          const chttp_jwt_claims claims = {.subject = "alice", .expires_at = INT64_C(3000000000)};
+          check_equal(chttp_jwt_hs256_token_create(&claims, key, sizeof(key) - 1u, &wa.token), SALTS_OK);
+          snprintf(value, sizeof(value), "Bearer %s", wa.token); authorization.value = value;
+        }
+        worker_asset_start();
+        worker_asset_call call = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js",
+            .headers = &authorization, .header_count = authenticated ? 1u : 0u}; worker_asset_call_run(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, authenticated ? 200u : 401u);
+        check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+        check_equal(wa.policies, authenticated); check_equal(wa.completions, authenticated);
+        if (!authenticated) check_equal(wa.trace_count, 0u);
+      }
+    }
+    it("isolates overlapping resource selections across workers and HTTP owners (protocol=%d)", protocol) {
+      chttp_server_execution_options execution = CHTTP_SERVER_EXECUTION_OPTIONS_INIT;
+      execution.owner_count = 2u; wa.config.execution = &execution; wa.limits.workers = 2u; wa.hold = true; worker_asset_start();
+      wa.background = (worker_asset_call){.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"};
+      check_equal(sync_thread_create(&wa.thread, worker_asset_call_run, &wa.background), SALTS_OK); wa.thread_live = true; worker_asset_wait_entered();
+      worker_asset_call css = {.protocol = (chttp_protocol)protocol, .target = "/assets/css/app.css"}; worker_asset_call_run(&css);
+      check_equal(css.status, SALTS_OK); check_equal(css.code, 200u); check_equal(css.body, "body{}");
+      sync_mutex_lock(&wa.mutex); wa.release = true; sync_cond_broadcast(&wa.changed); sync_mutex_unlock(&wa.mutex);
+      check_equal(sync_thread_join(&wa.thread), SALTS_OK); wa.thread_live = false;
+      check_equal(wa.background.status, SALTS_OK); check_equal(wa.background.body, "console.log(1);");
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      check_equal(wa.policies, 2); check_equal(wa.completions, 2);
+    }
+    it("serves CSS, immutable, ranged, HEAD, cached and SPA responses on workers (protocol=%d)", protocol) {
+      worker_asset_start();
+      worker_asset_call css = {.protocol = (chttp_protocol)protocol, .target = "/assets/css/app.css"}; worker_asset_call_run(&css);
+      check_equal(css.status, SALTS_OK); check_equal(css.code, 200u); check_equal(css.body, "body{}");
+      check_equal(css.cache, "public, max-age=60"); check_equal(css.type, "text/css; charset=utf-8");
+      worker_asset_call js = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"}; worker_asset_call_run(&js);
+      check_equal(js.status, SALTS_OK); check_equal(js.code, 200u); check_equal(js.body, "console.log(1);");
+      check_equal(js.cache, "public, max-age=31536000, immutable"); check_equal(js.etag, "\"asset-v1\"");
+      const chttp_header range = {"Range", "bytes=0-3"};
+      worker_asset_call ranged = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js", .headers = &range, .header_count = 1u};
+      worker_asset_call_run(&ranged); check_equal(ranged.status, SALTS_OK); check_equal(ranged.code, 206u);
+      check_equal(ranged.body, "cons"); check_equal(ranged.range, "bytes 0-3/15");
+      worker_asset_call head = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js", .method = CHTTP_METHOD_HEAD};
+      worker_asset_call_run(&head); check_equal(head.status, SALTS_OK); check_equal(head.code, 200u); check_equal(head.bytes, 0u);
+      const chttp_header condition = {"If-None-Match", "\"asset-v1\""};
+      worker_asset_call cached = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js", .headers = &condition, .header_count = 1u};
+      worker_asset_call_run(&cached); check_equal(cached.status, SALTS_OK); check_equal(cached.code, 304u); check_equal(cached.bytes, 0u);
+      worker_asset_call spa = {.protocol = (chttp_protocol)protocol, .target = "/app/route"}; worker_asset_call_run(&spa);
+      check_equal(spa.status, SALTS_OK); check_equal(spa.code, 200u); check_equal(spa.body, "<main>shell</main>");
+      worker_asset_call api = {.protocol = (chttp_protocol)protocol, .target = "/api/ping"}; worker_asset_call_run(&api);
+      check_equal(api.status, SALTS_OK); check_equal(api.code, 200u); check_equal(api.body, "api");
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      check_equal(wa.policies, 6); check_equal(wa.completions, 6); check_equal(wa.api_calls, 1); check_equal(wa.destroyed, 1);
+    }
+    it("rejects unsafe paths and preserves reserved namespace boundaries (protocol=%d)", protocol) {
+      worker_asset_start();
+      const char *targets[] = {"/assets/../index.html", "/assets/%2e%2e/index.html", "/assets/css%2fapp.css",
+          "/assets/%ff.js", "/assets/%00.js", "/assets/css%5capp.css", "/assets/file:stream", "/assets/missing.js",
+          "/assets", "/assetsfoo/index.html", "/appfoo/route", "/api/missing"};
+      for (size_t i = 0u; i < sizeof(targets) / sizeof(targets[0]); ++i) {
+        worker_asset_call call = {.protocol = (chttp_protocol)protocol, .target = targets[i]}; worker_asset_call_run(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, 404u); check_not_equal(call.body, "<main>shell</main>");
+      }
+      worker_asset_call valid = {.protocol = (chttp_protocol)protocol, .target = "/assets//css/./app.css"}; worker_asset_call_run(&valid);
+      check_equal(valid.status, SALTS_OK); check_equal(valid.code, 200u); check_equal(valid.body, "body{}");
+      worker_asset_call method = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js", .method = CHTTP_METHOD_POST};
+      worker_asset_call_run(&method); check_equal(method.status, SALTS_OK); check_equal(method.code, 405u); check_equal(method.allow, "GET, HEAD");
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      check_equal(wa.policies, 1); check_equal(wa.api_calls, 0);
+    }
+    for (int rejected = 0; rejected < 2; ++rejected) {
+      it("unwinds worker hooks around rejection or policy failure (protocol=%d rejected=%d)", protocol, rejected) {
+        wa.reject = rejected != 0; wa.fail = !rejected; worker_asset_start();
+        worker_asset_call call = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, rejected ? 403u : 500u);
+        check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+        check_equal(wa.policies, rejected ? 0 : 1); check_equal(wa.completions, 1);
+        const int failure[] = {1,2,3,-2,-1,200}, rejection[] = {1,2,-2,-1,200};
+        check_equal(wa.trace_count, rejected ? 5u : 6u);
+        check_equal(wa.trace, rejected ? rejection : failure, rejected ? sizeof(rejection) : sizeof(failure));
+        check_equal(wa.outcome.business_status, rejected ? SALTS_OK : SALTS_EPERM);
+      }
+    }
+    it("copies borrowed policy output before after hooks and preserves cache overrides (protocol=%d)", protocol) {
+      wa.mutate_etag = true; wa.override_cache = true; worker_asset_start();
+      worker_asset_call call = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 200u);
+      check_equal(call.etag, "\"asset-v1\""); check_equal(call.cache, "private, max-age=0");
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      const int expected[] = {1,2,3,12,11,200}; check_equal(wa.trace_count, 6u); check_equal(wa.trace, expected, sizeof(expected));
+    }
+    it("keeps native progress live and rejects excess Invocation slots before hooks (protocol=%d)", protocol) {
+      wa.hold = true; wa.limits.capacity = 1u; worker_asset_start();
+      wa.background = (worker_asset_call){.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"};
+      check_equal(sync_thread_create(&wa.thread, worker_asset_call_run, &wa.background), SALTS_OK); wa.thread_live = true; worker_asset_wait_entered();
+      worker_asset_call rejected = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"}; worker_asset_call_run(&rejected);
+      check_equal(rejected.status, SALTS_OK); check_equal(rejected.code, 503u);
+      worker_asset_call missing = {.protocol = (chttp_protocol)protocol, .target = "/api/missing"}; worker_asset_call_run(&missing);
+      check_equal(missing.status, SALTS_OK); check_equal(missing.code, 404u);
+      sync_mutex_lock(&wa.mutex); const int policies = wa.policies; wa.release = true; sync_cond_broadcast(&wa.changed); sync_mutex_unlock(&wa.mutex);
+      check_equal(policies, 1); check_equal(sync_thread_join(&wa.thread), SALTS_OK); wa.thread_live = false;
+      check_equal(wa.background.status, SALTS_OK); check_equal(wa.background.code, 200u);
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK); check_equal(wa.completions, 1);
+    }
+    it("rejects retained-byte exhaustion before entering the asset chain (protocol=%d)", protocol) {
+      wa.limits.retained_bytes = wa.limits.reply_bytes + wa.limits.header_bytes + (wa.limits.header_capacity + 1u) * sizeof(chttp_header);
+      worker_asset_start();
+      worker_asset_call call = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 503u); check_equal(wa.trace_count, 0u);
+      check_equal(wa.policies, 0); check_equal(wa.completions, 0);
+    }
+    it("retains the asset context and Bean after a running policy deadline (protocol=%d)", protocol) {
+      wa.hold = true; wa.config.deadlines.handler_ms = 500u; worker_asset_start();
+      wa.background = (worker_asset_call){.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"};
+      check_equal(sync_thread_create(&wa.thread, worker_asset_call_run, &wa.background), SALTS_OK); wa.thread_live = true; worker_asset_wait_entered();
+      check_equal(sync_thread_join(&wa.thread), SALTS_OK); wa.thread_live = false;
+      check_not_equal(wa.background.status, SALTS_OK); check_not_equal(wa.background.status, SALTS_ETIMEDOUT);
+      check_equal(chttp_application_close(&wa.app, 5u), SALTS_ETIMEDOUT); check_not_null(wa.app.impl); check_equal(wa.destroyed, 0);
+      sync_mutex_lock(&wa.mutex); wa.release = true; sync_cond_broadcast(&wa.changed); sync_mutex_unlock(&wa.mutex);
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      check_equal(wa.policies, 1); check_equal(wa.completions, 1); check_equal(wa.destroyed, 1);
+      check_not_equal(wa.outcome.transport_status, SALTS_OK);
+    }
+    it("fails bounded metadata publication without a partial asset response (protocol=%d)", protocol) {
+      wa.limits.header_capacity = 3u; worker_asset_start();
+      worker_asset_call call = {.protocol = (chttp_protocol)protocol, .target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 500u); check_equal(call.etag, ""); check_equal(call.cache, "");
+      check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK);
+      check_equal(wa.outcome.business_status, SALTS_ENOBUFS);
+    }
+  }
+#if !defined(_WIN32)
+  it("rejects a symlink escaping the asset root before invoking worker policy") {
+    wa.outside = tt_make_temp_dir("chttp-worker-assets-outside-"); check_not_null(wa.outside);
+    char secret[ASSETS_HTTP_PATH_BYTES], link[ASSETS_HTTP_PATH_BYTES];
+    check_equal(assets_http_path(secret, wa.outside, "secret.txt"), SALTS_OK);
+    check_equal(assets_http_path(link, wa.root, "escape.txt"), SALTS_OK);
+    check_equal(assets_http_write(secret, "private-secret"), SALTS_OK); check_equal(fs_symlink(secret, link, 0), SALTS_OK);
+    worker_asset_start(); worker_asset_call call = {.target = "/assets/escape.txt"}; worker_asset_call_run(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 404u); check_not_equal(call.body, "private-secret");
+    check_equal(chttp_application_close(&wa.app, ASSETS_HTTP_TIMEOUT_MS), SALTS_OK); check_equal(wa.policies, 0);
+  }
+#endif
+  it("validates canonical policy ABI/hooks and snapshots the mount before publication") {
+    worker_asset_initialize();
+    check_true(cmeta_type_desc_valid(&chttp_asset_relative_pointer));
+    check_true(cmeta_function_abi_desc_valid(FunctionAbi(worker_asset_policy)));
+    const cmeta_function_abi_desc *abi = wa.binding.policy_abi;
+    wa.mount.size = 0u; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.size = sizeof(wa.mount);
+    wa.mount.max_relative_path_bytes = 0u; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.max_relative_path_bytes = 256u;
+    wa.binding.policy_abi = FunctionAbi(worker_asset_api); check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL);
+    wa.binding.policy_abi = NULL; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.binding.policy_abi = abi;
+    wa.mount.user = &wa; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.user = NULL;
+    wa.mount.immutable = assets_http_immutable; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.immutable = NULL;
+    wa.mount.etag = assets_http_etag; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL); wa.mount.etag = NULL;
+    wa.binding.component_id = "missing"; check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_ENOENT);
+    wa.binding.component_id = "WorkerAssetComponent";
+    const chttp_invocation_interceptor invalid = {0}; wa.binding.hooks = &invalid; wa.binding.hook_count = 1u;
+    check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EINVAL);
+    wa.binding.hooks = wa.hooks; wa.binding.hook_count = 2u;
+    check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_OK);
+    check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EALREADY);
+    memset(&wa.mount, 0, sizeof(wa.mount)); memset(wa.hooks, 0, sizeof(wa.hooks)); worker_asset_listen();
+    check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_EBUSY);
+    worker_asset_call call = {.target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 200u); check_equal(call.etag, "\"asset-v1\"");
+  }
+  it("serves built-in assets without a callback receiver or legacy raw context") {
+    wa.binding = (chttp_application_asset_binding){.mount = &wa.mount}; worker_asset_start();
+    worker_asset_call call = {.target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 200u); check_equal(call.cache, "public, max-age=60");
+    check_equal(wa.policies, 0); check_equal(wa.completions, 0);
+  }
+  it("leaves registration transactional when the native middleware capacity is full") {
+    wa.config.http.middleware_capacity = 1u; worker_asset_initialize();
+    check_equal(chttp_application_worker_assets(&wa.app, &wa.binding), SALTS_ENOBUFS); worker_asset_listen();
+    worker_asset_call call = {.target = "/assets/app.01234567.js"}; worker_asset_call_run(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 200u); check_equal(call.body, "api");
+    check_equal(wa.policies, 0); check_equal(wa.completions, 0);
   }
 }
