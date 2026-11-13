@@ -808,3 +808,9 @@
   include larger-than-arena transfers, H1/H2 WAIT, known/unknown/empty lengths,
   SSE formatting, negative producer status, C++ exception/RAII, overload,
   cancellation and finite-close ownership. Upload and WebSocket remain ongoing.
+- Source CI 43357112929 on Linux GCC/Clang exposed a cancellation-fixture race:
+  the 4096-byte H2 response could finish its native send before the client's sink
+  canceled. Client cancellation does not retroactively fail an already completed
+  Server terminal. The producer now blocks after its first chunk until the
+  client returns cancellation, guaranteeing EOF/END_STREAM has not completed.
+  Original CI failures remain preserved; no production change or retry.

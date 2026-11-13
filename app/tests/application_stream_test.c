@@ -37,7 +37,7 @@ static struct {
   sync_mutex_t mutex;
   sync_cond_t changed;
   sync_thread_t thread;
-  bool thread_live, hold, release, entered, sse_enabled, known, fail_business, recover;
+  bool thread_live, hold, hold_after_first, release, entered, sse_enabled, known, fail_business, recover;
   size_t total, offset, chunk, declared;
   int read_status, reads, cleanups, cleanup_status, afters, completions, destroyed, selection_status;
   _Atomic int invalid;
@@ -68,7 +68,7 @@ static int stream_read(void *user, void *buffer, size_t capacity, size_t *out) {
   sync_mutex_lock(&streams.mutex);
   if (streams.afters != 1 || !capacity || capacity > streams.chunk) atomic_fetch_add(&streams.invalid, 1);
   ++streams.reads;
-  if (streams.hold) {
+  if (streams.hold || (streams.hold_after_first && streams.reads > 1)) {
     streams.entered = true; sync_cond_broadcast(&streams.changed);
     while (!streams.release) sync_cond_wait(&streams.changed, &streams.mutex);
   }
@@ -178,8 +178,10 @@ spec("Application worker streaming") {
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
     it("settles worker source cleanup after client cancellation (protocol=%d)", protocol) {
+      streams.hold_after_first = true;
       stream_start(); stream_call call = {.protocol = (chttp_protocol)protocol, .cancel = true}; stream_perform(&call);
       check_equal(call.status, SALTS_ECANCELED);
+      sync_mutex_lock(&streams.mutex); streams.release = true; sync_cond_broadcast(&streams.changed); sync_mutex_unlock(&streams.mutex);
       check_equal(chttp_application_close(&streams.app, 5000u), SALTS_OK);
       check_equal(streams.cleanups, 1); check_equal(streams.completions, 1); check_not_equal(streams.outcome.transport_status, SALTS_OK);
     }
