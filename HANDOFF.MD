@@ -975,3 +975,20 @@
   fields; bytes, containers and variants await complete projection contracts.
   Preserve migration-worker-body-byte-admission-cases.log (27 pass, 1 failure);
   the corrected suite passes all 28 cases in worker-body-shape-cases.log.
+
+## Workspace cleanup and fresh configuration
+
+- Sanitizer options and their inherited presets now use ENABLE_ASAN,
+  ENABLE_UBSAN and ENABLE_TSAN. Refresh old caches when migrating the names;
+  the existing Linux/Clang qualification and TSan exclusivity remain intact.
+- ChttpConfig must substitute SaltsCore_VERSION, populated by find_package.
+  A generic VERSION placeholder was undefined and rendered an empty version
+  before EXACT. Fresh configuration restores the selected SDK pin (0.1.4 here).
+- Fresh configuration also exposed OpenSSL missing from the host test PATH.
+  Preserve migration-workspace-cleanup-fresh.log. Explicitly adding the existing
+  independent OpenSSL 3.2.4 host executable to this invocation's PATH resolved
+  discovery; no product TLS dependency or CMake discovery fallback was added.
+- native-release-user fresh configure, complete graph build, 121/121 formal
+  CTests and install passed: migration-workspace-cleanup-tools-fresh.log and
+  migration-workspace-cleanup-{build,ctest,install}.log. This fresh preset leaves
+  BUILD_BENCHMARK off; CI explicitly enables its three benchmark CTests.

@@ -1,29 +1,30 @@
-if(SALTSCORE_ENABLE_TSAN AND
-   (SALTSCORE_ENABLE_ASAN OR SALTSCORE_ENABLE_UBSAN))
+if(ENABLE_TSAN AND
+   (ENABLE_ASAN OR ENABLE_UBSAN))
   message(FATAL_ERROR "ThreadSanitizer cannot be combined with ASan/UBSan")
 endif()
 
-if(SALTSCORE_ENABLE_ASAN OR SALTSCORE_ENABLE_UBSAN OR SALTSCORE_ENABLE_TSAN)
+if(ENABLE_ASAN OR ENABLE_UBSAN OR ENABLE_TSAN)
   if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "SaltsCore sanitizer profiles require Clang/LLVM")
+    message(FATAL_ERROR "CHttp sanitizer profiles require Clang/LLVM")
   endif()
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "SaltsCore sanitizer profiles are qualified on Linux only")
+    message(FATAL_ERROR
+            "CHttp sanitizer profiles are qualified on Linux only")
   endif()
 
-  set(_saltscore_sanitizers)
-  if(SALTSCORE_ENABLE_ASAN)
-    list(APPEND _saltscore_sanitizers address)
+  set(_sanitizers)
+  if(ENABLE_ASAN)
+    list(APPEND _sanitizers address)
   endif()
-  if(SALTSCORE_ENABLE_UBSAN)
-    list(APPEND _saltscore_sanitizers undefined)
+  if(ENABLE_UBSAN)
+    list(APPEND _sanitizers undefined)
   endif()
-  if(SALTSCORE_ENABLE_TSAN)
-    list(APPEND _saltscore_sanitizers thread)
+  if(ENABLE_TSAN)
+    list(APPEND _sanitizers thread)
   endif()
-  list(JOIN _saltscore_sanitizers "," _saltscore_sanitizer_list)
+  list(JOIN _sanitizers "," _sanitizer_list)
   add_compile_options(
-    "-fsanitize=${_saltscore_sanitizer_list}"
+    "-fsanitize=${_sanitizer_list}"
     -fno-omit-frame-pointer)
-  add_link_options("-fsanitize=${_saltscore_sanitizer_list}")
+  add_link_options("-fsanitize=${_sanitizer_list}")
 endif()
