@@ -565,9 +565,13 @@ spec("Application worker WebSocket") {
       check_equal(chttp_application_close(&ws.app, 5000u), SALTS_OK); check_equal(ws.opens, 0); check_equal(ws.admissions, 1);
     }
     it("fails a peer on an event error and joins its Close before completion (protocol=%d)", protocol) {
-      ws.fail_event = true; ws_start(); unsigned int code = 0u;
+      ws.fail_event = true; ws.hold = true; ws_start(); unsigned int code = 0u;
       check_equal(ws_connect(0, (chttp_protocol)protocol, &code), SALTS_OK);
       check_equal(chttp_websocket_client_send_text(&ws.clients[0], "fail", 4u, 5000u), SALTS_OK);
+      /* send drains native output and may observe a peer reset in the same
+       * call. Release the intentional business failure only after send has
+       * returned, so this case tests terminal/Close joining in a fixed order. */
+      ws_wait_entered(); ws_release();
       chttp_websocket_event event = {0};
       const int status = chttp_websocket_client_receive(&ws.clients[0], 5000u, &event);
       check_not_equal(status, SALTS_ETIMEDOUT);

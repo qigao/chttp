@@ -1054,3 +1054,10 @@
   This checks rollback release without changing runtime capacity, adding a
   request retry or weakening native lifetime. Original failed job 131763092027
   remains on run 43388598632; do not rerun that unchanged job.
+- Run 107's macOS profile exposed a second fixture ordering assumption: the H2
+  client send drains native output and propagates any observed peer terminal,
+  so an immediately failing event can reset it before send returns. The event
+  failure case now uses its existing hold/release condition to finish send
+  before allowing SALTS_EIO, then still verifies exactly one message, Close and
+  completion with the original business error. Failed job 131768681035 remains
+  on run 43390271574; no transport return code was weakened or retried.
