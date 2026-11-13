@@ -260,8 +260,9 @@ returns to its original connection owner; this design does not migrate endpoints
 Built-in CORS preflight, protocol failures and JWT denial can terminate without
 calling application code. Every supplied admission callback uses the header-only
 worker stage; it must not receive a borrowed parser view. H1 does not send
-100 Continue before successful admission. H2 suspends admission/credit for that
-stream within existing bounds while other streams continue progressing. This
+100 Continue before successful admission. H2 holds user delivery for that stream
+and bounds early DATA with existing native stream/body limits while other
+streams continue progressing. This
 requires an internal retained admission bridge; today's response_defer API is
 not valid at an arbitrary header callback.
 
@@ -604,6 +605,32 @@ forced free or successful close with a live task. External producers must be
 quiescent before the relevant executor is destroyed.
 
 ### Session, files, streaming and WebSocket migration requirements
+
+Pre-body admission uses a separate short callback scope, not a response defer.
+It owns a copied header/params/JWT snapshot while using the same bounded worker
+slots, byte budget and executor as business Invocations. Its only output is a
+copied status/Retry-After decision. The task finalizer releases its snapshot and
+slot before publishing that value to the native owner; it never accesses the
+reusable record after publication. Body waiting buffers remain bounded by the
+existing native connection/stream and request-body limits. Business admission
+then reserves its ordinary Invocation credit and may return 503 before calling
+business code if full. Keeping a second header frame through the entire response
+was rejected because no user state is borrowed after this value-only callback.
+Private work telemetry counts these callback scopes and body Invocations, not
+HTTP requests; transport stats remain the HTTP request fact source.
+
+The native gate has the existing generation-checked per-request token. A closed
+pending header gate records cancellation and retains its native slot until its
+sole producer publishes; no callback scope or native owner is freed under that
+producer. The decision is consumed only on the native owner. JWT precedes the
+callback; 100 Continue/body_open/body delivery follow an allow decision. H1
+pauses at the header wire boundary, including zero-length requests; H2 buffers
+early DATA within existing limits and does not dispatch it to user callbacks.
+body_ms includes queue/callback time and is never restarted on continuation.
+The initial private slice supports ordinary H1/H2; upgrade/extended CONNECT
+remain with the later WebSocket adapter. Public synchronous admission is intact,
+and cannot be combined with this private gate. Removing the private registration
+restores ordinary owner admission without a fallback or new configuration flag.
 
 The next private slice stages a raw file response, equivalent to the engine's
 response_file capability rather than conditional serve_file/asset routing.

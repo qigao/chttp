@@ -62,6 +62,8 @@ struct InvocationCppContext {
   chttp_protocol protocol = CHTTP_HTTP_1_1;
   const void *control = nullptr;
   bool fail = false, worker = false, reflected = false, legacy_rejected = false, header_copied = false;
+  bool admission_fail = false, admission_worker = false, admission_values = false;
+  int admission_unwound = 0;
   unsigned int code = 0;
 };
 struct InvocationCppController {
@@ -72,6 +74,16 @@ struct InvocationCppController {
 };
 cmeta_reflect_data(InvocationCppController, "test.InvocationCppController", cmeta_field(int, value));
 CHTTP_INVOCATION_ACTION(cpp_invocation);
+CHTTP_ADMISSION_ACTION(cpp_admission);
+int cpp_admission(void *self, const chttp_server_request_view *request, chttp_server_admission_result *result) {
+  auto& context = *static_cast<InvocationCppController*>(self)->call_context;
+  struct Scope { int& count; ~Scope() noexcept { ++count; } } scope{context.admission_unwound};
+  context.admission_worker = chttp_application_worker_current(context.app) && sync_thread_current_token() != context.control;
+  context.admission_values = request && !request->body && !request->body_size && !request->session &&
+      request->path && std::strcmp(request->path, "/cpp") == 0;
+  if (context.admission_fail) throw std::runtime_error("Admission failure");
+  *result = {}; return context.admission_values ? SALTS_OK : SALTS_EPROTO;
+}
 int cpp_invocation(void *self, const chttp_invocation *invocation) {
   auto& controller = *static_cast<InvocationCppController*>(self);
   auto& context = *controller.call_context;
@@ -94,6 +106,10 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   const chttp_application_work_config limits{1u, 2u, 8192u, 128u, 1u, 32u};
   int status = chttp_application_worker_prepare(app, &limits);
   if (status != SALTS_OK) return status;
+  const chttp_application_admission_binding admission{"CppComponent", cmeta_reflected_data(InvocationCppController),
+      FunctionAbi(cpp_admission), chttp::detail::admission_action<cpp_admission>};
+  status = chttp_application_worker_admission(app, &admission);
+  if (status != SALTS_OK) return status;
   chttp_application_worker_binding binding{};
   binding.component_id = "CppComponent"; binding.receiver = cmeta_reflected_data(InvocationCppController);
   binding.method = CHTTP_METHOD_GET; binding.path = "/cpp"; binding.abi = FunctionAbi(cpp_throw);
@@ -112,7 +128,7 @@ static int cpp_invocation_body(chttp_application *app, void *user) {
   options.protocol = context.protocol; options.timeout_ms = 5000u;
   status = chttp_get(&client, &options, &response, &error); context.code = response.status_code;
   const char *field = chttp_response_header(&response, "X-Cpp");
-  context.header_copied = context.fail ? field == nullptr : field && std::strcmp(field, "cpp") == 0;
+  context.header_copied = context.fail || context.admission_fail ? field == nullptr : field && std::strcmp(field, "cpp") == 0;
   chttp_response_destroy(&response); const int closed = chttp_client_destroy(&client, 5000u);
   return status == SALTS_OK ? closed : status;
 }
@@ -135,10 +151,10 @@ static_assert(!std::is_constructible_v<chttp::Bean<CppController, DerivedFactory
 
 spec("Application C++ RAII") {
   before_each() { destroyed = 0; unwound = 0; }
-  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure <= 1; ++failure) {
-    it("admits a C++17 Invocation and contains action exceptions (protocol=%d failure=%d)", protocol, failure) {
+  for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) for (int failure = 0; failure <= 3; ++failure) {
+    it("admits C++17 header/action callbacks and contains exceptions (protocol=%d failure=%d)", protocol, failure) {
       InvocationCppContext context; context.protocol = static_cast<chttp_protocol>(protocol);
-      context.fail = failure != 0; context.control = sync_thread_current_token();
+      context.fail = (failure & 1) != 0; context.admission_fail = (failure & 2) != 0; context.control = sync_thread_current_token();
       auto factory = [&context](const cmeta_data_desc*, const void*, const salts_configurator_dependency*, size_t) {
         return std::make_unique<InvocationCppController>(&context);
       };
@@ -164,9 +180,10 @@ spec("Application C++ RAII") {
         if (operation == SALTS_OK) operation = cpp_invocation_body(&app, &context);
       }
       check_equal(operation, SALTS_OK); check_equal(closed, SALTS_OK);
-      check_true(context.worker); check_true(context.reflected); check_true(context.legacy_rejected);
+      check_equal(context.worker, !context.admission_fail); check_equal(context.reflected, !context.admission_fail); check_true(context.legacy_rejected);
+      check_true(context.admission_worker); check_true(context.admission_values); check_equal(context.admission_unwound, 1);
       check_true(context.header_copied);
-      check_equal(context.code, failure ? 500u : 200u); check_equal(unwound, 1); check_equal(destroyed, 1);
+      check_equal(context.code, failure ? 500u : 200u); check_equal(unwound, context.admission_fail ? 0 : 1); check_equal(destroyed, 1);
     }
   }
   it("contains action exceptions and destroys an ACE-owned native object on scope exit") {

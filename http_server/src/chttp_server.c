@@ -393,6 +393,97 @@ static void chttp_server_request_admission_clear(chttp_server_request_state *sta
   state->param_count = 0u;
 }
 
+bool chttp_server_admission_abandon(chttp_server_deferred_target *target) {
+  if (!target->admission) return false;
+  atomic_store_explicit(&target->admission_canceled, true, memory_order_release);
+  const chttp_server_deferred_state state = chttp_server_deferred_token_state(
+      atomic_load_explicit(target->token, memory_order_acquire));
+  return state == CHTTP_SERVER_DEFERRED_PENDING || state == CHTTP_SERVER_DEFERRED_WRITING;
+}
+int chttp_server_admission_gate_cancelled(const chttp_server_admission_gate *gate, bool *out) {
+  if (!gate || !gate->impl || !gate->generation || !out) return SALTS_EINVAL;
+  chttp_server_deferred_target *target = gate->impl;
+  if (!target->token) return SALTS_EINVAL;
+  const uint_fast64_t token = atomic_load_explicit(target->token, memory_order_acquire);
+  const chttp_server_deferred_state state = chttp_server_deferred_token_state(token);
+  *out = chttp_server_deferred_token_generation(token) != gate->generation ||
+      atomic_load_explicit(&target->admission_canceled, memory_order_acquire) ||
+      state == CHTTP_SERVER_DEFERRED_IDLE || state == CHTTP_SERVER_DEFERRED_CANCELED;
+  return SALTS_OK;
+}
+int chttp_server_admission_gate_complete(chttp_server_admission_gate *gate, int status,
+    const chttp_server_admission_result *result) {
+  if (!gate || !gate->impl || !gate->generation || !result) return SALTS_EINVAL;
+  chttp_server_deferred_target *target = gate->impl;
+  if (!target->token || !target->server || !target->connection) return SALTS_EINVAL;
+  uint_fast64_t token = atomic_load_explicit(target->token, memory_order_acquire);
+  for (;;) {
+    if (chttp_server_deferred_token_generation(token) != gate->generation ||
+        chttp_server_deferred_token_state(token) == CHTTP_SERVER_DEFERRED_IDLE) return SALTS_ENOENT;
+    const chttp_server_deferred_state state = chttp_server_deferred_token_state(token);
+    if (state != CHTTP_SERVER_DEFERRED_PENDING) return SALTS_EALREADY;
+    if (atomic_compare_exchange_weak_explicit(target->token, &token,
+        chttp_server_deferred_token(gate->generation, CHTTP_SERVER_DEFERRED_WRITING),
+        memory_order_acq_rel, memory_order_acquire)) break;
+  }
+  if (!target->admission) {
+    atomic_store_explicit(target->token, chttp_server_deferred_token(gate->generation, CHTTP_SERVER_DEFERRED_PENDING), memory_order_release);
+    return SALTS_EINVAL;
+  }
+  target->admission_status = status; target->admission_result = *result;
+  chttp_server_impl *server = target->server;
+  chttp_server_owner_lane *owner = target->connection->owner;
+  sync_mutex_lock(&server->mutex);
+  atomic_store_explicit(target->token, chttp_server_deferred_token(gate->generation, CHTTP_SERVER_DEFERRED_READY), memory_order_release);
+  *gate = (chttp_server_admission_gate){0};
+  (void)chttp_server_owner_wake_locked(owner);
+  sync_mutex_unlock(&server->mutex);
+  return SALTS_OK;
+}
+int chttp_server_request_admission_apply(chttp_server_request_state *state, int status,
+    const chttp_server_admission_result *result) {
+  state->admission_complete = true;
+  state->admission_result = *result;
+  const unsigned int code = state->admission_result.status_code;
+  if (status != SALTS_OK || (code != 0 && (code < 400u || code > 599u)) ||
+      (code == 0 && state->admission_result.retry_after_seconds != 0)) {
+    state->admission_result = (chttp_server_admission_result){.status_code = 500u};
+    chttp_server_stats_handler_error(state->server);
+  }
+  state->admission_rejected = state->admission_result.status_code != 0;
+  return state->admission_rejected ? SALTS_EPERM : SALTS_OK;
+}
+static int chttp_server_admission_begin(chttp_server_request_state *state,
+    const chttp_server_request_view *request) {
+  if (request->method == CHTTP_METHOD_CONNECT || chttp_server_request_header(request, "Upgrade"))
+    return SALTS_ENOTSUP;
+  chttp_server_deferred_target *target = state->response_builder.deferred_target;
+  uint_fast64_t token = atomic_load_explicit(target->token, memory_order_acquire);
+  if (chttp_server_deferred_token_state(token) != CHTTP_SERVER_DEFERRED_IDLE) return SALTS_EBUSY;
+  uint32_t generation = chttp_server_deferred_token_generation(token) + 1u;
+  if (!generation) ++generation;
+  if (!atomic_compare_exchange_strong_explicit(target->token, &token,
+      chttp_server_deferred_token(generation, CHTTP_SERVER_DEFERRED_WRITING),
+      memory_order_acq_rel, memory_order_acquire)) return SALTS_EBUSY;
+  target->admission = true;
+  target->file = (chttp_server_deferred_file){0};
+  atomic_store_explicit(&target->admission_canceled, false, memory_order_relaxed);
+  target->request = (chttp_server_request_view){.http_major = request->http_major, .http_minor = request->http_minor,
+      .method = request->method, .protocol_keep_alive = request->protocol_keep_alive};
+  target->admission_result = (chttp_server_admission_result){0}; target->admission_status = SALTS_OK;
+  atomic_store_explicit(target->token, chttp_server_deferred_token(generation, CHTTP_SERVER_DEFERRED_PENDING), memory_order_release);
+  chttp_server_admission_gate gate = {target, generation};
+  const int status = state->server->admission_async(state->server->admission_async_user, request, &gate);
+  if (status == SALTS_OK) return CHTTP_SERVER_ADMISSION_PENDING;
+  /* Rejected begin transferred no producer and invokes no callback. */
+  target->admission = false;
+  atomic_store_explicit(target->token, chttp_server_deferred_token(generation, CHTTP_SERVER_DEFERRED_IDLE), memory_order_release);
+  const chttp_server_admission_result rejected = {.status_code =
+      status == SALTS_ENOBUFS || status == SALTS_ESHUTDOWN ? 503u : 500u};
+  return chttp_server_request_admission_apply(state,
+      rejected.status_code == 503u ? SALTS_OK : status, &rejected);
+}
+
 int chttp_server_request_admit(chttp_server_request_state *state,
                                const chttp_server_request_view *request,
                                chttp_method route_method) {
@@ -425,7 +516,7 @@ int chttp_server_request_admit(chttp_server_request_state *state,
       return status;
     }
   }
-  if (state->server->admission == NULL) return SALTS_OK;
+  if (state->server->admission == NULL && state->server->admission_async == NULL) return SALTS_OK;
   chttp_server_request_view admitted = *request;
   admitted.params = state->params;
   admitted.param_count = state->param_count;
@@ -434,18 +525,15 @@ int chttp_server_request_admit(chttp_server_request_state *state,
   admitted.body = NULL;
   admitted.body_size = 0;
   admitted.body_sink_user = NULL;
+  if (state->server->admission_async) {
+    state->admission_complete = false;
+    return chttp_server_admission_begin(state, &admitted);
+  }
   chttp_server_impl *previous = chttp_active_callback_server;
   chttp_active_callback_server = state->server;
   status = state->server->admission(state->server->admission_user, &admitted, &state->admission_result);
   chttp_active_callback_server = previous;
-  const unsigned int code = state->admission_result.status_code;
-  if (status != SALTS_OK || (code != 0 && (code < 400u || code > 599u)) ||
-      (code == 0 && state->admission_result.retry_after_seconds != 0)) {
-    state->admission_result = (chttp_server_admission_result){.status_code = 500u};
-    chttp_server_stats_handler_error(state->server);
-  }
-  state->admission_rejected = state->admission_result.status_code != 0;
-  return state->admission_rejected ? SALTS_EPERM : SALTS_OK;
+  return chttp_server_request_admission_apply(state, status, &state->admission_result);
 }
 
 void chttp_server_request_state_reset(chttp_server_request_state *state) {
@@ -529,6 +617,7 @@ int chttp_server_connection_init(chttp_server_impl *server,
                                      .response = &connection->deferred_response,
                                      .token = &connection->deferred_token,
                                      .kind = CHTTP_SERVER_DEFERRED_HTTP_1_1};
+  atomic_init(&connection->deferred_target.admission_canceled, false);
   connection->request_state.response_builder.deferred_target = &connection->deferred_target;
   status = chttp_server_parser_init(&connection->parser, &parser_config);
   if (status == SALTS_OK && server->config.enable_http2)
@@ -749,6 +838,7 @@ static void chttp_server_on_state(void *user, cnet_connection handle, cnet_conne
   } else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
     const chttp_server_deferred_state deferred_state = chttp_server_deferred_token_state(
         atomic_load_explicit(&connection->deferred_token, memory_order_acquire));
+    (void)chttp_server_admission_abandon(&connection->deferred_target);
     chttp_server_request_terminal_notify(&connection->request_state, SALTS_ECONNRESET);
     chttp_server_websocket_transport_closed(connection);
     connection->active = false;
@@ -1097,6 +1187,11 @@ static int chttp_server_h1_input_resume(chttp_server_connection *connection) {
   if (connection == NULL) return SALTS_EINVAL;
   status = chttp_server_parser_resume(&connection->parser);
   if (status != SALTS_OK) return status;
+  /* Resuming an empty admitted request can dispatch its deferred handler
+   * immediately. Leave pipelined input owned until that response settles. */
+  if (connection->retained_response_paused ||
+      chttp_server_deferred_token_state(atomic_load_explicit(&connection->deferred_token,
+      memory_order_acquire)) != CHTTP_SERVER_DEFERRED_IDLE) return SALTS_OK;
   size = connection->websocket_upgrade_input_size;
   connection->websocket_upgrade_input_size = 0u;
   if (size == 0u) return SALTS_OK;
@@ -1179,28 +1274,12 @@ static void chttp_server_on_send(void *user, cnet_connection handle, size_t size
   else if (!connection->response_streaming) (void)chttp_server_send_pending(connection);
 }
 
-static int chttp_server_on_headers(void *user, const chttp_server_request_view *request,
-                                   chttp_server_parser_headers_action *out_action) {
-  chttp_server_connection *connection = (chttp_server_connection *)user;
-  chttp_server_request_state *state;
-  chttp_server_request_view routed_request;
+static int chttp_server_h1_admission_reject(chttp_server_connection *connection,
+    const chttp_server_request_view *request) {
+  chttp_server_request_state *state = &connection->request_state;
+  chttp_server_request_view routed_request = *request;
   chttp_server_response_builder *builder;
   int status;
-
-  if (connection == NULL || request == NULL || out_action == NULL) return SALTS_EINVAL;
-  *out_action = CHTTP_SERVER_HEADERS_CONTINUE;
-  state = &connection->request_state;
-  if (chttp_server_deadline_expired(state)) return SALTS_ETIMEDOUT;
-  chttp_server_deadline_start(state, connection->server->deadlines.body_ms);
-  chttp_server_request_admission_clear(state);
-  chttp_server_response_builder_reset(&state->response_builder);
-
-  routed_request = *request;
-  chttp_server_request_enrich(connection, &routed_request);
-  status = chttp_server_request_admit(state, &routed_request, routed_request.method);
-  if (status == SALTS_OK) return SALTS_OK;
-  if (status != SALTS_EPERM) return status;
-
   routed_request.protocol_keep_alive = 0;
   builder = &state->response_builder;
   builder->request = &routed_request;
@@ -1218,6 +1297,36 @@ static int chttp_server_on_headers(void *user, const chttp_server_request_view *
 
   chttp_server_stats_response(connection->server);
   connection->close_after_write = true;
+  return SALTS_OK;
+}
+
+static int chttp_server_on_headers(void *user, const chttp_server_request_view *request,
+                                   chttp_server_parser_headers_action *out_action) {
+  chttp_server_connection *connection = (chttp_server_connection *)user;
+  chttp_server_request_state *state;
+  chttp_server_request_view routed_request;
+  int status;
+
+  if (connection == NULL || request == NULL || out_action == NULL) return SALTS_EINVAL;
+  *out_action = CHTTP_SERVER_HEADERS_CONTINUE;
+  state = &connection->request_state;
+  if (chttp_server_deadline_expired(state)) return SALTS_ETIMEDOUT;
+  chttp_server_deadline_start(state, connection->server->deadlines.body_ms);
+  chttp_server_request_admission_clear(state);
+  chttp_server_response_builder_reset(&state->response_builder);
+
+  routed_request = *request;
+  chttp_server_request_enrich(connection, &routed_request);
+  status = chttp_server_request_admit(state, &routed_request, routed_request.method);
+  if (status == CHTTP_SERVER_ADMISSION_PENDING) {
+    *out_action = CHTTP_SERVER_HEADERS_WAIT;
+    return SALTS_OK;
+  }
+  if (status == SALTS_OK) return SALTS_OK;
+  if (status != SALTS_EPERM) return status;
+
+  status = chttp_server_h1_admission_reject(connection, &routed_request);
+  if (status != SALTS_OK) return status;
   *out_action = CHTTP_SERVER_HEADERS_STOP;
   return SALTS_OK;
 }
@@ -1581,6 +1690,13 @@ static int chttp_server_deadlines_progress(
     if (!chttp_server_deadline_expired(&connection->request_state)) continue;
     uint_fast64_t token = atomic_load_explicit(&connection->deferred_token, memory_order_acquire);
     connection->request_state.deadline_ms = 0;
+    if (connection->deferred_target.admission) {
+      (void)chttp_server_admission_abandon(&connection->deferred_target);
+      connection->deferred_disconnected = true;
+      connection->pending_action = CHTTP_SERVER_PENDING_CLOSE;
+      chttp_server_connection_close(connection);
+      continue;
+    }
     if (chttp_server_deferred_token_state(token) != CHTTP_SERVER_DEFERRED_IDLE) {
       if (chttp_server_deferred_token_state(token) == CHTTP_SERVER_DEFERRED_PENDING)
         (void)atomic_compare_exchange_strong_explicit(&connection->deferred_token, &token,
@@ -1594,6 +1710,34 @@ static int chttp_server_deadlines_progress(
     chttp_server_connection_close(connection);
   }
   return SALTS_OK;
+}
+
+static int chttp_server_h1_admission_ready(chttp_server_connection *connection, uint_fast64_t token) {
+  chttp_server_deferred_target *target = &connection->deferred_target;
+  const chttp_server_admission_result decision = target->admission_result;
+  const int result = target->admission_status;
+  const chttp_server_request_view request = target->request;
+  const bool canceled = atomic_load_explicit(&target->admission_canceled, memory_order_acquire);
+  target->admission = false;
+  atomic_store_explicit(target->token,
+      chttp_server_deferred_token(chttp_server_deferred_token_generation(token), CHTTP_SERVER_DEFERRED_IDLE), memory_order_release);
+  if (canceled || connection->deferred_disconnected || !connection->active || !connection->connected) {
+    chttp_server_request_state_reset(&connection->request_state);
+    chttp_server_response_builder_reset(&connection->deferred_builder);
+    (void)chttp_server_parser_reset(&connection->parser);
+    connection->deferred_disconnected = false;
+    if (connection->active) chttp_server_connection_close(connection);
+    return SALTS_OK;
+  }
+  if (chttp_server_deadline_expired(&connection->request_state)) {
+    chttp_server_connection_close(connection); return SALTS_OK;
+  }
+  int status = chttp_server_request_admission_apply(&connection->request_state, result, &decision);
+  if (status == SALTS_EPERM) status = chttp_server_h1_admission_reject(connection, &request);
+  else if (status == SALTS_OK) status = chttp_server_h1_input_resume(connection);
+  if (status != SALTS_OK) { chttp_server_connection_close(connection); return SALTS_OK; }
+  status = chttp_server_send_pending(connection);
+  return chttp_server_action_pressure(status) ? SALTS_OK : status;
 }
 
 static int chttp_server_deferred_progress(
@@ -1620,6 +1764,11 @@ static int chttp_server_deferred_progress(
         chttp_server_deferred_token_state(deferred_token);
     status = chttp_h2_server_connection_deferred_progress(connection->h2);
     if (status != SALTS_OK) return status;
+    if (deferred_state == CHTTP_SERVER_DEFERRED_READY && connection->deferred_target.admission) {
+      status = chttp_server_h1_admission_ready(connection, deferred_token);
+      if (status != SALTS_OK) return status;
+      continue;
+    }
     if (deferred_state == CHTTP_SERVER_DEFERRED_CANCELED) {
       chttp_session_request_abort(&connection->request_state);
       chttp_server_request_state_reset(&connection->request_state);

@@ -12,6 +12,7 @@
 
 CHTTP_ACTION(chttp_expected_action);
 CHTTP_INVOCATION_ACTION(chttp_expected_invocation);
+CHTTP_ADMISSION_ACTION(chttp_expected_admission);
 
 typedef struct application_invocation_hook { chttp_invocation_chain_hook hook; } application_invocation_hook;
 typedef struct application_worker_action {
@@ -39,6 +40,8 @@ typedef struct application_impl {
   size_t worker_route_capacity;
   bool worker_prototype_allowed;
   bool configuration_closed;
+  chttp_application_admission_fn admission_invoke;
+  void *admission_receiver;
   salts_configurator_context graph;
   salts_configurator_instance *instances;
   salts_configurator_dependency *dependencies;
@@ -181,6 +184,26 @@ int chttp_application_worker_prepare(chttp_application *owner,
   const int status = chttp_application_work_init(&app->workers, config);
   if (status != SALTS_OK) { free(actions); return status; }
   app->worker_actions = actions;
+  return SALTS_OK;
+}
+static int application_admission_begin(void *context, const chttp_server_request_view *request,
+    chttp_server_admission_gate *gate) {
+  application_impl *app = context;
+  return chttp_application_work_admit(&app->workers, request, gate, app->admission_invoke, app->admission_receiver);
+}
+int chttp_application_worker_admission(chttp_application *owner,
+    const chttp_application_admission_binding *binding) {
+  application_impl *app = owner ? owner->impl : NULL;
+  if (!app || !binding || !binding->invoke || !app->workers.impl) return SALTS_EINVAL;
+  if (app->configuration_closed) return SALTS_EBUSY;
+  if (app->admission_invoke) return SALTS_EALREADY;
+  if (!cmeta_function_abi_contract_compatible(FunctionAbi(chttp_expected_admission), binding->abi)) return SALTS_EINVAL;
+  void *receiver = NULL;
+  int status = application_receiver(app, binding->component_id, binding->receiver, &receiver);
+  if (status != SALTS_OK) return status;
+  status = chttp_server_set_admission_async(&app->server, application_admission_begin, app);
+  if (status != SALTS_OK) return status;
+  app->admission_invoke = binding->invoke; app->admission_receiver = receiver;
   return SALTS_OK;
 }
 int chttp_application_worker_mount(chttp_application *owner,

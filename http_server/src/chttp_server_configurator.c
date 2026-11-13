@@ -474,8 +474,17 @@ int chttp_server_set_admission(chttp_server *server, chttp_server_admission_fn a
   if (server == NULL || server->impl == NULL) return SALTS_EINVAL;
   chttp_server_impl *impl = (chttp_server_impl *)server->impl;
   if (impl->start_called) return SALTS_EBUSY;
+  if (admission != NULL && impl->admission_async != NULL) return SALTS_EALREADY;
   impl->admission = admission;
   impl->admission_user = user;
+  return SALTS_OK;
+}
+int chttp_server_set_admission_async(chttp_server *server, chttp_server_admission_begin_fn begin, void *user) {
+  if (server == NULL || server->impl == NULL || begin == NULL) return SALTS_EINVAL;
+  chttp_server_impl *impl = server->impl;
+  if (impl->start_called) return SALTS_EBUSY;
+  if (impl->admission != NULL || impl->admission_async != NULL) return SALTS_EALREADY;
+  impl->admission_async = begin; impl->admission_async_user = user;
   return SALTS_OK;
 }
 

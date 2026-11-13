@@ -8,12 +8,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tinytest.h"
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef SOCKET invocation_socket;
+#define INVOCATION_INVALID_SOCKET INVALID_SOCKET
+#define invocation_socket_close closesocket
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+typedef int invocation_socket;
+#define INVOCATION_INVALID_SOCKET (-1)
+#define invocation_socket_close close
+#endif
 
 typedef struct InvocationController { int marker; } InvocationController;
 cmeta_reflect_data(InvocationController, "test.InvocationController", cmeta_field(int, marker));
 cmeta_component_empty(InvocationComponent);
 CHTTP_INVOCATION_ACTION(invocation_echo);
 CHTTP_ACTION(invocation_legacy_contract);
+CHTTP_ADMISSION_ACTION(invocation_admission);
 typedef struct invocation_call {
   const char *target;
   chttp_protocol protocol;
@@ -26,6 +42,8 @@ typedef struct invocation_call {
   bool head;
   int repeat;
   char length[24];
+  char retry_after[24];
+  bool expect_continue;
 } invocation_call;
 static struct {
   chttp_application app;
@@ -43,6 +61,14 @@ static struct {
   size_t workers;
   size_t header_capacity, header_bytes;
   size_t reply_bytes;
+  size_t capacity, retained_bytes;
+  bool admission_enabled, admission_hold, admission_close;
+  const char *param_value;
+  unsigned int admission_code;
+  uint32_t admission_retry;
+  int admission_status, admissions;
+  chttp_jwt_bearer_validator jwt;
+  char *token;
   char *file_path;
   bool file_removed, file_then_fail;
   const char *reply_type;
@@ -76,6 +102,37 @@ static void trace(int event) {
   if (fixture.trace_count < sizeof(fixture.trace) / sizeof(fixture.trace[0])) fixture.trace[fixture.trace_count++] = event;
   else atomic_fetch_add(&fixture.invalid, 1);
   sync_mutex_unlock(&fixture.mutex);
+}
+static void header_scope_check(void *self, const chttp_server_request_view *request) {
+  const char *value = chttp_server_request_header(request, "X-Admission");
+  if (!self || ((InvocationController *)self)->marker != 42 || !chttp_application_worker_current(&fixture.app) ||
+      !request || request->session || request->body || request->body_size || request->body_streamed ||
+      !request->path || !request->target || !value || strcmp(value, "original") != 0)
+    atomic_fetch_add(&fixture.invalid, 1);
+  if (fixture.jwt.impl && (!request->jwt_claims || !request->jwt_claims->subject ||
+      strcmp(request->jwt_claims->subject, "alice") != 0 || !request->jwt_claims->expires_at))
+    atomic_fetch_add(&fixture.invalid, 1);
+  if (fixture.param_value) {
+    const char *value = chttp_server_request_param(request, "id");
+    if (!value || strcmp(value, fixture.param_value) != 0) atomic_fetch_add(&fixture.invalid, 1);
+  }
+}
+int invocation_admission(void *self, const chttp_server_request_view *request, chttp_server_admission_result *result) {
+  header_scope_check(self, request); trace(0);
+  chttp_application_work_stats stats = {0};
+  if (chttp_application_worker_stats(&fixture.app, &stats) != SALTS_OK || stats.accepted <= stats.completed)
+    atomic_fetch_add(&fixture.invalid, 1);
+  if (fixture.admission_close && chttp_application_close(&fixture.app, 5u) != SALTS_EBUSY)
+    atomic_fetch_add(&fixture.invalid, 1);
+  sync_mutex_lock(&fixture.mutex); ++fixture.admissions;
+  if (fixture.admission_hold) {
+    ++fixture.entered; sync_cond_broadcast(&fixture.changed);
+    while (!fixture.release) sync_cond_wait(&fixture.changed, &fixture.mutex);
+  }
+  sync_mutex_unlock(&fixture.mutex);
+  header_scope_check(self, request);
+  *result = (chttp_server_admission_result){fixture.admission_code, fixture.admission_retry};
+  return fixture.admission_status;
 }
 static void scope_check(void *self, const chttp_invocation *invocation) {
   const chttp_server_request_view *request = chttp_invocation_request(invocation);
@@ -189,17 +246,22 @@ static void completed(void *self, const chttp_server_request_view *request, cons
 }
 static void initialize(void) {
   check_equal(chttp_application_init(&fixture.app, &fixture.config), SALTS_OK);
-  const chttp_application_work_config limits = {fixture.workers, 4u, 16384u, fixture.reply_bytes,
+  const chttp_application_work_config limits = {fixture.workers, fixture.capacity, fixture.retained_bytes, fixture.reply_bytes,
       fixture.header_capacity, fixture.header_bytes};
   check_equal(chttp_application_worker_prepare(&fixture.app, &limits), SALTS_OK);
+  if (fixture.admission_enabled) {
+    const chttp_application_admission_binding binding = {"InvocationComponent", cmeta_reflected_data(InvocationController),
+        FunctionAbi(invocation_admission), invocation_admission};
+    check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_OK);
+  }
 }
-static void listen(void) {
+static void fixture_listen(void) {
   check_equal(chttp_application_start(&fixture.app), SALTS_OK);
   uint16_t port = 0u; check_equal(chttp_application_port(&fixture.app, &port), SALTS_OK);
   snprintf(fixture.uri, sizeof(fixture.uri), "tcp://127.0.0.1:%u", (unsigned)port);
 }
 static void start(void) {
-  initialize(); check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK); listen();
+  initialize(); check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK); fixture_listen();
 }
 static void perform(void *context) {
   invocation_call *call = context; chttp_client client = {0}; chttp_response response = {0}; chttp_error error = {0};
@@ -209,8 +271,16 @@ static void perform(void *context) {
   call->status = chttp_client_init(&client, &config);
   if (call->status != SALTS_OK) return;
   static const char body[] = {'a', '\0', 'z'};
+  chttp_header headers[3] = {{"X-Admission", "original"}}; size_t count = 1u;
+  char authorization[1024];
+  if (fixture.token) {
+    snprintf(authorization, sizeof(authorization), "Bearer %s", fixture.token);
+    headers[count++] = (chttp_header){"Authorization", authorization};
+  }
+  if (call->expect_continue) headers[count++] = (chttp_header){"Expect", "100-continue"};
   const chttp_options options = {.connection_uri = fixture.uri, .authority = "invocation.test", .target = call->target,
-      .protocol = call->protocol, .timeout_ms = 5000u, .body = call->head ? NULL : body, .body_size = call->head ? 0u : sizeof(body)};
+      .protocol = call->protocol, .timeout_ms = 5000u, .headers = headers, .header_count = count,
+      .body = call->head ? NULL : body, .body_size = call->head ? 0u : sizeof(body)};
   for (int iteration = 0; iteration < (call->repeat ? call->repeat : 1); ++iteration) {
     call->status = call->head ? chttp_head(&client, &options, &response, &error) : chttp_post(&client, &options, &response, &error);
     call->code = response.status_code; call->bytes = response.body_size;
@@ -226,6 +296,8 @@ static void perform(void *context) {
     if (value) snprintf(call->type, sizeof(call->type), "%s", value);
     value = chttp_response_header(&response, "Content-Length");
     if (value) snprintf(call->length, sizeof(call->length), "%s", value);
+    value = chttp_response_header(&response, "Retry-After");
+    if (value) snprintf(call->retry_after, sizeof(call->retry_after), "%s", value);
     chttp_response_destroy(&response);
     if (call->status != SALTS_OK) break;
   }
@@ -237,6 +309,41 @@ static void wait_for_entry(void) {
   while (!fixture.entered && monotonic_ms() - began < 5000u)
     (void)sync_cond_timedwait(&fixture.changed, &fixture.mutex, UINT64_C(10000000));
   const int entered = fixture.entered; sync_mutex_unlock(&fixture.mutex); check_equal(entered, 1);
+}
+
+/* Send coalesced HTTP bytes without the Client's sequential request policy.
+ * The fixture owns the socket through peer EOF and bounds both wire buffers. */
+static int raw_exchange(const char *wire, char *response, size_t capacity) {
+  uint16_t port = 0u;
+  int status = chttp_application_port(&fixture.app, &port);
+  if (status != SALTS_OK) return status;
+  invocation_socket peer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (peer == INVOCATION_INVALID_SOCKET) return SALTS_EIO;
+#if defined(_WIN32)
+  const DWORD timeout = 5000u;
+  status = setsockopt(peer, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+#else
+  const struct timeval timeout = {5, 0};
+  status = setsockopt(peer, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+#endif
+  const struct sockaddr_in address = {.sin_family = AF_INET, .sin_port = htons(port),
+      .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
+  if (status == 0) status = connect(peer, (const struct sockaddr *)&address, sizeof(address));
+  size_t sent = 0u, size = 0u;
+  const size_t length = strlen(wire);
+  while (status == 0 && sent < length) {
+    const int count = send(peer, wire + sent, (int)(length - sent), 0);
+    if (count <= 0) status = -1;
+    else sent += (size_t)count;
+  }
+  response[0] = '\0';
+  while (status == 0 && size + 1u < capacity) {
+    const int count = recv(peer, response + size, (int)(capacity - size - 1u), 0);
+    if (count <= 0) { if (count < 0) status = -1; break; }
+    size += (size_t)count; response[size] = '\0';
+  }
+  invocation_socket_close(peer);
+  return status != 0 ? SALTS_EIO : size + 1u == capacity ? SALTS_EMSGSIZE : SALTS_OK;
 }
 
 static int copied_header(const chttp_invocation *invocation) {
@@ -293,6 +400,8 @@ spec("Application canonical buffered Invocation") {
     sync_mutex_init(&fixture.mutex); sync_cond_init(&fixture.changed); fixture.workers = 1u;
     fixture.reply_type = "application/octet-stream";
     fixture.reply_bytes = 128u;
+    fixture.capacity = 4u;
+    fixture.retained_bytes = 16384u;
     fixture.provider = (salts_configurator_provider_binding){sizeof(fixture.provider),
         SALTS_CONFIGURATOR_PROVIDER_BINDING_ABI_VERSION, cmeta_component_meta(InvocationComponent), NULL, NULL, create, NULL, NULL};
     fixture.deployment = (salts_configurator_deployment){&fixture.provider, NULL, NULL};
@@ -309,6 +418,7 @@ spec("Application canonical buffered Invocation") {
     sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
     if (fixture.thread_live) check_equal(sync_thread_join(&fixture.thread), SALTS_OK);
     check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_equal(atomic_load(&fixture.invalid), 0);
+    chttp_jwt_token_destroy(fixture.token); check_equal(chttp_jwt_bearer_validator_destroy(&fixture.jwt), SALTS_OK);
     if (fixture.file_path) {
       if (!fixture.file_removed) check_equal(tt_remove_file(fixture.file_path), 0);
       free(fixture.file_path);
@@ -325,6 +435,86 @@ spec("Application canonical buffered Invocation") {
     check_equal(chttp_invocation_reject(&empty, &proceed, 403u, NULL, NULL, 0u), SALTS_EINVAL); check_true(proceed);
   }
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
+    it("shares the retained-byte limit with header snapshots (protocol=%d)", protocol) {
+      fixture.admission_enabled = true; fixture.retained_bytes = fixture.reply_bytes = 16u; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 503u);
+      chttp_application_work_stats stats = {0};
+      check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK);
+      check_equal(stats.pending, 0u); check_equal(stats.retained_bytes, 0u);
+      check_equal(stats.accepted, 0u); check_equal(stats.rejected, 1u);
+      check_equal(fixture.admissions, 0); check_equal(fixture.calls, 0);
+    }
+    it("copies route parameters and forbids close from the header worker (protocol=%d)", protocol) {
+      fixture.admission_enabled = true; fixture.admission_close = true;
+      fixture.binding.path = "/echo/:id"; fixture.param_value = "copied"; start();
+      invocation_call call = {.target = "/echo/copied", .protocol = (chttp_protocol)protocol}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 201u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(fixture.admissions, 1); check_equal(fixture.calls, 1); check_equal(fixture.destroyed, 1);
+    }
+    it("runs header admission and body action on one worker with one shared slot (protocol=%d)", protocol) {
+      fixture.admission_enabled = true; fixture.capacity = 1u; start();
+      invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .expect_continue = protocol == CHTTP_HTTP_1_1}; perform(&call);
+      check_equal(call.status, SALTS_OK); check_equal(call.code, 201u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(fixture.admissions, 1); check_equal(fixture.calls, 1); check_equal(fixture.completions, 1);
+      const int expected[] = {0,1,2,3,12,11,200}; check_equal(fixture.trace_count, 7u); check_equal(fixture.trace, expected, sizeof(expected));
+    }
+    it("holds body delivery behind a worker decision and rejects excess header credit (protocol=%d)", protocol) {
+      fixture.admission_enabled = true; fixture.admission_hold = true; fixture.capacity = 1u; start();
+      fixture.background = (invocation_call){.target = "/echo", .protocol = (chttp_protocol)protocol};
+      check_equal(sync_thread_create(&fixture.thread, perform, &fixture.background), SALTS_OK); fixture.thread_live = true; wait_for_entry();
+      invocation_call rejected = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&rejected);
+      check_equal(rejected.status, SALTS_OK); check_equal(rejected.code, 503u);
+      sync_mutex_lock(&fixture.mutex); const int calls = fixture.calls, admissions = fixture.admissions; sync_mutex_unlock(&fixture.mutex);
+      check_equal(calls, 0); check_equal(admissions, 1);
+      sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
+      check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
+      check_equal(fixture.background.status, SALTS_OK); check_equal(fixture.background.code, 201u);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+      check_equal(fixture.calls, 1); check_equal(fixture.admissions, 1);
+    }
+    for (int failure = 0; failure < 4; ++failure) {
+      it("rejects before business for header decision %d (protocol=%d)", failure, protocol) {
+        fixture.admission_enabled = true;
+        fixture.admission_status = failure == 1 ? SALTS_EIO : SALTS_OK;
+        fixture.admission_code = failure == 0 ? 429u : failure == 2 ? 201u : 0u;
+        fixture.admission_retry = failure == 0 ? 3u : failure == 3 ? 1u : 0u;
+        start(); invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol, .expect_continue = protocol == CHTTP_HTTP_1_1}; perform(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, failure == 0 ? 429u : 500u);
+        check_equal(call.retry_after, failure == 0 ? "3" : "");
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(fixture.admissions, 1); check_equal(fixture.calls, 0); check_equal(fixture.completions, 0);
+      }
+    }
+    for (int authorized = 0; authorized < 2; ++authorized) {
+      it("authenticates JWT before worker admission (protocol=%d authorized=%d)", protocol, authorized) {
+        static const unsigned char key[] = "0123456789abcdef0123456789abcdef";
+        const chttp_jwt_bearer_validator_options options = {.size = sizeof(options), .key = key, .key_size = sizeof(key) - 1u};
+        check_equal(chttp_jwt_bearer_validator_init(&fixture.jwt, &options), SALTS_OK);
+        fixture.config.jwt = &fixture.jwt; fixture.admission_enabled = true;
+        if (authorized) {
+          const chttp_jwt_claims claims = {.subject = "alice", .expires_at = INT64_C(3000000000)};
+          check_equal(chttp_jwt_hs256_token_create(&claims, key, sizeof(key) - 1u, &fixture.token), SALTS_OK);
+        }
+        start(); invocation_call call = {.target = "/echo", .protocol = (chttp_protocol)protocol}; perform(&call);
+        check_equal(call.status, SALTS_OK); check_equal(call.code, authorized ? 201u : 401u);
+        check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+        check_equal(fixture.admissions, authorized); check_equal(fixture.calls, authorized);
+      }
+    }
+    it("includes worker header wait in body deadline and retains finite-close ownership (protocol=%d)", protocol) {
+      fixture.admission_enabled = true; fixture.admission_hold = true; fixture.config.deadlines.body_ms = 500u; start();
+      fixture.background = (invocation_call){.target = "/echo", .protocol = (chttp_protocol)protocol};
+      check_equal(sync_thread_create(&fixture.thread, perform, &fixture.background), SALTS_OK); fixture.thread_live = true; wait_for_entry();
+      check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
+      check_not_equal(fixture.background.status, SALTS_OK); check_not_equal(fixture.background.status, SALTS_ETIMEDOUT);
+      check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT); check_not_null(fixture.app.impl); check_equal(fixture.destroyed, 0);
+      sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
+      check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK); check_equal(fixture.destroyed, 1);
+      check_equal(fixture.admissions, 1); check_equal(fixture.calls, 0);
+    }
     for (int kind = 0; kind < 3; ++kind) {
       it("owns a copied file decision through native completion (protocol=%d kind=%d)", protocol, kind) {
         fixture.file_path = tt_make_temp_file("chttp-worker-file-", ".bin"); check_not_null(fixture.file_path);
@@ -454,6 +644,34 @@ spec("Application canonical buffered Invocation") {
       check_equal(call.status, SALTS_OK); check_equal(call.code, 201u);
     }
   }
+  it("serializes coalesced zero-body requests across header and file-response continuations") {
+    static const char wire[] = "GET /echo HTTP/1.1\r\nHost: x\r\nX-Admission: original\r\n\r\n"
+        "GET /echo HTTP/1.1\r\nHost: x\r\nX-Admission: original\r\nConnection: close\r\n\r\n";
+    fixture.admission_enabled = true; fixture.binding.method = CHTTP_METHOD_GET; fixture.reply_bytes = 512u;
+    fixture.file_path = tt_make_temp_file("chttp-worker-pipeline-", ".txt"); check_not_null(fixture.file_path);
+    static const char body[] = "pipeline-body";
+    check_equal(tt_write_file(fixture.file_path, body, sizeof(body) - 1u), 0); start();
+    char response[4096]; check_equal(raw_exchange(wire, response, sizeof(response)), SALTS_OK);
+    const char *first = strstr(response, "HTTP/1.1 201"); check_not_null(first);
+    const char *second = first ? strstr(first + 1, "HTTP/1.1 201") : NULL; check_not_null(second);
+    if (first && second) {
+      const char *first_body = strstr(first, body), *second_body = strstr(second, body);
+      check_true(first_body && first_body < second); check_not_null(second_body);
+      check_null(strstr(second + 1, "HTTP/1.1"));
+    }
+    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    check_equal(fixture.admissions, 2); check_equal(fixture.calls, 2); check_equal(fixture.completions, 2);
+  }
+  it("rejects an Expect request without sending 100 Continue") {
+    fixture.admission_enabled = true; fixture.admission_code = 429u; fixture.admission_retry = 3u; start();
+    char response[4096];
+    check_equal(raw_exchange("POST /echo HTTP/1.1\r\nHost: x\r\nX-Admission: original\r\n"
+        "Content-Length: 4\r\nExpect: 100-continue\r\n\r\n", response, sizeof(response)), SALTS_OK);
+    check_not_null(strstr(response, "HTTP/1.1 429")); check_null(strstr(response, "100 Continue"));
+    check_not_null(strstr(response, "Retry-After: 3"));
+    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    check_equal(fixture.admissions, 1); check_equal(fixture.calls, 0);
+  }
   it("rejects legacy/missing metadata and missing hook Beans before route publication") {
     initialize(); fixture.binding.abi = FunctionAbi(invocation_legacy_contract);
     check_equal(cmeta_function_param_abi(fixture.binding.abi, 1u), CMETA_ABI_OBJECT_POINTER);
@@ -464,14 +682,46 @@ spec("Application canonical buffered Invocation") {
     check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_ENOENT);
     fixture.hooks[1].component_id = "InvocationComponent";
     check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK);
-    memset(fixture.hooks, 0, sizeof(fixture.hooks)); memset(&fixture.binding, 0, sizeof(fixture.binding)); listen();
+    memset(fixture.hooks, 0, sizeof(fixture.hooks)); memset(&fixture.binding, 0, sizeof(fixture.binding)); fixture_listen();
     invocation_call call = {.target = "/echo", .protocol = CHTTP_HTTP_2}; perform(&call);
     check_equal(call.status, SALTS_OK); check_equal(call.code, 201u);
+  }
+  it("validates the admission ABI and canonical Bean before publishing its native gate") {
+    initialize();
+    chttp_application_admission_binding binding = {"InvocationComponent", cmeta_reflected_data(InvocationController),
+        FunctionAbi(invocation_echo), invocation_admission};
+    check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_EINVAL);
+    binding.abi = NULL; check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_EINVAL);
+    binding.abi = FunctionAbi(invocation_admission); binding.component_id = "missing";
+    check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_ENOENT);
+    binding.component_id = "InvocationComponent";
+    check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_OK);
+    check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_EALREADY);
+    check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK); fixture_listen();
+    check_equal(chttp_application_worker_admission(&fixture.app, &binding), SALTS_EBUSY);
+    invocation_call call = {.target = "/echo", .protocol = CHTTP_HTTP_2}; perform(&call);
+    check_equal(call.status, SALTS_OK); check_equal(call.code, 201u);
+  }
+  it("skips a queued header callback whose native body deadline already expired") {
+    fixture.admission_enabled = true; fixture.admission_hold = true; fixture.capacity = 2u;
+    fixture.config.deadlines.body_ms = 500u; start();
+    fixture.background = (invocation_call){.target = "/echo", .protocol = CHTTP_HTTP_2};
+    check_equal(sync_thread_create(&fixture.thread, perform, &fixture.background), SALTS_OK); fixture.thread_live = true; wait_for_entry();
+    invocation_call queued = {.target = "/echo", .protocol = CHTTP_HTTP_2}; perform(&queued);
+    check_not_equal(queued.status, SALTS_OK); check_not_equal(queued.status, SALTS_ETIMEDOUT);
+    check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
+    check_not_equal(fixture.background.status, SALTS_OK);
+    chttp_application_work_stats stats = {0}; check_equal(chttp_application_worker_stats(&fixture.app, &stats), SALTS_OK);
+    check_equal(stats.pending, 2u); check_equal(stats.accepted, 2u); check_equal(stats.completed, 0u);
+    check_equal(chttp_application_close(&fixture.app, 5u), SALTS_ETIMEDOUT); check_equal(fixture.destroyed, 0);
+    sync_mutex_lock(&fixture.mutex); fixture.release = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
+    check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
+    check_equal(fixture.admissions, 1); check_equal(fixture.calls, 0); check_equal(fixture.destroyed, 1);
   }
   it("keeps overlapping Invocations isolated even on the same two-worker executor") {
     fixture.workers = 2u; fixture.cross_scope = true; fixture.binding.path = "/first"; initialize();
     check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK);
-    fixture.binding.path = "/second"; check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK); listen();
+    fixture.binding.path = "/second"; check_equal(chttp_application_worker_mount(&fixture.app, &fixture.binding), SALTS_OK); fixture_listen();
     fixture.background = (invocation_call){.target = "/first", .protocol = CHTTP_HTTP_2};
     check_equal(sync_thread_create(&fixture.thread, perform, &fixture.background), SALTS_OK); fixture.thread_live = true; wait_for_entry();
     invocation_call call = {.target = "/second", .protocol = CHTTP_HTTP_2}; perform(&call);

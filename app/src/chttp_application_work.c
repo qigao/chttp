@@ -51,6 +51,11 @@ struct work_item {
   chttp_application_work_task task;
   chttp_application_work_chain_hook hooks[CHTTP_APPLICATION_WORK_MAX_HOOKS];
   chttp_application_work_reply reply;
+  chttp_server_admission_gate admission;
+  chttp_application_admission_fn admission_fn;
+  void *admission_user;
+  int admission_status;
+  chttp_server_admission_result admission_result;
 };
 struct work_impl {
   cflow_executor executor;
@@ -485,6 +490,77 @@ int chttp_application_work_init(chttp_application_work *owner,
   impl->accepting = 1; owner->impl = impl;
   return SALTS_OK;
 }
+static int reserve_work(work_impl *impl, size_t bytes, work_item **out) {
+  work_item *item = NULL;
+  int status = SALTS_OK;
+  sync_mutex_lock(&impl->mutex);
+  if (!impl->accepting) status = SALTS_ESHUTDOWN;
+  else if (bytes > impl->config.retained_bytes - impl->stats.retained_bytes) status = SALTS_ENOBUFS;
+  else {
+    for (size_t i = 0u; i < impl->config.capacity; ++i)
+      if (!impl->items[i].busy) { item = &impl->items[i]; break; }
+    if (!item) status = SALTS_ENOBUFS;
+  }
+  if (status == SALTS_OK) {
+    item->busy = 1; item->owner = impl; item->bytes = bytes;
+    ++impl->stats.pending; impl->stats.retained_bytes += bytes;
+    *out = item;
+  } else count_event(&impl->stats.rejected);
+  sync_mutex_unlock(&impl->mutex);
+  return status;
+}
+static void run_admission(void *context) {
+  work_item *item = context;
+  bool canceled = false;
+  int status = chttp_server_admission_gate_cancelled(&item->admission, &canceled);
+  if (status == SALTS_OK)
+    status = canceled ? SALTS_ECANCELED : item->admission_fn(item->admission_user, &item->request, &item->admission_result);
+  item->admission_status = status;
+}
+static void cancel_admission(void *context) { ((work_item *)context)->admission_status = SALTS_ECANCELED; }
+static void finalize_admission(void *context) {
+  work_item *item = context;
+  work_impl *impl = item->owner;
+  chttp_server_admission_gate gate = item->admission;
+  const chttp_server_admission_result result = item->admission_result;
+  const int status = item->admission_status;
+  sync_mutex_lock(&impl->mutex);
+  count_event(&impl->stats.completed);
+  if (status == SALTS_ECANCELED) count_event(&impl->stats.cancelled);
+  sync_mutex_unlock(&impl->mutex);
+  /* No input/frame/user state remains borrowed when the native owner resumes.
+   * Record reuse is valid during this finalizer tail; never access item again. */
+  release_work(item);
+  if (chttp_server_admission_gate_complete(&gate, status, &result) != SALTS_OK)
+    invariant_failure(impl);
+}
+int chttp_application_work_admit(chttp_application_work *owner, const chttp_server_request_view *request,
+    chttp_server_admission_gate *gate, chttp_application_admission_fn fn, void *user) {
+  if (!owner || !owner->impl || !request || !gate || !gate->impl || !gate->generation || !fn ||
+      request->session || request->body || request->body_size || request->body_streamed)
+    return SALTS_EINVAL;
+  size_t bytes = 0u;
+  int status = snapshot_size(request, &bytes);
+  if (status != SALTS_OK) return status;
+  work_impl *impl = owner->impl;
+  work_item *item = NULL;
+  status = reserve_work(impl, bytes, &item);
+  if (status != SALTS_OK) return status;
+  item->storage = malloc(bytes);
+  if (!item->storage) { release_work(item); return SALTS_ENOMEM; }
+  item->storage_bytes = bytes; snapshot_copy(item, request);
+  item->admission = *gate; *gate = (chttp_server_admission_gate){0};
+  item->admission_fn = fn; item->admission_user = user;
+  const cflow_executor_task task = {.run = run_admission, .cancel = cancel_admission,
+      .finalize = finalize_admission, .user = item};
+  sync_mutex_lock(&impl->mutex); count_event(&impl->stats.accepted); sync_mutex_unlock(&impl->mutex);
+  if (cflow_executor_try_post_task(&impl->executor, &task) != CFLOW_ADMISSION_ACCEPTED) {
+    *gate = item->admission; release_work(item); invariant_failure(impl); return SALTS_EPROTO;
+  }
+  /* Accepted post can finalize/reuse item before returning. */
+  return SALTS_OK;
+}
+
 int chttp_application_work_submit(chttp_application_work *owner,
     const chttp_server_request_view *request, chttp_server_response *response,
     const chttp_application_work_task *task) {
@@ -514,22 +590,10 @@ int chttp_application_work_submit(chttp_application_work *owner,
   status = add_bytes(&bytes, impl->header_reservation);
   if (status != SALTS_OK) return status;
   work_item *item = NULL;
-  sync_mutex_lock(&impl->mutex);
-  if (!impl->accepting) status = SALTS_ESHUTDOWN;
-  else if (bytes > impl->config.retained_bytes - impl->stats.retained_bytes) status = SALTS_ENOBUFS;
-  else {
-    for (size_t i = 0; i < impl->config.capacity; ++i) {
-      if (!impl->items[i].busy) { item = &impl->items[i]; break; }
-    }
-    if (!item) status = SALTS_ENOBUFS;
-  }
-  if (status == SALTS_OK) {
-    item->busy = 1; item->owner = impl; item->bytes = bytes; item->session_bytes = session_bytes;
-    item->storage_bytes = storage_bytes; item->method_capacity = task->method_capacity;
-    ++impl->stats.pending; impl->stats.retained_bytes += bytes;
-  } else count_event(&impl->stats.rejected);
-  sync_mutex_unlock(&impl->mutex);
+  status = reserve_work(impl, bytes, &item);
   if (status != SALTS_OK) return status;
+  item->session_bytes = session_bytes;
+  item->storage_bytes = storage_bytes; item->method_capacity = task->method_capacity;
   item->storage = malloc(storage_bytes);
   if (!item->storage) { release_work(item); return SALTS_ENOMEM; }
   item->reply.headers = &item->reply.content_type;

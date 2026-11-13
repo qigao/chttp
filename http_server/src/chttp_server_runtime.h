@@ -239,8 +239,15 @@ struct chttp_server_deferred_target {
   chttp_server_request_view request;
   chttp_server_deferred_kind kind;
   chttp_server_deferred_file file;
+  bool admission;
+  atomic_bool admission_canceled;
+  int admission_status;
+  chttp_server_admission_result admission_result;
 };
 int chttp_server_deferred_file_prepare(chttp_server_deferred_target *);
+bool chttp_server_admission_abandon(chttp_server_deferred_target *);
+int chttp_server_request_admission_apply(chttp_server_request_state *, int,
+    const chttp_server_admission_result *);
 
 typedef enum chttp_server_websocket_command_kind {
   CHTTP_SERVER_WEBSOCKET_COMMAND_TEXT = 1,
@@ -434,6 +441,8 @@ struct chttp_server_impl {
   chttp_server_deadlines deadlines;
   chttp_server_admission_fn admission;
   void *admission_user;
+  chttp_server_admission_begin_fn admission_async;
+  void *admission_async_user;
   chttp_server_config config;
   chttp_server_socket_options socket_options;
   chttp_server_execution_options execution_options;

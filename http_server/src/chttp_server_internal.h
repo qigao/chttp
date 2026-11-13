@@ -9,13 +9,16 @@ typedef struct chttp_server_parser {
   void *impl;
 } chttp_server_parser;
 
-enum { CHTTP_SERVER_REQUEST_DEFERRED = 1 };
+enum { CHTTP_SERVER_REQUEST_DEFERRED = 1, CHTTP_SERVER_ADMISSION_PENDING = 2 };
 
 typedef int (*chttp_server_parser_request_fn)(void *user, const chttp_server_request_view *request);
 
 typedef enum chttp_server_parser_headers_action {
   CHTTP_SERVER_HEADERS_CONTINUE = 0,
-  CHTTP_SERVER_HEADERS_STOP
+  CHTTP_SERVER_HEADERS_STOP,
+  /* Private ordinary-HTTP gate. Resume continues before 100/body callbacks;
+   * Upgrade/CONNECT cannot use this action until their adapter is supplied. */
+  CHTTP_SERVER_HEADERS_WAIT
 } chttp_server_parser_headers_action;
 
 typedef int (*chttp_server_parser_headers_fn)(

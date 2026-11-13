@@ -10,6 +10,28 @@
 #include "chttp_invocation.h"
 #include "../../http_common/http/chttp_method_hooks.h"
 
+static const cmeta_type_identity chttp_admission_request_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.admission.request");
+static const cmeta_type_identity chttp_admission_result_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.admission.result");
+static const cmeta_type_desc chttp_admission_request_type = {"chttp_server_request_view", sizeof(chttp_server_request_view),
+    CMETA_ALIGNOF(chttp_server_request_view), CMETA_T_OBJECT, NULL, NULL, &chttp_admission_request_identity};
+static const cmeta_type_desc chttp_admission_result_type = {"chttp_server_admission_result", sizeof(chttp_server_admission_result),
+    CMETA_ALIGNOF(chttp_server_admission_result), CMETA_T_OBJECT, NULL, NULL, &chttp_admission_result_identity};
+static const cmeta_type_desc chttp_admission_request_pointer = {"const chttp_server_request_view *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_admission_request_type, NULL, NULL};
+static const cmeta_type_desc chttp_admission_result_pointer = {"chttp_server_admission_result *", sizeof(void *),
+    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_admission_result_type, NULL, NULL};
+#define CHTTP_ADMISSION_ACTION(name_) \
+  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
+    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
+    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER), \
+    (chttp_server_admission_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_admission_result_pointer, CMETA_ABI_OBJECT_POINTER))
+typedef struct chttp_application_admission_binding {
+  const char *component_id;
+  const cmeta_data_desc *receiver;
+  const cmeta_function_abi_desc *abi;
+  chttp_application_admission_fn invoke;
+} chttp_application_admission_binding;
+
 /* Private method scope. Mount copies descriptor rows; callback code/contexts
  * borrow canonical ACE graph lifetime. Call DTO/Session views are read-only. */
 typedef struct chttp_application_method_interceptor {
@@ -42,6 +64,11 @@ extern "C" {
  * and hook contexts are borrowed through Application close. Receiver ownership
  * is resolved from the canonical ACE graph; callers cannot provide a raw Bean. */
 int chttp_application_worker_prepare(chttp_application *, const chttp_application_work_config *);
+/* Private ordinary-H1/H2 header callback. Resolves a canonical Bean and exact
+ * ABI before start; no caller-supplied receiver/context or owner callback.
+ * Body/Session are absent, views expire on return. Return the existing copied
+ * status/Retry-After decision. Same-pool close is forbidden as for actions. */
+int chttp_application_worker_admission(chttp_application *, const chttp_application_admission_binding *);
 int chttp_application_worker_mount(chttp_application *, const chttp_application_worker_binding *);
 /* Generated synchronous direct/CFlow/Plugin HTTP methods, using the same pool.
  * Binding/execution metadata is borrowed through close; receiver is canonical
