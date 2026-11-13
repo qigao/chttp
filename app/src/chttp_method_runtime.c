@@ -2,6 +2,7 @@
 #include "chttp_method_runtime.h"
 
 #include <core/error_codes.h>
+#include <core/vstr.h>
 #include <memory/buffer.h>
 #include <data_bind_plugin_execution.h>
 #include "../../http_common/http/chttp_native_json.h"
@@ -31,6 +32,7 @@ typedef struct chttp_service_method_record {
   chttp_application_work *workers;
   cflow_plan cflow_plan;
   chttp_native_json_plans json;
+  chttp_native_json_plan input_json;
   chttp_method_hook hooks[CHTTP_METHOD_MAX_HOOKS];
   size_t hook_count;
 
@@ -90,6 +92,8 @@ typedef struct chttp_service_http_provider {
   chttp_service_invocation *invocation;
   const chttp_server_request_view *request;
   chttp_service_scalar_reader scalar;
+  DataBindFormatReader input;
+  DataBindFormatCanonicalReader canonical_input;
 
   cserde_writer writer;
   size_t writer_tokens;
@@ -432,6 +436,17 @@ static DataBindStatus chttp_service_scalar_reader_init(
              : DATA_BIND_ERR_RUNTIME;
 }
 
+static cserde_status chttp_service_http_body_next(void *context, cserde_token *token) {
+  chttp_service_http_provider *provider = context;
+  const cserde_status status = cserde_reader_next(
+      data_bind_format_canonical_reader_reader(&provider->canonical_input), token);
+  /* The record/JSON shape was admitted at mount. Unsupported wire names or
+   * root tokens are bad client input, not a runtime schema configuration error. */
+  return status == CSERDE_UNSUPPORTED ? CSERDE_VALUE_OUT_OF_RANGE : status;
+}
+static const cserde_reader_ops CHTTP_SERVICE_BODY_READER_OPS = {
+    sizeof(cserde_reader_ops), CSERDE_READER_OPS_ABI_VERSION, chttp_service_http_body_next};
+
 static DataBindStatus chttp_service_http_open_input(
     void *context, const DataBindBindingPlanEntry *entry,
     cserde_reader *reader, DataBindBindingValueState *state,
@@ -469,10 +484,20 @@ static DataBindStatus chttp_service_http_open_input(
         provider, entry->address.name, &text, &text_size);
     if (status != DATA_BIND_OK || text == NULL) return status;
   } else if (strcmp(entry->address.space, "http.body") == 0) {
-    chttp_service_error_set(
-        error, DATA_BIND_ERR_RUNTIME,
-        "Structured HTTP body binding requires shared DataBind FormatPlan support");
-    return DATA_BIND_ERR_RUNTIME;
+    const DataBindFormatPlan *format = provider->invocation->record->input_json.format;
+    if (!format || provider->input.reader) return DATA_BIND_ERR_RUNTIME;
+    if (!provider->request->body_size) return DATA_BIND_OK;
+    status = data_bind_format_reader_open(data_bind_json_format_provider(),
+        provider->request->body, provider->request->body_size,
+        provider->invocation->native_options.max_depth, &provider->input, error);
+    if (status != DATA_BIND_OK) return status;
+    status = data_bind_format_canonical_reader_init(
+        format, provider->input.reader, &provider->canonical_input, error);
+    if (status != DATA_BIND_OK) return status;
+    if (cserde_reader_init(reader, &CHTTP_SERVICE_BODY_READER_OPS, provider) != CSERDE_OK)
+      return DATA_BIND_ERR_RUNTIME;
+    *state = DATA_BIND_VALUE_STATE_VALUE;
+    return DATA_BIND_OK;
   } else {
     chttp_service_error_set(
         error, DATA_BIND_ERR_SCHEMA,
@@ -1160,6 +1185,7 @@ static void chttp_service_method_release(
     chttp_service_method_record *record) {
   if (record == NULL) return;
   cflow_plan_destroy(&record->cflow_plan);
+  data_bind_format_plan_free(record->input_json.format);
   chttp_native_json_plans_clear(&record->json);
   cmeta_cleanup_run(&record->plugin_cleanup);
   memset(record, 0, sizeof(*record));
@@ -1276,6 +1302,7 @@ static int chttp_service_plan_supported(
   const DataBindBindingPlan *binding;
   size_t i;
   size_t egress_count;
+  size_t body_count = 0u;
   DataBindBindingPlanEntry entry = DATA_BIND_BINDING_PLAN_ENTRY_INIT;
 
   if (plan == NULL ||
@@ -1288,8 +1315,14 @@ static int chttp_service_plan_supported(
   for (i = 0u; i < data_bind_binding_plan_ingress_count(binding); ++i) {
     entry = (DataBindBindingPlanEntry)DATA_BIND_BINDING_PLAN_ENTRY_INIT;
     if (!data_bind_binding_plan_ingress_at(binding, i, &entry) ||
-        entry.address.space == NULL || !chttp_service_scalar_kind(entry.data))
+        entry.address.space == NULL)
       return 0;
+    if (strcmp(entry.address.space, "http.body") == 0) {
+      if (!structured || !entry.data || entry.data->kind != CMETA_DATA_STRUCT || ++body_count != 1u)
+        return 0;
+      continue;
+    }
+    if (!chttp_service_scalar_kind(entry.data)) return 0;
     if (strcmp(entry.address.space, "http.path") != 0 &&
         strcmp(entry.address.space, "http.query") != 0 &&
         strcmp(entry.address.space, "http.header") != 0 &&
@@ -1671,6 +1704,14 @@ static int chttp_service_http_execute(
       request == NULL || output == NULL)
     return SALTS_EINVAL;
 
+  if (record->input_json.format && request->body_size) {
+    vstr media = vstr_from_cstr(chttp_server_request_header(request, "Content-Type"));
+    const size_t separator = vstr_find_char(media, ';');
+    if (separator != VSTR_NPOS) media = vstr_sub(media, 0u, separator);
+    if (!vstr_ieq(vstr_trim(media, " \t"), vstr_from_cstr("application/json")))
+      return output->write(output->context, 415u, "text/plain", "Unsupported Media Type", 22u, NULL);
+  }
+
   result = chttp_service_invocation_init(record, &invocation);
   if (result != SALTS_OK) return result;
 
@@ -1678,6 +1719,8 @@ static int chttp_service_http_execute(
       .service = record->owner,
       .invocation = &invocation,
       .request = request,
+      .input = DATA_BIND_FORMAT_READER_INIT,
+      .canonical_input = DATA_BIND_FORMAT_CANONICAL_READER_INIT,
       .staged_content_type = "text/plain"};
 
   provider.context = &provider_context;
@@ -1693,6 +1736,9 @@ static int chttp_service_http_execute(
       &invocation.frame, &diagnostic);
   if (bind_status == DATA_BIND_OK)
     invocation.frame_live = 1;
+  /* Native decoding owns DTO values; parser/token borrows end before hooks. */
+  const DataBindStatus closed = data_bind_format_reader_close(&provider_context.input);
+  if (bind_status == DATA_BIND_OK) bind_status = closed;
 
   if (bind_status != DATA_BIND_OK) {
     const chttp_service_http_failure_response failure =
@@ -1983,8 +2029,11 @@ static int chttp_method_runtime_mount_http_impl(
   record->param_count = param_count;
   if (mount->output_codec) {
     DataBindError error = DATA_BIND_ERROR_INIT;
-    const DataBindStatus compiled = chttp_native_json_plans_compile(mount->output_codec, binding, native,
+    DataBindStatus compiled = chttp_native_json_plans_compile(mount->output_codec, binding, native,
         data_bind_http_method_plan_transport(mount->method_plan), &record->json, &error);
+    if (compiled == DATA_BIND_OK)
+      compiled = chttp_native_json_input_compile(mount->output_codec, binding, native,
+          data_bind_http_method_plan_transport(mount->method_plan), &record->input_json, &error);
     if (compiled != DATA_BIND_OK) {
       chttp_service_method_release(record);
       return compiled == DATA_BIND_ERR_OOM ? SALTS_ENOMEM : SALTS_ENOTSUP;

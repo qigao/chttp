@@ -170,6 +170,10 @@ batches and real DSO drain under canceled running methods. Method completion
 tests cover entered reverse ordering, completion-only hooks, immutable per-item
 facts, blocked-observer leases and H2 flow-window backpressure while the sole
 worker serves another method.
+`chttp_application_body_test` verifies required record JSON input across H1/H2
+and DIRECT/CFlow/real Plugin execution: native integer/text fidelity, nested
+validation, malformed/unknown/duplicate/missing inputs, media admission, bounded
+storage, single-record reuse and DTO/provider retention during finite close.
 Public Session/admission integration, stream/WS adaptation, remaining DTO ingress/
 state/collection representations and the public Invocation migration remain required
 before switching the programming model. No runtime feature switch was added.
@@ -383,6 +387,35 @@ and lease until the producer's real terminal/finalizer. There is one business
 completion authority even when an external producer participates.
 
 ### Interceptors, RPC and terminal outcomes
+
+The private JSON ingress slice admits one required, non-nullable record projected
+from the complete HTTP body, alongside existing scalar route/query/header/cookie
+inputs. The MethodPlan must explicitly select JSON; nonempty bodies require an
+application/json media type (case-insensitive, optional parameters), otherwise
+the worker stages 415 before entering method hooks. Missing/invalid JSON,
+native decode/validation failures and byte/depth/item/owned-value exhaustion
+retain the existing 400/422/413 ingress mapping. An over-limit transport body
+keeps its existing H1 413 or H2 stream reset. No content sniffing is used.
+
+At mount, the supplied MethodPlan codec compiles an immutable payload FormatPlan
+and verifies its canonical native record. All schema/name work stays there;
+codec storage can be released before start. Input fields admit scalar/string/
+enum/record shapes. Optional/null overlays, bytes, collections, variants and
+multiple projected body fields remain rejected at mount until their complete
+representation contracts land. Nested non-identity
+name mappings remain governed by the SDK's FormatPlan admission.
+
+The existing Invocation snapshot owns bounded body bytes. A worker opens one
+explicit JSON provider lease and a canonical-name reader only during input
+binding. BindingPlan owns native decoding, nested validation and rollback; DTO
+strings use their canonical owning providers. The reader closes before
+method/hooks execute, on both success and failure. The published JSON provider
+builds a transient DOM; its storage scales with the admitted body and active
+workers, separately from the native owned-byte budget. The token reader/DTO
+storage retain the existing native depth, item and owned-byte budgets.
+No owner-affine body/reader escapes to user code, extra task/pool or unbounded
+input cache is introduced. Failed admission publishes no route; failed decoding
+enters no business hook and releases the same resources before response staging.
 
 The private structured-output migration takes the same codec used to compile
 the MethodPlan explicitly at worker mount. Control-plane schema introspection
