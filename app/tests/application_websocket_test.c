@@ -46,6 +46,7 @@ static struct {
   chttp_websocket_pool pool;
   chttp_jwt_bearer_validator jwt;
   char *token;
+  const char *selected_subprotocol, *offered_subprotocol;
   ws_socket socket;
   sync_mutex_t mutex;
   sync_cond_t changed;
@@ -64,6 +65,7 @@ static struct {
   chttp_server_websocket_session peer;
   chttp_application_work_outcome outcome;
   _Atomic int invalid;
+  _Atomic int subprotocol_status;
   char uri[96];
   char cookie[128];
 } ws;
@@ -111,6 +113,18 @@ int ws_open(void *self, const chttp_invocation *invocation) {
   int status = chttp_invocation_set_header(invocation, "X-Worker", "accepted");
   chttp_session *session = chttp_invocation_session(invocation);
   if (status == SALTS_OK && session) status = chttp_session_set(session, "ws", "accepted");
+  if (status == SALTS_OK && ws.selected_subprotocol) {
+    if (chttp_invocation_set_header(invocation, "Sec-WebSocket-Protocol", ws.selected_subprotocol) != SALTS_EPERM ||
+        chttp_invocation_select_websocket_subprotocol(invocation, "invalid token") != SALTS_EINVAL)
+      atomic_fetch_add(&ws.invalid, 1);
+    status = chttp_invocation_select_websocket_subprotocol(invocation, ws.selected_subprotocol);
+    atomic_store(&ws.subprotocol_status, status);
+    if (status != SALTS_OK) return chttp_invocation_respond(invocation, 400u, NULL, NULL, 0u);
+    status = chttp_invocation_websocket_accept(invocation);
+    if (chttp_invocation_select_websocket_subprotocol(invocation, ws.selected_subprotocol) != SALTS_EALREADY)
+      atomic_fetch_add(&ws.invalid, 1);
+    return status;
+  }
   return status == SALTS_OK ? chttp_invocation_websocket_accept(invocation) : status;
 }
 int ws_session(void *self, const chttp_invocation *invocation) {
@@ -209,7 +223,7 @@ static int ws_connect(int index, chttp_protocol protocol, unsigned int *code) {
   if (ws.token) snprintf(authorization, sizeof(authorization), "Bearer %s", ws.token);
   const chttp_header header = {"Authorization", authorization};
   const chttp_websocket_connect_options options = {.size = sizeof(options), .uri = ws.uri,
-      .timeout_ms = 5000u, .protocol = protocol, .headers = ws.token ? &header : NULL, .header_count = ws.token ? 1u : 0u};
+      .timeout_ms = 5000u, .protocol = protocol, .subprotocol = ws.offered_subprotocol, .headers = ws.token ? &header : NULL, .header_count = ws.token ? 1u : 0u};
   return chttp_websocket_client_connect(&ws.clients[index], &options, code);
 }
 static void ws_wait(int *value, int target) {
@@ -594,5 +608,23 @@ spec("Application worker WebSocket") {
       check_equal(chttp_websocket_client_destroy(&ws.clients[0], 5000u), SALTS_OK);
       check_equal(chttp_application_close(&ws.app, 5000u), SALTS_OK); check_equal(ws.opens, 0); check_equal(ws.events, 0);
     }
+  }
+
+  it("selects an offered subprotocol through the public Invocation on H1 and H2") {
+    ws.selected_subprotocol = ws.offered_subprotocol = "mqtt";
+    ws_start();
+    unsigned int code = 0u;
+    check_equal(ws_connect(0, CHTTP_HTTP_1_1, &code), SALTS_OK);
+    check_equal(ws_connect(1, CHTTP_HTTP_2, &code), SALTS_OK);
+  }
+  it("rejects an unoffered subprotocol and keeps the Application usable") {
+    ws.selected_subprotocol = "mqtt";
+    ws.offered_subprotocol = "other";
+    ws_start();
+    unsigned int code = 0u;
+    check_not_equal(ws_connect(0, CHTTP_HTTP_1_1, &code), SALTS_OK);
+    check_equal(atomic_load(&ws.subprotocol_status), SALTS_EPROTO);
+    ws.offered_subprotocol = "mqtt";
+    check_equal(ws_connect(1, CHTTP_HTTP_2, &code), SALTS_OK);
   }
 }

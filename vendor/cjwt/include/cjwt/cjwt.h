@@ -8,6 +8,10 @@
 
 #include <json_parser.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*----------------------------------------------------------------------------*/
 /*                                   Macros                                   */
 /*----------------------------------------------------------------------------*/
@@ -348,5 +352,9 @@ void cjwt_print(FILE *stream, cjwt_t *jwt);
  *      CJWTE_UNKNOWN_ALG
  */
 cjwt_code_t cjwt_alg_string_to_enum(const char *s, size_t len, cjwt_alg_t *alg);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

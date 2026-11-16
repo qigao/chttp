@@ -1,6 +1,7 @@
 #include "chttp_application_work.h"
 #include "../../http_server/src/chttp_server_engine.h"
 #include "../../http_common/http/chttp_response_fields.h"
+#include "../../http_common/http/chttp_websocket_handshake.h"
 #include <cflow/executor.h>
 #include <cnet/websocket.h>
 #include <threads/threads.h>
@@ -261,10 +262,10 @@ static int reserve_header(const chttp_application_work_reply *reply, const char 
   *slot = index;
   return SALTS_OK;
 }
-int chttp_application_work_set_header(chttp_application_work_reply *reply, const char *name, const char *value) {
+static int set_header(chttp_application_work_reply *reply, const char *name, const char *value, bool websocket) {
   if (!chttp_application_work_reply_current(reply)) return SALTS_EINVAL;
   chttp_response_field_size measured;
-  const int status = chttp_response_field_measure(name, value, false, &measured);
+  const int status = chttp_response_field_measure(name, value, websocket, &measured);
   if (status != SALTS_OK) return status;
   if (reply->finalized) return SALTS_EALREADY;
   work_item *item = reply->item;
@@ -288,6 +289,17 @@ int chttp_application_work_set_header(chttp_application_work_reply *reply, const
   reply->headers[index + 1u] = (chttp_header){name_copy, value_copy};
   reply->header_used = budget.used; reply->header_wire = budget.wire; reply->header_count = budget.count;
   return SALTS_OK;
+}
+int chttp_application_work_set_header(chttp_application_work_reply *reply, const char *name, const char *value) {
+  return set_header(reply, name, value, false);
+}
+int chttp_application_work_websocket_subprotocol(chttp_application_work_reply *reply,
+    const chttp_server_request_view *request, const char *subprotocol) {
+  if (!chttp_application_work_reply_current(reply) || !reply->item->websocket.event || !request)
+    return SALTS_EINVAL;
+  if (reply->sealed || reply->finalized) return SALTS_EALREADY;
+  int status = chttp_websocket_subprotocol_check(request->headers, request->header_count, subprotocol);
+  return status == SALTS_OK ? set_header(reply, "Sec-WebSocket-Protocol", subprotocol, true) : status;
 }
 int chttp_application_work_response_file(chttp_application_work_reply *reply, unsigned int code,
     const char *type, const char *path) {

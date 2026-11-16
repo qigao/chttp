@@ -31,6 +31,11 @@ int chttp_invocation_set_header(const chttp_invocation *invocation, const char *
   const chttp_invocation_state *state = invocation_state(invocation);
   return state ? chttp_application_work_set_header(state->reply, name, value) : SALTS_EINVAL;
 }
+int chttp_invocation_select_websocket_subprotocol(const chttp_invocation *invocation, const char *subprotocol) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  return state ? chttp_application_work_websocket_subprotocol(state->reply, &state->request, subprotocol)
+               : SALTS_EINVAL;
+}
 int chttp_invocation_websocket_accept(const chttp_invocation *invocation) {
   const chttp_invocation_state *state = invocation_state(invocation);
   return state ? chttp_application_work_websocket_accept(state->reply) : SALTS_EINVAL;

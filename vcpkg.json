@@ -1,6 +1,6 @@
 {
   "name": "http-services",
-  "version-semver": "0.1.0",
+  "version-semver": "0.1.1",
   "dependencies": [
     "llhttp",
     "tree-sitter",

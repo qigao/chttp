@@ -51,6 +51,11 @@ int chttp_invocation_respond(const chttp_invocation *, unsigned int, const char 
 /* Opening-only explicit acceptance. Normal buffered respond() rejects the
  * upgrade. Session intents and entered hooks settle before native publication. */
 int chttp_invocation_websocket_accept(const chttp_invocation *);
+/** Selects a copied, case-sensitive token offered in this opening request.
+ * EINVAL rejects invalid scope/token, EPROTO rejects an unoffered token, and
+ * EALREADY rejects a sealed draft. Header budgets and ownership are unchanged. */
+int chttp_invocation_select_websocket_subprotocol(const chttp_invocation *, const char *);
+
 /* Copied case-insensitive upsert; valid through entered hook unwind, including
  * after respond(). Count/byte exhaustion returns ENOBUFS without mutation;
  * reserved transport fields return EPERM, invalid fields EINVAL. Content-Type

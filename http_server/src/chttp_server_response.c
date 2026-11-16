@@ -1,5 +1,6 @@
 #include "chttp_server_runtime.h"
 #include "../../http_common/http/chttp_response_fields.h"
+#include "../../http_common/http/chttp_websocket_handshake.h"
 #include <core/platform.h>
 #include <core/clock.h>
 
@@ -201,33 +202,6 @@ int chttp_server_response_append_vary(chttp_server_response *response, const cha
   return chttp_server_response_set_header(response, "Vary", fields);
 }
 
-static bool chttp_server_response_subprotocol_offered(const chttp_server_request_view *request,
-                                                      const char *subprotocol) {
-  const size_t wanted_size = strlen(subprotocol);
-  size_t header_index;
-  for (header_index = 0u; header_index < request->header_count; ++header_index) {
-    const chttp_header *header = &request->headers[header_index];
-    const char *cursor;
-    if (!chttp_response_ascii_equal(header->name, "Sec-WebSocket-Protocol")) continue;
-    cursor = header->value;
-    while (cursor != NULL && *cursor != '\0') {
-      const char *end = strchr(cursor, ',');
-      const char *token_end;
-      if (end == NULL) end = cursor + strlen(cursor);
-      while (cursor != end && (*cursor == ' ' || *cursor == '\t'))
-        ++cursor;
-      token_end = end;
-      while (token_end != cursor && (token_end[-1] == ' ' || token_end[-1] == '\t'))
-        --token_end;
-      if ((size_t)(token_end - cursor) == wanted_size &&
-          memcmp(cursor, subprotocol, wanted_size) == 0)
-        return true;
-      cursor = *end == ',' ? end + 1 : end;
-    }
-  }
-  return false;
-}
-
 int chttp_server_response_select_websocket_subprotocol(chttp_server_response *response,
                                                        const chttp_server_request_view *request,
                                                        const char *subprotocol) {
@@ -235,7 +209,7 @@ int chttp_server_response_select_websocket_subprotocol(chttp_server_response *re
       (request->header_count != 0u && request->headers == NULL) ||
       !chttp_response_token(subprotocol))
     return SALTS_EINVAL;
-  if (!chttp_server_response_subprotocol_offered(request, subprotocol)) return SALTS_EPROTO;
+  if (chttp_websocket_subprotocol_check(request->headers, request->header_count, subprotocol) != SALTS_OK) return SALTS_EPROTO;
   return chttp_server_response_set_header_impl(response, "Sec-WebSocket-Protocol", subprotocol,
                                                true);
 }
@@ -406,16 +380,16 @@ static void chttp_server_deferred_publish(chttp_server_deferred *deferred,
 }
 
 static int deferred_headers(chttp_server_deferred_target *target,
-    const chttp_header *headers, size_t count) {
+    const chttp_header *headers, size_t count, bool websocket) {
   chttp_server_response_builder *base = &target->request_state->response_builder;
   int status = SALTS_OK;
   chttp_server_response_builder_reset(target->response_builder);
   target->file = (chttp_server_deferred_file){0};
   target->websocket_accept = false;
   for (size_t i = 0u; status == SALTS_OK && i < base->header_count; ++i)
-    status = chttp_server_response_set_header(target->response, base->headers[i].name, base->headers[i].value);
+    status = chttp_server_response_set_header_impl(target->response, base->headers[i].name, base->headers[i].value, websocket);
   for (size_t i = 0u; status == SALTS_OK && i < count; ++i)
-    status = chttp_server_response_set_header(target->response, headers[i].name, headers[i].value);
+    status = chttp_server_response_set_header_impl(target->response, headers[i].name, headers[i].value, websocket);
   return status;
 }
 
@@ -440,7 +414,7 @@ int chttp_server_deferred_response_source(chttp_server_deferred *deferred, unsig
   chttp_server_deferred_target *target = deferred->impl;
   int status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
-  status = deferred_headers(target, headers, count);
+  status = deferred_headers(target, headers, count, false);
   if (status == SALTS_OK) status = chttp_server_response_source_owned(target->response,
       code, NULL, &source->source, source->cleanup, source->source.user);
   if (status != SALTS_OK) {
@@ -459,7 +433,7 @@ int chttp_server_deferred_websocket_accept(chttp_server_deferred *deferred, cons
   if (!target->websocket) return SALTS_ENOTSUP;
   int status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
-  status = deferred_headers(target, headers, count);
+  status = deferred_headers(target, headers, count, true);
   if (status != SALTS_OK) {
     atomic_store_explicit(target->token,
         chttp_server_deferred_token(deferred->generation, CHTTP_SERVER_DEFERRED_PENDING), memory_order_release);
@@ -481,7 +455,7 @@ int chttp_server_deferred_response_file(chttp_server_deferred *deferred,
     return SALTS_EINVAL;
   int status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
-  status = deferred_headers(target, headers, count);
+  status = deferred_headers(target, headers, count, false);
   if (status != SALTS_OK) {
     chttp_server_response_builder_reset(target->response_builder);
     atomic_store_explicit(target->token,
@@ -520,7 +494,7 @@ int chttp_server_deferred_reply(chttp_server_deferred *deferred,
   status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
 
-  status = deferred_headers(target, response->headers, response->header_count);
+  status = deferred_headers(target, response->headers, response->header_count, false);
   if (status == SALTS_OK)
     status = chttp_server_reply(target->response, response->status_code, response->content_type,
                                 response->body, response->body_size);
@@ -560,7 +534,7 @@ int chttp_server_deferred_reply_buffer(
   status = chttp_server_deferred_claim(target->token, deferred->generation);
   if (status != SALTS_OK) return status;
 
-  status = deferred_headers(target, headers, header_count);
+  status = deferred_headers(target, headers, header_count, false);
   if (status == SALTS_OK)
     status = chttp_server_reply_buffer(
         target->response, status_code, content_type, body);

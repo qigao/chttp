@@ -1,5 +1,6 @@
 #include <http_server/http.h>
 #include "chttp_websocket_handshake.h"
+#include "chttp_response_fields.h"
 
 #include <core/base64.h>
 
@@ -319,4 +320,32 @@ int chttp_websocket_server_handshake_validate(const chttp_server_request_view *r
   status = chttp_websocket_accept_compute(key, accept, accept_capacity);
   if (status != SALTS_OK) *out_http_status = status == SALTS_EMSGSIZE ? 500u : 400u;
   return status;
+}
+
+int chttp_websocket_subprotocol_check(const chttp_header *headers, size_t header_count,
+                                                      const char *subprotocol) {
+  if ((header_count && !headers) || !chttp_response_token(subprotocol)) return SALTS_EINVAL;
+  const size_t wanted_size = strlen(subprotocol);
+  size_t header_index;
+  for (header_index = 0u; header_index < header_count; ++header_index) {
+    const chttp_header *header = &headers[header_index];
+    const char *cursor;
+    if (!chttp_response_ascii_equal(header->name, "Sec-WebSocket-Protocol")) continue;
+    cursor = header->value;
+    while (cursor != NULL && *cursor != '\0') {
+      const char *end = strchr(cursor, ',');
+      const char *token_end;
+      if (end == NULL) end = cursor + strlen(cursor);
+      while (cursor != end && (*cursor == ' ' || *cursor == '\t'))
+        ++cursor;
+      token_end = end;
+      while (token_end != cursor && (token_end[-1] == ' ' || token_end[-1] == '\t'))
+        --token_end;
+      if ((size_t)(token_end - cursor) == wanted_size &&
+          memcmp(cursor, subprotocol, wanted_size) == 0)
+        return SALTS_OK;
+      cursor = *end == ',' ? end + 1 : end;
+    }
+  }
+  return SALTS_EPROTO;
 }

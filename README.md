@@ -55,8 +55,16 @@ and [build instructions](cmake/BUILD.md).
 | HTTP / RPC client | `CHttp::Client` | `<http_client/http.h>`, `<http_client/rpc.h>` |
 | HTTP / RPC engine primitives | `CHttp::Server` | `<http_server/http.h>`, `<http_server/rpc.h>` |
 | S3 client | `CHttp::S3` | `<s3/s3.h>` |
+| JWT / JWS / JWK / JWE | `CHttp::JWT` (static) | `<cjwt/cjwt.h>` |
 
 Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
+
+`CHttp::JWT` installs the same cjwt archive used by the HTTP server, including
+its private GmSSL/libecc provider. Consumers link this target and include
+`<cjwt/cjwt.h>` from C11 or C++17; private provider headers and targets are not
+part of the SDK. It exposes cjwt's existing algorithms, ownership and error
+codes, and creates no new HTTP runtime. Release SDKs predating this export must
+be rebuilt before consumers use the target.
 
 ### App entry point
 

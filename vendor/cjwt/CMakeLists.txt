@@ -5,17 +5,28 @@ add_library(chttp_cjwt STATIC
   "src/jwe_salts.c"
   "src/jws_salts.c"
   "src/print.c"
-  "src/utils.c")
-set_target_properties(chttp_cjwt PROPERTIES FOLDER "vendor/cjwt")
+  "src/utils.c"
+  $<TARGET_OBJECTS:chttp_cjwt_crypto>)
+cmake_config_target(chttp_cjwt ALIAS CHttp::JWT EXPORT_NAME JWT FOLDER "vendor/cjwt")
+set_target_properties(chttp_cjwt PROPERTIES C_VISIBILITY_PRESET hidden)
 target_compile_features(chttp_cjwt PRIVATE c_std_11)
 target_include_directories(
   chttp_cjwt
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include"
-          "${CMAKE_CURRENT_SOURCE_DIR}/include/cjwt"
-          "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/cjwt"
+          "${CMAKE_CURRENT_SOURCE_DIR}/src"
+          "${CMAKE_CURRENT_SOURCE_DIR}/crypto/src")
 target_link_libraries(
   chttp_cjwt
-  PRIVATE Salts::JsonParser chttp_cjwt_crypto Salts::Core)
+  PUBLIC Salts::JsonParser
+  PRIVATE GmSSL::GmSSL Salts::Core)
+
+install(TARGETS chttp_cjwt EXPORT ChttpTargets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES include/cjwt/cjwt.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cjwt)
+install(FILES LICENSES/Apache-2.0.txt
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/Chttp/cjwt)
 
 
 if(BUILD_TESTS)

@@ -18,11 +18,12 @@ foreach(test_file ${TEST_FILES})
     get_filename_component(test_stem ${test_file} NAME_WE)
     set(test_name chttp_cjwt_${test_stem})
     add_executable(${test_name} ${test_file})
-    target_link_libraries(${test_name} PRIVATE chttp_cjwt chttp_cjwt_crypto Salts::JsonParser Salts::TinyTest)
+    target_link_libraries(${test_name} PRIVATE CHttp::JWT Salts::TinyTest)
     target_include_directories(${test_name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${CMAKE_CURRENT_SOURCE_DIR}/../include/cjwt
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../crypto/src)
     target_compile_definitions(${test_name} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     
     if(MSVC)
@@ -39,4 +40,11 @@ foreach(test_file ${TEST_FILES})
     
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_target_properties(${test_name} PROPERTIES FOLDER vendor/cjwt/tests)
+endforeach()
+
+foreach(language IN ITEMS c cpp)
+  cmake_add_test(chttp_cjwt_public_${language}_test
+    SOURCES test_public_api.${language}
+    LIBS CHttp::JWT Salts::TinyTest
+    FOLDER "vendor/cjwt/tests")
 endforeach()

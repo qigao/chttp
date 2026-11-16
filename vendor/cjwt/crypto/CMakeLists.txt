@@ -23,7 +23,7 @@ set(LIBECC_SOURCES
     "${LIBECC_ROOT}/src/utils/utils.c"
     "${LIBECC_ROOT}/src/utils/utils_rand.c")
 
-add_library(chttp_cjwt_crypto STATIC
+add_library(chttp_cjwt_crypto OBJECT
   src/crypto_eddsa.c src/crypto_ecdsa.c src/crypto_key_wrap.c
   src/crypto_symmetric.c src/crypto_key.c src/crypto_key_pem.c
   ${LIBECC_SOURCES})

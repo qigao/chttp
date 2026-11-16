@@ -24,4 +24,6 @@ int chttp_websocket_server_handshake_validate(const chttp_server_request_view *r
                                               char *accept, size_t accept_capacity,
                                               unsigned int *out_http_status);
 
+int chttp_websocket_subprotocol_check(const chttp_header *, size_t, const char *);
+
 #endif /* CHTTP_WEBSOCKET_HANDSHAKE_H */

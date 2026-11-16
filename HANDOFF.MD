@@ -1,5 +1,20 @@
 # Split SDK migration handoff
 
+- 0.1.1 exports the existing cjwt/provider implementation as the public static
+  `CHttp::JWT` target and installs `<cjwt/cjwt.h>` with C++ linkage guards.
+  Private provider objects are folded into that archive; consumers do not need
+  a second vendor copy. C and C++ public API tests belong to `vendor/cjwt/tests`.
+- `chttp_invocation_select_websocket_subprotocol` selects only a token offered
+  by the opening request before the draft is sealed. Both native and worker
+  paths reuse the same token validation. Deferred upgrade publication preserves
+  the validated protocol header; ordinary header setters continue rejecting
+  reserved transport fields. Formal WebSocket tests cover H1/H2, unoffered and
+  invalid tokens, reserved-header rejection and sealed-draft rejection.
+- Native test tools require their matching OpenSSL configuration. The local
+  Anaconda OpenSSL 3 installation needs `OPENSSL_CONF` pointing at its own
+  `Library/ssl/openssl.cnf`; an unset value makes credential generation fail
+  before a TLS connection. Preserve this failure instead of disabling TLS tests.
+
 - Private handwritten Controller actions now use an exact callback-scoped
   `int(void *, const chttp_invocation *)` contract with canonical
   `chttp.invocation` identity. Mount admits FunctionAbi before route publication,
