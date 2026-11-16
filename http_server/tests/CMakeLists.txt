@@ -205,6 +205,10 @@ add_subdirectory(rpc_generated)
 
 # Independent TLS provider interoperability belongs to the Server protocol owner.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+if(DEFINED CHTTP_TEST_OPENSSL AND CHTTP_TEST_OPENSSL STREQUAL "")
+  message(FATAL_ERROR
+    "CHTTP_TEST_OPENSSL is empty; load its OpenSSL 3 executable path from .env or set -DCHTTP_TEST_OPENSSL=<absolute-path>")
+endif()
 find_program(CHTTP_TEST_OPENSSL NAMES openssl REQUIRED)
 add_executable(chttp_tls_openssl_server chttp_tls_openssl_server.c)
 target_link_libraries(chttp_tls_openssl_server PRIVATE CHttp::Server)

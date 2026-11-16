@@ -63,7 +63,7 @@
       "displayName": "llvm-mingw Windows x64 Release",
       "inherits": [
         "target-llvm-mingw-x64",
-        "release-mode",
+        "full-native",
         "native-environment"
       ]
     },

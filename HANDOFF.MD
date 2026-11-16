@@ -1097,3 +1097,38 @@
   migration-plain-cmake-cmeta-sdk.log and
   migration-plain-cmake-base018-{configure,build,ctest,install}.log in build/.
   No independent consumer project or TinyTest change was introduced.
+
+## LLVM-MinGW user preset test discovery (2026-11-16)
+
+- `llvm-mingw-x64-release-user` inherited `release-mode`, which sets
+  `BUILD_TESTS=OFF`, despite having a matching CTest preset. It now inherits
+  `full-native`, matching `native-release-user`. Reconfigure with
+  `cmake --preset llvm-mingw-x64-release-user`, then build the same preset
+  before running `ctest --preset llvm-mingw-x64-release-user`.
+- Complete build passed and CTest discovered 121 tests. The first full run
+  passed 120; `chttp_tls_openssl_test` failed during credential generation
+  because the selected Anaconda OpenSSL could not find its compiled-in
+  configuration path. Local `.env` now sets `OPENSSL_CONF` to that same
+  installation's `Library/ssl/openssl.cnf`; load it into the parent environment.
+  Updating `.env` alone does not change an existing process's environment.
+  The interoperability test passed with `-R '^chttp_tls_openssl_test$'`, then
+  `ctest --preset llvm-mingw-x64-release-user` passed all 121 tests in 96.54 s
+  after loading the corrected environment. No test was disabled. Final evidence
+  is `build/llvm-mingw-x64-release-user/Testing/Temporary/LastTest-after-openssl-conf.log`.
+  Original failure evidence is
+  `build/llvm-mingw-x64-release-user/Testing/Temporary/LastTest-before-openssl-conf.log`.
+  A subsequent process that omitted the variable reproduced the same failure;
+  that evidence is preserved alongside it as `LastTest-before-dotenv-reload.log`.
+- A later configure used a different search environment and cached
+  `CHTTP_TEST_OPENSSL-NOTFOUND`, although the selected tool remained installed.
+  Native user presets now map the loaded `CHTTP_TEST_OPENSSL` environment value
+  to the existing FILEPATH cache input, matching CI's explicit selection.
+  Set the executable path in `.env` and reload before configuring; keep
+  `OPENSSL_CONF` from the same installation. An explicitly empty value fails
+  configuration with an actionable error rather than bypassing find_program.
+  Configuration and the complete build passed with OpenSSL removed from PATH;
+  the formal `chttp_tls_openssl_test` then passed in 7.48 s. The empty-input
+  negative configure failed as expected (exit 1), recorded in
+  `build/llvm-mingw-x64-release-user/openssl-empty-config.log`, and normal
+  configuration was restored successfully. Full CTest was not repeated for
+  this tool-selection change.

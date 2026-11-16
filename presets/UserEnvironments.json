@@ -29,7 +29,13 @@
       "inherits": [
         "vcpkg-cache",
         "native-runtime"
-      ]
+      ],
+      "cacheVariables": {
+        "CHTTP_TEST_OPENSSL": {
+          "type": "FILEPATH",
+          "value": "$penv{CHTTP_TEST_OPENSSL}"
+        }
+      }
     }
   ]
 }

@@ -46,6 +46,13 @@ compiler SDK. Linux/macOS use `llvm-native-release-user`; Linux GCC uses
 tests. CI builds the full configured graph without selecting targets and runs
 native tests through CTest. A failed configure/build stops that profile.
 
+Native user presets take `CHTTP_TEST_OPENSSL` from the loaded parent environment
+as the absolute path to the independent OpenSSL 3 command-line test tool, just
+as CI supplies the same CMake cache input. Set it in `.env` and reload the
+environment before configuring; the tool need not be on `PATH`. If that OpenSSL
+installation requires `OPENSSL_CONF`, load the path to its own `openssl.cnf`
+before running CTest as well. CMake and CTest do not read `.env` themselves.
+
 Use `--fresh` explicitly after changing SDK/compiler/triplet inputs. Ordinary
 builds do not clear caches or repair dependency roots. The install preset writes
 to its own stage, never into a dependency root.
