@@ -49,6 +49,10 @@ jobs:
         $archive = [IO.Path]::GetFullPath('build/ci-inputs/infrastructure.tar')
         git -C $env:VCPKG_CACHE_REPOSITORY_ROOT archive --format=tar HEAD --output $archive
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $fields = 'VCPKG_CACHE_VERSION', 'SALTS_BASE_VERSION', 'CMETA_VERSION', 'CMETA_REF', 'SALTS_CNET_VERSION', 'SALTS_UTILS_VERSION'
+        $fields | ForEach-Object { "$_=$((Get-Item -LiteralPath "Env:$_").Value)" } | Set-Content .env -Encoding utf8
+        Add-Content .env 'VCPKG_CACHE_REPOSITORY_ROOT=build/ci-infrastructure/vcpkg-cache' -Encoding utf8
+        Copy-Item .env build/ci-inputs/chttp.env
         python .github/ci/sdk-inputs.py prepare
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     - name: Select the published SDK intersection
@@ -107,6 +111,7 @@ jobs:
         python-version: '3.12'
     - name: Restore the shared infrastructure snapshot and SDKs
       run: |
+        Copy-Item build/ci-inputs/chttp.env .env
         New-Item -ItemType Directory -Path $env:VCPKG_CACHE_REPOSITORY_ROOT -Force | Out-Null
         tar xf build/ci-inputs/infrastructure.tar -C $env:VCPKG_CACHE_REPOSITORY_ROOT
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
