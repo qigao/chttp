@@ -39,6 +39,8 @@ typedef struct chttp_h2_test_server {
   size_t expected_requests;
   size_t goaway_responses;
   int refuse_first_stream;
+  const char *expected_upload;
+  int32_t upload_stream;
   int unprocessed_goaway;
   int partial_then_refuse;
   int partial_wire_response;
@@ -238,9 +240,14 @@ static int chttp_h2_test_set_timeout(chttp_h2_test_socket socket_value) {
 
 static int chttp_h2_test_send_all(chttp_h2_test_socket socket_value, const void *data,
                                   size_t size) {
+#if defined(_WIN32)
+  const int flags = 0;
+#else
+  const int flags = MSG_NOSIGNAL;
+#endif
   size_t offset = 0u;
   while (offset < size) {
-    const int sent = send(socket_value, (const char *)data + offset, (int)(size - offset), 0);
+    const int sent = send(socket_value, (const char *)data + offset, (int)(size - offset), flags);
     if (sent <= 0) return SALTS_EIO;
     offset += (size_t)sent;
   }
@@ -327,6 +334,10 @@ static int chttp_h2_test_on_end(void *user, int32_t stream_id, int end_stream) {
   if (request_index == 0u && server->refuse_first_stream)
     return chttp_h2_proto_submit_rst_stream(server->protocol, stream_id,
                                            CHTTP_H2_ERR_REFUSED_STREAM);
+  if (server->expected_upload != NULL) {
+    server->upload_stream = stream_id;
+    return 0;
+  }
   if (request_index == 0u && server->unprocessed_goaway)
     return chttp_h2_proto_submit_goaway(server->protocol,
         server->goaway_last_current ? (uint32_t)stream_id : 0u, server->goaway_error);
@@ -370,9 +381,17 @@ static void chttp_h2_test_on_goaway(void *user, uint32_t last_stream_id, uint32_
 static int chttp_h2_test_on_data(void *user, int32_t stream_id,
     const uint8_t *data, size_t size) {
   chttp_h2_test_server *server = user;
-  (void)stream_id; (void)data;
   if (size > SIZE_MAX - server->received_body_bytes) return -1;
   server->received_body_bytes += size;
+  if (stream_id == server->upload_stream && size != 0u) {
+    if (size > strlen(server->expected_upload) || memcmp(data, server->expected_upload, size) != 0)
+      return -1;
+    server->expected_upload += size;
+    if (*server->expected_upload == '\0') {
+      static const chttp_h2_hpack_header ok = {":status", 7u, "200", 3u};
+      return chttp_h2_proto_submit_response(server->protocol, stream_id, &ok, 1u, NULL, 0u);
+    }
+  }
   return 0;
 }
 
@@ -1162,7 +1181,8 @@ static void chttp_test_async_file_retry(bool h2, bool download, bool changed, bo
   check_equal(tt_write_file(path, download ? "old" : "abc", 3u), 0);
   h1_retry_peer h1 = {.partial = download, .download = download,
       .mutate_path = changed ? path : NULL};
-  chttp_h2_test_server h2peer = {.refuse_first_stream = 1, .empty_responses = !download};
+  chttp_h2_test_server h2peer = {.refuse_first_stream = 1, .parse_until_close = 1,
+      .expected_upload = download ? NULL : "abc"};
   chttp_h2_test_server *server = h2 ? &h2peer : &h1.server;
   server->expected_requests = changed || budget_failure ? 1u : 2u;
   uint16_t port;
@@ -1170,7 +1190,7 @@ static void chttp_test_async_file_retry(bool h2, bool download, bool changed, bo
   char uri[64];
   check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", port) > 0);
   sync_thread_t thread = NULL;
-  check_equal(sync_thread_create(&thread, h2 ? chttp_h2_test_serve : chttp_h1_test_retry_peer,
+  check_equal(sync_thread_create(&thread, h2 ? chttp_h2_test_serve_until_client_goaway : chttp_h1_test_retry_peer,
       h2 ? (void *)server : (void *)&h1), SALTS_OK);
   async_retry_probe probe = {.client = &client};
   chttp_request_options request = {.connection_uri = uri, .authority = "retry.file", .target = "/file",

@@ -1237,3 +1237,19 @@
   passed 3/3 in 3.87 s. Evidence: build/async-flush. HTTP on Linux/macOS/sanitizers
   was not run locally. CMeta and Utils upstream source changes are committed,
   pushed and released; HTTP changes remain in the existing local worktree.
+
+## CHttp 0.1.2 qualification
+
+- Run 44229226642 stopped before building because a clean runner had no repository
+  `.env`. The prepare job now writes the six non-secret selectors synchronized from
+  the local `.env` and a checkout-relative cache path. All profiles restore that
+  snapshot from the existing shared input artifact. Run 44229603437 passed SDK
+  preparation and reached all eight builds.
+- That run exposed two raw test-peer issues in `chttp_h2_client_test`.
+  POSIX writes after the intentional client timeout raised SIGPIPE. The fixture
+  now uses MSG_NOSIGNAL so send returns the socket error. Windows LLVM-MinGW
+  received ECONNRESET when the H2 upload fixture responded to headers and closed
+  with request data outstanding. The replay peer now verifies the uploaded bytes
+  on the admitted stream before responding and reads until client shutdown.
+  Windows LLVM-MinGW passed the full H2 client test five consecutive times with
+  `ctest --preset native-release-user -R '^chttp_h2_client_test$' --repeat until-fail:5`.
