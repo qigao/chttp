@@ -391,6 +391,8 @@ static int chttp_h2_on_begin_headers(void *user, int32_t stream_id) {
   chttp_h2_request_state *request = chttp_h2_session_request(session, stream_id);
   if (request == NULL || request->header_block_open) return -1;
   request->attempt.response_started = true;
+  if (session->callbacks.on_response_progress != NULL)
+    session->callbacks.on_response_progress(session->callbacks.user, request->request_user);
   request->header_block_open = true;
   request->regular_header_seen = false;
   request->status_seen = false;
@@ -411,6 +413,8 @@ static int chttp_h2_on_header(void *user, int32_t stream_id, const char *name, s
   if (request == NULL || !request->header_block_open || name == NULL || value == NULL ||
       name_size == 0u)
     return -1;
+  if (session->callbacks.on_response_progress != NULL)
+    session->callbacks.on_response_progress(session->callbacks.user, request->request_user);
   if (name[0] == ':') {
     if (request->trailers || request->regular_header_seen || request->status_seen ||
         !chttp_h2_ascii_equal_n(name, name_size, ":status") ||
@@ -530,6 +534,8 @@ static int chttp_h2_on_data(void *user, int32_t stream_id, const uint8_t *data, 
   chttp_h2_session *session = (chttp_h2_session *)user;
   chttp_h2_request_state *request = chttp_h2_session_request(session, stream_id);
   size_t next_size = 0u;
+  if (request != NULL && size != 0u && session->callbacks.on_response_progress != NULL)
+    session->callbacks.on_response_progress(session->callbacks.user, request->request_user);
   if (request == NULL || !request->final_headers_seen || (size != 0u && data == NULL) ||
       ((request->method == CHTTP_METHOD_HEAD || request->response.status_code == 204u ||
         request->response.status_code == 304u) &&

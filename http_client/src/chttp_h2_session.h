@@ -84,6 +84,7 @@ typedef void (*chttp_h2_session_complete_fn)(void *user, void *request_user,
 typedef struct chttp_h2_session_callbacks {
   void *user;
   chttp_h2_session_complete_fn on_complete;
+  void (*on_response_progress)(void *user, void *request_user);
 } chttp_h2_session_callbacks;
 
 struct chttp_h2_session {

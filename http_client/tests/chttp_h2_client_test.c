@@ -10,6 +10,7 @@
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -42,6 +43,9 @@ typedef struct chttp_h2_test_server {
   int partial_then_refuse;
   int partial_wire_response;
   int drop_first_response;
+  const char *stall_path;
+  const char *paced_path;
+  chttp_h2_test_socket accepted_socket;
   uint32_t goaway_error;
   bool goaway_last_current;
   size_t refuse_responses;
@@ -62,6 +66,7 @@ typedef struct chttp_h2_test_server {
 typedef struct chttp_h2_test_completion {
   size_t count;
   int statuses[4];
+  const char *stages[4];
   unsigned int response_statuses[4];
   char bodies[4][16];
 } chttp_h2_test_completion;
@@ -261,6 +266,8 @@ static int chttp_h2_test_on_header(void *user, int32_t stream_id, const char *na
   return 0;
 }
 
+static void chttp_h2_test_flush(chttp_h2_test_server *server, chttp_h2_test_socket accepted);
+
 static int chttp_h2_test_on_end(void *user, int32_t stream_id, int end_stream) {
   static const chttp_h2_hpack_header response_headers[] = {
       {":status", sizeof(":status") - 1u, "200", sizeof("200") - 1u},
@@ -291,6 +298,19 @@ static int chttp_h2_test_on_end(void *user, int32_t stream_id, int end_stream) {
   if (request_index < sizeof(server->paths) / sizeof(server->paths[0]))
     memcpy(server->paths[request_index], server->path, sizeof(server->path));
   ++server->request_count;
+  if (server->stall_path != NULL && strcmp(server->path, server->stall_path) == 0) return 0;
+  if (server->paced_path != NULL && strcmp(server->path, server->paced_path) == 0) {
+    static const chttp_h2_hpack_header headers[] = {{":status",7,"200",3},{"content-length",14,"4",1}};
+    static const uint8_t paced[] = {'o','k','a','y'};
+    if (chttp_h2_proto_submit_headers(server->protocol, stream_id, headers, 2u, 0) != 0) return -1;
+    for (unsigned i = 0; i < 4u; ++i) {
+      if (i != 0u) sleep_ms(250u);
+      if (chttp_h2_proto_submit_data(server->protocol, stream_id, paced+i, 1u, i==3u) != 0) return -1;
+      chttp_h2_test_flush(server, server->accepted_socket);
+      if (server->status != SALTS_OK) return -1;
+    }
+    return 0;
+  }
   if (request_index == 0u && server->drop_first_response) return 0;
   if (server->partial_wire_response) return 0;
   if (request_index == 0u && server->partial_then_refuse) {
@@ -483,6 +503,7 @@ static void chttp_h2_test_serve_one(chttp_h2_test_server *server, size_t target_
     return;
   }
   ++server->accepted_connections;
+  server->accepted_socket = accepted;
   server->status = chttp_h2_test_set_timeout(accepted);
   callbacks.user_data = server;
   callbacks.on_begin_headers = chttp_h2_test_on_begin;
@@ -750,6 +771,7 @@ static void chttp_h2_test_on_complete(void *user, chttp_request request,
   (void)request;
   if (index >= sizeof(completion->statuses) / sizeof(completion->statuses[0])) return;
   completion->statuses[index] = error == NULL ? SALTS_OK : error->status;
+  completion->stages[index] = error == NULL ? NULL : error->stage;
   if (response != NULL) {
     const size_t body_size = response->body_size < sizeof(completion->bodies[index]) - 1u
                                  ? response->body_size
@@ -927,6 +949,8 @@ typedef struct h1_retry_peer {
   chttp_h2_test_server server;
   bool partial;
   bool http_failure;
+  bool download;
+  const char *mutate_path;
 } h1_retry_peer;
 
 static void chttp_h1_test_retry_peer(void *user) {
@@ -944,8 +968,8 @@ static void chttp_h1_test_retry_peer(void *user) {
     server->status = chttp_h2_test_set_timeout(accepted);
     while (server->status == SALTS_OK) {
       char *end = strstr(input, "\r\n\r\n");
-      if (end != NULL && used >= (size_t)(end + 4u - input) + 3u) {
-        if (memcmp(end + 4u, "abc", 3u) != 0) server->status = SALTS_EPROTO;
+      if (end != NULL && used >= (size_t)(end + 4u - input) + (peer->download ? 0u : 3u)) {
+        if (!peer->download && memcmp(end + 4u, "abc", 3u) != 0) server->status = SALTS_EPROTO;
         else ++server->request_count;
         break;
       }
@@ -956,9 +980,13 @@ static void chttp_h1_test_retry_peer(void *user) {
       input[used] = '\0';
     }
     if (server->status == SALTS_OK && (index != 0u || peer->partial || peer->http_failure)) {
-      const char *wire = index != 0u ? ok : peer->partial ? partial : failure;
+      const char *wire = index != 0u ? (peer->download ?
+          "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nyz" : ok) :
+          peer->partial ? partial : failure;
       server->status = chttp_h2_test_send_all(accepted, wire, strlen(wire));
     }
+    if (index == 0u && peer->mutate_path != NULL &&
+        tt_write_file(peer->mutate_path, "changed", 7u) != 0) server->status = SALTS_EIO;
     chttp_h2_test_close_socket(accepted);
   }
 }
@@ -1010,7 +1038,259 @@ static void chttp_h1_test_logical_retry(chttp_method method, bool idempotent,
   if (http_failure) check_equal(response_status, 503u);
 }
 
+typedef struct async_retry_probe {
+  chttp_async_client *client;
+  size_t offset, sink_bytes, writes, rewinds, rollbacks, completions;
+  int status, hook_status, reentry;
+  unsigned int response_status;
+} async_retry_probe;
+static int async_retry_read(void *user, void *buffer, size_t capacity, size_t *size) {
+  async_retry_probe *p = user;
+  *size = 3u-p->offset;
+  if (*size > capacity) *size = capacity;
+  memcpy(buffer, "abc"+p->offset, *size); p->offset += *size;
+  return SALTS_OK;
+}
+static int async_retry_write(void *user, const void *data, size_t size) {
+  async_retry_probe *p = user;
+  (void)data; p->sink_bytes += size; ++p->writes;
+  return SALTS_OK;
+}
+static int async_retry_rewind(void *user) {
+  async_retry_probe *p = user; ++p->rewinds; p->offset = 0u; return p->hook_status;
+}
+static int async_retry_rollback(void *user) {
+  async_retry_probe *p = user; ++p->rollbacks; p->sink_bytes = 0u; return p->hook_status;
+}
+static void async_retry_complete(void *user, chttp_logical_request request,
+    const chttp_response_view *response, const chttp_error *error) {
+  async_retry_probe *p = user;
+  (void)request;
+  ++p->completions; p->status = error == NULL ? SALTS_OK : error->status;
+  if (response != NULL) p->response_status = response->status_code;
+  size_t completions;
+  p->reentry = chttp_async_client_poll(p->client, 0u, &completions);
+}
+enum async_retry_mode { ASYNC_RETRY_MEMORY, ASYNC_RETRY_STREAM, ASYNC_RETRY_ROLLBACK,
+  ASYNC_RETRY_HOOK_FAILURE, ASYNC_RETRY_DEADLINE, ASYNC_RETRY_BUDGET, ASYNC_RETRY_CANCEL,
+  ASYNC_RETRY_STOP, ASYNC_RETRY_PARTIAL_MEMORY };
+static void chttp_test_async_retry(bool h2, enum async_retry_mode mode) {
+  chttp_async_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  h1_retry_peer h1 = {.partial = mode == ASYNC_RETRY_ROLLBACK || mode == ASYNC_RETRY_PARTIAL_MEMORY};
+  chttp_h2_test_server h2peer = {.refuse_first_stream = 1, .empty_responses = 1};
+  chttp_h2_test_server *server = h2 ? &h2peer : &h1.server;
+  const bool success = mode <= ASYNC_RETRY_ROLLBACK;
+  server->expected_requests = success ? 2u : 1u;
+  check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+  uint16_t port;
+  check_equal(chttp_h2_test_listener(&server->listener, &port), SALTS_OK);
+  char uri[64];
+  check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", port) > 0);
+  sync_thread_t thread = NULL;
+  check_equal(sync_thread_create(&thread, h2 ? chttp_h2_test_serve : chttp_h1_test_retry_peer,
+      h2 ? (void *)server : (void *)&h1), SALTS_OK);
+  async_retry_probe probe = {.client = &client,
+      .hook_status = mode == ASYNC_RETRY_HOOK_FAILURE ? SALTS_EIO : SALTS_OK};
+  chttp_body_source source = {.read = async_retry_read, .user = &probe,
+      .content_length = 3u, .content_length_known = 1};
+  chttp_body_sink sink = {.write = async_retry_write, .user = &probe};
+  chttp_request_replay replay = {&probe, async_retry_rewind, async_retry_rollback};
+  chttp_request_options request = {.connection_uri = uri, .authority = "retry.test",
+      .target = "/async-retry", .method = CHTTP_METHOD_PUT,
+      .protocol = h2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1};
+  if (mode == ASYNC_RETRY_MEMORY || mode >= ASYNC_RETRY_DEADLINE) {
+    request.body = "abc"; request.body_size = 3u;
+  } else { request.body_source = &source; request.body_sink = &sink; }
+  chttp_retry_options retry = CHTTP_RETRY_OPTIONS_INIT;
+  retry.max_attempts = 2u; retry.retry_body_byte_budget = mode == ASYNC_RETRY_BUDGET ? 0u : 3u;
+  if (mode >= ASYNC_RETRY_DEADLINE && mode != ASYNC_RETRY_BUDGET)
+    retry.initial_backoff_ms = retry.maximum_backoff_ms = 20000u;
+  if (mode == ASYNC_RETRY_CANCEL || mode == ASYNC_RETRY_STOP) {
+    retry.initial_backoff_ms = retry.maximum_backoff_ms = 1000u;
+    retry.jitter_seed = 1u;
+  }
+  const chttp_request_timeouts timeouts = {mode == ASYNC_RETRY_DEADLINE ? 60u : 5000u, 0u};
+  chttp_logical_request logical;
+  if (request.body_source != NULL) {
+    check_equal(chttp_async_client_submit_retry(&client, &request, &timeouts, &retry, NULL,
+        async_retry_complete, &probe, &logical), SALTS_ENOTSUP);
+    check_equal(logical.generation, 0u);
+  }
+  check_equal(chttp_async_client_submit_retry(&client, &request, &timeouts, &retry, &replay,
+      async_retry_complete, &probe, &logical), SALTS_OK);
+  memset(uri, 'x', strlen(uri));
+  size_t delivered = 0u;
+  const uint64_t deadline = monotonic_ms()+5000u;
+  const uint64_t cancel_at = monotonic_ms()+50u;
+  bool canceled = false;
+  while (probe.completions == 0u && monotonic_ms() < deadline) {
+    size_t completions;
+    check_equal(chttp_async_client_poll(&client, 10u, &completions), SALTS_OK);
+    delivered += completions;
+    if (!canceled && (mode == ASYNC_RETRY_CANCEL || mode == ASYNC_RETRY_STOP) &&
+        monotonic_ms() >= cancel_at) {
+      canceled = true;
+      if (mode == ASYNC_RETRY_CANCEL)
+        check_equal(chttp_async_logical_request_cancel(&client, logical), SALTS_OK);
+      else check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+    }
+  }
+  check_equal(probe.completions, 1u); check_equal(probe.reentry, SALTS_EBUSY);
+  if (mode != ASYNC_RETRY_STOP) check_equal(delivered, 1u);
+  check_equal(probe.status, success ? SALTS_OK : mode == ASYNC_RETRY_HOOK_FAILURE ? SALTS_EIO :
+      mode == ASYNC_RETRY_DEADLINE ? SALTS_ETIMEDOUT : mode == ASYNC_RETRY_BUDGET ? SALTS_ENOBUFS :
+      mode == ASYNC_RETRY_CANCEL ? SALTS_ECANCELED : mode == ASYNC_RETRY_PARTIAL_MEMORY ? SALTS_EPROTO : SALTS_ESHUTDOWN);
+  check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+  check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+  check_equal(sync_thread_join(&thread), SALTS_OK); sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(server->listener);
+  check_equal(server->status, SALTS_OK); check_equal(server->request_count, success ? 2u : 1u);
+  if (mode == ASYNC_RETRY_STREAM || mode == ASYNC_RETRY_ROLLBACK) {
+    check_equal(probe.rewinds, 1u); check_equal(probe.rollbacks, 1u);
+    check_equal(probe.sink_bytes, 0u);
+  }
+  if (mode == ASYNC_RETRY_ROLLBACK) check_greater(probe.writes, 0u);
+}
+
+static void chttp_test_async_file_retry(bool h2, bool download, bool changed, bool budget_failure) {
+  chttp_async_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+  char *path = tt_make_temp_file("chttp-retry-file", ".dat");
+  check_not_null(path);
+  check_equal(tt_write_file(path, download ? "old" : "abc", 3u), 0);
+  h1_retry_peer h1 = {.partial = download, .download = download,
+      .mutate_path = changed ? path : NULL};
+  chttp_h2_test_server h2peer = {.refuse_first_stream = 1, .empty_responses = !download};
+  chttp_h2_test_server *server = h2 ? &h2peer : &h1.server;
+  server->expected_requests = changed || budget_failure ? 1u : 2u;
+  uint16_t port;
+  check_equal(chttp_h2_test_listener(&server->listener, &port), SALTS_OK);
+  char uri[64];
+  check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", port) > 0);
+  sync_thread_t thread = NULL;
+  check_equal(sync_thread_create(&thread, h2 ? chttp_h2_test_serve : chttp_h1_test_retry_peer,
+      h2 ? (void *)server : (void *)&h1), SALTS_OK);
+  async_retry_probe probe = {.client = &client};
+  chttp_request_options request = {.connection_uri = uri, .authority = "retry.file", .target = "/file",
+      .method = download ? CHTTP_METHOD_GET : CHTTP_METHOD_PUT,
+      .protocol = h2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1};
+  chttp_retry_options retry = CHTTP_RETRY_OPTIONS_INIT;
+  retry.max_attempts = budget_failure ? 1u : 2u; retry.retry_body_byte_budget = 3u;
+  const chttp_request_timeouts timeouts = {5000u, 0u};
+  const chttp_retry_files files = {.upload_path = download ? NULL : path,
+      .download_path = download ? path : NULL};
+  chttp_logical_request logical;
+  check_equal(chttp_async_client_submit_file_retry(&client, &request, &timeouts, &retry, &files,
+      async_retry_complete, &probe, &logical), SALTS_OK);
+  check_equal(probe.completions, 0u);
+  const uint64_t deadline = monotonic_ms()+5000u;
+  while (probe.completions == 0u && monotonic_ms() < deadline) {
+    size_t completions;
+    check_equal(chttp_async_client_poll(&client, 10u, &completions), SALTS_OK);
+  }
+  check_equal(probe.completions, 1u);
+  check_equal(probe.status, changed ? SALTS_EIO : budget_failure ? SALTS_EPROTO : SALTS_OK);
+  check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+  check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+  check_equal(sync_thread_join(&thread), SALTS_OK); sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(server->listener);
+  check_equal(server->status, SALTS_OK); check_equal(server->request_count, server->expected_requests);
+  if (download) {
+    FILE *file = fopen(path, "rb"); check_not_null(file);
+    char contents[8] = {0}; const size_t size = fread(contents, 1u, sizeof(contents), file);
+    check_equal(fclose(file), 0);
+    bool preserved = budget_failure;
+    check_equal(size, preserved ? 3u : 2u);
+    check_equal(memcmp(contents, preserved ? "old" : h2 ? "ok" : "yz", size), 0);
+  }
+  check_equal(tt_remove_file(path), 0); free(path);
+}
+
+static void chttp_h1_test_paced_peer(void *user) {
+  chttp_h2_test_server *server = user;
+  chttp_h2_test_socket socket_value = accept(server->listener, NULL, NULL);
+  if (socket_value == CHTTP_H2_TEST_INVALID_SOCKET) { server->status = SALTS_EIO; return; }
+  ++server->accepted_connections;
+  server->status = chttp_h2_test_set_timeout(socket_value);
+  char input[1024] = {0}; size_t used = 0u;
+  while (server->status == SALTS_OK && strstr(input, "\r\n\r\n") == NULL) {
+    const int received = recv(socket_value, input+used, (int)(sizeof(input)-used-1u), 0);
+    if (received <= 0) { server->status = SALTS_EIO; break; }
+    used += (size_t)received; input[used] = '\0';
+    if (used == sizeof(input)-1u) { server->status = SALTS_EMSGSIZE; break; }
+  }
+  static const char headers[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n";
+  if (server->status == SALTS_OK) server->status = chttp_h2_test_send_all(socket_value, headers, sizeof(headers)-1u);
+  for (size_t i = 0u; i < 2u && server->status == SALTS_OK; ++i) {
+    sleep_ms(80u);
+    server->status = chttp_h2_test_send_all(socket_value, "ok"+i, 1u);
+  }
+  chttp_h2_test_close_socket(socket_value);
+}
+
+static void chttp_test_h1_timer(unsigned mode) {
+  chttp_async_client client = {0};
+  chttp_client_config config = chttp_h2_test_config();
+  check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+  chttp_h2_test_server peer = {0};
+  uint16_t port;
+  check_equal(chttp_h2_test_listener(&peer.listener, &port), SALTS_OK);
+  char uri[64]; check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", port) > 0);
+  sync_thread_t thread = NULL;
+  check_equal(sync_thread_create(&thread, chttp_h1_test_paced_peer, &peer), SALTS_OK);
+  chttp_h2_test_completion completion = {0};
+  const chttp_request_options options = {.connection_uri = uri, .authority = "timer.test", .target = "/",
+      .method = CHTTP_METHOD_GET, .protocol = CHTTP_HTTP_1_1,
+      .on_complete = chttp_h2_test_on_complete, .user = &completion};
+  const chttp_request_timeouts timeouts = {mode == 0u ? 120u : 1000u, mode == 1u ? 40u : 200u};
+  chttp_request request;
+  check_equal(chttp_async_client_submit_with_timeouts(&client, &options, &timeouts, &request), SALTS_OK);
+  const uint64_t deadline = monotonic_ms()+5000u;
+  while (completion.count == 0u && monotonic_ms() < deadline) {
+    size_t count; check_equal(chttp_async_client_poll(&client, 1000u, &count), SALTS_OK);
+  }
+  check_equal(completion.count, 1u);
+  check_equal(completion.statuses[0], mode == 2u ? SALTS_OK : SALTS_ETIMEDOUT);
+  if (mode != 2u) check_equal(completion.stages[0], mode == 0u ? "http-deadline" : "response-idle-timeout");
+  else check_equal(completion.bodies[0], "ok");
+  check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
+  check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+  check_equal(sync_thread_join(&thread), SALTS_OK); sync_thread_destroy(&thread);
+  chttp_h2_test_close_socket(peer.listener);
+  check_equal(peer.accepted_connections, 1u);
+  /* A timeout deliberately closes the socket while the peer still writes. */
+  if (mode == 2u) check_equal(peer.status, SALTS_OK);
+}
+
 spec("CHTTP HTTP/2 client") {
+  group("HTTP1 request timers") {
+    it("keeps the total deadline fixed during response progress") { chttp_test_h1_timer(0u); }
+    it("expires a stalled response independently") { chttp_test_h1_timer(1u); }
+    it("renews only the response idle budget") { chttp_test_h1_timer(2u); }
+  }
+  group("asynchronous file replay") {
+    it("reopens an H1 upload source") { chttp_test_async_file_retry(false, false, false, false); }
+    it("reopens an H2 upload source") { chttp_test_async_file_retry(true, false, false, false); }
+    it("rejects a modified upload before replay") { chttp_test_async_file_retry(false, false, true, false); }
+    it("truncates partial downloads and commits only the complete result") { chttp_test_async_file_retry(false, true, false, false); }
+    it("commits an H2 download after a refused stream") { chttp_test_async_file_retry(true, true, false, false); }
+    it("preserves the destination after a failed partial download") { chttp_test_async_file_retry(false, true, false, true); }
+  }
+  group("asynchronous logical retry") {
+    it("replays an H1 memory request once") { chttp_test_async_retry(false, ASYNC_RETRY_MEMORY); }
+    it("replays an H2 refused stream once") { chttp_test_async_retry(true, ASYNC_RETRY_MEMORY); }
+    it("rewinds H1 sources after real transport settlement") { chttp_test_async_retry(false, ASYNC_RETRY_STREAM); }
+    it("rewinds H2 sources after real stream settlement") { chttp_test_async_retry(true, ASYNC_RETRY_STREAM); }
+    it("rolls back partial H1 response output") { chttp_test_async_retry(false, ASYNC_RETRY_ROLLBACK); }
+    it("does not authorize partial memory replay with an unused rollback hook") { chttp_test_async_retry(false, ASYNC_RETRY_PARTIAL_MEMORY); }
+    it("fails when source replay fails") { chttp_test_async_retry(false, ASYNC_RETRY_HOOK_FAILURE); }
+    it("keeps one total deadline through backoff") { chttp_test_async_retry(true, ASYNC_RETRY_DEADLINE); }
+    it("enforces the retry byte budget") { chttp_test_async_retry(true, ASYNC_RETRY_BUDGET); }
+    it("cancels during backoff without another attempt") { chttp_test_async_retry(true, ASYNC_RETRY_CANCEL); }
+    it("seals backoff work on stop") { chttp_test_async_retry(true, ASYNC_RETRY_STOP); }
+  }
   it("explicitly replays an H1 GET body after a response-free transport loss") {
     chttp_h1_test_logical_retry(CHTTP_METHOD_GET, false, false, false);
   }
@@ -1258,6 +1538,107 @@ spec("CHTTP HTTP/2 client") {
     check_equal(server.paths[1], "/second");
     check_equal(server.accepted_connections, 1u);
     chttp_h2_test_close_socket(listener);
+  }
+
+  group("per-stream request deadlines") {
+    static chttp_async_client client;
+    static chttp_h2_test_completion results[4];
+    static chttp_h2_test_socket listener;
+    static chttp_h2_test_server server;
+    static sync_thread_t thread;
+    static char uri[64];
+    before_each() {
+      chttp_client_config config = chttp_h2_test_config();
+      uint16_t port;
+      client = (chttp_async_client){0};
+      memset(results, 0, sizeof(results));
+      server = (chttp_h2_test_server){.parse_until_close = 1, .stall_path = "/stall", .paced_path = "/paced"};
+      listener = CHTTP_H2_TEST_INVALID_SOCKET;
+      thread = NULL;
+      config.network.connection_capacity = 1u;
+      config.request_capacity = 3u;
+      check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
+      check_equal(chttp_h2_test_listener(&listener, &port), SALTS_OK);
+      check_greater(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u", (unsigned)port), 0);
+      server.listener = listener;
+      check_equal(sync_thread_create(&thread, chttp_h2_test_serve_until_client_goaway, &server), SALTS_OK);
+    }
+    after_each() {
+      if (client.impl != NULL) {
+        check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(chttp_async_client_destroy(&client), SALTS_OK);
+      }
+      if (thread != NULL) {
+        check_equal(sync_thread_join(&thread), SALTS_OK);
+        sync_thread_destroy(&thread);
+      }
+      chttp_h2_test_close_socket(listener);
+    }
+    for (unsigned kind = 0; kind < 3u; ++kind) {
+      it("expires only the stalled stream with timer kind %u", kind) {
+        chttp_request warm = {0}, stalled = {0}, sibling = {0}, reused = {0};
+        chttp_request_options options = {.connection_uri = uri, .authority = "timer.test",
+            .target = "/warm", .method = CHTTP_METHOD_GET, .protocol = CHTTP_HTTP_2,
+            .on_complete = chttp_h2_test_on_complete, .user = &results[0]};
+        size_t completions;
+        uint64_t deadline = monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+        check_equal(chttp_async_client_submit(&client, &options, &warm), SALTS_OK);
+        while (results[0].count == 0u && monotonic_ms() < deadline)
+          check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+        check_equal(results[0].count, 1u);
+        check_equal(results[0].statuses[0], SALTS_OK);
+        const chttp_request_timeouts timeouts = {kind == 1u ? 0u : 200u, kind == 0u ? 0u : 40u};
+        options.target = "/stall"; options.user = &results[1];
+        check_equal(chttp_async_client_submit_with_timeouts(&client, &options, &timeouts, &stalled), SALTS_OK);
+        options.target = "/sibling"; options.user = &results[2];
+        check_equal(chttp_async_client_submit(&client, &options, &sibling), SALTS_OK);
+        deadline = monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+        while ((results[1].count == 0u || results[2].count == 0u) && monotonic_ms() < deadline)
+          check_equal(chttp_async_client_poll(&client, 50u, &completions), SALTS_OK);
+        check_equal(results[1].count, 1u);
+        check_equal(results[1].statuses[0], SALTS_ETIMEDOUT);
+        check_equal(results[1].stages[0], kind == 0u ? "http-deadline" : "response-idle-timeout");
+        check_equal(results[2].count, 1u);
+        check_equal(results[2].statuses[0], SALTS_OK);
+        options.target = "/reused"; options.user = &results[3];
+        check_equal(chttp_async_client_submit(&client, &options, &reused), SALTS_OK);
+        deadline = monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+        while (results[3].count == 0u && monotonic_ms() < deadline)
+          check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+        check_equal(results[3].count, 1u);
+        check_equal(results[3].statuses[0], SALTS_OK);
+        check_equal(chttp_async_request_cancel(&client, stalled), SALTS_ENOENT);
+        check_equal(chttp_async_client_stop(&client, CHTTP_H2_TEST_TIMEOUT_MS), SALTS_OK);
+        check_equal(sync_thread_join(&thread), SALTS_OK);
+        sync_thread_destroy(&thread); thread = NULL;
+        check_equal(server.status, SALTS_OK);
+        check_equal(server.accepted_connections, 1u);
+        for (unsigned i = 0; i < 4u; ++i) check_equal(results[i].count, 1u);
+      }
+    }
+    for (unsigned total = 0; total < 2u; ++total) {
+      it("renews own-stream idle progress without extending total budget, total=%u", total) {
+        chttp_request request = {0};
+        const chttp_request_timeouts timeouts = {total ? 700u : 2000u, 400u};
+        chttp_request_options options = {.connection_uri = uri, .authority = "timer.test",
+            .target = "/paced", .method = CHTTP_METHOD_GET, .protocol = CHTTP_HTTP_2,
+            .on_complete = chttp_h2_test_on_complete, .user = &results[0]};
+        size_t completions;
+        check_equal(chttp_async_client_submit_with_timeouts(&client, &options, &timeouts, &request), SALTS_OK);
+        const uint64_t deadline = monotonic_ms() + CHTTP_H2_TEST_TIMEOUT_MS;
+        while (results[0].count == 0u && monotonic_ms() < deadline)
+          check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+        check_equal(results[0].count, 1u);
+        check_equal(results[0].statuses[0], total ? SALTS_ETIMEDOUT : SALTS_OK);
+        if (total) check_equal(results[0].stages[0], "http-deadline");
+        else check_equal(results[0].bodies[0], "okay");
+        /* Let the peer finish its late DATA before orderly connection shutdown. */
+        const uint64_t settle_until = monotonic_ms() + 150u;
+        while (monotonic_ms() < settle_until)
+          check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
+        check_equal(results[0].count, 1u);
+      }
+    }
   }
 
   group("READY H2 protocol leases") {

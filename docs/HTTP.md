@@ -478,6 +478,27 @@ pool `receive` 返回的 view 在下一次任意 pool 操作时失效，stale ge
 状态只有一个事实源。H2 DATA 只是这套 byte-stream engine 的 transport adapter；stream flow-control
 credit 在输入被同步消费后归还，Close frame 排空后才发送 END_STREAM。
 
+### 异步 WebSocket client
+
+`chttp_async_websocket_init/connect/poll/close/stop/destroy` 由初始化线程调用；
+`send_text/send_binary/send_ping/send_pong/cancel` 可由多个生产线程并发调用。没有后台
+client 线程；poll 驱动既有 H1 bridge 或 RFC 8441 H2 stream，WS/WSS 的 TLS、ALPN、握手
+校验与同步 client 共用实现。四个回调必须配置，全部在 progress 线程、命令锁外执行，
+不得递归 poll/stop/destroy；event data 只在当前回调内有效。
+
+`command_capacity` 和 `pending_byte_capacity` 均为正，包含预留、排队与在途发送；成功
+提交复制载荷。超出单条上限返回 EMSGSIZE，累计/slot 满返回 ENOBUFS，不保留输入，也无
+回调。非零 `chttp_websocket_operation` 表示已提交，即使后续 wake 返回错误也不得重发。
+`on_send` 按发布顺序完成一次，表示本地输出终态；不保证远端收到或处理。queued cancel
+完成 ECANCELED，在途 cancel 返回 EBUSY；旧 generation 返回 ENOENT。
+
+connect 复制 URI/headers/subprotocol 并 retain TLS profile；正的 opening timeout 是必需项。
+成功 admission 后必有一次 on_open，失败/stop 会排空已接受发送并最终调用 on_closed。
+close 要求已排空发送，否则 EBUSY；收到 peer Close 也封闭发送。stop 封闭 admission，
+实际网络/tag terminal 排空后才能 destroy；零预算 ETIMEDOUT 保留实例以便继续推进。
+先停止并 join 所有生产线程，再 destroy。H1/H2 开启拒绝、双向 Close、多个生产线程与
+经过证书验证的 WSS 由正式 `chttp_websocket_test` 覆盖。
+
 ## 高级 event-loop 接口
 
 `chttp_async_client_submit()`、`chttp_async_request_cancel()`、`chttp_async_client_poll()`、
@@ -485,9 +506,15 @@ credit 在输入被同步消费后归还，Close frame 排空后才发送 END_ST
 适配器使用的高级接口，不是普通 HTTP 调用流程。只有这类集成层负责调用
 `chttp_async_client_poll()`；应用业务代码默认使用 requests-style API。
 
-高级接口当前不创建 per-request timer；Executor/事件循环拥有 deadline，并在到期时调用
-`chttp_async_request_cancel()`。`chttp_options.timeout_ms` 只属于 requests-style 阻塞调用，不能把它
-误解为 async stream 字段。
+`chttp_async_client_submit_with_timeouts()` 显式指定 `chttp_request_timeouts`：total budget
+从 admission 开始固定，response-idle budget 仅由本响应字节/headers/DATA 续期，H2 sibling
+流量和连接控制帧不会续期。零禁用单项，两项不能同时为零。到期沿普通 cancel/terminal drain
+完成一次 `ETIMEDOUT`，stage 为 `http-deadline` 或 `response-idle-timeout`；既有 RPC 保留
+`rpc-deadline`。普通 submit 不启用计时器；`chttp_options.timeout_ms` 仍属于阻塞调用。
+
+异步逻辑重试使用独立的 `chttp_async_client_submit_retry()` 和 generation-checked
+`chttp_logical_request`，由同一 poll/stop 推进，只有一个最终回调。流回放、文件重开、
+授权与平台限制见 [逻辑重试](CHTTP_LOGICAL_RETRY.md)。
 
 ## Ownership、状态与背压
 
@@ -610,10 +637,16 @@ message limits；llhttp 是私有 parser adapter。
 
 这一选择增加一个显式层；小型 memory response 仍完整 buffering，而 source/sink 将文件和大正文
 保持为有界 chunk。它避免 HTTP/RPC 重复连接状态机，也避免
-第三方 parser 类型进入 CNet API。当前 keep-alive pool 只复用完整 message 之间的空闲连接；若
-迁移到 streaming、pipelining 或 retry，需保留当前 message API，并先补 CNet write-terminal
-契约。若实现需要回滚，应回退对应提交并恢复上一版安装包；不能依赖运行时 fallback 或已经
-移除的构建开关。
+第三方 parser 类型进入 CNet API。H1 在完整 message 之间复用连接，H2 通过有界 stream lease
+复用 session；streaming 和显式 retry 均保留原 message API 与 CNet write-terminal 契约。
+若实现需要回滚，应一起移除新增声明与调用，恢复上一版安装包；不能依赖运行时 fallback。
+
+通用计时器复用请求表扫描与 cancel/drain，避免新增 timer 运行时。异步逻辑重试选择复用
+现有纯预算组件、请求快照与 poll，以独立有界逻辑记录保留跨 attempt 状态；候选的整池
+重建会影响 H2 sibling，因此仅等待旧 attempt 实际排空。代价是最多额外
+`request_capacity` 份有界输入快照，回放必须显式授权。异步 WebSocket 选择复制命令加 mutex
+FIFO，网络进展仍使用现有 bridge/H2；独立 worker 会引入第二个关闭/调度边界，未采用。
+命令 metadata 为 O(command_capacity)，排队及在途 payload 总量不超过 pending_byte_capacity。
 
 ## 构建与验证
 
@@ -636,29 +669,23 @@ Windows 命令必须先进入 `VsDevCmd.bat` 环境。llhttp 的上游 API 与 s
 ## 密码库迁移边界
 
 CHTTP 的 WebSocket SHA-1、S3 SHA-256/HMAC/MD5、流式文件摘要、CSRF 恒定时间比较和
-敏感数据清零由内部 `http_common/http/chttp_digest` 调用 GmSSL 完成。错误继续使用
+敏感数据清零由内部 `http_common/http/chttp_digest` 调用公开 Salts::Crypto API 完成。错误继续使用
 Salts 状态码。文件操作拥有摘要上下文并在退出路径销毁，CSRF 比较失败拒绝请求。
 SHA-1 和 MD5 用于现有协议要求。
 
-JWT/JWE 归属 `vendor/cjwt`。其私有 `chttp_cjwt_crypto` 目标使用已有 GmSSL 包与固定
-libecc 源码，提供密钥导入、签名和认证加密。适配器源自 SaltsUtils 提交
-`234c4a73bcefc455d48b3550ec2142d7ff1c3f5a`，许可证、依赖版本、修改和所有权见
-[`vendor/cjwt/crypto/README.md`](../vendor/cjwt/crypto/README.md)。
+JWT/JWE 归属 `vendor/cjwt`，直接使用 SaltsCNet 的公开 `<crypto/key.h>` 和
+`Salts::Crypto`。HTTP 摘要使用 `<crypto/symmetric.h>` 与 `<crypto/sha256.h>`。
+CHTTP 不查找、编译或链接 GmSSL、libecc、Monocypher，也不保留私有密码库副本。
+上游 SDK 的版本和路径只由加载后的 `.env` 字段选择。
 
-已发布的拆分 SDK 只提供 CNet Crypto 的部分原语，旧通用 JOSE 头文件未随迁移保留。
-选择恢复 cjwt 已用的私有后端，以保留 HS/RS/PS 256/384/512、ES256/384/512/256K、
-Ed25519/Ed448、RSA-OAEP、RSA-OAEP-256、dir、AES-KW、PBES2 和 AES-GCM 128/192/256。
+Crypto 接口保留 HS/RS/PS 256/384/512、ES256/384/512/256K、Ed25519/Ed448、
+RSA-OAEP、RSA-OAEP-256、dir、AES-KW、PBES2 和 AES-GCM 128/192/256。
 公开 HTTP JWT Bearer admission 继续按 HS256 契约执行。TLS 由 CNet SDK 负责。
-
-另一方案需要在 CNet 扩充并发布完整 JOSE 密钥接口，会扩大上游公共接口及发布范围。
-当前实现复用已有、带互操作向量的后端，并将其符号改为 `cjwt_crypto_`。
-GmSSL 通过现有 vcpkg-cache 和 manifest 的 `gmssl` 依赖接入。libecc 使用 BSD 授权，
-固定上游提交并保留原始许可。libecc 的 SHA 符号有独立命名空间，以匹配自身上下文布局。
-适配器和头文件归属内部构建目标。迁移回滚需恢复旧实现及其匹配 SDK 组合。
+上游复用原有密码实现，密钥导入、调用缓冲区及失败输出的契约在公开头文件中维护。
 
 RSA 新增组件式 key API，在不改变现有 TLS RSA key ABI 的前提下支持 512–8192 位模数、
 最高 33 位奇数指数和仅含 `n/e/d` 的私钥。完整 CRT 参数会校验一致性。私钥操作使用随机
-盲化和输出前公钥复核，随机失败不回退到未盲化运算。cjwt 私有密钥对象复制输入、只读共享、
+盲化和输出前公钥复核，随机失败不回退到未盲化运算。Crypto 不透明密钥对象复制输入、只读共享、
 显式销毁并清零；JWS/JWE 在同步调用结束后销毁临时密钥。PEM 支持 SPKI、PKCS8、
 传统 RSA/EC 私钥，以及四个 JOSE EC 曲线的命名或显式参数和压缩公钥；没有密码回调。
 PSS 签名使用摘要长度的 salt，验签接受编码中的 salt 长度。认证失败不返回明文或 claims。

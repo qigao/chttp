@@ -9,12 +9,10 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8")
 
 def link_block(text, target):
-    marker = f"target_link_libraries({target}"
-    start = text.find(marker)
-    assert start >= 0, f"missing {marker}"
-    end = text.find(")\n", start)
-    assert end >= 0, f"unterminated {marker}"
-    return text[start:end + 1]
+    block = re.search(r"target_link_libraries\(\s*" + re.escape(target) +
+                      r"\s[^)]*\)", text)
+    assert block is not None, f"missing target_link_libraries for {target}"
+    return block.group(0)
 
 removed = [
     "openapi/ui/app.js",

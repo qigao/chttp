@@ -20,6 +20,8 @@ void chttp_retry_budget_init(chttp_retry_budget *budget, const chttp_retry_optio
     chttp_method method, size_t body_bytes, uint64_t deadline_ms);
 int chttp_retry_budget_prepare(chttp_retry_budget *budget, const chttp_attempt_facts *facts,
     int failure_status, uint64_t now_ms, cnet_retry_result *out);
+int chttp_retry_budget_prepare_replay(chttp_retry_budget *budget, const chttp_attempt_facts *facts,
+    bool rollback_response, int failure_status, uint64_t now_ms, cnet_retry_result *out);
 int chttp_retry_budget_advance(chttp_retry_budget *budget, uint64_t now_ms,
     cnet_retry_result *out);
 

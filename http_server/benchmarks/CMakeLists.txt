@@ -1,163 +1,159 @@
-add_executable(
-  chttp_server_owner_benchmark
-  chttp_server_owner_benchmark.c)
+add_executable(chttp_server_owner_benchmark chttp_server_owner_benchmark.c)
 
 target_link_libraries(
-  chttp_server_owner_benchmark
-  PRIVATE CHttp::Server CMeta::CFlow Salts::Core Salts::Core)
+        chttp_server_owner_benchmark PRIVATE CHttp::Server CMeta::CFlow Salts::Core Salts::Core
+)
 
 target_include_directories(
-  chttp_server_owner_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
-          ${PROJECT_SOURCE_DIR}/http_common/rpc
-          ${PROJECT_SOURCE_DIR}/http_server/src
-          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+        chttp_server_owner_benchmark
+        PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+                ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc
+)
 
 set_target_properties(
-  chttp_server_owner_benchmark
-  PROPERTIES
-    FOLDER "http_server/benchmarks"
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
+        chttp_server_owner_benchmark
+        PROPERTIES FOLDER "http_server/benchmarks"
+                   C_STANDARD 11
+                   C_STANDARD_REQUIRED ON
+                   C_EXTENSIONS OFF
+)
 
-add_executable(
-  chttp_server_ws_owner_benchmark
-  chttp_server_ws_owner_benchmark.c)
+add_executable(chttp_server_ws_owner_benchmark chttp_server_ws_owner_benchmark.c)
 
 target_link_libraries(
-  chttp_server_ws_owner_benchmark
-  PRIVATE CHttp::Server CHttp::Client
-          CMeta::CFlow Salts::Core Salts::Core Salts::TinyTest)
+        chttp_server_ws_owner_benchmark PRIVATE CHttp::Server CHttp::Client CMeta::CFlow
+                                                Salts::Core Salts::Core Salts::TinyTest
+)
 
 target_include_directories(
-  chttp_server_ws_owner_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
-          ${PROJECT_SOURCE_DIR}/http_common/rpc
-          ${PROJECT_SOURCE_DIR}/http_common/tests/support
-          ${PROJECT_SOURCE_DIR}/http_server/src
-          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+        chttp_server_ws_owner_benchmark
+        PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+                ${PROJECT_SOURCE_DIR}/http_common/tests/support
+                ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc
+)
 
 set_target_properties(
-  chttp_server_ws_owner_benchmark
-  PROPERTIES
-    FOLDER "http_server/benchmarks"
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
+        chttp_server_ws_owner_benchmark
+        PROPERTIES FOLDER "http_server/benchmarks"
+                   C_STANDARD 11
+                   C_STANDARD_REQUIRED ON
+                   C_EXTENSIONS OFF
+)
 
 foreach(writer IN ITEMS legacy dedicated)
-  add_test(NAME chttp_server_ws_owner_benchmark_${writer}
-    COMMAND chttp_server_ws_owner_benchmark)
-  set_tests_properties(chttp_server_ws_owner_benchmark_${writer} PROPERTIES
-    LABELS benchmark RUN_SERIAL TRUE TIMEOUT 180
-    ENVIRONMENT "CHTTP_OWNER_WS_WRITER=${writer}")
+        add_test(NAME chttp_server_ws_owner_benchmark_${writer}
+                 COMMAND chttp_server_ws_owner_benchmark
+        )
+        set_tests_properties(
+                chttp_server_ws_owner_benchmark_${writer}
+                PROPERTIES LABELS benchmark RUN_SERIAL TRUE TIMEOUT 180 ENVIRONMENT
+                           "CHTTP_OWNER_WS_WRITER=${writer}"
+        )
 endforeach()
 
-add_executable(
-  chttp_server_h2_tls_owner_benchmark
-  chttp_server_h2_tls_owner_benchmark.c)
+add_executable(chttp_server_h2_tls_owner_benchmark chttp_server_h2_tls_owner_benchmark.c)
 
 target_link_libraries(
-  chttp_server_h2_tls_owner_benchmark
-  PRIVATE CHttp::Server CHttp::Client
-          CMeta::CFlow Salts::Core Salts::Core Salts::TinyTest)
+        chttp_server_h2_tls_owner_benchmark PRIVATE CHttp::Server CHttp::Client CMeta::CFlow
+                                                    Salts::Core Salts::Core Salts::TinyTest
+)
 
 target_include_directories(
-  chttp_server_h2_tls_owner_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
-          ${PROJECT_SOURCE_DIR}/http_common/rpc
-          ${PROJECT_SOURCE_DIR}/http_common/tests/support
-          ${PROJECT_SOURCE_DIR}/http_client/src
-          ${PROJECT_SOURCE_DIR}/http_server/src
-          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+        chttp_server_h2_tls_owner_benchmark
+        PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
+                ${PROJECT_SOURCE_DIR}/http_common/rpc
+                ${PROJECT_SOURCE_DIR}/http_common/tests/support
+                ${PROJECT_SOURCE_DIR}/http_client/src
+                ${PROJECT_SOURCE_DIR}/http_server/src
+                ${PROJECT_SOURCE_DIR}/http_server/rpc
+)
 
 set_target_properties(
-  chttp_server_h2_tls_owner_benchmark
-  PROPERTIES
-    FOLDER "http_server/benchmarks"
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
+        chttp_server_h2_tls_owner_benchmark
+        PROPERTIES FOLDER "http_server/benchmarks"
+                   C_STANDARD 11
+                   C_STANDARD_REQUIRED ON
+                   C_EXTENSIONS OFF
+)
 
-
-add_executable(
-  chttp_server_owner_churn_benchmark
-  chttp_server_owner_churn_benchmark.c)
+add_executable(chttp_server_owner_churn_benchmark chttp_server_owner_churn_benchmark.c)
 
 target_link_libraries(
-  chttp_server_owner_churn_benchmark
-  PRIVATE CHttp::Server CMeta::CFlow Salts::Core Salts::Core)
+        chttp_server_owner_churn_benchmark PRIVATE CHttp::Server CMeta::CFlow Salts::Core
+                                                   Salts::Core
+)
 
 target_include_directories(
-  chttp_server_owner_churn_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
-          ${PROJECT_SOURCE_DIR}/http_common/rpc
-          ${PROJECT_SOURCE_DIR}/http_server/src
-          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+        chttp_server_owner_churn_benchmark
+        PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+                ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc
+)
 
 set_target_properties(
-  chttp_server_owner_churn_benchmark
-  PROPERTIES
-    FOLDER "http_server/benchmarks"
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
+        chttp_server_owner_churn_benchmark
+        PROPERTIES FOLDER "http_server/benchmarks"
+                   C_STANDARD 11
+                   C_STANDARD_REQUIRED ON
+                   C_EXTENSIONS OFF
+)
 
-
-add_executable(
-  chttp_server_owner_handler_cpu_benchmark
-  chttp_server_owner_handler_cpu_benchmark.c)
+add_executable(chttp_server_owner_handler_cpu_benchmark chttp_server_owner_handler_cpu_benchmark.c)
 
 target_link_libraries(
-  chttp_server_owner_handler_cpu_benchmark
-  PRIVATE CHttp::Server CMeta::CFlow Salts::Core Salts::Core)
+        chttp_server_owner_handler_cpu_benchmark PRIVATE CHttp::Server CMeta::CFlow Salts::Core
+                                                         Salts::Core
+)
 
 target_include_directories(
-  chttp_server_owner_handler_cpu_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support
-          ${PROJECT_SOURCE_DIR}/http_common/http
-          ${PROJECT_SOURCE_DIR}/http_common/rpc
-          ${PROJECT_SOURCE_DIR}/http_server/src
-          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+        chttp_server_owner_handler_cpu_benchmark
+        PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support
+                ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+                ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc
+)
 
 set_target_properties(
-  chttp_server_owner_handler_cpu_benchmark
-  PROPERTIES
-    FOLDER "http_server/benchmarks"
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
-
+        chttp_server_owner_handler_cpu_benchmark
+        PROPERTIES FOLDER "http_server/benchmarks"
+                   C_STANDARD 11
+                   C_STANDARD_REQUIRED ON
+                   C_EXTENSIONS OFF
+)
 
 add_executable(
-  chttp_server_listener_admission_stall_benchmark
-  chttp_server_listener_admission_stall_benchmark.c)
+        chttp_server_listener_admission_stall_benchmark
+        chttp_server_listener_admission_stall_benchmark.c
+)
 
 target_link_libraries(
-  chttp_server_listener_admission_stall_benchmark
-  PRIVATE CHttp::Server CMeta::CFlow Salts::Core Salts::Core)
+        chttp_server_listener_admission_stall_benchmark PRIVATE CHttp::Server CMeta::CFlow
+                                                                Salts::Core Salts::Core
+)
 
 target_include_directories(
-  chttp_server_listener_admission_stall_benchmark
-  PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http
-          ${PROJECT_SOURCE_DIR}/http_common/rpc
-          ${PROJECT_SOURCE_DIR}/http_server/src
-          ${PROJECT_SOURCE_DIR}/http_server/rpc)
+        chttp_server_listener_admission_stall_benchmark
+        PRIVATE ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
+                ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_server/rpc
+)
 
 set_target_properties(
-  chttp_server_listener_admission_stall_benchmark
-  PROPERTIES
-    FOLDER "http_server/benchmarks"
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    C_EXTENSIONS OFF)
+        chttp_server_listener_admission_stall_benchmark
+        PROPERTIES FOLDER "http_server/benchmarks"
+                   C_STANDARD 11
+                   C_STANDARD_REQUIRED ON
+                   C_EXTENSIONS OFF
+)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-add_test(NAME chttp_server_owner_handler_cpu_benchmark
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_owner_handler_cpu_benchmark.py
-    $<TARGET_FILE:chttp_server_owner_handler_cpu_benchmark>
-    ${CMAKE_BINARY_DIR}/benchmarks ${PROJECT_SOURCE_DIR}
-    "${CMAKE_C_COMPILER_ID}-${CMAKE_C_COMPILER_VERSION}/${CMAKE_BUILD_TYPE}")
-set_tests_properties(chttp_server_owner_handler_cpu_benchmark PROPERTIES
-  LABELS benchmark RUN_SERIAL TRUE TIMEOUT 600)
+add_test(
+        NAME chttp_server_owner_handler_cpu_benchmark
+        COMMAND
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/run_owner_handler_cpu_benchmark.py
+                $<TARGET_FILE:chttp_server_owner_handler_cpu_benchmark>
+                ${CMAKE_BINARY_DIR}/benchmarks ${PROJECT_SOURCE_DIR}
+                "${CMAKE_C_COMPILER_ID}-${CMAKE_C_COMPILER_VERSION}/${CMAKE_BUILD_TYPE}"
+)
+set_tests_properties(
+        chttp_server_owner_handler_cpu_benchmark PROPERTIES LABELS benchmark RUN_SERIAL TRUE
+                                                            TIMEOUT 600
+)

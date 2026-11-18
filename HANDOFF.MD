@@ -1,9 +1,20 @@
 # Split SDK migration handoff
 
-- 0.1.1 exports the existing cjwt/provider implementation as the public static
-  `CHttp::JWT` target and installs `<cjwt/cjwt.h>` with C++ linkage guards.
-  Private provider objects are folded into that archive; consumers do not need
-  a second vendor copy. C and C++ public API tests belong to `vendor/cjwt/tests`.
+- `CHttp::JWT` exports the public static cjwt target and installs `<cjwt/cjwt.h>`
+  with C++ linkage guards. Crypto operations use the public Salts::Crypto API
+  from SaltsCNet 0.1.14; no backend sources or headers are bundled in CHttp.
+  C and C++ public API tests belong to `vendor/cjwt/tests`.
+  Tests that include Crypto headers must link Salts::Crypto explicitly: a
+  private dependency of a static JWT target propagates only link requirements.
+  The selected published SDK is restored through `.env`; fresh full build,
+  13 JWT/JWE CTests, all 123 CTests (93.02 s) and installation passed with
+  `native-release-user`. Logs: `build/sync-salts-0.1.14/`.
+- `.github/ci/sdk-inputs.py` requires the repository `.env` for upstream
+  versions, immutable CMeta ref and the vcpkg-cache checkout root. It reads
+  only the existing nonsecret fields and overrides inherited selections for
+  child processes. A real CNet prepare selected 0.1.14 with conflicting parent
+  values; missing-file and missing-field checks failed without environment
+  fallback. The actual `.env` and its credentials were not changed.
 - `chttp_invocation_select_websocket_subprotocol` selects only a token offered
   by the opening request before the draft is sealed. Both native and worker
   paths reuse the same token validation. Deferred upgrade publication preserves
@@ -1147,3 +1158,82 @@
   `build/llvm-mingw-x64-release-user/openssl-empty-config.log`, and normal
   configuration was restored successfully. Full CTest was not repeated for
   this tool-selection change.
+
+## Protocol gap completion (2026-11-18)
+
+- KCP dead-link setters and terminal queries are published in SaltsCNet 0.1.16,
+  source ba44f12afdc385421e822b6b97a80c3e6c2c45f3, producer 44213515721.
+  Ten original CI SDK TARs were digest-qualified without repacking. Eight native
+  profiles passed formal CTest (102 Windows; 104 Linux/macOS including sanitizers);
+  Android evidence is cross-build/install/alignment only. HTTP selects the public
+  SDK through .env, restored with the existing sdk-inputs.py package entry point.
+  Run cmake --fresh --preset native-release-user after loading that .env.
+- HTTP timer admission reuses the physical request table. Total time never renews;
+  response idle renews only on the owning response, including decoded H2 headers.
+  RPC deadline stages remain separate. Async logical retry waits for actual slot,
+  retained output, file operation and stream-lease settlement before replay.
+  A rollback hook authorizes partial responses only when an actual sink uses it.
+- Async WS uses bounded copied commands and byte credits. Publication commits the
+  handle before wake; a wake error with a valid handle must not trigger resend.
+  The reserve/copy/publish/wake tail stays live through publishers drainage.
+  Stop/join producers before destroy. H1/H2 tests cover simultaneous send/cancel,
+  stale handles, close/rejection/stop, and verified WSS after releasing the caller's
+  TLS profile wrapper immediately after connect admission.
+- Native file replay closes/quiesces/reopens per attempt. Upload callers keep paths
+  immutable; changed size/mtime/ctime rejects replay. IOCP in the selected CMeta
+  does not support native FLUSH, so async download fails ENOTSUP before HTTP
+  admission and removes its temporary file. Do not add the blocking file helper's
+  synchronous fsync path here. io_uring/Darwin AIO commit runtime remains unverified
+  on this Windows host.
+- Mixed read/two-writer regression reproduced a lease collision before progress.
+  Sink transfers previously allocated lease 1 independently of live reads/writes.
+  Read/write/flush now share the existing non-wrapping allocator; exhaustion is
+  ERANGE. The mixed runtime test passes with exact file-content checks. Evidence:
+  mixed-file-before-ctest.log and mixed-file-after-ctest.log in the directory below.
+- Full build and 123/123 CTest passed in 99.23 s. Final boundary changes passed the
+  focused protocol/file/API/audit suite. Normal installation passed. Evidence is
+  build/fill-protocol-gaps; use the existing native-release-user build/test presets.
+  No CI/workflow files were changed for this work.
+- Existing UI dependency audit assumed target_link_libraries(target was on one
+  line; CMake formatting exposed that assumption. Its mandatory match now accepts
+  whitespace. Installation also retained NOTICE after the user deleted that file;
+  remove the stale install/reference, retaining LICENSE and THIRD_PARTY_NOTICES.md.
+
+## Asynchronous IOCP FLUSH and HTTP file commit (2026-11-18)
+
+- The previous Windows FLUSH limitation is resolved by CMeta 0.1.8, immutable
+  source fc4427f0e3f23487c34f1f5d595f96e605ba0191. Its bounded Windows work
+  object uses existing request records and round-robin flush execution without
+  blocking the caller/IOCP dispatcher. Cancellation retains a running flush's
+  file handle until the actual API return. Native errors are preserved. The
+  backend fences work callback tails before destruction; no fallback was added.
+- Qualified and published CMeta v0.1.8 from producer 44223561882: 10 original SDK
+  TARs, eight native profiles (120 Windows, 118 Linux/macOS including TSan), two
+  Android cross-build/install profiles with static archives and no device claim.
+  SaltsUtils v0.1.6 source da3e58eb51dafb975e980d78d718e1a0b3af3102 matches
+  that CMeta ref, Base 0.1.8 and cache 0.1.3. Producer 44223724344 passed all ten
+  profiles; each of eight native profiles passed 188 CTests. Original TAR bytes,
+  asset sizes/digests, source trees and JUnit status were verified before publish.
+- The Utils manifest now declares cmake_package=SaltsUtils. Its lightweight
+  release tag and exact dependency composition pass the existing HTTP SDK
+  restoration entry point, without older-manifest/tag compatibility branches.
+  A failed CLI release-create response had already created an empty draft;
+  inspect its exact target/assets before continuing upload, rather than creating
+  another release or weakening TLS verification.
+- Only existing nonsecret .env selectors/roots were updated. The CMeta SDK was
+  restored from its public original archive and the Utils SDK through existing
+  sdk-inputs.py prepare/restore --package salts-utils --profile
+  windows-llvm-mingw-x64. Roots are version-specific; older SDKs remain intact.
+  No CI/workflow file was changed. Upstream Utils CI version/ref variables were
+  synchronized from its .env before the exact-source producer run.
+- Windows exclusions were removed from the formal download regressions. Tests
+  now execute actual two-sink FLUSH in a shared runtime, H1 partial download
+  truncate/reopen/flush/rename, H2 REFUSED_STREAM replay/commit, and failed-download
+  target preservation. File-sync errors retain the native status from the sink.
+- Loaded the existing .env build fields, then cmake --fresh --preset
+  native-release-user; cmake --build --preset native-release-user; ctest --preset
+  native-release-user --output-on-failure; cmake --install build/native-release-user.
+  Build, 123/123 CTest (101.37 s), and install passed. Focused file/HTTP tests
+  passed 3/3 in 3.87 s. Evidence: build/async-flush. HTTP on Linux/macOS/sanitizers
+  was not run locally. CMeta and Utils upstream source changes are committed,
+  pushed and released; HTTP changes remain in the existing local worktree.

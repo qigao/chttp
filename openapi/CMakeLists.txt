@@ -1,16 +1,38 @@
-find_package(unofficial-tree-sitter CONFIG REQUIRED)
-find_library(OPENAPI_C_GRAMMAR_LIBRARY NAMES tree-sitter-c REQUIRED)
+find_package(
+        unofficial-tree-sitter CONFIG REQUIRED PATHS "${CHTTP_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH
+        NO_CMAKE_FIND_ROOT_PATH
+)
+find_library(
+        OPENAPI_C_GRAMMAR_LIBRARY
+        NAMES tree-sitter-c REQUIRED
+        PATHS "${CHTTP_DEPENDENCY_PREFIX}/$ENV{VCPKG_CONFIGURATION_SUBDIR}lib"
+        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH
+)
 
-add_library(openapi_generator STATIC src/plugin.c src/extract.c src/document.c src/comment.c src/databind_http.c)
+add_library(
+        openapi_generator STATIC src/plugin.c src/extract.c src/document.c src/comment.c
+                                 src/databind_http.c
+)
 add_library(OpenAPI::Generator ALIAS openapi_generator)
-target_include_directories(openapi_generator PUBLIC include PRIVATE src)
-target_link_libraries(openapi_generator PUBLIC unofficial::tree-sitter::tree-sitter
-  CMeta::CMeta CMeta::CFlow Salts::JsonParser Salts::CYamlJsonAdapter Salts::DataBind
-  PRIVATE ${CMAKE_DL_LIBS})
+target_include_directories(
+        openapi_generator
+        PUBLIC include
+        PRIVATE src
+)
+target_link_libraries(
+        openapi_generator
+        PUBLIC unofficial::tree-sitter::tree-sitter CMeta::CMeta CMeta::CFlow Salts::JsonParser
+               Salts::CYamlJsonAdapter Salts::DataBind
+        PRIVATE ${CMAKE_DL_LIBS}
+)
 
 add_library(openapi_ui_model STATIC src/ui_model.c)
 add_library(OpenAPI::UIModel ALIAS openapi_ui_model)
-target_include_directories(openapi_ui_model PUBLIC include PRIVATE src)
+target_include_directories(
+        openapi_ui_model
+        PUBLIC include
+        PRIVATE src
+)
 target_link_libraries(openapi_ui_model PUBLIC OpenAPI::Generator CHttp::App)
 add_executable(openapi-gen src/main.c)
 target_link_libraries(openapi-gen PRIVATE openapi_generator)
@@ -18,26 +40,32 @@ target_link_libraries(openapi-gen PRIVATE openapi_generator)
 set(PLUGIN_NAME c)
 set(PLUGIN_SYMBOL tree_sitter_c)
 foreach(query IN ITEMS PLUGIN_QUERY PLUGIN_NAME_QUERY)
-  if(query STREQUAL "PLUGIN_QUERY")
-    set(query_file "${CMAKE_CURRENT_SOURCE_DIR}/queries/extract/c.scm")
-  else()
-    set(query_file "${CMAKE_CURRENT_SOURCE_DIR}/queries/extract/c-name.scm")
-  endif()
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${query_file}")
-  file(READ "${query_file}" ${query})
-  string(REPLACE "\\" "\\\\" ${query} "${${query}}")
-  string(REPLACE "\"" "\\\"" ${query} "${${query}}")
-  string(REPLACE "\r" "" ${query} "${${query}}")
-  string(REPLACE "\n" "\\n" ${query} "${${query}}")
+        if(query STREQUAL "PLUGIN_QUERY")
+                set(query_file "${CMAKE_CURRENT_SOURCE_DIR}/queries/extract/c.scm")
+        else()
+                set(query_file "${CMAKE_CURRENT_SOURCE_DIR}/queries/extract/c-name.scm")
+        endif()
+        set_property(
+                DIRECTORY
+                APPEND
+                PROPERTY CMAKE_CONFIGURE_DEPENDS "${query_file}"
+        )
+        file(READ "${query_file}" ${query})
+        string(REPLACE "\\" "\\\\" ${query} "${${query}}")
+        string(REPLACE "\"" "\\\"" ${query} "${${query}}")
+        string(REPLACE "\r" "" ${query} "${${query}}")
+        string(REPLACE "\n" "\\n" ${query} "${${query}}")
 endforeach()
 configure_file(plugins/language.c.in generated/c.c @ONLY)
 add_library(openapi_c MODULE "${CMAKE_CURRENT_BINARY_DIR}/generated/c.c")
 target_include_directories(openapi_c PRIVATE include)
-target_link_libraries(openapi_c PRIVATE "${OPENAPI_C_GRAMMAR_LIBRARY}" unofficial::tree-sitter::tree-sitter)
+target_link_libraries(
+        openapi_c PRIVATE "${OPENAPI_C_GRAMMAR_LIBRARY}" unofficial::tree-sitter::tree-sitter
+)
 set_target_properties(openapi_c PROPERTIES PREFIX "")
 if(BUILD_EXAMPLES OR BUILD_TESTS)
-  add_subdirectory(examples)
+        add_subdirectory(examples)
 endif()
 if(BUILD_TESTS)
-  add_subdirectory(tests)
+        add_subdirectory(tests)
 endif()

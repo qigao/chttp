@@ -4,6 +4,7 @@
 #include "chttp_internal.h"
 #include "chttp_tls.h"
 #include "chttp_connection_recovery.h"
+#include "chttp_logical_retry.h"
 #include <cnet/client_pool.h>
 #include <core/tstr.h>
 
@@ -64,15 +65,18 @@ typedef struct chttp_slot {
   /* JSON-RPC logical wire ID is stored in the existing HTTP request slot.
    * No independent RPC registry or transport owner is allocated. */
   uint64_t rpc_wire_id;
-  uint64_t rpc_deadline_at_ms;
+  uint64_t deadline_at_ms;
+  uint64_t response_progress_at_ms;
+  uint32_t response_idle_timeout_ms;
   bool rpc_wire_id_live;
-  bool rpc_deadline_cancelled;
+  bool deadline_cancelled;
   chttp_slot_state state;
   bool result_delivered;
   bool cancel_requested;
   bool source_enabled;
   bool source_complete;
   bool source_final_pending;
+  bool internal_completion;
 } chttp_slot;
 
 typedef enum chttp_h1_state {
@@ -108,6 +112,8 @@ struct chttp_h1_session {
 };
 
 struct chttp_client_impl {
+  chttp_logical_runtime *logical;
+  chttp_client_config config;
   chttp_connection_recovery_options recovery_options;
   bool admission_started;
   cnet_client network;
@@ -450,6 +456,45 @@ int chttp_async_client_attempt_facts(chttp_async_client *client,
   return SALTS_OK;
 }
 
+/* One slot is the timer authority for H1 or one H2 stream. Subtractions only
+ * compare elapsed monotonic time, so renewing idle never overflows a deadline. */
+static uint64_t chttp_slot_timeout_remaining(const chttp_slot *slot, uint64_t now) {
+  uint64_t remaining = UINT64_MAX;
+  if (slot->deadline_at_ms != 0u)
+    remaining = now < slot->deadline_at_ms ? slot->deadline_at_ms - now : 0u;
+  if (slot->response_idle_timeout_ms != 0u) {
+    const uint64_t elapsed = now - slot->response_progress_at_ms;
+    const uint64_t idle = elapsed < slot->response_idle_timeout_ms
+        ? slot->response_idle_timeout_ms - elapsed : 0u;
+    if (idle < remaining) remaining = idle;
+  }
+  return remaining;
+}
+
+static const char *chttp_slot_timeout_stage(const chttp_slot *slot, uint64_t now) {
+  if (slot->rpc_wire_id_live) return "rpc-deadline";
+  if (slot->response_idle_timeout_ms != 0u &&
+      now - slot->response_progress_at_ms >= slot->response_idle_timeout_ms &&
+      (slot->deadline_at_ms == 0u || now < slot->deadline_at_ms ||
+       now - slot->response_progress_at_ms - slot->response_idle_timeout_ms >=
+           now - slot->deadline_at_ms)) return "response-idle-timeout";
+  return "http-deadline";
+}
+
+static void chttp_slot_response_progress(chttp_slot *slot) {
+  uint64_t now;
+  if (slot->response_idle_timeout_ms == 0u) return;
+  now = monotonic_ms();
+  if (!slot->deadline_cancelled && !slot->cancel_requested &&
+      chttp_slot_timeout_remaining(slot, now) != 0u)
+    slot->response_progress_at_ms = now;
+}
+
+static void chttp_h2_response_progress(void *user, void *request_user) {
+  (void)user;
+  chttp_slot_response_progress((chttp_slot *)request_user);
+}
+
 static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *response, int status,
                                int native_status, const char *stage) {
   chttp_client_impl *impl;
@@ -461,12 +506,11 @@ static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *resp
   impl = slot->client;
   /* The wire deadline includes response decode and callback delivery. An
    * ordinary user cancel wins if already admitted before the timeout. */
-  if (slot->rpc_deadline_cancelled ||
-      (slot->rpc_deadline_at_ms != 0u && !slot->cancel_requested &&
-       monotonic_ms() >= slot->rpc_deadline_at_ms)) {
+  if (slot->deadline_cancelled ||
+      (!slot->cancel_requested && chttp_slot_timeout_remaining(slot, monotonic_ms()) == 0u)) {
     status = SALTS_ETIMEDOUT;
     native_status = 0;
-    stage = "rpc-deadline";
+    stage = chttp_slot_timeout_stage(slot, monotonic_ms());
   }
   slot->result_delivered = true;
   if (status != SALTS_OK) {
@@ -477,7 +521,7 @@ static void chttp_slot_deliver(chttp_slot *slot, const chttp_response_view *resp
   impl->callback_active = true;
   slot->on_complete(slot->user, slot->public_handle, response, error_view);
   impl->callback_active = false;
-  ++impl->completion_count;
+  if (!slot->internal_completion) ++impl->completion_count;
 }
 
 static int chttp_h1_try_close(chttp_h1_session *session) {
@@ -916,7 +960,10 @@ static void chttp_cnet_receive(void *user, cnet_connection connection,
     chttp_slot_fail_and_close(slot, SALTS_ENOTSUP, 0, "transport-kind");
     return;
   }
-  if (view->size != 0u) slot->attempt.response_started = true;
+  if (view->size != 0u) {
+    slot->attempt.response_started = true;
+    chttp_slot_response_progress(slot);
+  }
   status = chttp_response_parser_execute(&slot->response_parser, view->data, view->size);
   if (status != SALTS_OK) {
     chttp_slot_fail_and_close(slot, status, slot->response_parser.parser_status,
@@ -1209,7 +1256,8 @@ static int chttp_h2_submit(chttp_client_impl *impl, const chttp_request_options 
                            chttp_file_sink_transfer *file_sink_transfer,
                            const cnet_destination_result *destination, uint64_t deadline_at_ms,
                            chttp_request *out_request) {
-  chttp_h2_session_callbacks callbacks = {.user = impl, .on_complete = chttp_h2_complete};
+  chttp_h2_session_callbacks callbacks = {.user = impl, .on_complete = chttp_h2_complete,
+      .on_response_progress = chttp_h2_response_progress};
   chttp_h2_session *session;
   chttp_tls_profile_impl *tls_profile = NULL;
   chttp_slot *slot;
@@ -1332,6 +1380,7 @@ int chttp_async_client_init(chttp_async_client *client, const chttp_client_confi
   if (!chttp_config_valid(config)) return SALTS_EINVAL;
   impl = (chttp_client_impl *)calloc(1u, sizeof(*impl));
   if (impl == NULL) return SALTS_ENOMEM;
+  impl->config = *config;
   impl->slots = (chttp_slot *)calloc(config->request_capacity, sizeof(*impl->slots));
   impl->h1_sessions =
       (chttp_h1_session *)calloc(config->network.connection_capacity, sizeof(*impl->h1_sessions));
@@ -1690,7 +1739,38 @@ int chttp_async_client_rpc_submit_transport(
   if (slot == NULL) return SALTS_EPROTO;
   slot->rpc_wire_id = wire_id;
   slot->rpc_wire_id_live = true;
-  slot->rpc_deadline_at_ms = deadline_at_ms;
+  slot->deadline_at_ms = deadline_at_ms;
+  return SALTS_OK;
+}
+
+int chttp_async_client_submit_with_timeouts(chttp_async_client *client,
+    const chttp_request_options *options, const chttp_request_timeouts *timeouts,
+    chttp_request *out_request) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  const uint64_t now = monotonic_ms();
+  uint64_t opening_deadline, total_deadline = 0u;
+  chttp_slot *slot;
+  int status;
+  if (out_request == NULL) return SALTS_EINVAL;
+  *out_request = (chttp_request){0};
+  if (impl == NULL || options == NULL || timeouts == NULL ||
+      (timeouts->total_timeout_ms == 0u && timeouts->response_idle_timeout_ms == 0u))
+    return SALTS_EINVAL;
+  if (now > UINT64_MAX - timeouts->total_timeout_ms ||
+      now > UINT64_MAX - timeouts->response_idle_timeout_ms) return SALTS_ERANGE;
+  if (timeouts->total_timeout_ms != 0u) total_deadline = now + timeouts->total_timeout_ms;
+  opening_deadline = total_deadline;
+  if (timeouts->response_idle_timeout_ms != 0u &&
+      (opening_deadline == 0u || now + timeouts->response_idle_timeout_ms < opening_deadline))
+    opening_deadline = now + timeouts->response_idle_timeout_ms;
+  status = chttp_async_client_submit_impl(client, options, NULL, NULL, NULL,
+                                         opening_deadline, out_request);
+  if (status != SALTS_OK) return status;
+  slot = chttp_slot_find(impl, *out_request);
+  if (slot == NULL) return SALTS_EPROTO;
+  slot->deadline_at_ms = total_deadline;
+  slot->response_progress_at_ms = now;
+  slot->response_idle_timeout_ms = timeouts->response_idle_timeout_ms;
   return SALTS_OK;
 }
 
@@ -1751,6 +1831,57 @@ int chttp_async_client_submit_timed(chttp_async_client *client,
                                          deadline_at_ms, out_request);
 }
 
+int chttp_async_client_logical_runtime(chttp_async_client *client, chttp_logical_runtime **out) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  if (impl == NULL || out == NULL) return SALTS_EINVAL;
+  if (impl->callback_active || impl->poll_active) return SALTS_EBUSY;
+  if (!impl->admission_open) return SALTS_ESHUTDOWN;
+  if (impl->logical == NULL) {
+    int status = chttp_logical_runtime_init(&impl->logical, client, &impl->config);
+    if (status != SALTS_OK) return status;
+  }
+  *out = impl->logical;
+  return SALTS_OK;
+}
+
+bool chttp_async_request_pending(chttp_async_client *client, chttp_request request) {
+  return chttp_slot_find(chttp_client_get(client), request) != NULL;
+}
+
+void chttp_async_client_logical_complete(chttp_async_client *client, chttp_logical_complete_fn fn,
+    void *user, chttp_logical_request request, const chttp_response_view *response,
+    const chttp_error *error) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  const bool prior = impl->callback_active;
+  impl->callback_active = true;
+  fn(user, request, response, error);
+  impl->callback_active = prior;
+  ++impl->completion_count;
+}
+
+int chttp_async_client_replay_hook(chttp_async_client *client, int (*hook)(void *), void *user) {
+  chttp_client_impl *impl = chttp_client_get(client);
+  impl->callback_active = true;
+  const int status = hook(user);
+  impl->callback_active = false;
+  return status;
+}
+
+int chttp_async_client_submit_logical_attempt(chttp_async_client *client,
+    const chttp_request_options *options, chttp_file_transfer *source,
+    chttp_file_sink_transfer *sink, uint64_t deadline, uint32_t idle_ms,
+    chttp_request *out) {
+  int status = chttp_async_client_submit_impl(client, options, source, sink, NULL, deadline, out);
+  if (status == SALTS_OK) {
+    chttp_slot *slot = chttp_slot_find(chttp_client_get(client), *out);
+    slot->internal_completion = true;
+    slot->deadline_at_ms = deadline;
+    slot->response_progress_at_ms = monotonic_ms();
+    slot->response_idle_timeout_ms = idle_ms;
+  }
+  return status;
+}
+
 int chttp_async_request_cancel(chttp_async_client *client, chttp_request request) {
   chttp_client_impl *impl = chttp_client_get(client);
   chttp_slot *slot = chttp_slot_find(impl, request);
@@ -1781,10 +1912,10 @@ int chttp_async_request_cancel(chttp_async_client *client, chttp_request request
   return SALTS_OK;
 }
 
-/* RPC deadlines are properties of existing HTTP request slots. The Owner
+/* Request deadlines are properties of existing HTTP request slots. The Owner
  * scans the same bounded table; no RPC poller/timer/connection is created.
  * Cancellation follows the ordinary CNet/H2 terminal drain contract. */
-static int chttp_rpc_expire_deadlines(chttp_async_client *client,
+static int chttp_expire_deadlines(chttp_async_client *client,
                                      chttp_client_impl *impl) {
   const uint64_t now = monotonic_ms();
   size_t i;
@@ -1793,19 +1924,18 @@ static int chttp_rpc_expire_deadlines(chttp_async_client *client,
     chttp_slot *slot = &impl->slots[i];
     int status;
     if (slot->state == CHTTP_SLOT_FREE || slot->result_delivered ||
-        !slot->rpc_wire_id_live || slot->rpc_deadline_at_ms == 0u ||
-        slot->rpc_deadline_cancelled || slot->cancel_requested ||
-        slot->rpc_deadline_at_ms > now)
+        slot->deadline_cancelled || slot->cancel_requested ||
+        chttp_slot_timeout_remaining(slot, now) != 0u)
       continue;
     /* H2 explicitly defers reset completion to session_progress, so mark
      * deadline intent before admitting cancel; roll it back on failure. */
-    slot->rpc_deadline_cancelled = true;
+    slot->deadline_cancelled = true;
     status = chttp_async_request_cancel(client, slot->public_handle);
     if (status != SALTS_OK) {
       /* H1 may successfully admit close, then report a Pool drain error.
        * Preserve timeout intent once native cancellation is committed. */
       if (!slot->cancel_requested)
-        slot->rpc_deadline_cancelled = false;
+        slot->deadline_cancelled = false;
       if (status != SALTS_EALREADY && status != SALTS_ENOENT &&
           first_status == SALTS_OK)
         first_status = status;
@@ -1814,7 +1944,7 @@ static int chttp_rpc_expire_deadlines(chttp_async_client *client,
   return first_status;
 }
 
-static uint32_t chttp_rpc_deadline_poll_budget(const chttp_client_impl *impl,
+static uint32_t chttp_deadline_poll_budget(const chttp_client_impl *impl,
                                                uint32_t timeout_ms) {
   const uint64_t now = monotonic_ms();
   uint64_t budget = timeout_ms;
@@ -1823,11 +1953,9 @@ static uint32_t chttp_rpc_deadline_poll_budget(const chttp_client_impl *impl,
     const chttp_slot *slot = &impl->slots[i];
     uint64_t remaining;
     if (slot->state == CHTTP_SLOT_FREE || slot->result_delivered ||
-        !slot->rpc_wire_id_live || slot->rpc_deadline_at_ms == 0u ||
-        slot->rpc_deadline_cancelled || slot->cancel_requested)
+        slot->deadline_cancelled || slot->cancel_requested)
       continue;
-    remaining = slot->rpc_deadline_at_ms > now
-                    ? slot->rpc_deadline_at_ms - now : 0u;
+    remaining = chttp_slot_timeout_remaining(slot, now);
     if (remaining < budget) budget = remaining;
   }
   return (uint32_t)budget;
@@ -1847,14 +1975,18 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
   if (impl->stopped) return SALTS_ESHUTDOWN;
   impl->poll_active = true;
   impl->completion_count = 0u;
-  deadline_status = chttp_rpc_expire_deadlines(client, impl);
+  status = chttp_logical_runtime_progress(impl->logical);
+  if (status != SALTS_OK) { impl->poll_active = false; return status; }
+  deadline_status = chttp_expire_deadlines(client, impl);
   close_status = chttp_file_runtime_progress(impl);
   if (close_status == SALTS_OK) close_status = chttp_h2_progress_sessions(impl);
   {
     const int retry_status = chttp_retry_pending_closes(impl);
     if (close_status == SALTS_OK) close_status = retry_status;
   }
-  wait_ms = chttp_rpc_deadline_poll_budget(impl, timeout_ms);
+  wait_ms = chttp_deadline_poll_budget(impl, timeout_ms);
+  wait_ms = chttp_logical_runtime_wait(impl->logical, wait_ms);
+  if (impl->completion_count != 0u) wait_ms = 0u;
   if (impl->recovery_options.max_attempts > 1u) {
     const int progress = chttp_client_pool_progress(impl);
     if (progress != SALTS_OK && close_status == SALTS_OK) close_status = progress;
@@ -1866,7 +1998,7 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
   status = cnet_client_poll(&impl->network, chttp_file_runtime_poll_timeout(impl, wait_ms),
                             &network_events);
   {
-    const int after_deadlines = chttp_rpc_expire_deadlines(client, impl);
+    const int after_deadlines = chttp_expire_deadlines(client, impl);
     if (deadline_status == SALTS_OK) deadline_status = after_deadlines;
   }
   if (status == SALTS_OK) {
@@ -1880,6 +2012,10 @@ int chttp_async_client_poll(chttp_async_client *client, uint32_t timeout_ms,
     if (close_status == SALTS_OK) close_status = manager_status;
   }
   chttp_h2_reap_terminal_sessions(impl);
+  {
+    const int logical_status = chttp_logical_runtime_progress(impl->logical);
+    if (close_status == SALTS_OK) close_status = logical_status;
+  }
   *out_completions = impl->completion_count;
   impl->poll_active = false;
   if (status != SALTS_OK) return status;
@@ -1898,6 +2034,7 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
   if (impl->stopped) return SALTS_OK;
   impl->admission_open = false;
   impl->stop_active = true;
+  chttp_logical_runtime_seal(impl->logical);
   for (index = 0u; index < impl->connection_capacity; ++index) {
     int status = chttp_connection_recovery_seal(&impl->h1_sessions[index].recovery);
     if (status != SALTS_OK) return status;
@@ -1968,6 +2105,12 @@ int chttp_async_client_stop(chttp_async_client *client, uint32_t timeout_ms) {
     if (status == SALTS_OK && !manager_snapshot.drained) status = SALTS_EBUSY;
     if (status != SALTS_OK && first_status == SALTS_OK) first_status = status;
   }
+  {
+    const int logical_status = chttp_logical_runtime_progress(impl->logical);
+    if (first_status == SALTS_OK) first_status = logical_status;
+    if (stop_status == SALTS_OK && first_status == SALTS_OK &&
+        !chttp_logical_runtime_empty(impl->logical)) first_status = SALTS_EBUSY;
+  }
   if (stop_status == SALTS_OK && first_status == SALTS_OK) impl->stopped = true;
   return first_status != SALTS_OK ? first_status : stop_status;
 }
@@ -1995,6 +2138,7 @@ int chttp_async_client_destroy(chttp_async_client *client) {
     chttp_h2_session_destroy(&impl->h2_sessions[index]);
   for (index = 0u; index < impl->request_capacity; ++index)
     chttp_slot_release(&impl->slots[index]);
+  chttp_logical_runtime_destroy(impl->logical);
   free(impl->h1_sessions);
   free(impl->h2_sessions);
   free(impl->slots);

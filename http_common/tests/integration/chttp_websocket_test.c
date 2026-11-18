@@ -344,7 +344,238 @@ static void chttp_websocket_fragment_event(void *user, chttp_websocket *websocke
     atomic_fetch_add_explicit(messages, 1, memory_order_relaxed);
 }
 
+typedef struct chttp_async_ws_test_probe {
+  chttp_async_websocket *client;
+  const void *thread;
+  unsigned opened, sent, messages, closes, closed;
+  int open_status, close_status, callback_error;
+  unsigned int http_status;
+  uint64_t tags[8];
+  int statuses[8];
+} chttp_async_ws_test_probe;
+
+static void chttp_async_ws_test_open(void *user, int status, unsigned int http_status) {
+  chttp_async_ws_test_probe *p = user;
+  ++p->opened; p->open_status = status; p->http_status = http_status;
+  size_t callbacks;
+  if (sync_thread_current_token() != p->thread ||
+      chttp_async_websocket_poll(p->client, 0u, &callbacks) != SALTS_EBUSY)
+    p->callback_error = 1;
+}
+static void chttp_async_ws_test_send(void *user, chttp_websocket_operation operation,
+                                    uint64_t tag, size_t size, int status) {
+  chttp_async_ws_test_probe *p = user;
+  if (sync_thread_current_token() != p->thread || operation.generation == 0u ||
+      (size != 5u && size != 12u) || p->sent >= 8u) { p->callback_error = 1; return; }
+  p->tags[p->sent] = tag; p->statuses[p->sent++] = status;
+}
+static void chttp_async_ws_test_event(void *user, const chttp_websocket_event *event) {
+  chttp_async_ws_test_probe *p = user;
+  if (sync_thread_current_token() != p->thread) p->callback_error = 1;
+  if (event->kind == CHTTP_WEBSOCKET_EVENT_CLOSE) ++p->closes;
+  if (event->kind == CHTTP_WEBSOCKET_EVENT_MESSAGE) {
+    if (event->size != 5u ||
+        (memcmp(event->data, "ready", 5u) != 0 && memcmp(event->data, "hello", 5u) != 0))
+      p->callback_error = 1;
+    ++p->messages;
+  }
+}
+static void chttp_async_ws_test_closed(void *user, int status) {
+  chttp_async_ws_test_probe *p = user;
+  ++p->closed; p->close_status = status;
+  if (sync_thread_current_token() != p->thread) p->callback_error = 1;
+}
+typedef struct chttp_async_ws_test_producer {
+  chttp_async_websocket *client;
+  chttp_websocket_operation operation;
+  uint64_t tag;
+  bool cancel;
+  int status, wrong_thread, cancel_status;
+} chttp_async_ws_test_producer;
+static void chttp_async_ws_test_produce(void *arg) {
+  chttp_async_ws_test_producer *p = arg;
+  char payload[] = "hello";
+  size_t callbacks;
+  p->wrong_thread = chttp_async_websocket_poll(p->client, 0u, &callbacks);
+  p->status = chttp_async_websocket_send_text(p->client, payload, 5u, p->tag, &p->operation);
+  if (p->cancel && p->status == SALTS_OK)
+    p->cancel_status = chttp_async_websocket_cancel(p->client, p->operation);
+  memset(payload, 'x', 5u);
+}
+
+static void chttp_async_ws_test_matrix(bool h2, bool secure, bool peer_close) {
+  chttp_websocket_test_probe server_probe = {0};
+  chttp_server server = {0};
+  chttp_async_websocket client = {0};
+  chttp_async_ws_test_probe probe = {.client = &client, .thread = sync_thread_current_token()};
+  chttp_server_config server_config = chttp_websocket_test_server_config();
+  chttp_async_websocket_config config = {.client = chttp_websocket_test_client_config(),
+      .command_capacity = 3u, .pending_byte_capacity = 12u, .close_timeout_ms = 5000u,
+      .callbacks = {&probe, chttp_async_ws_test_open, chttp_async_ws_test_send,
+                    chttp_async_ws_test_event, chttp_async_ws_test_closed}};
+  chttp_server_websocket_options route = {.size = sizeof(route), .path = "/chat/:id",
+      .on_open = chttp_websocket_test_open, .on_event = chttp_websocket_test_event,
+      .user = &server_probe};
+  char *cert = NULL, *key = NULL, *ca = NULL;
+  chttp_tls_profile profile = {0};
+  const char *alpn[] = {h2 ? "h2" : "http/1.1"};
+  cnet_tls_server_config server_tls = {.size = sizeof(server_tls),
+      .alpn_protocols = alpn, .alpn_protocol_count = 1u};
+  cnet_tls_client_config client_tls = {.size = sizeof(client_tls), .server_name = "localhost",
+      .alpn_protocols = alpn, .alpn_protocol_count = 1u};
+  if (h2) chttp_websocket_test_enable_h2(&server_config, &config.client);
+  if (secure) {
+    cert = tt_make_temp_file("async-ws-cert", ".pem");
+    key = tt_make_temp_file("async-ws-key", ".pem");
+    ca = tt_make_temp_file("async-ws-ca", ".pem");
+    check_not_null(cert); check_not_null(key); check_not_null(ca);
+    check_equal(tt_write_file(cert, CHTTP_TLS_TEST_CERTIFICATE, sizeof(CHTTP_TLS_TEST_CERTIFICATE)-1u), 0);
+    check_equal(tt_write_file(key, CHTTP_TLS_TEST_KEY, sizeof(CHTTP_TLS_TEST_KEY)-1u), 0);
+    check_equal(tt_write_file(ca, CHTTP_TLS_TEST_CA_CERTIFICATE, sizeof(CHTTP_TLS_TEST_CA_CERTIFICATE)-1u), 0);
+    server_tls.cert_file = cert; server_tls.key_file = key; client_tls.ca_file = ca;
+    server_config.tls = &server_tls;
+    server_config.network.tls_io_buffer_bytes = config.client.network.tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES;
+    server_config.network.tls_handshake_timeout_ms = config.client.network.tls_handshake_timeout_ms = 5000u;
+    check_equal(chttp_tls_profile_init(&profile, &client_tls), SALTS_OK);
+  }
+  check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+  chttp_server_websocket_transport_options transport = CHTTP_SERVER_WEBSOCKET_TRANSPORT_OPTIONS_INIT;
+  transport.dedicated_h1 = 1;
+  check_equal(chttp_server_set_websocket_transport(&server, &transport), SALTS_OK);
+  check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
+  check_equal(chttp_server_start(&server), SALTS_OK);
+  uint16_t port;
+  check_equal(chttp_server_port(&server, &port), SALTS_OK);
+  char uri[128];
+  check_true(snprintf(uri, sizeof(uri), "%s://127.0.0.1:%u/chat/42", secure ? "wss" : "ws", port) > 0);
+  chttp_websocket_connect_options options = {.size = sizeof(options), .uri = uri,
+      .timeout_ms = 5000u, .protocol = h2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1,
+      .tls = secure ? &profile : NULL};
+  check_equal(chttp_async_websocket_init(&client, &config), SALTS_OK);
+  check_equal(chttp_async_websocket_connect(&client, &options), SALTS_OK);
+  check_equal(probe.opened, 0u);
+  if (secure) check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
+  memset(uri, 'x', strlen(uri)); /* admission owns the opening snapshot */
+  chttp_websocket_operation first, canceled, rejected;
+  char payload[] = "hello";
+  check_equal(chttp_async_websocket_send_text(&client, payload, 5u, 1u, &first), SALTS_OK);
+  check_equal(chttp_async_websocket_send_binary(&client, payload, 5u, 2u, &canceled), SALTS_OK);
+  check_equal(chttp_async_websocket_send_text(&client, payload, 5u, 9u, &rejected), SALTS_ENOBUFS);
+  check_equal(rejected.generation, 0u);
+  memset(payload, 'x', 5u);
+  check_equal(chttp_async_websocket_cancel(&client, canceled), SALTS_OK);
+  check_equal(chttp_async_websocket_close(&client, 1000u, NULL, 0u), SALTS_ESHUTDOWN);
+  uint64_t deadline = monotonic_ms()+5000u;
+  while ((probe.sent != 2u || probe.messages != 2u) && monotonic_ms() < deadline) {
+    size_t callbacks;
+    check_equal(chttp_async_websocket_poll(&client, 10u, &callbacks), SALTS_OK);
+  }
+  check_equal(probe.opened, 1u); check_equal(probe.open_status, SALTS_OK);
+  check_equal(probe.http_status, h2 ? 200u : 101u);
+  check_equal(probe.sent, 2u); check_equal(probe.messages, 2u);
+  check_equal(probe.tags[0], 1u); check_equal(probe.tags[1], 2u);
+  check_equal(probe.statuses[0], SALTS_OK); check_equal(probe.statuses[1], SALTS_ECANCELED);
+  check_equal(chttp_async_websocket_cancel(&client, first), SALTS_ENOENT);
+  chttp_async_ws_test_producer producers[2] = {{.client = &client, .tag = 3u},
+      {.client = &client, .tag = 4u, .cancel = true}};
+  sync_thread_t threads[2] = {NULL, NULL};
+  for (size_t i = 0u; i < 2u; ++i)
+    check_equal(sync_thread_create(&threads[i], chttp_async_ws_test_produce, &producers[i]), SALTS_OK);
+  for (size_t i = 0u; i < 2u; ++i) {
+    check_equal(sync_thread_join(&threads[i]), SALTS_OK); sync_thread_destroy(&threads[i]);
+    check_equal(producers[i].status, SALTS_OK); check_equal(producers[i].wrong_thread, SALTS_EINVAL);
+  }
+  check_equal(producers[1].cancel_status, SALTS_OK);
+  check_equal(chttp_async_websocket_close(&client, 1000u, NULL, 0u), SALTS_EBUSY);
+  deadline = monotonic_ms()+5000u;
+  while ((probe.sent != 4u || probe.messages != 3u) && monotonic_ms() < deadline) {
+    size_t callbacks;
+    check_equal(chttp_async_websocket_poll(&client, 10u, &callbacks), SALTS_OK);
+  }
+  check_equal(probe.sent, 4u); check_equal(probe.messages, 3u);
+  for (size_t i = 2u; i < 4u; ++i)
+    check_equal(probe.statuses[i], probe.tags[i] == 4u ? SALTS_ECANCELED : SALTS_OK);
+  if (peer_close) {
+    chttp_websocket_operation operation;
+    /* Keep the byte bound explicit even for the peer-close trigger. */
+    check_equal(chttp_async_websocket_send_text(&client, "server-close", 12u, 4u, &operation), SALTS_OK);
+  } else check_equal(chttp_async_websocket_close(&client, 1000u, "done", 4u), SALTS_OK);
+  deadline = monotonic_ms()+5000u;
+  while (probe.closed == 0u && monotonic_ms() < deadline) {
+    size_t callbacks;
+    check_equal(chttp_async_websocket_poll(&client, 10u, &callbacks), SALTS_OK);
+  }
+  check_equal(probe.closes, 1u); check_equal(probe.closed, 1u);
+  check_equal(probe.close_status, SALTS_OK); check_equal(probe.callback_error, 0);
+  check_equal(chttp_async_websocket_stop(&client, 0u), SALTS_OK);
+  check_equal(chttp_async_websocket_destroy(&client), SALTS_OK);
+  check_equal(chttp_server_stop(&server, 5000u), SALTS_OK);
+  check_equal(chttp_server_destroy(&server), SALTS_OK);
+  if (secure) {
+    check_equal(chttp_tls_profile_destroy(&profile), SALTS_OK);
+    check_equal(tt_remove_file(cert), 0); check_equal(tt_remove_file(key), 0); check_equal(tt_remove_file(ca), 0);
+    free(cert); free(key); free(ca);
+  }
+}
+
+static void chttp_async_ws_test_failure(bool h2, bool stop_opening) {
+  chttp_server server = {0};
+  chttp_async_websocket client = {0};
+  chttp_async_ws_test_probe probe = {.client = &client, .thread = sync_thread_current_token()};
+  chttp_server_config server_config = chttp_websocket_test_server_config();
+  chttp_async_websocket_config config = {.client = chttp_websocket_test_client_config(),
+      .command_capacity = 2u, .pending_byte_capacity = 16u, .close_timeout_ms = 5000u,
+      .callbacks = {&probe, chttp_async_ws_test_open, chttp_async_ws_test_send,
+                    chttp_async_ws_test_event, chttp_async_ws_test_closed}};
+  if (h2) chttp_websocket_test_enable_h2(&server_config, &config.client);
+  check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
+  chttp_server_websocket_options route = {.size = sizeof(route), .path = "/reject",
+      .on_open = chttp_websocket_test_reject_open, .on_event = chttp_websocket_test_capture_event};
+  check_equal(chttp_server_websocket_with(&server, &route), SALTS_OK);
+  check_equal(chttp_server_start(&server), SALTS_OK);
+  uint16_t port;
+  check_equal(chttp_server_port(&server, &port), SALTS_OK);
+  char uri[128];
+  check_true(snprintf(uri, sizeof(uri), "ws://127.0.0.1:%u/reject", port) > 0);
+  chttp_websocket_connect_options options = {.size = sizeof(options), .uri = uri,
+      .protocol = h2 ? CHTTP_HTTP_2 : CHTTP_HTTP_1_1, .timeout_ms = 5000u};
+  check_equal(chttp_async_websocket_init(&client, &config), SALTS_OK);
+  check_equal(chttp_async_websocket_connect(&client, &options), SALTS_OK);
+  chttp_websocket_operation operation;
+  check_equal(chttp_async_websocket_send_text(&client, "hello", 5u, 1u, &operation), SALTS_OK);
+  if (stop_opening) check_equal(chttp_async_websocket_stop(&client, 5000u), SALTS_OK);
+  else {
+    const uint64_t deadline = monotonic_ms()+5000u;
+    while (probe.closed == 0u && monotonic_ms() < deadline) {
+      size_t callbacks;
+      const int status = chttp_async_websocket_poll(&client, 10u, &callbacks);
+      check_true(status == SALTS_OK || status == SALTS_EPROTO);
+    }
+  }
+  check_equal(probe.opened, 1u); check_equal(probe.sent, 1u); check_equal(probe.closed, 1u);
+  check_equal(probe.open_status, stop_opening ? SALTS_ECANCELED : SALTS_EPROTO);
+  check_equal(probe.statuses[0], stop_opening ? SALTS_ECANCELED : SALTS_EPROTO);
+  check_equal(probe.close_status, stop_opening ? SALTS_OK : SALTS_EPROTO);
+  check_equal(probe.callback_error, 0);
+  if (!stop_opening) check_equal(probe.http_status, 500u);
+  check_equal(chttp_async_websocket_destroy(&client), SALTS_OK);
+  check_equal(chttp_server_stop(&server, 5000u), SALTS_OK);
+  check_equal(chttp_server_destroy(&server), SALTS_OK);
+}
+
 spec("CHTTP WebSocket client/server") {
+  group("bounded asynchronous client") {
+    it("copies and cancels H1 commands across threads") { chttp_async_ws_test_matrix(false, false, false); }
+    it("copies and cancels H2 commands across threads") { chttp_async_ws_test_matrix(true, false, false); }
+    it("retains verified WSS H1 credentials") { chttp_async_ws_test_matrix(false, true, false); }
+    it("retains verified WSS H2 credentials") { chttp_async_ws_test_matrix(true, true, false); }
+    it("settles a peer-initiated H1 close once") { chttp_async_ws_test_matrix(false, false, true); }
+    it("settles a peer-initiated H2 close once") { chttp_async_ws_test_matrix(true, false, true); }
+    it("drains H1 opening rejection and queued sends") { chttp_async_ws_test_failure(false, false); }
+    it("drains H2 opening rejection and queued sends") { chttp_async_ws_test_failure(true, false); }
+    it("stops H1 before opening completion") { chttp_async_ws_test_failure(false, true); }
+    it("stops H2 before opening completion") { chttp_async_ws_test_failure(true, true); }
+  }
   group("dedicated H1 bridge") {
     static chttp_server server;
     static chttp_websocket_client client;

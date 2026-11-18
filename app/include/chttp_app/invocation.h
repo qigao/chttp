@@ -10,20 +10,33 @@
 extern "C" {
 #endif
 
-typedef struct chttp_invocation { const void *impl; } chttp_invocation;
+typedef struct chttp_invocation {
+  const void *impl;
+} chttp_invocation;
 typedef int (*chttp_invocation_action_fn)(void *, const chttp_invocation *);
-static const cmeta_type_identity chttp_invocation_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.invocation");
-static const cmeta_type_desc chttp_invocation_type = {"chttp_invocation", sizeof(chttp_invocation),
-    CMETA_ALIGNOF(chttp_invocation), CMETA_T_OBJECT, NULL, NULL, &chttp_invocation_identity};
+static const cmeta_type_identity chttp_invocation_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.invocation");
+static const cmeta_type_desc chttp_invocation_type = {"chttp_invocation",
+                                                      sizeof(chttp_invocation),
+                                                      CMETA_ALIGNOF(chttp_invocation),
+                                                      CMETA_T_OBJECT,
+                                                      NULL,
+                                                      NULL,
+                                                      &chttp_invocation_identity};
 static const cmeta_type_desc chttp_invocation_pointer_type = {"const chttp_invocation *",
-    sizeof(chttp_invocation *), CMETA_ALIGNOF(chttp_invocation *), CMETA_T_POINTER,
-    &chttp_invocation_type, NULL, NULL};
-#define CHTTP_ACTION(name_) \
-  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
-    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, \
-      &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
-    (const chttp_invocation *, invocation, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, \
-      &chttp_invocation_pointer_type, CMETA_ABI_OBJECT_POINTER))
+                                                              sizeof(chttp_invocation *),
+                                                              CMETA_ALIGNOF(chttp_invocation *),
+                                                              CMETA_T_POINTER,
+                                                              &chttp_invocation_type,
+                                                              NULL,
+                                                              NULL};
+#define CHTTP_ACTION(name_)                                                                        \
+  FunctionDeclAsAbiResult(                                                                         \
+      io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_,                       \
+      (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER,              \
+       &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER),                                            \
+      (const chttp_invocation *, invocation, CMETA_PARAM_IN | CMETA_PARAM_BORROWED,                \
+       &chttp_invocation_pointer_type, CMETA_ABI_OBJECT_POINTER))
 
 CMETA_INTERCEPTOR_TYPE(chttp_invocation_chain, chttp_invocation, chttp_invocation_result);
 /* Hooks follow the SDK ACE no-throw/longjmp contract. Contexts come from the
@@ -47,7 +60,8 @@ const cmeta_function_desc *chttp_invocation_operation(const chttp_invocation *);
 int chttp_invocation_cancelled(const chttp_invocation *, bool *);
 /* Same bounded copied draft/status/content-type contract as the worker engine.
  * EALREADY after sealing; EMSGSIZE leaves the draft unsealed and reusable. */
-int chttp_invocation_respond(const chttp_invocation *, unsigned int, const char *, const void *, size_t);
+int chttp_invocation_respond(const chttp_invocation *, unsigned int, const char *, const void *,
+                             size_t);
 /* Opening-only explicit acceptance. Normal buffered respond() rejects the
  * upgrade. Session intents and entered hooks settle before native publication. */
 int chttp_invocation_websocket_accept(const chttp_invocation *);
@@ -69,8 +83,8 @@ int chttp_invocation_set_header(const chttp_invocation *, const char *, const ch
  * subsequent read/wire failures use the native transport outcome.
  * The file must remain immutable through the native terminal. No URL mapping
  * or conditional/range policy is added. Headers follow normal hook ordering. */
-int chttp_invocation_response_file(const chttp_invocation *, unsigned int,
-    const char *, const char *);
+int chttp_invocation_response_file(const chttp_invocation *, unsigned int, const char *,
+                                   const char *);
 /* serve_file counterpart using the owned request snapshot. Metadata
  * and conditional/range policy run on the worker; path/MIME and response fields
  * are copied into reply/header budgets. EINVAL/ENOBUFS/EMSGSIZE and filesystem
@@ -85,17 +99,21 @@ int chttp_invocation_serve_file(const chttp_invocation *, const chttp_server_fil
  * worker callbacks after action/hook unwind, with zero bytes meaning EOF.
  * No native builder or Invocation scope may be retained by the source. */
 int chttp_invocation_response_source(const chttp_invocation *, unsigned int, const char *,
-    const chttp_body_source *, void (*cleanup)(void *, int), size_t chunk_bytes);
+                                     const chttp_body_source *, void (*cleanup)(void *, int),
+                                     size_t chunk_bytes);
 /* SSE formatting/next/close reuse the web helper on workers. Scratch and user
  * borrow the same successful source-selection lifetime through cleanup. */
 struct chttp_web_sse_stream;
-int chttp_invocation_sse_response(const chttp_invocation *, struct chttp_web_sse_stream *, size_t chunk_bytes);
+int chttp_invocation_sse_response(const chttp_invocation *, struct chttp_web_sse_stream *,
+                                  size_t chunk_bytes);
 /* Validates CSRF and commits the upload on this worker using the detached
  * Session view. The request must belong to this upload's copied sink user. */
-chttp_web_status chttp_invocation_upload_finalize(const chttp_invocation *, chttp_web_upload_request *,
-    const chttp_web_validation *, chttp_web_error *);
+chttp_web_status chttp_invocation_upload_finalize(const chttp_invocation *,
+                                                  chttp_web_upload_request *,
+                                                  const chttp_web_validation *, chttp_web_error *);
 /* Before-only handled rejection; success seals the draft and clears proceed. */
-int chttp_invocation_reject(const chttp_invocation *, bool *, unsigned int, const char *, const void *, size_t);
+int chttp_invocation_reject(const chttp_invocation *, bool *, unsigned int, const char *,
+                            const void *, size_t);
 
 #ifdef __cplusplus
 }

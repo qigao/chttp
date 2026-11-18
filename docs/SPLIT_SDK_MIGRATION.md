@@ -76,14 +76,12 @@ missing Ed25519 test key and selecting Base's exported `Salts::URI` target.
 The existing `http_example_contract_idl_codegen` target and
 `chttp_thread_cpu_test` passed.
 
-The missing JOSE interface is resolved by restoring cjwt's prior GmSSL/libecc
-adapter inside `vendor/cjwt/crypto`. Symbols use the private `cjwt_crypto_`
-namespace. The original commit, dependency/license decisions, ownership and
-error contracts are recorded in that directory's README. HTTP and S3 use
-`http_common/http/chttp_digest` for the existing digest and clearing operations.
-Windows LLVM-MinGW builds the complete graph and installs the SDK successfully.
-All 11 cjwt CTests, including the independent JWS/JWE vectors, pass. HTTP JWT,
-CSRF, WebSocket handshake and S3 regressions also pass.
+The JOSE primitive interface is supplied by SaltsCNet 0.1.14 through
+`Salts::Crypto`. The former cjwt-private adapter has moved upstream; CHttp
+uses the public key/signature and symmetric headers, with no bundled crypto
+backend. HTTP and S3 use `http_common/http/chttp_digest` to translate Crypto
+results into their existing Salts status codes. Selected SDK versions and
+roots come from the locally loaded `.env`.
 
 The first full CTest run passed 100 of 103 tests. OpenAPI conformance initially
 lacked its declared Python requirements. After installing the existing pinned
@@ -139,10 +137,11 @@ VERSION/SOVERSION properties. GNUInstallDirs, exported targets and the existing
 source/target helpers follow SaltsCNet's CMake layout. Installed consumers load
 the selected upstream packages before Chttp; ChttpConfig only imports targets.
 
-The selected composition is Base 0.1.8, SaltsCNet 0.1.12, Utils 0.1.4 and CMeta
-0.1.6 at ref 679710f7e3312811efdd92494744a2499286a6a5. Utils declares the CMeta
+The selected composition is Base 0.1.8, SaltsCNet 0.1.16, Utils 0.1.6 and CMeta
+0.1.8 at ref fc4427f0e3f23487c34f1f5d595f96e605ba0191. Utils declares the CMeta
 source SDK build against Base 0.1.8; its release helper is the primary target/host
-SDK flow. The old Base 0.1.6 CMeta binary is not part of this composition.
+SDK flow. The published CMeta 0.1.8 binaries have that same Base 0.1.8 composition,
+including bounded asynchronous IOCP FLUSH for HTTP file commits.
 Restoration still verifies original release manifests, producer/tree identity,
 asset size and SHA-256 before extraction. Product configuration performs no SDK
 restoration, version selection, package-feed access or dependency repair.

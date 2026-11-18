@@ -6,7 +6,8 @@
 #include <string.h>
 
 static const char s3_create_bucket_xml_prefix[] =
-    "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+    "<CreateBucketConfiguration "
+    "xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
     "<LocationConstraint>";
 static const char s3_create_bucket_xml_suffix[] =
     "</LocationConstraint></CreateBucketConfiguration>";

@@ -16,6 +16,8 @@ typedef enum chttp_file_source_result {
 } chttp_file_source_result;
 
 typedef void (*chttp_file_ready_fn)(void *user);
+/* One non-wrapping lease namespace for all HTTP files in a shared runtime. */
+cflow_io_lease_id chttp_file_next_lease(void);
 
 typedef struct chttp_file_transfer {
   cflow_io_file file;

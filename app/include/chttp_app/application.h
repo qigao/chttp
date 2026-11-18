@@ -1,72 +1,161 @@
 #ifndef CHTTP_APPLICATION_H
 #define CHTTP_APPLICATION_H
-#include <chttp_app/invocation.h>
-#include <http_server/rpc.h>
-#include <cmeta/configurator.h>
 #include <cflow/function_projection.h>
+#include <chttp_app/invocation.h>
+#include <cmeta/configurator.h>
+#include <cmeta/plugin.h>
 #include <data_bind_method_plan.h>
 #include <data_bind_native_binding.h>
-#include <cmeta/plugin.h>
+#include <http_server/rpc.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-typedef struct chttp_application { void *impl; } chttp_application;
-static const cmeta_type_identity chttp_admission_request_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.admission.request");
-static const cmeta_type_identity chttp_admission_result_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.admission.result");
-static const cmeta_type_desc chttp_admission_request_type = {"chttp_server_request_view", sizeof(chttp_server_request_view),
-    CMETA_ALIGNOF(chttp_server_request_view), CMETA_T_OBJECT, NULL, NULL, &chttp_admission_request_identity};
-static const cmeta_type_desc chttp_admission_result_type = {"chttp_server_admission_result", sizeof(chttp_server_admission_result),
-    CMETA_ALIGNOF(chttp_server_admission_result), CMETA_T_OBJECT, NULL, NULL, &chttp_admission_result_identity};
-static const cmeta_type_desc chttp_admission_request_pointer = {"const chttp_server_request_view *", sizeof(void *),
-    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_admission_request_type, NULL, NULL};
-static const cmeta_type_desc chttp_admission_result_pointer = {"chttp_server_admission_result *", sizeof(void *),
-    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_admission_result_type, NULL, NULL};
-#define CHTTP_ADMISSION_ACTION(name_) \
-  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
-    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
-    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER), \
-    (chttp_server_admission_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_admission_result_pointer, CMETA_ABI_OBJECT_POINTER))
+typedef struct chttp_application {
+  void *impl;
+} chttp_application;
+static const cmeta_type_identity chttp_admission_request_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.admission.request");
+static const cmeta_type_identity chttp_admission_result_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.admission.result");
+static const cmeta_type_desc chttp_admission_request_type = {
+    "chttp_server_request_view",
+    sizeof(chttp_server_request_view),
+    CMETA_ALIGNOF(chttp_server_request_view),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &chttp_admission_request_identity};
+static const cmeta_type_desc chttp_admission_result_type = {
+    "chttp_server_admission_result",
+    sizeof(chttp_server_admission_result),
+    CMETA_ALIGNOF(chttp_server_admission_result),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &chttp_admission_result_identity};
+static const cmeta_type_desc chttp_admission_request_pointer = {"const chttp_server_request_view *",
+                                                                sizeof(void *),
+                                                                CMETA_ALIGNOF(void *),
+                                                                CMETA_T_POINTER,
+                                                                &chttp_admission_request_type,
+                                                                NULL,
+                                                                NULL};
+static const cmeta_type_desc chttp_admission_result_pointer = {"chttp_server_admission_result *",
+                                                               sizeof(void *),
+                                                               CMETA_ALIGNOF(void *),
+                                                               CMETA_T_POINTER,
+                                                               &chttp_admission_result_type,
+                                                               NULL,
+                                                               NULL};
+#define CHTTP_ADMISSION_ACTION(name_)                                                              \
+  FunctionDeclAsAbiResult(                                                                         \
+      io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_,                       \
+      (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER,              \
+       &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER),                                            \
+      (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED,          \
+       &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER),                                \
+      (chttp_server_admission_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,            \
+       &chttp_admission_result_pointer, CMETA_ABI_OBJECT_POINTER))
 
-static const cmeta_type_identity chttp_upload_sink_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.upload.sink");
-static const cmeta_type_desc chttp_upload_sink_type = {"chttp_body_sink", sizeof(chttp_body_sink),
-    CMETA_ALIGNOF(chttp_body_sink), CMETA_T_OBJECT, NULL, NULL, &chttp_upload_sink_identity};
-static const cmeta_type_desc chttp_upload_sink_pointer = {"chttp_body_sink *", sizeof(void *),
-    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_upload_sink_type, NULL, NULL};
-#define CHTTP_UPLOAD_OPEN_ACTION(name_) \
-  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
-    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
-    (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER), \
-    (chttp_body_sink *, sink, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_upload_sink_pointer, CMETA_ABI_OBJECT_POINTER))
+static const cmeta_type_identity chttp_upload_sink_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.upload.sink");
+static const cmeta_type_desc chttp_upload_sink_type = {"chttp_body_sink",
+                                                       sizeof(chttp_body_sink),
+                                                       CMETA_ALIGNOF(chttp_body_sink),
+                                                       CMETA_T_OBJECT,
+                                                       NULL,
+                                                       NULL,
+                                                       &chttp_upload_sink_identity};
+static const cmeta_type_desc chttp_upload_sink_pointer = {"chttp_body_sink *",
+                                                          sizeof(void *),
+                                                          CMETA_ALIGNOF(void *),
+                                                          CMETA_T_POINTER,
+                                                          &chttp_upload_sink_type,
+                                                          NULL,
+                                                          NULL};
+#define CHTTP_UPLOAD_OPEN_ACTION(name_)                                                            \
+  FunctionDeclAsAbiResult(                                                                         \
+      io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_,                       \
+      (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER,              \
+       &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER),                                            \
+      (const chttp_server_request_view *, request, CMETA_PARAM_IN | CMETA_PARAM_BORROWED,          \
+       &chttp_admission_request_pointer, CMETA_ABI_OBJECT_POINTER),                                \
+      (chttp_body_sink *, sink, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,                            \
+       &chttp_upload_sink_pointer, CMETA_ABI_OBJECT_POINTER))
 
-static const cmeta_type_identity chttp_websocket_event_scope_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.websocket.event-scope");
-static const cmeta_type_desc chttp_websocket_event_scope_type = {"chttp_websocket_event_view",
-    sizeof(chttp_websocket_event_view), CMETA_ALIGNOF(chttp_websocket_event_view),
-    CMETA_T_OBJECT, NULL, NULL, &chttp_websocket_event_scope_identity};
-static const cmeta_type_desc chttp_websocket_event_scope_pointer = {"const chttp_websocket_event_view *",
-    sizeof(void *), CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_websocket_event_scope_type, NULL, NULL};
-#define CHTTP_WEBSOCKET_EVENT_ACTION(name_) \
-  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
-    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
-    (const chttp_websocket_event_view *, event, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_websocket_event_scope_pointer, CMETA_ABI_OBJECT_POINTER))
+static const cmeta_type_identity chttp_websocket_event_scope_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.websocket.event-scope");
+static const cmeta_type_desc chttp_websocket_event_scope_type = {
+    "chttp_websocket_event_view",
+    sizeof(chttp_websocket_event_view),
+    CMETA_ALIGNOF(chttp_websocket_event_view),
+    CMETA_T_OBJECT,
+    NULL,
+    NULL,
+    &chttp_websocket_event_scope_identity};
+static const cmeta_type_desc chttp_websocket_event_scope_pointer = {
+    "const chttp_websocket_event_view *",
+    sizeof(void *),
+    CMETA_ALIGNOF(void *),
+    CMETA_T_POINTER,
+    &chttp_websocket_event_scope_type,
+    NULL,
+    NULL};
+#define CHTTP_WEBSOCKET_EVENT_ACTION(name_)                                                        \
+  FunctionDeclAsAbiResult(                                                                         \
+      io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_,                       \
+      (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER,              \
+       &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER),                                            \
+      (const chttp_websocket_event_view *, event, CMETA_PARAM_IN | CMETA_PARAM_BORROWED,           \
+       &chttp_websocket_event_scope_pointer, CMETA_ABI_OBJECT_POINTER))
 
-static const cmeta_type_identity chttp_asset_relative_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.asset.relative-char");
-static const cmeta_type_identity chttp_asset_relative_const_identity = CMETA_TYPE_ID_CONST_INIT(&chttp_asset_relative_identity);
-static const cmeta_type_identity chttp_asset_relative_pointer_identity = CMETA_TYPE_ID_POINTER_INIT(&chttp_asset_relative_const_identity);
-static const cmeta_type_identity chttp_asset_policy_identity = CMETA_TYPE_ID_ATOM_INIT("chttp.asset.policy-result");
-static const cmeta_type_desc chttp_asset_relative_const_type = {"const char", sizeof(char), CMETA_ALIGNOF(char),
-    CMETA_T_INTEGER, NULL, NULL, &chttp_asset_relative_const_identity};
-static const cmeta_type_desc chttp_asset_relative_pointer = {"const char *", sizeof(const char *),
-    CMETA_ALIGNOF(const char *), CMETA_T_POINTER, &chttp_asset_relative_const_type, NULL, &chttp_asset_relative_pointer_identity};
+static const cmeta_type_identity chttp_asset_relative_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.asset.relative-char");
+static const cmeta_type_identity chttp_asset_relative_const_identity =
+    CMETA_TYPE_ID_CONST_INIT(&chttp_asset_relative_identity);
+static const cmeta_type_identity chttp_asset_relative_pointer_identity =
+    CMETA_TYPE_ID_POINTER_INIT(&chttp_asset_relative_const_identity);
+static const cmeta_type_identity chttp_asset_policy_identity =
+    CMETA_TYPE_ID_ATOM_INIT("chttp.asset.policy-result");
+static const cmeta_type_desc chttp_asset_relative_const_type = {
+    "const char",
+    sizeof(char),
+    CMETA_ALIGNOF(char),
+    CMETA_T_INTEGER,
+    NULL,
+    NULL,
+    &chttp_asset_relative_const_identity};
+static const cmeta_type_desc chttp_asset_relative_pointer = {
+    "const char *",
+    sizeof(const char *),
+    CMETA_ALIGNOF(const char *),
+    CMETA_T_POINTER,
+    &chttp_asset_relative_const_type,
+    NULL,
+    &chttp_asset_relative_pointer_identity};
 static const cmeta_type_desc chttp_asset_policy_type = {"chttp_asset_policy_result",
-    sizeof(chttp_asset_policy_result), CMETA_ALIGNOF(chttp_asset_policy_result),
-    CMETA_T_OBJECT, NULL, NULL, &chttp_asset_policy_identity};
-static const cmeta_type_desc chttp_asset_policy_pointer = {"chttp_asset_policy_result *", sizeof(void *),
-    CMETA_ALIGNOF(void *), CMETA_T_POINTER, &chttp_asset_policy_type, NULL, NULL};
-#define CHTTP_ASSET_POLICY_ACTION(name_) \
-  FunctionDeclAsAbiResult(io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_, \
-    (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER, &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER), \
-    (const char *, relative_path, CMETA_PARAM_IN | CMETA_PARAM_BORROWED, &chttp_asset_relative_pointer, CMETA_ABI_OBJECT_POINTER), \
-    (chttp_asset_policy_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED, &chttp_asset_policy_pointer, CMETA_ABI_OBJECT_POINTER))
+                                                        sizeof(chttp_asset_policy_result),
+                                                        CMETA_ALIGNOF(chttp_asset_policy_result),
+                                                        CMETA_T_OBJECT,
+                                                        NULL,
+                                                        NULL,
+                                                        &chttp_asset_policy_identity};
+static const cmeta_type_desc chttp_asset_policy_pointer = {"chttp_asset_policy_result *",
+                                                           sizeof(void *),
+                                                           CMETA_ALIGNOF(void *),
+                                                           CMETA_T_POINTER,
+                                                           &chttp_asset_policy_type,
+                                                           NULL,
+                                                           NULL};
+#define CHTTP_ASSET_POLICY_ACTION(name_)                                                           \
+  FunctionDeclAsAbiResult(                                                                         \
+      io, int, &cmeta_type_int, CMETA_ABI_SCALAR, CMETA_RESULT_VALUE, name_,                       \
+      (void *, self, CMETA_PARAM_INOUT | CMETA_PARAM_BORROWED | CMETA_PARAM_RECEIVER,              \
+       &cmeta_type_void_ptr, CMETA_ABI_OBJECT_POINTER),                                            \
+      (const char *, relative_path, CMETA_PARAM_IN | CMETA_PARAM_BORROWED,                         \
+       &chttp_asset_relative_pointer, CMETA_ABI_OBJECT_POINTER),                                   \
+      (chttp_asset_policy_result *, result, CMETA_PARAM_OUT | CMETA_PARAM_BORROWED,                \
+       &chttp_asset_policy_pointer, CMETA_ABI_OBJECT_POINTER))
 
 /* Reflected header-only worker callback on a canonical Bean. No Session/body;
  * copied status/Retry-After decides admission. Errors propagate, never allow. */
@@ -98,7 +187,7 @@ typedef struct chttp_action {
   size_t hook_count;
   const chttp_upload *upload;
 } chttp_action;
-#define CHTTP_MAPPING(method_, path_, action_) \
+#define CHTTP_MAPPING(method_, path_, action_)                                                     \
   {method_, path_, FunctionAbi(action_), action_, NULL, NULL, 0u, NULL}
 #define CHTTP_GET(path_, action_) CHTTP_MAPPING(CHTTP_METHOD_GET, path_, action_)
 #define CHTTP_POST(path_, action_) CHTTP_MAPPING(CHTTP_METHOD_POST, path_, action_)
@@ -114,7 +203,9 @@ typedef struct chttp_application_method_interceptor {
   chttp_method_completion_fn after_completion;
 } chttp_application_method_interceptor;
 typedef enum chttp_dispatch {
-  CHTTP_DISPATCH_DIRECT = 0, CHTTP_DISPATCH_CFLOW = 2, CHTTP_DISPATCH_PLUGIN = 3
+  CHTTP_DISPATCH_DIRECT = 0,
+  CHTTP_DISPATCH_CFLOW = 2,
+  CHTTP_DISPATCH_PLUGIN = 3
 } chttp_dispatch;
 /* DIRECT/CFLOW/PLUGIN run synchronously on the owned pool. No borrowed executor.
  * Codec must match plan and is borrowed only at init; canonical metadata,
@@ -195,7 +286,7 @@ typedef struct chttp_binding_limits {
   size_t native_max_items;
   size_t native_max_owned_bytes;
 } chttp_binding_limits;
-#define CHTTP_BINDING_LIMITS_INIT \
+#define CHTTP_BINDING_LIMITS_INIT                                                                  \
   {sizeof(chttp_binding_limits), 0u, 1024u, 4096u, 65536u, 16384u, 16u, 256u, 65536u}
 
 /* Configuration metadata/code borrows Application lifetime. Init resolves
@@ -246,12 +337,15 @@ int chttp_application_stats(const chttp_application *, chttp_server_stats *);
 int chttp_application_close(chttp_application *, uint32_t timeout_ms);
 
 typedef int (*chttp_application_body_fn)(chttp_application *, void *);
-typedef struct chttp_application_outcome { int operation_status; int close_status; } chttp_application_outcome;
+typedef struct chttp_application_outcome {
+  int operation_status;
+  int close_status;
+} chttp_application_outcome;
 /** Status-aware C11 scoped execution; always closes a successfully initialized
  * application. If ownership cannot settle, it is returned in owner for explicit
  * close. Never supplies a no-fail CMeta cleanup for fallible server drain. */
 int chttp_application_with(chttp_application *owner, const chttp_application_config *,
-    chttp_application_body_fn, void *, chttp_application_outcome *);
+                           chttp_application_body_fn, void *, chttp_application_outcome *);
 
 /* Worker telemetry and scope query; neither drives protocol progress. */
 int chttp_application_worker_stats(chttp_application *, chttp_worker_stats *);

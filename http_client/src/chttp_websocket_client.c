@@ -11,6 +11,8 @@
 #include <core/clock.h>
 #include <core/vstr.h>
 #include <uri_parser.h>
+#include <crypto/symmetric.h>
+#include <threads/threads.h>
 
 #include <limits.h>
 #include <stdbool.h>
@@ -54,6 +56,7 @@ typedef struct chttp_websocket_client_impl {
   size_t pending_input_capacity;
   size_t pending_input_size;
   size_t tagged_size;
+  int tagged_status;
   bool tagged_pending;
   chttp_h2_proto *h2_protocol;
   chttp_tls_profile_impl *tls_profile;
@@ -223,6 +226,7 @@ static void chttp_websocket_client_tag_complete(void *user, cnet_websocket *webs
     return;
   }
   client->tagged_pending = false;
+  client->tagged_status = status;
   if (status != SALTS_OK) client->terminal_status = status;
 }
 
@@ -1341,4 +1345,695 @@ int chttp_websocket_client_destroy(chttp_websocket_client *client, uint32_t time
   free(impl);
   client->impl = NULL;
   return first_status;
+}
+
+/* Async facade shares this file's handshake, frame engine and transport code.
+ * Mutex scope is slot/byte admission and publication; allocations and user
+ * callbacks occur outside it. A publisher remains counted through its wake.
+ */
+typedef enum chttp_ws_command_state {
+  CHTTP_WS_FREE, CHTTP_WS_RESERVED, CHTTP_WS_QUEUED, CHTTP_WS_ACTIVE
+} chttp_ws_command_state;
+typedef struct chttp_ws_command {
+  unsigned char *data;
+  size_t size;
+  uint64_t tag;
+  uint32_t generation;
+  unsigned kind;
+  chttp_ws_command_state state;
+  bool canceled;
+} chttp_ws_command;
+typedef struct chttp_async_websocket_impl {
+  chttp_websocket_client wire;
+  sync_mutex_t mutex;
+  sync_thread_affine_state affinity;
+  chttp_async_websocket_callbacks callbacks;
+  chttp_ws_command *commands;
+  uint32_t *queue;
+  size_t capacity, byte_capacity, reserved_bytes, publishers, head, queued;
+  size_t delivered_callbacks;
+  uint32_t active;
+  uint32_t close_timeout_ms;
+  uint64_t connect_deadline, close_deadline;
+  chttp_websocket_connect_options options;
+  chttp_header *headers;
+  char *option_bytes;
+  size_t option_bytes_size;
+  char transport_uri[320], authority[320], target[2050];
+  size_t handshake_request_size;
+  unsigned connect_stage;
+  int status;
+  bool secure, admission, opening, open_delivered, ready;
+  bool closing, peer_close, stopping, stop_requested, stopped;
+} chttp_async_websocket_impl;
+
+enum { CHTTP_WS_TEXT, CHTTP_WS_BINARY, CHTTP_WS_PING, CHTTP_WS_PONG };
+
+static int chttp_async_ws_owner(chttp_async_websocket *client,
+                                chttp_async_websocket_impl **out) {
+  if (client == NULL || client->impl == NULL) return SALTS_EINVAL;
+  *out = client->impl;
+  return sync_thread_affine_check(&(*out)->affinity, client);
+}
+
+static void chttp_async_ws_options_destroy(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  if (wire != NULL) wire->expected_subprotocol = NULL;
+  if (impl->option_bytes != NULL) salts_crypto_clear(impl->option_bytes, impl->option_bytes_size);
+  free(impl->option_bytes);
+  free(impl->headers);
+  impl->option_bytes = NULL;
+  impl->headers = NULL;
+  impl->options = (chttp_websocket_connect_options){0};
+}
+
+static int chttp_async_ws_text_size(size_t *total, const char *text, size_t limit) {
+  const size_t length = strlen(text);
+  if (*total >= limit || length >= limit - *total) return SALTS_EMSGSIZE;
+  *total += length + 1u;
+  return SALTS_OK;
+}
+static char *chttp_async_ws_copy_text(char **cursor, const char *text) {
+  const size_t n = strlen(text) + 1u;
+  char *result = *cursor;
+  memcpy(result, text, n);
+  *cursor += n;
+  return result;
+}
+static int chttp_async_ws_options_copy(chttp_async_websocket_impl *impl,
+                                       const chttp_websocket_connect_options *input) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  size_t bytes = 0u;
+  int status;
+  char *cursor;
+  const size_t limit = wire->handshake_capacity;
+  if (input->header_count > limit / sizeof(chttp_header)) return SALTS_EMSGSIZE;
+  status = chttp_async_ws_text_size(&bytes, input->uri, limit);
+  if (status == SALTS_OK && input->subprotocol != NULL)
+    status = chttp_async_ws_text_size(&bytes, input->subprotocol, limit);
+  for (size_t i = 0; status == SALTS_OK && i < input->header_count; ++i) {
+    const chttp_header *header = &input->headers[i];
+    if (!chttp_websocket_client_header_token(header->name) ||
+        !chttp_websocket_client_header_value(header->value) ||
+        chttp_websocket_client_header_owned(header->name)) return SALTS_EINVAL;
+    status = chttp_async_ws_text_size(&bytes, header->name, limit);
+    if (status == SALTS_OK) status = chttp_async_ws_text_size(&bytes, header->value, limit);
+  }
+  if (status != SALTS_OK) return status;
+  impl->option_bytes = malloc(bytes);
+  if (impl->option_bytes == NULL) return SALTS_ENOMEM;
+  impl->option_bytes_size = bytes;
+  if (input->header_count != 0u) {
+    impl->headers = calloc(input->header_count, sizeof(*impl->headers));
+    if (impl->headers == NULL) { chttp_async_ws_options_destroy(impl); return SALTS_ENOMEM; }
+  }
+  cursor = impl->option_bytes;
+  impl->options = *input;
+  impl->options.uri = chttp_async_ws_copy_text(&cursor, input->uri);
+  impl->options.subprotocol = input->subprotocol == NULL ? NULL
+      : chttp_async_ws_copy_text(&cursor, input->subprotocol);
+  for (size_t i = 0; i < input->header_count; ++i) {
+    impl->headers[i].name = chttp_async_ws_copy_text(&cursor, input->headers[i].name);
+    impl->headers[i].value = chttp_async_ws_copy_text(&cursor, input->headers[i].value);
+  }
+  impl->options.headers = impl->headers;
+  return SALTS_OK;
+}
+
+int chttp_async_websocket_init(chttp_async_websocket *client,
+                               const chttp_async_websocket_config *config) {
+  chttp_async_websocket_impl *impl;
+  int status;
+  size_t metadata;
+  if (client == NULL || client->impl != NULL || config == NULL ||
+      config->command_capacity == 0u || config->command_capacity > UINT32_MAX ||
+      config->pending_byte_capacity == 0u || config->close_timeout_ms == 0u ||
+      config->callbacks.on_open == NULL || config->callbacks.on_send == NULL ||
+      config->callbacks.on_event == NULL || config->callbacks.on_closed == NULL)
+    return SALTS_EINVAL;
+  if (config->command_capacity > (SIZE_MAX - sizeof(*impl)) /
+      (sizeof(chttp_ws_command) + sizeof(uint32_t))) return SALTS_ERANGE;
+  metadata = sizeof(*impl) + config->command_capacity *
+      (sizeof(chttp_ws_command) + sizeof(uint32_t));
+  if (config->pending_byte_capacity > SIZE_MAX - metadata) return SALTS_ERANGE;
+  impl = calloc(1u, sizeof(*impl));
+  if (impl == NULL) return SALTS_ENOMEM;
+  impl->commands = calloc(config->command_capacity, sizeof(*impl->commands));
+  impl->queue = calloc(config->command_capacity, sizeof(*impl->queue));
+  if (impl->commands == NULL || impl->queue == NULL) {
+    free(impl->queue); free(impl->commands); free(impl); return SALTS_ENOMEM;
+  }
+  status = sync_thread_affine_init(&impl->affinity, client);
+  if (status != SALTS_OK) {
+    free(impl->queue); free(impl->commands); free(impl); return status;
+  }
+  status = chttp_websocket_client_init(&impl->wire, &config->client);
+  if (status != SALTS_OK) {
+    free(impl->queue); free(impl->commands); free(impl); return status;
+  }
+  impl->capacity = config->command_capacity;
+  impl->byte_capacity = config->pending_byte_capacity;
+  impl->close_timeout_ms = config->close_timeout_ms;
+  impl->callbacks = config->callbacks;
+  sync_mutex_init(&impl->mutex);
+  client->impl = impl;
+  return SALTS_OK;
+}
+
+int chttp_async_websocket_connect(chttp_async_websocket *client,
+                                  const chttp_websocket_connect_options *options) {
+  chttp_async_websocket_impl *impl;
+  chttp_websocket_client_impl *wire;
+  uri_t uri;
+  char key[CHTTP_WEBSOCKET_KEY_CAPACITY];
+  int status = chttp_async_ws_owner(client, &impl);
+  if (status != SALTS_OK) return status;
+  wire = impl->wire.impl;
+  if (options == NULL || options->size != sizeof(*options) || options->uri == NULL ||
+      options->timeout_ms == 0u || (options->header_count != 0u && options->headers == NULL) ||
+      (options->protocol != CHTTP_HTTP_1_1 && options->protocol != CHTTP_HTTP_2) ||
+      (options->subprotocol != NULL && !chttp_websocket_client_header_token(options->subprotocol)))
+    return SALTS_EINVAL;
+  if (impl->opening || impl->open_delivered || impl->stopping || impl->stopped ||
+      wire->phase != CHTTP_WEBSOCKET_CLIENT_DISCONNECTED) return SALTS_EALREADY;
+  const uint64_t now = monotonic_ms();
+  if (now > UINT64_MAX - options->timeout_ms) return SALTS_ERANGE;
+  status = chttp_async_ws_options_copy(impl, options);
+  if (status != SALTS_OK) return status;
+  wire->protocol = options->protocol;
+  wire->expected_subprotocol = impl->options.subprotocol;
+  status = chttp_websocket_client_uri(impl->options.uri, &uri, &impl->secure,
+      impl->transport_uri, sizeof(impl->transport_uri), impl->authority, sizeof(impl->authority),
+      impl->target, sizeof(impl->target));
+  if (status != SALTS_OK) goto rejected;
+  if ((!impl->secure && options->tls != NULL) ||
+      (options->tls != NULL && options->tls->impl == NULL)) { status = SALTS_EINVAL; goto rejected; }
+  if (impl->secure) {
+    status = chttp_tls_profile_acquire(options->tls, &wire->tls_profile);
+    if (status != SALTS_OK) goto rejected;
+    if ((wire->protocol == CHTTP_HTTP_2 && wire->tls_profile == NULL) ||
+        (wire->tls_profile != NULL && chttp_tls_profile_protocol(wire->tls_profile) != wire->protocol)) {
+      status = SALTS_EPROTONOSUPPORT; goto rejected;
+    }
+  }
+  impl->options.tls = NULL; /* The connection retains the acquired profile, not the public wrapper. */
+  if (wire->protocol == CHTTP_HTTP_2) status = chttp_websocket_client_h2_init(wire);
+  else {
+    status = chttp_websocket_client_key_generate(key, sizeof(key));
+    if (status == SALTS_OK) status = chttp_websocket_accept_compute(key, wire->expected_accept, sizeof(wire->expected_accept));
+    if (status == SALTS_OK) status = chttp_websocket_client_request_build(wire, &impl->options,
+        impl->authority, impl->target, key, &impl->handshake_request_size);
+  }
+  if (status != SALTS_OK) goto rejected;
+  cnet_observer observer = {.on_state = chttp_websocket_client_on_state,
+      .on_receive = chttp_websocket_client_on_receive, .on_send = chttp_websocket_client_on_send, .user = wire};
+  cnet_connect_options connect = {.uri = impl->transport_uri, .observer = observer,
+      .tls_client = chttp_tls_profile_client(wire->tls_profile)};
+  wire->phase = CHTTP_WEBSOCKET_CLIENT_CONNECTING;
+  status = chttp_managed_stream_connect(&wire->transport, &connect, &wire->connection);
+  if (status != SALTS_OK) goto rejected;
+  impl->connect_deadline = now + options->timeout_ms;
+  impl->opening = true;
+  sync_mutex_lock(&impl->mutex);
+  impl->admission = true;
+  sync_mutex_unlock(&impl->mutex);
+  return SALTS_OK;
+rejected:
+  chttp_async_ws_options_destroy(impl);
+  wire->phase = CHTTP_WEBSOCKET_CLIENT_TERMINAL;
+  return status;
+}
+
+static int chttp_async_ws_enqueue(chttp_async_websocket *client, unsigned kind,
+    const void *data, size_t size, uint64_t tag, chttp_websocket_operation *out) {
+  chttp_async_websocket_impl *impl;
+  chttp_websocket_client_impl *wire;
+  chttp_ws_command *command = NULL;
+  size_t index = 0u, limit;
+  unsigned char *copy = NULL;
+  int status;
+  if (out == NULL) return SALTS_EINVAL;
+  *out = (chttp_websocket_operation){0};
+  if (client == NULL || client->impl == NULL || (data == NULL && size != 0u)) return SALTS_EINVAL;
+  impl = client->impl;
+  sync_mutex_lock(&impl->mutex);
+  if (!impl->admission) { sync_mutex_unlock(&impl->mutex); return SALTS_ESHUTDOWN; }
+  wire = impl->wire.impl;
+  limit = kind == CHTTP_WS_PING || kind == CHTTP_WS_PONG ? 125u :
+      (wire->protocol == CHTTP_HTTP_2 ? wire->max_frame_bytes : wire->max_message_bytes);
+  if (size > limit || size > impl->byte_capacity) {
+    sync_mutex_unlock(&impl->mutex); return SALTS_EMSGSIZE;
+  }
+  if (size > impl->byte_capacity - impl->reserved_bytes) {
+    sync_mutex_unlock(&impl->mutex); return SALTS_ENOBUFS;
+  }
+  for (; index < impl->capacity; ++index) {
+    chttp_ws_command *candidate = &impl->commands[index];
+    if (candidate->state == CHTTP_WS_FREE && candidate->generation != UINT32_MAX) {
+      command = candidate; break;
+    }
+  }
+  if (command == NULL) { sync_mutex_unlock(&impl->mutex); return SALTS_ENOBUFS; }
+  ++command->generation;
+  command->state = CHTTP_WS_RESERVED;
+  command->size = size;
+  command->tag = tag;
+  command->kind = kind;
+  command->canceled = false;
+  impl->reserved_bytes += size;
+  ++impl->publishers;
+  sync_mutex_unlock(&impl->mutex);
+  if (size != 0u) {
+    copy = malloc(size);
+    if (copy != NULL) memcpy(copy, data, size);
+  }
+  status = size != 0u && copy == NULL ? SALTS_ENOMEM : SALTS_OK;
+  sync_mutex_lock(&impl->mutex);
+  if (status == SALTS_OK && !impl->admission) status = SALTS_ESHUTDOWN;
+  if (status != SALTS_OK) {
+    sync_mutex_unlock(&impl->mutex);
+    free(copy); /* Return byte credit only after storage has actually gone. */
+    sync_mutex_lock(&impl->mutex);
+    impl->reserved_bytes -= size;
+    command->state = CHTTP_WS_FREE;
+  } else {
+    command->data = copy;
+    command->state = CHTTP_WS_QUEUED;
+    impl->queue[(impl->head + impl->queued) % impl->capacity] = (uint32_t)index;
+    ++impl->queued;
+    *out = (chttp_websocket_operation){(uint32_t)index + 1u, command->generation};
+  }
+  --impl->publishers;
+  /* Wake is bounded, nonblocking, and cannot call application code. Holding
+   * the lock keeps the backend live through the final publisher's wake tail. */
+  const int wake_status = cnet_client_wake(&wire->network);
+  sync_mutex_unlock(&impl->mutex);
+  return status != SALTS_OK ? status : wake_status;
+}
+
+int chttp_async_websocket_send_text(chttp_async_websocket *c, const void *data, size_t n,
+    uint64_t tag, chttp_websocket_operation *out) {
+  return chttp_async_ws_enqueue(c, CHTTP_WS_TEXT, data, n, tag, out);
+}
+int chttp_async_websocket_send_binary(chttp_async_websocket *c, const void *data, size_t n,
+    uint64_t tag, chttp_websocket_operation *out) {
+  return chttp_async_ws_enqueue(c, CHTTP_WS_BINARY, data, n, tag, out);
+}
+int chttp_async_websocket_send_ping(chttp_async_websocket *c, const void *data, size_t n,
+    uint64_t tag, chttp_websocket_operation *out) {
+  return chttp_async_ws_enqueue(c, CHTTP_WS_PING, data, n, tag, out);
+}
+int chttp_async_websocket_send_pong(chttp_async_websocket *c, const void *data, size_t n,
+    uint64_t tag, chttp_websocket_operation *out) {
+  return chttp_async_ws_enqueue(c, CHTTP_WS_PONG, data, n, tag, out);
+}
+int chttp_async_websocket_cancel(chttp_async_websocket *client, chttp_websocket_operation operation) {
+  chttp_async_websocket_impl *impl;
+  chttp_ws_command *command;
+  int status;
+  if (client == NULL || client->impl == NULL || operation.slot == 0u || operation.generation == 0u)
+    return SALTS_EINVAL;
+  impl = client->impl;
+  sync_mutex_lock(&impl->mutex);
+  if (operation.slot > impl->capacity) { sync_mutex_unlock(&impl->mutex); return SALTS_ENOENT; }
+  command = &impl->commands[operation.slot-1u];
+  if (command->generation != operation.generation || command->state == CHTTP_WS_FREE) status = SALTS_ENOENT;
+  else if (command->state != CHTTP_WS_QUEUED) status = SALTS_EBUSY;
+  else if (command->canceled) status = SALTS_EALREADY;
+  else {
+    command->canceled = true;
+    chttp_websocket_client_impl *wire = impl->wire.impl;
+    status = cnet_client_wake(&wire->network);
+  }
+  sync_mutex_unlock(&impl->mutex);
+  return status;
+}
+
+static void chttp_async_ws_seal(chttp_async_websocket_impl *impl, int status) {
+  sync_mutex_lock(&impl->mutex);
+  impl->admission = false;
+  sync_mutex_unlock(&impl->mutex);
+  if (impl->status == SALTS_OK && status != SALTS_OK) impl->status = status;
+  impl->stopping = true;
+}
+
+static void chttp_async_ws_finish(chttp_async_websocket_impl *impl, uint32_t index, int status) {
+  chttp_ws_command *command = &impl->commands[index];
+  const chttp_websocket_operation operation = {index+1u, command->generation};
+  const uint64_t tag = command->tag;
+  const size_t size = command->size;
+  free(command->data);
+  sync_mutex_lock(&impl->mutex);
+  command->data = NULL;
+  command->state = CHTTP_WS_FREE;
+  impl->reserved_bytes -= size;
+  sync_mutex_unlock(&impl->mutex);
+  ++impl->delivered_callbacks;
+  impl->callbacks.on_send(impl->callbacks.user, operation, tag, size, status);
+}
+
+static bool chttp_async_ws_output_pending(chttp_websocket_client_impl *wire) {
+  if (wire->protocol == CHTTP_HTTP_2) return chttp_websocket_client_h2_output_pending(wire);
+  return wire->tagged_pending || wire->write_pending ||
+      (wire->websocket != NULL && cnet_websocket_has_pending_output(wire->websocket));
+}
+
+static int chttp_async_ws_flush(chttp_websocket_client_impl *wire) {
+  int status = chttp_websocket_client_bridge_progress(wire);
+  if (status != SALTS_OK) return status;
+  if (wire->protocol == CHTTP_HTTP_2 && wire->h2_protocol != NULL) {
+    if (wire->h2_frame_size == 0u && wire->websocket != NULL &&
+        cnet_websocket_has_pending_output(wire->websocket)) {
+      status = cnet_websocket_flush(wire->websocket);
+      if (status != SALTS_OK && status != SALTS_EBUSY) return status;
+    }
+    return chttp_websocket_client_h2_wire_flush(wire);
+  }
+  return SALTS_OK;
+}
+
+static void chttp_async_ws_events(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  size_t budget = wire->event_capacity;
+  while (wire->event_count != 0u && budget-- != 0u) {
+    const chttp_websocket_event event = wire->events[wire->event_head].event;
+    wire->event_head = (wire->event_head+1u) % wire->event_capacity;
+    --wire->event_count;
+    if (event.kind == CHTTP_WEBSOCKET_EVENT_CLOSE) {
+      impl->peer_close = true;
+      if (wire->protocol == CHTTP_HTTP_2) wire->h2_close_requested = true;
+      impl->closing = true;
+      sync_mutex_lock(&impl->mutex);
+      impl->admission = false;
+      sync_mutex_unlock(&impl->mutex);
+      const uint64_t now = monotonic_ms();
+      if (impl->close_deadline == 0u) {
+        if (now > UINT64_MAX-impl->close_timeout_ms) chttp_async_ws_seal(impl, SALTS_ERANGE);
+        else impl->close_deadline = now+impl->close_timeout_ms;
+      }
+    }
+    ++impl->delivered_callbacks;
+    impl->callbacks.on_event(impl->callbacks.user, &event);
+  }
+}
+
+static void chttp_async_ws_open_result(chttp_async_websocket_impl *impl, int status) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  const unsigned int http_status = wire->handshake_http_status;
+  impl->opening = false;
+  impl->open_delivered = true;
+  impl->ready = status == SALTS_OK;
+  chttp_async_ws_options_destroy(impl);
+  ++impl->delivered_callbacks;
+  impl->callbacks.on_open(impl->callbacks.user, status, http_status);
+}
+
+static int chttp_async_ws_open_advance(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  int status;
+  if (!wire->connected) return SALTS_OK;
+  if (impl->connect_stage == 0u) {
+    wire->phase = CHTTP_WEBSOCKET_CLIENT_HANDSHAKE;
+    if (wire->protocol == CHTTP_HTTP_1_1) {
+      status = chttp_cnet_retained_send(&wire->network, wire->connection, wire->send_retained,
+          wire->send_buffer, wire->send_capacity, impl->handshake_request_size, 0);
+      if (status != SALTS_OK) return status;
+      wire->write_pending = true;
+      wire->expected_write_size = impl->handshake_request_size;
+      impl->connect_stage = 2u;
+    } else impl->connect_stage = 1u;
+  }
+  if (impl->connect_stage == 1u && chttp_h2_proto_peer_settings_received(wire->h2_protocol)) {
+    if (chttp_h2_proto_peer_enable_connect_protocol(wire->h2_protocol) != 1u) return SALTS_EPROTONOSUPPORT;
+    status = chttp_websocket_client_h2_submit(wire, &impl->options,
+        impl->authority, impl->target, impl->secure);
+    if (status != SALTS_OK) return status;
+    impl->connect_stage = 2u;
+  }
+  status = chttp_async_ws_flush(wire);
+  if (status != SALTS_OK) return status;
+  if (wire->phase == CHTTP_WEBSOCKET_CLIENT_OPEN && !chttp_async_ws_output_pending(wire))
+    chttp_async_ws_open_result(impl, SALTS_OK);
+  return SALTS_OK;
+}
+
+static void chttp_async_ws_commands(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  if (impl->active != 0u) {
+    chttp_ws_command *command = &impl->commands[impl->active-1u];
+    const bool tagged = wire->protocol == CHTTP_HTTP_1_1 && command->kind <= CHTTP_WS_BINARY;
+    if ((tagged && !wire->tagged_pending) ||
+        (!tagged && (!chttp_async_ws_output_pending(wire) || wire->transport_terminal))) {
+      int status = tagged ? wire->tagged_status : wire->terminal_status;
+      if (impl->stop_requested && status != SALTS_OK) status = SALTS_ECANCELED;
+      const uint32_t index = impl->active-1u;
+      impl->active = 0u;
+      chttp_async_ws_finish(impl, index, status);
+    } else return;
+  }
+  for (size_t budget = 0; budget < impl->capacity; ++budget) {
+    sync_mutex_lock(&impl->mutex);
+    if (impl->queued == 0u || (!impl->ready && !impl->stopping)) {
+      sync_mutex_unlock(&impl->mutex); return;
+    }
+    const uint32_t index = impl->queue[impl->head];
+    chttp_ws_command *command = &impl->commands[index];
+    command->state = CHTTP_WS_ACTIVE;
+    const bool canceled = command->canceled;
+    sync_mutex_unlock(&impl->mutex);
+    int status = SALTS_OK;
+    bool submitted = false;
+    if (canceled || impl->stopping || impl->closing) {
+      status = canceled || impl->stop_requested ? SALTS_ECANCELED :
+          (impl->status != SALTS_OK ? impl->status : SALTS_ESHUTDOWN);
+    } else {
+      if (chttp_async_ws_output_pending(wire)) status = SALTS_EBUSY;
+      else if (wire->protocol == CHTTP_HTTP_1_1 && command->kind <= CHTTP_WS_BINARY) {
+        status = cnet_websocket_send_tagged(wire->websocket,
+            command->kind == CHTTP_WS_TEXT ? CNET_WEBSOCKET_MESSAGE_TEXT : CNET_WEBSOCKET_MESSAGE_BINARY,
+            command->data, command->size, 1u);
+        if (status == SALTS_OK) {
+          wire->tagged_pending = true; wire->tagged_size = command->size; wire->tagged_status = SALTS_OK;
+        }
+      } else {
+        const chttp_websocket_client_send_fn sends[] = {cnet_websocket_send_text,
+            cnet_websocket_send_binary,cnet_websocket_send_ping,cnet_websocket_send_pong};
+        status = sends[command->kind](wire->websocket, command->data, command->size);
+      }
+      submitted = status == SALTS_OK;
+      if (status == SALTS_ENOBUFS || status == SALTS_EBUSY) {
+        sync_mutex_lock(&impl->mutex); command->state = CHTTP_WS_QUEUED;
+        sync_mutex_unlock(&impl->mutex); return;
+      }
+    }
+    sync_mutex_lock(&impl->mutex);
+    impl->head = (impl->head+1u) % impl->capacity;
+    --impl->queued;
+    sync_mutex_unlock(&impl->mutex);
+    if (submitted) { impl->active = index+1u; return; }
+    chttp_async_ws_finish(impl, index, status);
+  }
+}
+
+static bool chttp_async_ws_normal_terminal(chttp_async_websocket_impl *impl,
+                                           chttp_websocket_client_impl *wire, int status) {
+  if (status != SALTS_ECONNRESET && status != SALTS_ECANCELED) return false;
+  if (impl->stop_requested) return true;
+  cnet_websocket_state state = CNET_WEBSOCKET_OPEN;
+  return impl->peer_close && wire->websocket != NULL &&
+      cnet_websocket_state_get(wire->websocket, &state) == SALTS_OK && state == CNET_WEBSOCKET_CLOSED;
+}
+
+static void chttp_async_ws_observe_terminal(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  if (wire->terminal_status != SALTS_OK &&
+      !chttp_async_ws_normal_terminal(impl, wire, wire->terminal_status))
+    chttp_async_ws_seal(impl, wire->terminal_status);
+  if (wire->transport_terminal) chttp_async_ws_seal(impl, impl->status);
+}
+
+static int chttp_async_ws_drive(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  int status;
+  const uint64_t now = monotonic_ms();
+  if (impl->opening && now >= impl->connect_deadline) chttp_async_ws_seal(impl, SALTS_ETIMEDOUT);
+  if (impl->closing && impl->close_deadline != 0u && now >= impl->close_deadline)
+    chttp_async_ws_seal(impl, SALTS_ETIMEDOUT);
+  chttp_async_ws_events(impl);
+  chttp_async_ws_observe_terminal(impl);
+  if (impl->stopping && impl->opening)
+    chttp_async_ws_open_result(impl, impl->status != SALTS_OK ? impl->status : SALTS_ECANCELED);
+  if (impl->opening && !impl->stopping) {
+    status = chttp_async_ws_open_advance(impl);
+    if (status != SALTS_OK && status != SALTS_ENOBUFS && status != SALTS_EBUSY)
+      chttp_async_ws_seal(impl, status);
+  }
+  chttp_async_ws_events(impl);
+  chttp_async_ws_commands(impl);
+  if (!impl->stopping && wire->connected && !wire->transport_terminal) {
+    status = chttp_async_ws_flush(wire);
+    if (status != SALTS_OK && status != SALTS_ENOBUFS && status != SALTS_EBUSY)
+      chttp_async_ws_seal(impl, status);
+    /* H1 binding requires the opening write's actual terminal first. */
+    if (!impl->stopping && !(impl->opening && wire->protocol == CHTTP_HTTP_1_1 &&
+        (impl->connect_stage == 0u || wire->write_pending))) {
+      status = chttp_websocket_client_receive_arm(wire);
+      if (status != SALTS_OK && status != SALTS_ENOBUFS && status != SALTS_EBUSY)
+        chttp_async_ws_seal(impl, status);
+    }
+  }
+  if (impl->closing && wire->websocket != NULL && !chttp_async_ws_output_pending(wire)) {
+    cnet_websocket_state state = CNET_WEBSOCKET_OPEN;
+    status = cnet_websocket_state_get(wire->websocket, &state);
+    if (status != SALTS_OK) chttp_async_ws_seal(impl, status);
+    else if (state == CNET_WEBSOCKET_CLOSED &&
+        (wire->protocol != CHTTP_HTTP_2 || wire->h2_stream_terminal))
+      chttp_async_ws_seal(impl, SALTS_OK);
+  }
+  if (impl->stopping && !wire->transport_terminal && wire->connection.generation != 0u) {
+    status = chttp_managed_stream_close(&wire->transport);
+    if (status != SALTS_OK && status != SALTS_EALREADY && status != SALTS_ESHUTDOWN &&
+        status != SALTS_ENOBUFS && status != SALTS_EBUSY) chttp_async_ws_seal(impl, status);
+  }
+  if (wire->transport_terminal) {
+    /* No new wire output is admitted here; close settles copied logical tags. */
+    status = chttp_websocket_client_bridge_progress(wire);
+    if (status != SALTS_OK && !chttp_async_ws_normal_terminal(impl, wire, status) &&
+        status != SALTS_ESHUTDOWN) chttp_async_ws_seal(impl, status);
+    chttp_async_ws_commands(impl);
+  }
+  return impl->status;
+}
+
+static int chttp_async_ws_release_wire(chttp_async_websocket_impl *impl) {
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  int status;
+  if (!impl->stopping || impl->active != 0u) return SALTS_OK;
+  sync_mutex_lock(&impl->mutex);
+  const bool pending = impl->queued != 0u || impl->publishers != 0u;
+  sync_mutex_unlock(&impl->mutex);
+  if (pending || (wire->connection.generation != 0u && !wire->transport_terminal)) return SALTS_OK;
+  chttp_async_ws_events(impl);
+  if (impl->opening) chttp_async_ws_open_result(impl,
+      impl->status != SALTS_OK ? impl->status : SALTS_ECANCELED);
+  status = chttp_websocket_client_destroy(&impl->wire, 0u);
+  if (impl->wire.impl != NULL) {
+    /* A zero-budget stop reports pending drainage; retain every allocation. */
+    if (status == SALTS_ETIMEDOUT || status == SALTS_EBUSY) return SALTS_OK;
+    return status;
+  }
+  if (impl->status == SALTS_OK && status != SALTS_OK) impl->status = status;
+  chttp_async_ws_options_destroy(impl);
+  impl->stopped = true;
+  ++impl->delivered_callbacks;
+  impl->callbacks.on_closed(impl->callbacks.user, impl->status);
+  return impl->status;
+}
+
+int chttp_async_websocket_poll(chttp_async_websocket *client, uint32_t timeout_ms,
+                               size_t *callbacks) {
+  chttp_async_websocket_impl *impl;
+  int status;
+  uint32_t wait = timeout_ms;
+  if (callbacks == NULL) return SALTS_EINVAL;
+  *callbacks = 0u;
+  status = chttp_async_ws_owner(client, &impl);
+  if (status != SALTS_OK) return status;
+  if (impl->stopped) return SALTS_ESHUTDOWN;
+  if (!impl->opening && !impl->open_delivered && !impl->stopping) return SALTS_EINVAL;
+  impl->affinity.busy = true;
+  impl->delivered_callbacks = 0u;
+  (void)chttp_async_ws_drive(impl);
+  status = chttp_async_ws_release_wire(impl);
+  if (!impl->stopped) {
+    chttp_websocket_client_impl *wire = impl->wire.impl;
+    const uint64_t now = monotonic_ms();
+    if (impl->delivered_callbacks != 0u) wait = 0u;
+    const uint64_t deadlines[2] = {impl->opening ? impl->connect_deadline : 0u,
+                                   impl->closing ? impl->close_deadline : 0u};
+    for (unsigned i = 0; i < 2u; ++i) {
+      if (deadlines[i] != 0u) {
+        const uint64_t remaining = deadlines[i] > now ? deadlines[i]-now : 0u;
+        if (remaining < wait) wait = (uint32_t)remaining;
+      }
+    }
+    size_t events = 0u;
+    int drive_status = cnet_client_poll(&wire->network, wait, &events);
+    if (drive_status != SALTS_OK && !(impl->stopping && drive_status == SALTS_ESHUTDOWN))
+      chttp_async_ws_seal(impl, drive_status);
+    drive_status = chttp_managed_stream_progress(&wire->transport);
+    if (drive_status != SALTS_OK) chttp_async_ws_seal(impl, drive_status);
+    (void)chttp_async_ws_drive(impl);
+    const int release_status = chttp_async_ws_release_wire(impl);
+    if (status == SALTS_OK) status = release_status;
+  }
+  *callbacks = impl->delivered_callbacks;
+  if (status == SALTS_OK) status = impl->status;
+  impl->affinity.busy = false;
+  return status;
+}
+
+int chttp_async_websocket_close(chttp_async_websocket *client, uint16_t code,
+                                const void *reason, size_t size) {
+  chttp_async_websocket_impl *impl;
+  int status = chttp_async_ws_owner(client, &impl);
+  if (status != SALTS_OK) return status;
+  if ((reason == NULL && size != 0u) || size > 123u) return SALTS_EINVAL;
+  if (!impl->ready || impl->closing || impl->stopping || impl->stopped) return SALTS_ESHUTDOWN;
+  const uint64_t now = monotonic_ms();
+  if (now > UINT64_MAX-impl->close_timeout_ms) return SALTS_ERANGE;
+  sync_mutex_lock(&impl->mutex);
+  if (impl->queued != 0u || impl->active != 0u || impl->publishers != 0u) {
+    sync_mutex_unlock(&impl->mutex); return SALTS_EBUSY;
+  }
+  chttp_websocket_client_impl *wire = impl->wire.impl;
+  /* This only encodes a bounded control frame into the existing engine;
+   * wire submission and application callbacks happen after unlocking. */
+  status = cnet_websocket_close(wire->websocket, code, reason, size);
+  if (status == SALTS_OK) {
+    impl->admission = false;
+    impl->closing = true;
+    impl->close_deadline = now+impl->close_timeout_ms;
+    if (wire->protocol == CHTTP_HTTP_2) wire->h2_close_requested = true;
+  }
+  sync_mutex_unlock(&impl->mutex);
+  return status;
+}
+
+int chttp_async_websocket_stop(chttp_async_websocket *client, uint32_t timeout_ms) {
+  chttp_async_websocket_impl *impl;
+  int status = chttp_async_ws_owner(client, &impl);
+  if (status != SALTS_OK) return status;
+  if (impl->stopped) return impl->status;
+  const uint64_t now = monotonic_ms();
+  if (now > UINT64_MAX-timeout_ms) return SALTS_ERANGE;
+  const uint64_t deadline = now+timeout_ms;
+  impl->stop_requested = true;
+  chttp_async_ws_seal(impl, SALTS_OK);
+  do {
+    size_t callbacks;
+    const uint64_t current = monotonic_ms();
+    const uint64_t remaining = deadline > current ? deadline-current : 0u;
+    status = chttp_async_websocket_poll(client, remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining, &callbacks);
+    if (impl->stopped) return impl->status != SALTS_OK ? impl->status : status;
+  } while (monotonic_ms() < deadline);
+  return SALTS_ETIMEDOUT;
+}
+
+int chttp_async_websocket_destroy(chttp_async_websocket *client) {
+  chttp_async_websocket_impl *impl;
+  int status = chttp_async_ws_owner(client, &impl);
+  if (status != SALTS_OK) return status;
+  sync_mutex_lock(&impl->mutex);
+  const bool busy = !impl->stopped || impl->publishers != 0u || impl->queued != 0u || impl->active != 0u;
+  sync_mutex_unlock(&impl->mutex);
+  if (busy) return SALTS_EBUSY;
+  status = sync_thread_affine_reset(&impl->affinity, client);
+  if (status != SALTS_OK) return status;
+  sync_mutex_destroy(&impl->mutex);
+  free(impl->queue);
+  free(impl->commands);
+  free(impl);
+  client->impl = NULL;
+  return SALTS_OK;
 }

@@ -2,10 +2,12 @@
 
 ## Dependency inputs
 
-Use the exact versions and root variables in [`.env.example`](../.env.example).
-CMake reads SDK roots from the parent environment without upstream version
-arguments and does not parse `.env`. Version variables control restoration. Load it with your
-existing environment manager, preserving credentials and unrelated settings.
+Define upstream versions, immutable refs and SDK roots only in the repository
+`.env`, using [`.env.example`](../.env.example) as the field template. SDK recovery
+reads the required `.env` directly and ignores inherited upstream selections.
+CMake reads SDK roots from the explicitly loaded parent environment without
+upstream version arguments and does not parse `.env`. Load it with your existing
+environment manager, preserving credentials and unrelated settings.
 Use absolute forward-slash paths. Only the matching vcpkg profile belongs in
 `CMAKE_PREFIX_PATH`; first-party packages use their own configured roots.
 
@@ -65,12 +67,11 @@ a native host executable through `SaltsUtils_IDLC_EXECUTABLE`, with explicit
 CI restores a separate released Linux host compiler closure. Cross-build and
 installation do not prove device execution; CI has no Android device runner.
 
-## CI variables
+## CI dependency inputs
 
-Set `VCPKG_CACHE_VERSION`, `SALTS_BASE_VERSION`, `CMETA_VERSION`,
-`SALTS_CNET_VERSION`, and `SALTS_UTILS_VERSION` to exact stable releases.
-`CMETA_REF` selects the immutable preparation entry point, currently
-`a5fad1682fcf501160b8fc6662dd55724d7b740d`.
+CI must provide its `.env` before upstream checkouts or SDK recovery. Upstream
+versions and refs cannot come from GitHub repository variables. The file remains
+untracked; credentials and unrelated machine settings must not be published.
 
 The eight published SDK profiles are explicit in
 [`sdk-matrix.json`](../.github/ci/sdk-matrix.json). The prepare job downloads

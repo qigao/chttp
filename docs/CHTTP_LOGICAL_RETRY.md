@@ -40,9 +40,46 @@ H1 任意响应字节、H2 已开始解码的响应 headers，或断链时无法
 block，均终止重放资格。TLS 验证前的未知 reset/timeout 保守终止；证书、身份、ALPN、
 协议错误不提供降级路径。429/5xx 是普通 HTTP 结果，不是本策略的触发条件。
 
-首期不支持 source rewind、sink rollback 或文件 reopen；`body_source`/`body_sink`
-非 NULL 时返回 ENOTSUP（包括 max_attempts=1），不消费它们。不新增 async logical
-operation、取消句柄、RPC/S3 自动授权或目的地切换。
+阻塞 `chttp_request_retry()` 保持内存请求契约；`body_source`/`body_sink` 非 NULL 时
+返回 ENOTSUP（包括 max_attempts=1），不消费它们。异步流/文件重试使用下面的显式入口；
+RPC/S3 和目的地选择没有新增自动授权。
+
+## 异步逻辑操作与回放
+
+`chttp_async_client_submit_retry(client, request, timeouts, retry, replay, complete, user, out)`
+复用同一 async client 的 poll/stop；`request.on_complete` 必须为 NULL，最终回调使用这里的
+`complete`。`timeouts.total_timeout_ms` 必须为正；退避和所有 attempt 共用固定 deadline，
+idle budget 每个 attempt 独立计时。URI/authority/target/headers/body 和 stream 描述符复制；
+TLS profile retain，回调 user 与 stream/hook user 借用到最终回调返回。
+
+每个 client 最多 `request_capacity` 条逻辑记录，物理 attempt 仍受原请求表约束；没有新增
+线程、poller 或无界队列。`chttp_async_logical_request_cancel()` 取消 generation handle；
+取消、stop、授权不足或预算耗尽都抑制下一次 admission，最终回调仅一次。poll 的 completion
+计数只包含逻辑最终回调，不暴露内部失败 attempt。handle 的存储保留到实际物理资源排空，
+旧 generation 不能取消新操作。所有 submit/cancel/poll/stop 都沿原单线程调用约束。
+
+多次尝试的 source 要求已知 content length 和 `chttp_request_replay.rewind_source`；sink
+要求 `rollback_sink`。缺少能力在 admission 前返回 ENOTSUP。旧 attempt 的网络发送、
+文件操作和 stream lease 实际终止后，先 rewind、再 rollback，各执行一次，然后新 admission。
+hook 运行于 poll 线程，不得重入或阻塞；任一失败以 `retry-replay` 终止。sink rollback 的
+显式契约允许幂等请求重放部分 transport 响应；已开始响应不能再用“协议证明未执行”授权。
+不提供 rollback 的内存响应继续沿原响应开始即停止重放的规则。
+
+`chttp_async_client_submit_file_retry()` 接收 `chttp_retry_files`，upload/download path 恰选
+一个，request body/source/sink 必须为空。path 在 `max_header_bytes` 内复制；文件打开在
+poll 中进行，打开失败也有一次最终回调。上传每次使用既有异步 file transfer，关闭排空后
+重开，核对 size/mtime/ctime；调用方必须保持路径和内容不变，metadata 核对不替代这一契约。
+下载将每次输出写到同一私有相邻临时文件，旧文件关闭后 reopen/truncate；只有完整 2xx
+才异步 FLUSH、close、rename。失败/取消移除临时文件，目标文件不变；非 2xx 是普通 HTTP
+结果，不提交文件，也不触发重试。文件排空/提交可以晚于 HTTP 结果 deadline。
+
+当前选用 [CMeta 0.1.8](https://github.com/qigao/cmeta/releases/tag/v0.1.8) 的 IOCP 后端
+通过一个按需调度的 Windows work 对象执行 `FlushFileBuffers`。排队任务使用既有有界
+request table，同一后端最多执行一个 flush；不阻塞 HTTP poll 或 IOCP dispatcher。
+取消尚未执行的任务会跳过调用，已开始的刷盘必须实际返回后才能发布 terminal、释放句柄。
+文件真实刷盘错误保留在 `status/native_status` 中。io_uring/Darwin AIO 使用其原生异步
+FLUSH。HTTP 不切换后端或调用同步 fsync 兼容路径。回滚只需移除新增的异步声明/运行时/
+调用与相关测试；既有阻塞重试及单次请求入口保持独立。
 
 ## 时间、内存与关闭协议
 
@@ -89,5 +126,8 @@ deadline 上限、原接口无重放及失败后复用。`chttp_connection_recov
 截止点拒绝、attempt/body credit 仅提交一次，以及取消、安全、零 body 和溢出边界；
 不使用 sleep、环境时钟替换或生产测试 hook。
 
-回滚一起移除新声明、logical loop、输入 owner 和相关调用/测试，保留旧单次路径和独立
-物理恢复。本改动不宣称 async retry 或整个 #231 的全部验收完成。
+异步正式用例另覆盖 H1/H2 精确重放次数、输入复制、source rewind、partial sink rollback、
+hook 失败、固定 deadline、累计字节、退避取消/stop、文件重开及源变化拒绝。
+正式用例还覆盖 IOCP 两个 sink 共享运行时并发 flush、H1 部分下载重开后完整提交、H2
+REFUSED_STREAM 后下载提交与失败后的原目标保留。其他平台的 HTTP 下载运行验收仍需在
+对应平台执行。不宣称整个 #231 的全部验收完成。

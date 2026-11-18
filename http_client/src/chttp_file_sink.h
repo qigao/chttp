@@ -24,7 +24,6 @@ typedef struct chttp_file_sink_transfer {
   chttp_file_sink_ready_fn ready;
   void *ready_user;
   cflow_io_request_id pending_request;
-  cflow_io_lease_id next_lease;
   uint64_t file_offset;
   size_t buffer_capacity;
   size_t buffer_offset;

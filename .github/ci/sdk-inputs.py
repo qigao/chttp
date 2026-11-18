@@ -1,6 +1,7 @@
 """Prepare published split SDKs once, then restore only verified original TARs.
 
 Base, vcpkg and compiler inputs use the immutable CMeta preparation entry point.
+The repository .env is the sole source of upstream selections.
 This file supplies CHttp's CNet and Utils release manifests, not a downloader.
 CMeta uses the source SDK composition declared by the selected Utils release.
 """
@@ -20,9 +21,21 @@ parser.add_argument('--profile')
 parser.add_argument('--prefix', default='')
 parser.add_argument('--package', choices=('salts-cnet', 'salts-utils'))
 args = parser.parse_args()
-root = Path.cwd()
+root = Path(__file__).resolve().parents[2]
 inputs = root / 'build/ci-inputs'
-infra = Path(os.environ['VCPKG_CACHE_REPOSITORY_ROOT'])
+upstream_fields = (
+    'VCPKG_CACHE_VERSION', 'SALTS_BASE_VERSION', 'CMETA_VERSION', 'CMETA_REF',
+    'SALTS_CNET_VERSION', 'SALTS_UTILS_VERSION', 'VCPKG_CACHE_REPOSITORY_ROOT',
+)
+upstream = {}
+with (root / '.env').open(encoding='utf-8-sig') as source:
+    for line in source:
+        name, separator, value = line.rstrip('\r\n').partition('=')
+        if name in upstream_fields:
+            upstream[name] = value
+for name in upstream_fields:
+    os.environ[name] = upstream[name]
+infra = Path(upstream['VCPKG_CACHE_REPOSITORY_ROOT'])
 packages = [('salts-cnet', 'SALTS_CNET', 'SaltsCNet'),
             ('salts-utils', 'SALTS_UTILS', 'SaltsUtils')]
 if args.package:
@@ -81,7 +94,7 @@ if args.phase == 'prepare':
     matrix = read(Path(__file__).with_name('sdk-matrix.json'))
     profiles = [args.profile] if args.profile else [p['sdk'] for p in matrix['include']]
     for repo, key, package in packages:
-        version = os.environ[key + '_VERSION']
+        version = upstream[key + '_VERSION']
         if not re.fullmatch(r'\d+\.\d+\.\d+', version):
             raise ValueError(key + '_VERSION must select a stable release')
         release = github(repo, f'releases/tags/v{version}')
@@ -104,13 +117,13 @@ if args.phase == 'prepare':
             if github(repo, f'git/commits/{source}')['tree']['sha'] != manifest['tree']:
                 raise ValueError('Release and SDK source trees differ')
         if repo == 'salts-utils':
-            required = {'SaltsBase': os.environ['SALTS_BASE_VERSION'], 'CMeta': os.environ['CMETA_VERSION'],
-                        'cmetaCommit': os.environ['CMETA_REF'], 'vcpkg-cache': os.environ['VCPKG_CACHE_VERSION']}
+            required = {'SaltsBase': upstream['SALTS_BASE_VERSION'], 'CMeta': upstream['CMETA_VERSION'],
+                        'cmetaCommit': upstream['CMETA_REF'], 'vcpkg-cache': upstream['VCPKG_CACHE_VERSION']}
             if any(manifest['dependencies'][k] != v for k, v in required.items()):
                 raise ValueError('Utils dependency composition differs from selected SDK inputs')
         if repo == 'salts-cnet' and any(
-                sdk['sdk_manifest']['base_version'] != os.environ['SALTS_BASE_VERSION']
-                or sdk['sdk_manifest']['cache_version'] != os.environ['VCPKG_CACHE_VERSION']
+                sdk['sdk_manifest']['base_version'] != upstream['SALTS_BASE_VERSION']
+                or sdk['sdk_manifest']['cache_version'] != upstream['VCPKG_CACHE_VERSION']
                 for sdk in manifest['sdks']):
             raise ValueError('CNet dependency composition differs from selected SDK inputs')
         selected = []
@@ -136,7 +149,7 @@ else:
         if original.stat().st_size != metadata['size'] or 'sha256:' + digest(original) != metadata['digest']:
             raise ValueError('Prepared release manifest failed integrity validation: ' + repo)
         manifest = read(original)
-        if manifest['version'] != os.environ[key + '_VERSION']:
+        if manifest['version'] != upstream[key + '_VERSION']:
             raise ValueError('Prepared version disagrees with selected environment: ' + repo)
         platform = cnet_profiles.get(args.profile, args.profile) if key == 'SALTS_CNET' else args.profile
         sdk = sdk_entry(repo, manifest, platform)

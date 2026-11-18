@@ -6,6 +6,8 @@
 
 #include "chttp_file_sink.h"
 #include "chttp_file_transfer.h"
+#include <core/tstr.h>
+int chttp_file_temp_path(const char *output_path, tstr *out_path);
 
 int chttp_destination_select(const chttp_destination_options *options,
                                const chttp_request_options *request,

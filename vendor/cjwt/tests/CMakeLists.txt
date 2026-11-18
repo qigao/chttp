@@ -22,8 +22,7 @@ foreach(test_file ${TEST_FILES})
     target_include_directories(${test_name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../include
         ${CMAKE_CURRENT_SOURCE_DIR}/../include/cjwt
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../crypto/src)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_compile_definitions(${test_name} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     
     if(MSVC)
@@ -41,6 +40,8 @@ foreach(test_file ${TEST_FILES})
     add_test(NAME ${test_name} COMMAND ${test_name})
     set_target_properties(${test_name} PROPERTIES FOLDER vendor/cjwt/tests)
 endforeach()
+
+target_link_libraries(chttp_cjwt_test_jwk PRIVATE Salts::Crypto)
 
 foreach(language IN ITEMS c cpp)
   cmake_add_test(chttp_cjwt_public_${language}_test

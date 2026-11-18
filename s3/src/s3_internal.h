@@ -93,8 +93,8 @@ int s3_response_parse_service_error(s3_response *response, size_t max_xml_bytes,
                                     size_t max_xml_nodes);
 
 int s3_xml_parse_root(const void *body, size_t body_size, size_t max_xml_bytes,
-                      size_t max_xml_nodes, const char *expected_root,
-                      xml_document *out_document, xml_node *out_root);
+                      size_t max_xml_nodes, const char *expected_root, xml_document *out_document,
+                      xml_node *out_root);
 int s3_xml_node_name_equal(xml_node node, const char *expected);
 xml_node s3_xml_child(xml_node parent, const char *name);
 int s3_xml_text_dup(xml_node node, char **out_text);

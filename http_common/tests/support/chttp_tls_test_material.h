@@ -5,9 +5,9 @@
  * Test identities intentionally separate TLS server and mTLS client roles.
  *
  * Server identity: RSA leaf signed by an RSA root. This exercises the released
- * GmSSL TLS 1.3 RSA server-signing path used by the general HTTPS/WSS/H2 tests.
+ * Salts::Crypto TLS 1.3 RSA server-signing path used by the general HTTPS/WSS/H2 tests.
  *
- * mTLS client identity: P-256 leaf signed by a P-256 root. GmSSL TLS 1.3
+ * mTLS client identity: P-256 leaf signed by a P-256 root. Salts::Crypto TLS 1.3
  * CertificateRequest selection requires an EC issuer for
  * signature_algorithms_cert. Both trust anchors are kept separate from the
  * presented leaf chains.

@@ -139,8 +139,8 @@ int s3_xml_text_dup(xml_node node, char **out_text) {
 }
 
 int s3_xml_parse_root(const void *body, size_t body_size, size_t max_xml_bytes,
-                      size_t max_xml_nodes, const char *expected_root,
-                      xml_document *out_document, xml_node *out_root) {
+                      size_t max_xml_nodes, const char *expected_root, xml_document *out_document,
+                      xml_node *out_root) {
   xml_limits limits = xml_default_limits();
   xml_diagnostic diagnostic = {0};
   xml_status xml_status;

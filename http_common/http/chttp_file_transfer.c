@@ -3,20 +3,20 @@
 #include <core/error_codes.h>
 #include <threads/threads.h>
 
-#include <stdlib.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* Read transfers can share a runtime: lease identity cannot be per file.
+/* Read/write/flush transfers share a runtime: lease identity cannot be per file.
  * Never wrap/reuse IDs, including while a completion callback submits its next
  * read. Relaxed ordering allocates identity only; it does not publish buffers. */
-static atomic_uint_fast64_t chttp_file_read_lease = 1u;
+static atomic_uint_fast64_t chttp_file_lease = 1u;
 
-static cflow_io_lease_id chttp_file_read_next_lease(void) {
-  uint_fast64_t current = atomic_load_explicit(&chttp_file_read_lease, memory_order_relaxed);
+cflow_io_lease_id chttp_file_next_lease(void) {
+  uint_fast64_t current = atomic_load_explicit(&chttp_file_lease, memory_order_relaxed);
   while (current != UINT64_MAX) {
-    if (atomic_compare_exchange_weak_explicit(&chttp_file_read_lease, &current, current + 1u,
-                                             memory_order_relaxed, memory_order_relaxed))
+    if (atomic_compare_exchange_weak_explicit(&chttp_file_lease, &current, current + 1u,
+                                              memory_order_relaxed, memory_order_relaxed))
       return (cflow_io_lease_id)current;
   }
   return 0u;
@@ -131,11 +131,11 @@ int chttp_file_transfer_open_read(chttp_file_transfer *transfer, cflow_io_file_r
 }
 
 int chttp_file_transfer_open_read_range(chttp_file_transfer *transfer,
-    cflow_io_file_runtime *runtime, const char *path, uint64_t offset, size_t length,
-    size_t chunk_capacity) {
+                                        cflow_io_file_runtime *runtime, const char *path,
+                                        uint64_t offset, size_t length, size_t chunk_capacity) {
   if (length > UINT64_MAX - offset) return SALTS_ERANGE;
-  const int status = chttp_file_transfer_open_read(transfer, runtime, path, length,
-                                                   chunk_capacity, NULL, NULL);
+  const int status =
+      chttp_file_transfer_open_read(transfer, runtime, path, length, chunk_capacity, NULL, NULL);
   if (status != SALTS_OK) return status;
   transfer->file_start = offset;
   transfer->file_offset = offset;
@@ -165,7 +165,7 @@ static chttp_file_source_result chttp_file_transfer_submit_read(chttp_file_trans
   } else {
     request_size = 1u;
   }
-  lease = chttp_file_read_next_lease();
+  lease = chttp_file_next_lease();
   if (lease == 0u) {
     chttp_file_transfer_fail(transfer, SALTS_ERANGE, 0);
     return CHTTP_FILE_SOURCE_ERROR;

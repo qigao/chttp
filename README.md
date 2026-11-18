@@ -15,13 +15,15 @@ plugins and CFlow execution; SaltsUtils supplies DataBind, IDL and Jinja.
 | Release input | CMake package | SDK root | Responsibility |
 | --- | --- | --- | --- |
 | `SALTS_BASE_VERSION=0.1.8` | `SaltsBase` | `SALTS_BASE_ROOT` | Core, NativeIO, parsers, TinyTest |
-| `CMETA_VERSION=0.1.6` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
-| `SALTS_CNET_VERSION=0.1.12` | `SaltsCNet` | `SALTS_CNET_ROOT` | CNet and Crypto |
-| `SALTS_UTILS_VERSION=0.1.4` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
+| `CMETA_VERSION=0.1.8` | `CMeta` | `CMETA_ROOT` | CMeta, CFlow, CSTL, plugins |
+| `SALTS_CNET_VERSION=0.1.16` | `SaltsCNet` | `SALTS_CNET_ROOT` | CNet and Crypto |
+| `SALTS_UTILS_VERSION=0.1.6` | `SaltsUtils` | `SALTS_UTILS_ROOT` | DataBind, IDL, Jinja |
 | `VCPKG_CACHE_VERSION=0.1.3` | preinstalled vcpkg profile | `VCPKG_INSTALLED_DIR` | Third-party packages and compiler contract |
 
-Versions come from the parent environment or a locally loaded `.env`, without
-the `v` prefix. CMake does not load dotenv files. Merge [`.env.example`](.env.example)
+Upstream versions and immutable refs come only from the repository `.env`,
+without the `v` prefix. SDK recovery reads that required file directly; inherited
+version variables cannot override it. CMake receives roots from the explicitly
+loaded environment and does not load dotenv files. Merge [`.env.example`](.env.example)
 into existing machine settings and keep credentials private. Each SDK root must
 match the compiler, architecture, configuration and selected release. Package
 discovery is restricted to those roots. CMake does not take upstream version
@@ -34,15 +36,16 @@ with the SDK roots above. After changing an SDK, compiler or triplet,
 configure explicitly with `cmake --fresh --preset <user-preset>`; normal configure
 does not clear package caches or select another dependency source.
 
-SaltsUtils 0.1.4 declares CMeta 0.1.6 source SDKs from immutable ref
-`679710f7e3312811efdd92494744a2499286a6a5`, built against Base 0.1.8.
+SaltsUtils 0.1.6 declares CMeta 0.1.8 source SDKs from immutable ref
+`fc4427f0e3f23487c34f1f5d595f96e605ba0191`, built against Base 0.1.8.
 CI reuses that release's `build-cmeta-sdk.ps1` for target and Android host SDKs.
-The older published CMeta binary targets Base 0.1.6 and is a different composition.
+The matching CMeta 0.1.8 published binary uses the same Base 0.1.8 composition and
+supports asynchronous IOCP FLUSH through a bounded backend work object.
 
-SaltsUtils 0.1.4 supplies IDL generation. `vendor/cjwt` owns JWT/JWE and its
-private GmSSL/libecc adapter. HTTP and S3 use internal GmSSL digest helpers.
-Provider provenance and ownership are documented in
-[`vendor/cjwt/crypto/README.md`](vendor/cjwt/crypto/README.md).
+SaltsUtils 0.1.6 supplies IDL generation. `vendor/cjwt` implements JWT/JWE
+using the public Salts::Crypto key, signature and symmetric APIs. HTTP and S3
+digest helpers use the same target. CHttp does not compile, discover or link
+cryptographic backends directly.
 
 See [the migration decision and validation record](docs/SPLIT_SDK_MIGRATION.md)
 and [build instructions](cmake/BUILD.md).
@@ -59,8 +62,8 @@ and [build instructions](cmake/BUILD.md).
 
 Client and Server each contain their own RPC-side implementation and link independently. S3 is a separate module built on `CHttp::Client`.
 
-`CHttp::JWT` installs the same cjwt archive used by the HTTP server, including
-its private GmSSL/libecc provider. Consumers link this target and include
+`CHttp::JWT` installs the same cjwt archive used by the HTTP server and links
+Salts::Crypto. Applications link this target and include
 `<cjwt/cjwt.h>` from C11 or C++17; private provider headers and targets are not
 part of the SDK. It exposes cjwt's existing algorithms, ownership and error
 codes, and creates no new HTTP runtime. Release SDKs predating this export must
@@ -226,7 +229,7 @@ and add regression coverage to the owning module's existing test suite.
 
 ## License
 
-See [LICENSE](LICENSE), [NOTICE](NOTICE), and
+See [LICENSE](LICENSE) and
 [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## CMake installation

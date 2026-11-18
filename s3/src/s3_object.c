@@ -233,8 +233,7 @@ static int s3_object_list_parse(const s3_client_impl *client, const s3_response 
   if (status != SALTS_OK) return status;
   for (index = 0u; index < xml_node_child_count(root); ++index) {
     const xml_node child = xml_node_child_at(root, index);
-    if (xml_node_type(child) == SALTS_XML_ELEMENT &&
-        s3_xml_node_name_equal(child, "Contents"))
+    if (xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, "Contents"))
       ++count;
   }
   if (count > client->base.config.max_list_entries ||
@@ -252,8 +251,7 @@ static int s3_object_list_parse(const s3_client_impl *client, const s3_response 
   out->count = count;
   for (index = 0u; index < xml_node_child_count(root) && status == SALTS_OK; ++index) {
     const xml_node child = xml_node_child_at(root, index);
-    if (xml_node_type(child) == SALTS_XML_ELEMENT &&
-        s3_xml_node_name_equal(child, "Contents"))
+    if (xml_node_type(child) == SALTS_XML_ELEMENT && s3_xml_node_name_equal(child, "Contents"))
       status = s3_object_info_parse(child, &out->items[output_index++]);
   }
   truncated = s3_xml_child(root, "IsTruncated");

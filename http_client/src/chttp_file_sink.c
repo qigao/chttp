@@ -1,4 +1,5 @@
 #include "chttp_file_sink.h"
+#include "chttp_file_transfer.h"
 
 #include <core/error_codes.h>
 #include <threads/threads.h>
@@ -111,7 +112,6 @@ int chttp_file_sink_transfer_open(chttp_file_sink_transfer *transfer,
   transfer->buffer_capacity = buffer_capacity;
   transfer->progress = progress;
   transfer->progress_user = progress_user;
-  transfer->next_lease = 1u;
   config.open_flags = CFLOW_IO_FILE_WRITE | CFLOW_IO_FILE_CREATE | CFLOW_IO_FILE_TRUNCATE;
   config.create_mode = CHTTP_FILE_CREATE_MODE;
   config.completion = chttp_file_sink_complete;
@@ -158,8 +158,11 @@ static chttp_file_sink_result chttp_file_sink_submit_write(chttp_file_sink_trans
   cflow_io_file_submit_result submitted;
   cflow_io_lease_id lease;
   const size_t size = transfer->buffer_size - transfer->buffer_offset;
-  lease = transfer->next_lease++;
-  if (transfer->next_lease == 0u) transfer->next_lease = 1u;
+  lease = chttp_file_next_lease();
+  if (lease == 0u) {
+    chttp_file_sink_fail(transfer, SALTS_ERANGE, 0);
+    return CHTTP_FILE_SINK_ERROR;
+  }
   transfer->submitted_size = size;
   transfer->pending_operation = CFLOW_IO_NATIVE_FILE_WRITE_AT;
   submitted =
@@ -201,8 +204,11 @@ chttp_file_sink_result chttp_file_sink_transfer_flush(chttp_file_sink_transfer *
   write_result = chttp_file_sink_transfer_advance(transfer);
   if (write_result != CHTTP_FILE_SINK_READY) return write_result;
   if (transfer->flushed) return CHTTP_FILE_SINK_READY;
-  lease = transfer->next_lease++;
-  if (transfer->next_lease == 0u) transfer->next_lease = 1u;
+  lease = chttp_file_next_lease();
+  if (lease == 0u) {
+    chttp_file_sink_fail(transfer, SALTS_ERANGE, 0);
+    return CHTTP_FILE_SINK_ERROR;
+  }
   transfer->submitted_size = 0u;
   transfer->pending_operation = CFLOW_IO_NATIVE_FILE_FLUSH;
   submitted = cflow_io_file_try_flush(&transfer->file, lease);

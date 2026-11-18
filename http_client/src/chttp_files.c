@@ -111,7 +111,7 @@ int chttp_put_file(chttp_client *client, const chttp_options *options, const cha
                            CHTTP_METHOD_PUT);
 }
 
-static int chttp_file_temp_path(const char *output_path, tstr *out_path) {
+int chttp_file_temp_path(const char *output_path, tstr *out_path) {
   static const char prefix[] = ".chttp-";
   static const char suffix[] = ".part";
   uuid_t uuid;

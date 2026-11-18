@@ -328,6 +328,25 @@ int chttp_async_client_set_socket_options(
 int chttp_async_client_submit(chttp_async_client *client, const chttp_request_options *options,
                               chttp_request *out_request);
 
+typedef struct chttp_request_timeouts {
+  uint32_t total_timeout_ms;
+  uint32_t response_idle_timeout_ms;
+} chttp_request_timeouts;
+
+/** Admits one H1 request or H2 stream with copied, per-request time budgets.
+ * At least one budget must be positive. Total starts before admission and never
+ * resets. Response-idle starts there too and renews only on this request's
+ * response bytes/decoded headers or DATA, never on sibling/control traffic.
+ * Expiry returns ETIMEDOUT once (http-deadline/response-idle-timeout), cancels
+ * only this request, and retains buffers/leases until their real terminals.
+ * Earlier user cancellation wins; late bytes do not revive an expired request.
+ * Ownership and owner-thread requirements match submit; no timer thread exists.
+ * Example: timeouts={1000,200}; submit_with_timeouts(&client,&request,&timeouts,&handle).
+ */
+int chttp_async_client_submit_with_timeouts(chttp_async_client *client,
+    const chttp_request_options *options, const chttp_request_timeouts *timeouts,
+    chttp_request *out_request);
+
 /**
  * Select with CNet policy and submit exactly one attempt. options.connection_uri
  * must be NULL. Other request ownership/callback rules match submit().
@@ -431,6 +450,59 @@ typedef struct chttp_retry_options {
 int chttp_request_retry(chttp_client *client, chttp_method method,
     const chttp_options *options, const chttp_retry_options *retry,
     chttp_response *out_response, chttp_error *out_error);
+
+typedef struct chttp_logical_request {
+  uint32_t slot;
+  uint32_t generation;
+} chttp_logical_request;
+typedef void (*chttp_logical_complete_fn)(void *user, chttp_logical_request request,
+    const chttp_response_view *response, const chttp_error *error);
+typedef struct chttp_request_replay {
+  void *user;
+  int (*rewind_source)(void *user);
+  int (*rollback_sink)(void *user);
+} chttp_request_replay;
+
+/** Explicit caller-driven logical retry; poll/stop use the existing async client.
+ * At most request_capacity logical records exist, alongside the same bounded
+ * physical request table. request.on_complete must be NULL. Inputs and stream descriptors are copied; callback
+ * user objects remain borrowed until the single final callback returns.
+ * total_timeout_ms is positive and shared by all attempts/backoff. Idle timing
+ * is per attempt. Memory payloads are copied once. A streamed source requires
+ * known length and rewind_source; a sink requires rollback_sink when retry is
+ * enabled. Hooks run once after the prior physical attempt fully settles and
+ * before the next admission, on the poll thread, without reentry/blocking.
+ * Failure of a hook is terminal. Replay retains authority/protocol/TLS identity.
+ * Transient transport failures may replay a partial response only with sink
+ * rollback and method/application idempotence. HTTP statuses, local/security
+ * failures never authorize replay. Cancellation and stop suppress new attempts.
+ * Result views are callback-scoped. Rejected admission gives no callback.
+ */
+int chttp_async_client_submit_retry(chttp_async_client *, const chttp_request_options *,
+    const chttp_request_timeouts *, const chttp_retry_options *,
+    const chttp_request_replay *, chttp_logical_complete_fn, void *user,
+    chttp_logical_request *out);
+int chttp_async_logical_request_cancel(chttp_async_client *, chttp_logical_request);
+
+typedef struct chttp_retry_files {
+  const char *upload_path;
+  const char *download_path;
+} chttp_retry_files;
+/** File variant: exactly one path; request body/source/sink must be empty.
+ * Paths are copied within max_header_bytes. Filesystem work starts in poll;
+ * admission commits one final callback even if opening subsequently fails.
+ * Upload paths must remain immutable through completion. Each retry closes and
+ * reopens the source, rejecting changed size/mtime/ctime. Download attempts use
+ * one private adjacent temporary file, reopened/truncated after settlement;
+ * only a complete 2xx result is flushed, closed and renamed to download_path.
+ * Failure/cancel removes the temporary file and preserves the destination.
+ * Async file flush is required, with ENOTSUP propagated on backends lacking it.
+ * IOCP uses CMeta's bounded flush worker. Completion includes file drainage/commit, which may outlive the
+ * result deadline. No RPC/S3 or ordinary file API gains implicit retry.
+ */
+int chttp_async_client_submit_file_retry(chttp_async_client *, const chttp_request_options *,
+    const chttp_request_timeouts *, const chttp_retry_options *, const chttp_retry_files *,
+    chttp_logical_complete_fn, void *user, chttp_logical_request *out);
 
 /**
  * Blocking destination-selected request, with the same policy/identity rules
@@ -585,6 +657,69 @@ int chttp_websocket_pool_close(chttp_websocket_pool *pool, chttp_websocket_sessi
 
 /** Closes active streams, then drains and releases the one shared CNet connection. */
 int chttp_websocket_pool_destroy(chttp_websocket_pool *pool, uint32_t timeout_ms);
+
+typedef struct chttp_async_websocket { void *impl; } chttp_async_websocket;
+typedef struct chttp_websocket_operation { uint32_t slot, generation; } chttp_websocket_operation;
+typedef struct chttp_async_websocket_callbacks {
+  void *user;
+  void (*on_open)(void *user, int status, unsigned int http_status);
+  void (*on_send)(void *user, chttp_websocket_operation operation, uint64_t tag,
+                   size_t size, int status);
+  void (*on_event)(void *user, const chttp_websocket_event *event);
+  void (*on_closed)(void *user, int status);
+} chttp_async_websocket_callbacks;
+typedef struct chttp_async_websocket_config {
+  chttp_websocket_client_config client;
+  size_t command_capacity;
+  size_t pending_byte_capacity;
+  uint32_t close_timeout_ms;
+  chttp_async_websocket_callbacks callbacks;
+} chttp_async_websocket_config;
+
+/** Caller-driven H1/H2 WS/WSS with many send producers and one progress thread.
+ * Init/connect/poll/close/stop/destroy stay on the init thread; send/cancel may
+ * run concurrently on other threads. All callbacks run on the progress thread
+ * outside the command lock. Event bytes are borrowed through callback return.
+ * All four callbacks and both positive queue/byte bounds are required. Accepted
+ * sends copy inputs; capacity includes reserved, queued and in-flight payloads.
+ * Full admission is ENOBUFS, oversize is EMSGSIZE, with no callback or retained
+ * input. TLS profiles are retained by the connection. No worker thread exists.
+ * Example: init(...); connect(...); producers send_binary(...); owner poll(...).
+ */
+int chttp_async_websocket_init(chttp_async_websocket *, const chttp_async_websocket_config *);
+/** Copies bounded URI/headers/subprotocol before returning. Positive timeout is
+ * mandatory. Successful admission produces exactly one on_open, including on
+ * failure/stop. Sends may queue after connect admission, before on_open. */
+int chttp_async_websocket_connect(chttp_async_websocket *, const chttp_websocket_connect_options *);
+
+/** One on_send per admitted operation, in publication order. Nonzero output
+ * handle means admission committed, even if the subsequent wake returns an
+ * error; never resubmit that payload. Completion means local output terminal,
+ * not peer receipt. H1 text/binary fragment; H2 retains its frame-size bound.
+ * Output handle is disjoint from input. Callers may release input on return.
+ */
+int chttp_async_websocket_send_text(chttp_async_websocket *, const void *, size_t,
+                                    uint64_t tag, chttp_websocket_operation *);
+int chttp_async_websocket_send_binary(chttp_async_websocket *, const void *, size_t,
+                                      uint64_t tag, chttp_websocket_operation *);
+int chttp_async_websocket_send_ping(chttp_async_websocket *, const void *, size_t,
+                                    uint64_t tag, chttp_websocket_operation *);
+int chttp_async_websocket_send_pong(chttp_async_websocket *, const void *, size_t,
+                                    uint64_t tag, chttp_websocket_operation *);
+/** Cancels a queued operation; in-flight output returns EBUSY and is never
+ * replayed. Committed cancellation completes once on the progress thread. */
+int chttp_async_websocket_cancel(chttp_async_websocket *, chttp_websocket_operation);
+int chttp_async_websocket_poll(chttp_async_websocket *, uint32_t timeout_ms, size_t *callbacks);
+/** Owner-only close, after queued/in-flight submissions settle (otherwise
+ * EBUSY). Copies the reason and seals admission after frame validation. */
+int chttp_async_websocket_close(chttp_async_websocket *, uint16_t code,
+                                const void *reason, size_t size);
+/** Seals admission and drains copied commands and actual network terminals.
+ * Zero budget is nonblocking; ETIMEDOUT preserves the object for more progress.
+ * Stop/join producers before destroy, including publish-to-wake tails. */
+int chttp_async_websocket_stop(chttp_async_websocket *, uint32_t timeout_ms);
+/** Requires stopped state, no active callback, and quiescent producers. */
+int chttp_async_websocket_destroy(chttp_async_websocket *);
 
 #ifdef __cplusplus
 }

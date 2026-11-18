@@ -57,7 +57,7 @@ typedef struct chttp_web_renderer_config {
   unsigned max_render_depth;
 } chttp_web_renderer_config;
 
-#define CHTTP_WEB_RENDERER_CONFIG_INIT \
+#define CHTTP_WEB_RENDERER_CONFIG_INIT                                                             \
   {256u * 1024u, 2u * 1024u * 1024u, 65536u, 1024u * 1024u, 64u}
 
 typedef struct chttp_web_error {
@@ -99,7 +99,7 @@ typedef struct chttp_web_principal {
   chttp_web_string_view display_name;
 } chttp_web_principal;
 
-#define CHTTP_WEB_PRINCIPAL_INIT \
+#define CHTTP_WEB_PRINCIPAL_INIT                                                                   \
   {sizeof(chttp_web_principal), false, {NULL, 0u}, {NULL, 0u}, {NULL, 0u}}
 
 /**
@@ -113,18 +113,12 @@ typedef struct chttp_web_principal_input {
   const char *display_name;
 } chttp_web_principal_input;
 
-#define CHTTP_WEB_PRINCIPAL_INPUT_INIT \
-  {sizeof(chttp_web_principal_input), NULL, NULL, NULL}
+#define CHTTP_WEB_PRINCIPAL_INPUT_INIT {sizeof(chttp_web_principal_input), NULL, NULL, NULL}
 
-enum {
-  CHTTP_WEB_LOGIN_PATH_HARD_MAX = 1024,
-  CHTTP_WEB_LOCAL_TARGET_HARD_MAX = 4096
-};
+enum { CHTTP_WEB_LOGIN_PATH_HARD_MAX = 1024, CHTTP_WEB_LOCAL_TARGET_HARD_MAX = 4096 };
 
-typedef int (*chttp_web_authorize_fn)(
-    void *user,
-    const chttp_web_principal *principal,
-    const chttp_server_request_view *request);
+typedef int (*chttp_web_authorize_fn)(void *user, const chttp_web_principal *principal,
+                                      const chttp_server_request_view *request);
 
 /**
  * Immutable application-owned browser authorization policy.
@@ -145,7 +139,7 @@ typedef struct chttp_web_auth_policy {
   void *forbidden_user;
 } chttp_web_auth_policy;
 
-#define CHTTP_WEB_AUTH_POLICY_INIT \
+#define CHTTP_WEB_AUTH_POLICY_INIT                                                                 \
   {sizeof(chttp_web_auth_policy), NULL, false, 0u, NULL, NULL, NULL, NULL}
 
 enum {
@@ -182,7 +176,7 @@ typedef struct chttp_web_asset_mount {
   const char *spa_fallback_relative_path;
 } chttp_web_asset_mount;
 
-#define CHTTP_WEB_ASSET_MOUNT_INIT \
+#define CHTTP_WEB_ASSET_MOUNT_INIT                                                                 \
   {sizeof(chttp_web_asset_mount), NULL, NULL, 0u, NULL, NULL, NULL, NULL}
 
 const cmeta_data_desc *chttp_web_principal_data(void);
@@ -203,9 +197,8 @@ typedef struct chttp_web_sse_event {
   bool has_retry;
 } chttp_web_sse_event;
 
-#define CHTTP_WEB_SSE_EVENT_INIT \
-  {sizeof(chttp_web_sse_event), {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, \
-   0u, false, false, false, false}
+#define CHTTP_WEB_SSE_EVENT_INIT                                                                   \
+  {sizeof(chttp_web_sse_event), {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, 0u, false, false, false, false}
 
 /**
  * Produces the next event synchronously on an Application worker.
@@ -214,8 +207,7 @@ typedef struct chttp_web_sse_event {
  * negative Salts status to fail the response. Returned views must remain valid
  * until the next producer call or stream cleanup.
  */
-typedef int (*chttp_web_sse_next_fn)(
-    void *user, chttp_web_sse_event *out_event);
+typedef int (*chttp_web_sse_next_fn)(void *user, chttp_web_sse_event *out_event);
 
 /** Exactly-once stream terminal callback; status follows CHTTP source cleanup. */
 typedef void (*chttp_web_sse_close_fn)(void *user, int status);
@@ -243,9 +235,8 @@ typedef struct chttp_web_sse_stream {
   bool eof;
 } chttp_web_sse_stream;
 
-#define CHTTP_WEB_SSE_STREAM_INIT \
-  {sizeof(chttp_web_sse_stream), NULL, NULL, NULL, NULL, 0u, 0u, 0u, \
-   0, false, false}
+#define CHTTP_WEB_SSE_STREAM_INIT                                                                  \
+  {sizeof(chttp_web_sse_stream), NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0, false, false}
 
 /** One named borrowed request value exposed to templates. */
 typedef struct chttp_web_named_value {
@@ -289,47 +280,33 @@ typedef struct chttp_web_validation {
   size_t byte_used;
 } chttp_web_validation;
 
-#define CHTTP_WEB_VALIDATION_INIT \
-  {sizeof(chttp_web_validation), true, {NULL, 0u, 0u, NULL}, \
-   NULL, 0u, NULL, 0u, 0u}
+#define CHTTP_WEB_VALIDATION_INIT                                                                  \
+  {sizeof(chttp_web_validation), true, {NULL, 0u, 0u, NULL}, NULL, 0u, NULL, 0u, 0u}
 
 const cmeta_data_desc *chttp_web_validation_error_data(void);
 const cmeta_data_desc *chttp_web_validation_data(void);
 
-chttp_web_status chttp_web_validation_init(
-    chttp_web_validation *validation,
-    chttp_web_validation_error *error_storage,
-    size_t error_capacity,
-    char *byte_storage,
-    size_t byte_capacity,
-    chttp_web_error *error);
+chttp_web_status chttp_web_validation_init(chttp_web_validation *validation,
+                                           chttp_web_validation_error *error_storage,
+                                           size_t error_capacity, char *byte_storage,
+                                           size_t byte_capacity, chttp_web_error *error);
 
-chttp_web_status chttp_web_validation_reset(
-    chttp_web_validation *validation,
-    chttp_web_error *error);
+chttp_web_status chttp_web_validation_reset(chttp_web_validation *validation,
+                                            chttp_web_error *error);
 
-chttp_web_status chttp_web_validation_add_field(
-    chttp_web_validation *validation,
-    const char *field,
-    const char *message,
-    chttp_web_error *error);
+chttp_web_status chttp_web_validation_add_field(chttp_web_validation *validation, const char *field,
+                                                const char *message, chttp_web_error *error);
 
-chttp_web_status chttp_web_validation_add_global(
-    chttp_web_validation *validation,
-    const char *message,
-    chttp_web_error *error);
+chttp_web_status chttp_web_validation_add_global(chttp_web_validation *validation,
+                                                 const char *message, chttp_web_error *error);
 
-size_t chttp_web_validation_field_count(
-    const chttp_web_validation *validation,
-    const char *field);
+size_t chttp_web_validation_field_count(const chttp_web_validation *validation, const char *field);
 
-const chttp_web_validation_error *chttp_web_validation_field_get(
-    const chttp_web_validation *validation,
-    const char *field,
-    size_t occurrence);
+const chttp_web_validation_error *
+chttp_web_validation_field_get(const chttp_web_validation *validation, const char *field,
+                               size_t occurrence);
 
-size_t chttp_web_validation_global_count(
-    const chttp_web_validation *validation);
+size_t chttp_web_validation_global_count(const chttp_web_validation *validation);
 
 /**
  * Handler-scoped typed request context.
@@ -372,9 +349,8 @@ typedef struct chttp_web_request_context_options {
   size_t session_capacity;
 } chttp_web_request_context_options;
 
-#define CHTTP_WEB_REQUEST_CONTEXT_OPTIONS_INIT \
-  {sizeof(chttp_web_request_context_options), NULL, 0u, NULL, 0u, \
-   NULL, 0u, NULL, 0u, NULL, 0u}
+#define CHTTP_WEB_REQUEST_CONTEXT_OPTIONS_INIT                                                     \
+  {sizeof(chttp_web_request_context_options), NULL, 0u, NULL, 0u, NULL, 0u, NULL, 0u, NULL, 0u}
 
 /** One decoded application/x-www-form-urlencoded key/value pair. */
 typedef struct chttp_web_form_pair {
@@ -407,14 +383,10 @@ typedef struct chttp_web_form_parse_options {
   size_t byte_capacity;
 } chttp_web_form_parse_options;
 
-#define CHTTP_WEB_FORM_PARSE_OPTIONS_INIT \
-  {sizeof(chttp_web_form_parse_options), 64u * 1024u, 128u, 64u * 1024u, \
-   NULL, 0u, NULL, 0u}
+#define CHTTP_WEB_FORM_PARSE_OPTIONS_INIT                                                          \
+  {sizeof(chttp_web_form_parse_options), 64u * 1024u, 128u, 64u * 1024u, NULL, 0u, NULL, 0u}
 
-enum {
-  CHTTP_WEB_CSRF_RANDOM_BYTES = 32,
-  CHTTP_WEB_CSRF_TOKEN_BYTES = 64
-};
+enum { CHTTP_WEB_CSRF_RANDOM_BYTES = 32, CHTTP_WEB_CSRF_TOKEN_BYTES = 64 };
 
 #define CHTTP_WEB_CSRF_FORM_FIELD "_csrf"
 #define CHTTP_WEB_CSRF_HEADER "X-CSRF-Token"
@@ -437,14 +409,11 @@ typedef struct chttp_web_multipart_part {
   bool has_content_type;
 } chttp_web_multipart_part;
 
-#define CHTTP_WEB_MULTIPART_PART_INIT \
-  {sizeof(chttp_web_multipart_part), {NULL, 0u}, {NULL, 0u}, \
-   {NULL, 0u}, false, false}
+#define CHTTP_WEB_MULTIPART_PART_INIT                                                              \
+  {sizeof(chttp_web_multipart_part), {NULL, 0u}, {NULL, 0u}, {NULL, 0u}, false, false}
 
-typedef int (*chttp_web_multipart_part_begin_fn)(
-    void *user, const chttp_web_multipart_part *part);
-typedef int (*chttp_web_multipart_part_data_fn)(
-    void *user, const void *data, size_t size);
+typedef int (*chttp_web_multipart_part_begin_fn)(void *user, const chttp_web_multipart_part *part);
+typedef int (*chttp_web_multipart_part_data_fn)(void *user, const void *data, size_t size);
 typedef int (*chttp_web_multipart_part_end_fn)(void *user);
 
 typedef struct chttp_web_multipart_callbacks {
@@ -454,8 +423,7 @@ typedef struct chttp_web_multipart_callbacks {
   chttp_web_multipart_part_end_fn part_end;
 } chttp_web_multipart_callbacks;
 
-#define CHTTP_WEB_MULTIPART_CALLBACKS_INIT \
-  {sizeof(chttp_web_multipart_callbacks), NULL, NULL, NULL}
+#define CHTTP_WEB_MULTIPART_CALLBACKS_INIT {sizeof(chttp_web_multipart_callbacks), NULL, NULL, NULL}
 
 typedef struct chttp_web_multipart_limits {
   size_t size;
@@ -469,9 +437,16 @@ typedef struct chttp_web_multipart_limits {
   size_t max_total_bytes;
 } chttp_web_multipart_limits;
 
-#define CHTTP_WEB_MULTIPART_LIMITS_INIT \
-  {sizeof(chttp_web_multipart_limits), 128u, 16u, 4096u, 128u, 512u, \
-   256u, 64u * 1024u, 16u * 1024u * 1024u}
+#define CHTTP_WEB_MULTIPART_LIMITS_INIT                                                            \
+  {sizeof(chttp_web_multipart_limits),                                                             \
+   128u,                                                                                           \
+   16u,                                                                                            \
+   4096u,                                                                                          \
+   128u,                                                                                           \
+   512u,                                                                                           \
+   256u,                                                                                           \
+   64u * 1024u,                                                                                    \
+   16u * 1024u * 1024u}
 
 /**
  * Caller-owned incremental multipart/form-data parser.
@@ -522,37 +497,30 @@ typedef struct chttp_web_multipart_parser {
  * Content-Type. A quoted boundary is accepted. The boundary is limited to the
  * MIME 70-byte maximum and must use valid boundary characters.
  */
-chttp_web_status chttp_web_multipart_init(
-    chttp_web_multipart_parser *parser,
-    const char *content_type,
-    const chttp_web_multipart_limits *limits,
-    const chttp_web_multipart_callbacks *callbacks,
-    void *user,
-    chttp_web_error *error);
+chttp_web_status chttp_web_multipart_init(chttp_web_multipart_parser *parser,
+                                          const char *content_type,
+                                          const chttp_web_multipart_limits *limits,
+                                          const chttp_web_multipart_callbacks *callbacks,
+                                          void *user, chttp_web_error *error);
 
 /**
  * Incrementally consumes arbitrary body chunks. Boundary delimiters may split
  * at any byte. Callback failures terminate the parser and are preserved in
  * error->native_status.
  */
-chttp_web_status chttp_web_multipart_feed(
-    chttp_web_multipart_parser *parser,
-    const void *data,
-    size_t data_size,
-    chttp_web_error *error);
+chttp_web_status chttp_web_multipart_feed(chttp_web_multipart_parser *parser, const void *data,
+                                          size_t data_size, chttp_web_error *error);
 
 /**
  * Completes the message. Success requires a fully received closing delimiter;
  * truncated or malformed input fails closed.
  */
-chttp_web_status chttp_web_multipart_finish(
-    chttp_web_multipart_parser *parser,
-    chttp_web_error *error);
+chttp_web_status chttp_web_multipart_finish(chttp_web_multipart_parser *parser,
+                                            chttp_web_error *error);
 
 /** Resets a parser for another body using the same boundary/config/callbacks. */
-chttp_web_status chttp_web_multipart_reset(
-    chttp_web_multipart_parser *parser,
-    chttp_web_error *error);
+chttp_web_status chttp_web_multipart_reset(chttp_web_multipart_parser *parser,
+                                           chttp_web_error *error);
 
 /**
  * Per-request streaming upload transaction.
@@ -561,11 +529,9 @@ chttp_web_status chttp_web_multipart_reset(
  * CHttp::App owns multipart/CSRF ordering only; it never allocates a request
  * map, chooses a persistence destination, or performs blocking persistence.
  */
-typedef int (*chttp_web_upload_begin_fn)(
-    void *user, const chttp_server_request_view *request);
+typedef int (*chttp_web_upload_begin_fn)(void *user, const chttp_server_request_view *request);
 typedef int (*chttp_web_upload_commit_fn)(void *user);
-typedef void (*chttp_web_upload_abort_fn)(
-    void *user, chttp_web_status status, int native_status);
+typedef void (*chttp_web_upload_abort_fn)(void *user, chttp_web_status status, int native_status);
 
 typedef struct chttp_web_upload_callbacks {
   size_t size;
@@ -577,7 +543,7 @@ typedef struct chttp_web_upload_callbacks {
   chttp_web_upload_abort_fn abort;
 } chttp_web_upload_callbacks;
 
-#define CHTTP_WEB_UPLOAD_CALLBACKS_INIT \
+#define CHTTP_WEB_UPLOAD_CALLBACKS_INIT                                                            \
   {sizeof(chttp_web_upload_callbacks), NULL, NULL, NULL, NULL, NULL, NULL}
 
 /**
@@ -607,49 +573,37 @@ typedef struct chttp_web_upload_request {
  * Application upload open method; writes/close/finalize run serially on workers.
  * Callbacks are synchronous and must terminate for close to settle.
  */
-chttp_web_status chttp_web_upload_open(
-    chttp_web_upload_request *upload,
-    const chttp_server_request_view *request,
-    const chttp_web_multipart_limits *limits,
-    const chttp_web_upload_callbacks *callbacks,
-    void *user,
-    chttp_body_sink *out_sink,
-    chttp_web_error *error);
+chttp_web_status chttp_web_upload_open(chttp_web_upload_request *upload,
+                                       const chttp_server_request_view *request,
+                                       const chttp_web_multipart_limits *limits,
+                                       const chttp_web_upload_callbacks *callbacks, void *user,
+                                       chttp_body_sink *out_sink, chttp_web_error *error);
 
 /**
  * Completes body streaming. Non-OK transport/sink status or multipart finish
  * failure aborts the application staging transaction exactly once.
  */
-void chttp_web_upload_close(
-    chttp_web_upload_request *upload,
-    int status);
+void chttp_web_upload_close(chttp_web_upload_request *upload, int status);
 
 /**
  * Terminal-handler gate. Success requires the same request's body_sink_user,
  * complete multipart parsing, valid CSRF, and (when provided) a valid
  * structured validation result before application commit runs.
  */
-chttp_web_status chttp_web_upload_finalize(
-    chttp_web_upload_request *upload,
-    const chttp_server_request_view *request,
-    const chttp_web_validation *validation,
-    chttp_web_error *error);
+chttp_web_status chttp_web_upload_finalize(chttp_web_upload_request *upload,
+                                           const chttp_server_request_view *request,
+                                           const chttp_web_validation *validation,
+                                           chttp_web_error *error);
 
 /** Explicitly aborts an unfinished transaction exactly once. */
-chttp_web_status chttp_web_upload_abort(
-    chttp_web_upload_request *upload,
-    chttp_web_status status,
-    int native_status,
-    chttp_web_error *error);
+chttp_web_status chttp_web_upload_abort(chttp_web_upload_request *upload, chttp_web_status status,
+                                        int native_status, chttp_web_error *error);
 
 /** Reuses caller storage only after commit or abort. */
-chttp_web_status chttp_web_upload_reset(
-    chttp_web_upload_request *upload,
-    chttp_web_error *error);
+chttp_web_status chttp_web_upload_reset(chttp_web_upload_request *upload, chttp_web_error *error);
 
 /** Returns the application staging user for a valid upload object. */
-void *chttp_web_upload_user(
-    const chttp_web_upload_request *upload);
+void *chttp_web_upload_user(const chttp_web_upload_request *upload);
 
 /**
  * Caller-owned scalar parsing scratch for generated-plan form binding.
@@ -664,13 +618,9 @@ typedef struct chttp_web_form_plan_options {
   size_t scalar_capacity;
 } chttp_web_form_plan_options;
 
-#define CHTTP_WEB_FORM_PLAN_OPTIONS_INIT \
-  {sizeof(chttp_web_form_plan_options), NULL, 0u}
+#define CHTTP_WEB_FORM_PLAN_OPTIONS_INIT {sizeof(chttp_web_form_plan_options), NULL, 0u}
 
-enum {
-  CHTTP_WEB_FLASH_HARD_MAX_MESSAGES = 16,
-  CHTTP_WEB_FLASH_HARD_MAX_SERIALIZED_BYTES = 1024
-};
+enum { CHTTP_WEB_FLASH_HARD_MAX_MESSAGES = 16, CHTTP_WEB_FLASH_HARD_MAX_SERIALIZED_BYTES = 1024 };
 
 typedef struct chttp_web_flash_message {
   chttp_web_string_view level;
@@ -685,8 +635,7 @@ typedef struct chttp_web_flash_config {
   size_t max_serialized_bytes;
 } chttp_web_flash_config;
 
-#define CHTTP_WEB_FLASH_CONFIG_INIT \
-  {sizeof(chttp_web_flash_config), 4u, 32u, 256u, 1024u}
+#define CHTTP_WEB_FLASH_CONFIG_INIT {sizeof(chttp_web_flash_config), 4u, 32u, 256u, 1024u}
 
 typedef struct chttp_web_flash_buffer {
   size_t size;
@@ -696,8 +645,7 @@ typedef struct chttp_web_flash_buffer {
   size_t byte_capacity;
 } chttp_web_flash_buffer;
 
-#define CHTTP_WEB_FLASH_BUFFER_INIT \
-  {sizeof(chttp_web_flash_buffer), NULL, 0u, NULL, 0u}
+#define CHTTP_WEB_FLASH_BUFFER_INIT {sizeof(chttp_web_flash_buffer), NULL, 0u, NULL, 0u}
 
 /**
  * Borrowed browser security policy. Non-NULL header values must remain valid
@@ -717,7 +665,7 @@ typedef struct chttp_web_security_policy {
   bool nosniff;
 } chttp_web_security_policy;
 
-#define CHTTP_WEB_SECURITY_POLICY_INIT \
+#define CHTTP_WEB_SECURITY_POLICY_INIT                                                             \
   {sizeof(chttp_web_security_policy), NULL, NULL, NULL, NULL, NULL, false}
 
 /**
@@ -728,35 +676,25 @@ typedef struct chttp_web_security_policy {
  * logical line while preserving leading/trailing empty lines. The event always
  * ends with one blank line.
  */
-chttp_web_status chttp_web_sse_format_event(
-    const chttp_web_sse_event *event,
-    char *buffer,
-    size_t buffer_capacity,
-    size_t *out_size,
-    chttp_web_error *error);
+chttp_web_status chttp_web_sse_format_event(const chttp_web_sse_event *event, char *buffer,
+                                            size_t buffer_capacity, size_t *out_size,
+                                            chttp_web_error *error);
 
 /**
  * Initializes a no-allocation SSE stream over a synchronous producer.
  * Reinitializing an active stream is invalid application behavior.
  */
-chttp_web_status chttp_web_sse_stream_init(
-    chttp_web_sse_stream *stream,
-    chttp_web_sse_next_fn next,
-    chttp_web_sse_close_fn close,
-    void *user,
-    char *scratch,
-    size_t scratch_capacity,
-    chttp_web_error *error);
+chttp_web_status chttp_web_sse_stream_init(chttp_web_sse_stream *stream, chttp_web_sse_next_fn next,
+                                           chttp_web_sse_close_fn close, void *user, char *scratch,
+                                           size_t scratch_capacity, chttp_web_error *error);
 
 /**
  * Commits a 200 text/event-stream response over CHTTP's existing response
  * source engine. Adds Cache-Control: no-cache. HTTP framing remains fully
  * owned by CHTTP for both HTTP/1.1 and HTTP/2.
  */
-chttp_web_status chttp_web_sse_response(
-    const struct chttp_invocation *response,
-    chttp_web_sse_stream *stream,
-    chttp_web_error *error);
+chttp_web_status chttp_web_sse_response(const struct chttp_invocation *response,
+                                        chttp_web_sse_stream *stream, chttp_web_error *error);
 
 /**
  * Builds one synchronous, non-reentrant renderer from an application-owned
@@ -770,12 +708,10 @@ chttp_web_status chttp_web_sse_response(
  * init, and destroy never overlap for the same renderer. Parallel workers
  * should own independent renderers (or externally serialize one renderer).
  */
-chttp_web_status chttp_web_renderer_init(
-    chttp_web_renderer *renderer,
-    const chttp_web_template *templates,
-    size_t template_count,
-    const chttp_web_renderer_config *config,
-    chttp_web_error *error);
+chttp_web_status chttp_web_renderer_init(chttp_web_renderer *renderer,
+                                         const chttp_web_template *templates, size_t template_count,
+                                         const chttp_web_renderer_config *config,
+                                         chttp_web_error *error);
 
 /**
  * Renders one frozen template against a typed CMeta root.
@@ -788,29 +724,21 @@ chttp_web_status chttp_web_renderer_init(
  * model_desc/model are borrowed only for this call. Invocation request,
  * route-param, header, Session and JWT views expire with the worker callback.
  */
-chttp_web_status chttp_web_render(
-    chttp_web_renderer *renderer,
-    const char *template_name,
-    const cmeta_data_desc *model_desc,
-    const void *model,
-    char **out_html,
-    size_t *out_size,
-    chttp_web_error *error);
+chttp_web_status chttp_web_render(chttp_web_renderer *renderer, const char *template_name,
+                                  const cmeta_data_desc *model_desc, const void *model,
+                                  char **out_html, size_t *out_size, chttp_web_error *error);
 
 /**
  * Renders fully before committing an in-memory CHTTP response. A zero status
  * code selects 200. A NULL content type selects "text/html; charset=utf-8".
  * Render failures therefore leave the response uncommitted.
  */
-chttp_web_status chttp_web_render_response(
-    chttp_web_renderer *renderer,
-    const struct chttp_invocation *response,
-    const char *template_name,
-    const cmeta_data_desc *model_desc,
-    const void *model,
-    unsigned int status_code,
-    const char *content_type,
-    chttp_web_error *error);
+chttp_web_status chttp_web_render_response(chttp_web_renderer *renderer,
+                                           const struct chttp_invocation *response,
+                                           const char *template_name,
+                                           const cmeta_data_desc *model_desc, const void *model,
+                                           unsigned int status_code, const char *content_type,
+                                           chttp_web_error *error);
 
 /** True only for an HX-Request header whose value is exactly "true". */
 bool chttp_web_request_is_htmx(const chttp_server_request_view *request);
@@ -819,30 +747,23 @@ bool chttp_web_request_is_htmx(const chttp_server_request_view *request);
  * Snapshots handler-borrowed request/session pointers into a bounded typed
  * context. The function performs no allocation and never retains request.
  */
-chttp_web_status chttp_web_request_context_init(
-    chttp_web_request_context *context,
-    const chttp_server_request_view *request,
-    const chttp_web_request_context_options *options,
-    chttp_web_error *error);
+chttp_web_status chttp_web_request_context_init(chttp_web_request_context *context,
+                                                const chttp_server_request_view *request,
+                                                const chttp_web_request_context_options *options,
+                                                chttp_web_error *error);
 
 /** CMeta descriptor for embedding chttp_web_request_context in application models. */
 const cmeta_data_desc *chttp_web_request_context_data(void);
 
 const char *chttp_web_csrf_token(const chttp_session *session);
 
-chttp_web_status chttp_web_csrf_ensure(
-    chttp_session *session,
-    const char **out_token,
-    chttp_web_error *error);
+chttp_web_status chttp_web_csrf_ensure(chttp_session *session, const char **out_token,
+                                       chttp_web_error *error);
 
-chttp_web_status chttp_web_csrf_rotate(
-    chttp_session *session,
-    const char **out_token,
-    chttp_web_error *error);
+chttp_web_status chttp_web_csrf_rotate(chttp_session *session, const char **out_token,
+                                       chttp_web_error *error);
 
-chttp_web_status chttp_web_csrf_clear(
-    chttp_session *session,
-    chttp_web_error *error);
+chttp_web_status chttp_web_csrf_clear(chttp_session *session, chttp_web_error *error);
 
 /**
  * Validates POST/PUT/PATCH/DELETE. GET/HEAD/OPTIONS pass without a token.
@@ -854,25 +775,20 @@ chttp_web_status chttp_web_csrf_clear(
  * Compares one explicit token candidate against the current session token in
  * constant time. Safe HTTP methods succeed without requiring a token.
  */
-chttp_web_status chttp_web_csrf_validate_token(
-    const chttp_server_request_view *request,
-    const void *token,
-    size_t token_size,
-    chttp_web_error *error);
+chttp_web_status chttp_web_csrf_validate_token(const chttp_server_request_view *request,
+                                               const void *token, size_t token_size,
+                                               chttp_web_error *error);
 
-chttp_web_status chttp_web_csrf_validate(
-    const chttp_server_request_view *request,
-    const chttp_web_form *form,
-    chttp_web_error *error);
+chttp_web_status chttp_web_csrf_validate(const chttp_server_request_view *request,
+                                         const chttp_web_form *form, chttp_web_error *error);
 
 /**
  * Reads the authenticated browser principal from reserved Session state.
  * Missing or malformed subject state is treated as unauthenticated.
  */
-chttp_web_status chttp_web_principal_get(
-    const chttp_server_request_view *request,
-    chttp_web_principal *out_principal,
-    chttp_web_error *error);
+chttp_web_status chttp_web_principal_get(const chttp_server_request_view *request,
+                                         chttp_web_principal *out_principal,
+                                         chttp_web_error *error);
 
 /**
  * Validates one browser return target without allocating or materializing a
@@ -884,11 +800,8 @@ chttp_web_status chttp_web_principal_get(
  * authority/path semantics are rejected. Content rejection returns
  * CHTTP_WEB_AUTH; bound overflow returns CHTTP_WEB_CAPACITY.
  */
-chttp_web_status chttp_web_local_target_validate(
-    const char *target,
-    size_t target_size,
-    size_t max_target_bytes,
-    chttp_web_error *error);
+chttp_web_status chttp_web_local_target_validate(const char *target, size_t target_size,
+                                                 size_t max_target_bytes, chttp_web_error *error);
 
 /**
  * Browser authentication/authorization for an Invocation before hook.
@@ -902,7 +815,7 @@ chttp_web_status chttp_web_local_target_validate(
  * The policy and nested callbacks borrow only this worker callback scope.
  */
 int chttp_web_authorize(const struct chttp_invocation *invocation,
-    const chttp_web_auth_policy *policy, bool *proceed);
+                        const chttp_web_auth_policy *policy, bool *proceed);
 
 /**
  * Performs the security transition after the application has verified
@@ -912,39 +825,27 @@ int chttp_web_authorize(const struct chttp_invocation *invocation,
  * Any failure after regeneration invalidates the entire Session so partially
  * authenticated state is never published.
  */
-chttp_web_status chttp_web_principal_sign_in(
-    const chttp_server_request_view *request,
-    const chttp_web_form *form,
-    const chttp_web_principal_input *principal,
-    const char **out_csrf_token,
-    chttp_web_error *error);
+chttp_web_status chttp_web_principal_sign_in(const chttp_server_request_view *request,
+                                             const chttp_web_form *form,
+                                             const chttp_web_principal_input *principal,
+                                             const char **out_csrf_token, chttp_web_error *error);
 
 /**
  * POST-only browser logout. Validates CSRF then invalidates the entire Session,
  * causing the existing CHTTP Session cookie path to expire the cookie.
  */
-chttp_web_status chttp_web_principal_sign_out(
-    const chttp_server_request_view *request,
-    const chttp_web_form *form,
-    chttp_web_error *error);
+chttp_web_status chttp_web_principal_sign_out(const chttp_server_request_view *request,
+                                              const chttp_web_form *form, chttp_web_error *error);
 
-chttp_web_status chttp_web_flash_push(
-    chttp_session *session,
-    const chttp_web_flash_config *config,
-    const char *level,
-    const char *text,
-    chttp_web_error *error);
+chttp_web_status chttp_web_flash_push(chttp_session *session, const chttp_web_flash_config *config,
+                                      const char *level, const char *text, chttp_web_error *error);
 
-chttp_web_status chttp_web_flash_consume(
-    chttp_session *session,
-    const chttp_web_flash_config *config,
-    const chttp_web_flash_buffer *buffer,
-    size_t *out_count,
-    chttp_web_error *error);
+chttp_web_status chttp_web_flash_consume(chttp_session *session,
+                                         const chttp_web_flash_config *config,
+                                         const chttp_web_flash_buffer *buffer, size_t *out_count,
+                                         chttp_web_error *error);
 
-chttp_web_status chttp_web_flash_clear(
-    chttp_session *session,
-    chttp_web_error *error);
+chttp_web_status chttp_web_flash_clear(chttp_session *session, chttp_web_error *error);
 
 /**
  * Strict same-origin browser profile:
@@ -967,23 +868,16 @@ chttp_web_security_policy chttp_web_security_authenticated_policy(void);
  * digits. Empty field names, empty '&' segments, malformed escapes, and all
  * configured limit overflows fail closed. On failure out_form is zeroed.
  */
-chttp_web_status chttp_web_form_parse(
-    const void *data,
-    size_t data_size,
-    const chttp_web_form_parse_options *options,
-    chttp_web_form *out_form,
-    chttp_web_error *error);
+chttp_web_status chttp_web_form_parse(const void *data, size_t data_size,
+                                      const chttp_web_form_parse_options *options,
+                                      chttp_web_form *out_form, chttp_web_error *error);
 
 /** Returns the number of exact case-sensitive occurrences of name. */
-size_t chttp_web_form_count(
-    const chttp_web_form *form,
-    const char *name);
+size_t chttp_web_form_count(const chttp_web_form *form, const char *name);
 
 /** Returns the zero-based exact occurrence of name, or NULL. */
-const chttp_web_form_pair *chttp_web_form_get(
-    const chttp_web_form *form,
-    const char *name,
-    size_t occurrence);
+const chttp_web_form_pair *chttp_web_form_get(const chttp_web_form *form, const char *name,
+                                              size_t occurrence);
 
 /**
  * Binds a browser form through one generated immutable HTTP MethodPlan.
@@ -1006,48 +900,33 @@ const chttp_web_form_pair *chttp_web_form_get(
  * storage and scalar scratch must remain valid through this synchronous call.
  */
 chttp_web_status chttp_web_form_bind_method_plan(
-    const chttp_web_form *form,
-    const DataBindHttpMethodPlan *method_plan,
-    const DataBindNativeOptions *native_options,
-    DataBindBindingCallFrame *frame,
-    const chttp_web_form_plan_options *options,
-    chttp_web_validation *validation,
-    DataBindBindingPlanDiagnostic *diagnostic,
-    chttp_web_error *error);
+    const chttp_web_form *form, const DataBindHttpMethodPlan *method_plan,
+    const DataBindNativeOptions *native_options, DataBindBindingCallFrame *frame,
+    const chttp_web_form_plan_options *options, chttp_web_validation *validation,
+    DataBindBindingPlanDiagnostic *diagnostic, chttp_web_error *error);
 
 /**
  * Sends an empty ordinary HTTP redirect. Only 301/302/303/307/308 are
  * accepted. Location is copied by CHTTP before return.
  */
-chttp_web_status chttp_web_redirect(
-    const struct chttp_invocation *response,
-    unsigned int status_code,
-    const char *location,
-    chttp_web_error *error);
+chttp_web_status chttp_web_redirect(const struct chttp_invocation *response,
+                                    unsigned int status_code, const char *location,
+                                    chttp_web_error *error);
 
 /** Non-terminal HTMX response-header helpers; values are copied by CHTTP. */
-chttp_web_status chttp_web_hx_redirect(
-    const struct chttp_invocation *response,
-    const char *location,
-    chttp_web_error *error);
-chttp_web_status chttp_web_hx_trigger(
-    const struct chttp_invocation *response,
-    const char *trigger,
-    chttp_web_error *error);
-chttp_web_status chttp_web_hx_retarget(
-    const struct chttp_invocation *response,
-    const char *selector,
-    chttp_web_error *error);
+chttp_web_status chttp_web_hx_redirect(const struct chttp_invocation *response,
+                                       const char *location, chttp_web_error *error);
+chttp_web_status chttp_web_hx_trigger(const struct chttp_invocation *response, const char *trigger,
+                                      chttp_web_error *error);
+chttp_web_status chttp_web_hx_retarget(const struct chttp_invocation *response,
+                                       const char *selector, chttp_web_error *error);
 
 /** Renders one HTML error page; status_code must be in the 400..599 range. */
-chttp_web_status chttp_web_render_error(
-    chttp_web_renderer *renderer,
-    const struct chttp_invocation *response,
-    unsigned int status_code,
-    const char *template_name,
-    const cmeta_data_desc *model_desc,
-    const void *model,
-    chttp_web_error *error);
+chttp_web_status chttp_web_render_error(chttp_web_renderer *renderer,
+                                        const struct chttp_invocation *response,
+                                        unsigned int status_code, const char *template_name,
+                                        const cmeta_data_desc *model_desc, const void *model,
+                                        chttp_web_error *error);
 
 void chttp_web_output_free(char *html);
 void chttp_web_renderer_destroy(chttp_web_renderer *renderer);

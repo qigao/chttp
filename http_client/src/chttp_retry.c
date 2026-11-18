@@ -19,6 +19,11 @@ void chttp_retry_budget_init(chttp_retry_budget *b, const chttp_retry_options *o
 
 int chttp_retry_budget_prepare(chttp_retry_budget *b, const chttp_attempt_facts *facts,
     int failure_status, uint64_t now_ms, cnet_retry_result *out) {
+  return chttp_retry_budget_prepare_replay(b, facts, false, failure_status, now_ms, out);
+}
+
+int chttp_retry_budget_prepare_replay(chttp_retry_budget *b, const chttp_attempt_facts *facts,
+    bool rollback_response, int failure_status, uint64_t now_ms, cnet_retry_result *out) {
   uint64_t delay = 0u, random = b->random;
   int status;
   if (b->waiting) return SALTS_EBUSY;
@@ -27,8 +32,8 @@ int chttp_retry_budget_prepare(chttp_retry_budget *b, const chttp_attempt_facts 
   b->gate.explicitly_enabled = b->options.max_attempts > 1u && facts->retryable_failure;
   b->gate.cancelled = failure_status == SALTS_ECANCELED || failure_status == SALTS_ESHUTDOWN;
   b->gate.security_failure = facts->security_failure || failure_status == SALTS_EAUTH;
-  b->gate.owned_replayable_body = !facts->response_started;
-  b->gate.protocol_proves_not_executed = facts->protocol_not_executed;
+  b->gate.owned_replayable_body = !facts->response_started || rollback_response;
+  b->gate.protocol_proves_not_executed = facts->protocol_not_executed && !facts->response_started;
   status = cnet_retry_evaluate(&b->gate, out);
   if (status != SALTS_OK || !out->allowed) return status;
   random ^= random << 13u; random ^= random >> 7u; random ^= random << 17u;

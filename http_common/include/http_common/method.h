@@ -1,8 +1,8 @@
 #ifndef CHTTP_COMMON_METHOD_H
 #define CHTTP_COMMON_METHOD_H
 /* Scheduler-neutral generated method facts. Views borrow their callback scope. */
-#include <data_bind_binding_plan.h>
 #include <cmeta/ace_interceptor.h>
+#include <data_bind_binding_plan.h>
 #include <stdint.h>
 struct chttp_server_request_view;
 struct chttp_session;
@@ -15,7 +15,7 @@ typedef struct chttp_method_result {
   /* Borrowed staged output, possibly different from input for a CFlow Plan. */
   const DataBindBindingCallFrame *output;
 } chttp_method_result;
-#define CHTTP_METHOD_RESULT_INIT \
+#define CHTTP_METHOD_RESULT_INIT                                                                   \
   {DATA_BIND_OK, 0, false, false, DATA_BIND_BINDING_OUTCOME_INIT, NULL}
 
 typedef struct chttp_method_call {
@@ -62,7 +62,8 @@ typedef void (*chttp_method_completion_fn)(void *, const chttp_method_completion
 /* Before-only explicit authorization rejection; no mutable engine builder. */
 static inline cmeta_status chttp_method_call_reject(const chttp_method_call *call, bool *proceed) {
   if (!call || !call->result || !proceed) return CMETA_INVALID_ARGUMENT;
-  call->result->rejected = true; *proceed = false;
+  call->result->rejected = true;
+  *proceed = false;
   return CMETA_OK;
 }
 

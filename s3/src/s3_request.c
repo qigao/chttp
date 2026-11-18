@@ -435,7 +435,7 @@ void s3_request_plan_destroy(s3_request_plan *plan) {
   for (index = 0u; index < plan->header_count; ++index) {
     if (plan->headers[index].value != NULL)
       chttp_crypto_clear((void *)plan->headers[index].value,
-                      tstr_len((tstr)plan->headers[index].value));
+                         tstr_len((tstr)plan->headers[index].value));
     tstr_free((tstr)plan->headers[index].name);
     tstr_free((tstr)plan->headers[index].value);
   }
