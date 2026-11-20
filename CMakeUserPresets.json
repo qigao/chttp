@@ -253,6 +253,14 @@
       "configurePreset": "gcc-arm64-release-user"
     },
     {
+      "name": "install-gcc-arm64-release-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "gcc-arm64-release-user"
+    },
+    {
       "name": "android-release-user",
       "inherits": "base-build",
       "configurePreset": "android-release-user"
