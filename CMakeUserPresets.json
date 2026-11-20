@@ -51,6 +51,15 @@
       ]
     },
     {
+      "name": "gcc-arm64-release-user",
+      "displayName": "Linux GCC arm64 Release",
+      "inherits": [
+        "native-environment",
+        "linux-gcc-arm64",
+        "full-native"
+      ]
+    },
+    {
       "name": "android-release-user",
       "displayName": "Android NDK Clang Release",
       "inherits": [
@@ -236,6 +245,14 @@
       "configurePreset": "gcc-release-user"
     },
     {
+      "name": "gcc-arm64-release-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "gcc-arm64-release-user"
+    },
+    {
       "name": "android-release-user",
       "inherits": "base-build",
       "configurePreset": "android-release-user"
@@ -398,6 +415,14 @@
         "test-linux"
       ],
       "configurePreset": "gcc-release-user"
+    },
+    {
+      "name": "gcc-arm64-release-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "gcc-arm64-release-user"
     },
     {
       "name": "llvm-mingw-x64-release-user",

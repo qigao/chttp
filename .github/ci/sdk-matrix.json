@@ -41,10 +41,34 @@
       "android_abi": ""
     },
     {
+      "sdk": "linux-clang-arm64",
+      "runner": "ubuntu-24.04-arm",
+      "preset": "llvm-native-release-user",
+      "triplet": "arm64-linux",
+      "test": true,
+      "android_abi": ""
+    },
+    {
+      "sdk": "linux-gcc-arm64",
+      "runner": "ubuntu-24.04-arm",
+      "preset": "gcc-arm64-release-user",
+      "triplet": "arm64-linux",
+      "test": true,
+      "android_abi": ""
+    },
+    {
       "sdk": "macos-clang-arm64",
       "runner": "macos-15",
       "preset": "llvm-native-release-user",
       "triplet": "arm64-osx",
+      "test": true,
+      "android_abi": ""
+    },
+    {
+      "sdk": "macos-clang-x64",
+      "runner": "macos-15-intel",
+      "preset": "llvm-native-release-user",
+      "triplet": "x64-osx",
       "test": true,
       "android_abi": ""
     },
