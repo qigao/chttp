@@ -589,9 +589,9 @@ spec("Application bounded structured output") {
     check_equal(response.status_code, 200u); chttp_response_destroy(&response); wait_for_completion();
     sync_mutex_lock(&fixture.mutex);
     const size_t count = fixture.completion_count;
-    const bool small = count == 1u && strcmp(fixture.completions[0].path, "/value/1") == 0;
+    const bool small_response_completed = count == 1u && strcmp(fixture.completions[0].path, "/value/1") == 0;
     fixture.release_sink = true; sync_cond_broadcast(&fixture.changed); sync_mutex_unlock(&fixture.mutex);
-    check_equal(count, 1u); check_true(small); check_equal(atomic_load(&fixture.after), 2);
+    check_equal(count, 1u); check_true(small_response_completed); check_equal(atomic_load(&fixture.after), 2);
     check_equal(sync_thread_join(&fixture.thread), SALTS_OK); fixture.thread_live = false;
     check_equal(fixture.request_status, SALTS_OK); check_equal(chttp_application_close(&fixture.app, 5000u), SALTS_OK);
     check_equal(fixture.completion_count, 2u); check_equal(fixture.completions[1].path, "/value/4");
