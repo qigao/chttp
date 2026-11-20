@@ -40,9 +40,10 @@ packages = [('salts-cnet', 'SALTS_CNET', 'SaltsCNet'),
             ('salts-utils', 'SALTS_UTILS', 'SaltsUtils')]
 if args.package:
     packages = [package for package in packages if package[0] == args.package]
-cnet_profiles = {'windows-llvm-mingw-x64':'windows-x64', 'linux-clang-x64':'linux-x64',
+cnet_profiles = {'windows-llvm-mingw-x64':'windows-x64', 'windows-llvm-mingw-arm64':'windows-arm64',
+                 'linux-clang-x64':'linux-x64',
                  'linux-clang-x64-tsan':'linux-x64-tsan', 'linux-clang-arm64':'linux-arm64',
-                 'macos-clang-arm64':'macos-arm64', 'macos-clang-x64':'macos-x64'}
+                 'macos-clang-arm64':'macos-arm64'}
 
 
 def read(path):

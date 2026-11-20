@@ -161,6 +161,28 @@
         "ci-vcpkg",
         "android-x64-release-user"
       ]
+    },
+    {
+      "name": "msvc-arm64-release-user",
+      "displayName": "Native Windows MSVC ARM64 Release",
+      "inherits": "msvc-release-user",
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "arm64-windows"
+      }
+    },
+    {
+      "name": "llvm-mingw-native-arm64-release-user",
+      "displayName": "Native Windows LLVM-MinGW ARM64 Release",
+      "inherits": [
+        "target-llvm-mingw-arm64",
+        "llvm-mingw-x64-release-user"
+      ],
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": null
+      },
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "qigao-arm64-windows-llvm-mingw"
+      }
     }
   ],
   "buildPresets": [
@@ -381,6 +403,26 @@
       "name": "install-ci-android-x64-release-user",
       "inherits": "install-android-x64-release-user",
       "configurePreset": "ci-android-x64-release-user"
+    },
+    {
+      "name": "msvc-arm64-release-user",
+      "inherits": "msvc-release-user",
+      "configurePreset": "msvc-arm64-release-user"
+    },
+    {
+      "name": "install-msvc-arm64-release-user",
+      "inherits": "install-msvc-release-user",
+      "configurePreset": "msvc-arm64-release-user"
+    },
+    {
+      "name": "llvm-mingw-native-arm64-release-user",
+      "inherits": "llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-native-arm64-release-user"
+    },
+    {
+      "name": "install-llvm-mingw-native-arm64-release-user",
+      "inherits": "install-llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-native-arm64-release-user"
     }
   ],
   "testPresets": [
@@ -467,6 +509,16 @@
         "gcc-release-user"
       ],
       "configurePreset": "ci-gcc-release-user"
+    },
+    {
+      "name": "msvc-arm64-release-user",
+      "inherits": "msvc-release-user",
+      "configurePreset": "msvc-arm64-release-user"
+    },
+    {
+      "name": "llvm-mingw-native-arm64-release-user",
+      "inherits": "llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-native-arm64-release-user"
     }
   ]
 }
