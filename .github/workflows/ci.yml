@@ -106,15 +106,23 @@ jobs:
         ref: v${{ env.SALTS_UTILS_VERSION }}
         path: build/upstream/salts-utils
         persist-credentials: false
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - name: Restore the shared infrastructure snapshot and SDKs
+    - name: Restore the shared infrastructure snapshot
       run: |
         Copy-Item build/ci-inputs/chttp.env .env
         New-Item -ItemType Directory -Path $env:VCPKG_CACHE_REPOSITORY_ROOT -Force | Out-Null
         tar xf build/ci-inputs/infrastructure.tar -C $env:VCPKG_CACHE_REPOSITORY_ROOT
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - uses: ./build/ci-infrastructure/vcpkg-cache/.github/actions/setup-llvm-mingw
+      if: startsWith(matrix.sdk, 'windows-llvm-mingw-')
+      with:
+        target: ${{ matrix.sdk == 'windows-llvm-mingw-arm64' && 'arm64' || 'x64' }}
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        # PyYAML 6.0.1 supplies Windows x64 wheels for the test runner.
+        architecture: ${{ runner.os == 'Windows' && 'x64' || '' }}
+    - name: Restore the prepared native SDKs
+      run: |
         python build/upstream/cmeta/.github/ci/sdk-inputs.py restore --consumer . --profile '${{ matrix.sdk }}'
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         python .github/ci/sdk-inputs.py restore --profile '${{ matrix.sdk }}'
@@ -126,24 +134,16 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         python .github/ci/sdk-inputs.py restore --profile linux-clang-x64 --prefix HOST_
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    - name: Restore prepared LLVM-MinGW compiler
-      if: matrix.sdk == 'windows-llvm-mingw-x64'
-      run: |
-        $lock = Get-Content build/ci-inputs/locks/windows-compiler.json -Raw | ConvertFrom-Json
-        $payload = [IO.Path]::GetFileNameWithoutExtension(([Uri]$lock.source.url).AbsolutePath)
-        python "$env:VCPKG_CACHE_REPOSITORY_ROOT/scripts/restore-native-dependency.py" locked `
-          build/ci-inputs/locks/windows-compiler.json --destination build/ci-llvm-mingw `
-          --payload $payload --executable bin/x86_64-w64-mingw32-clang.exe
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        $receipt = Get-Content build/ci-llvm-mingw/receipt.json -Raw | ConvertFrom-Json
-        "LLVM_MINGW_ROOT=$($receipt.root)" >> $env:GITHUB_ENV
     - name: Locate Visual Studio developer environment
       if: runner.os == 'Windows'
       run: |
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-        $root = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        $arch = $env:RUNNER_ARCH.ToLowerInvariant()
+        $tools = if ($arch -eq 'arm64') { 'ARM64' } else { 'x86.x64' }
+        $root = & $vswhere -latest -products '*' -requires "Microsoft.VisualStudio.Component.VC.Tools.$tools" -property installationPath
         if ($LASTEXITCODE -ne 0 -or !$root) { throw 'Visual Studio C++ tools are required' }
         "VSDEVCMD_BAT=$root/Common7/Tools/VsDevCmd.bat" >> $env:GITHUB_ENV
+        "VSDEVCMD_ARCH=$arch" >> $env:GITHUB_ENV
     - name: Install Linux system development dependencies
       if: startsWith(matrix.sdk, 'linux-')
       shell: bash

@@ -51,6 +51,15 @@
       ]
     },
     {
+      "name": "gcc-arm64-release-user",
+      "displayName": "Linux GCC arm64 Release",
+      "inherits": [
+        "native-environment",
+        "linux-gcc-arm64",
+        "full-native"
+      ]
+    },
+    {
       "name": "android-release-user",
       "displayName": "Android NDK Clang Release",
       "inherits": [
@@ -152,6 +161,32 @@
         "ci-vcpkg",
         "android-x64-release-user"
       ]
+    },
+    {
+      "name": "msvc-arm64-release-user",
+      "displayName": "Native Windows MSVC ARM64 Release",
+      "inherits": "msvc-release-user",
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "arm64-windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_FLAGS_RELEASE": "/Od /DNDEBUG",
+        "CMAKE_CXX_FLAGS_RELEASE": "/Od /DNDEBUG"
+      }
+    },
+    {
+      "name": "llvm-mingw-native-arm64-release-user",
+      "displayName": "Native Windows LLVM-MinGW ARM64 Release",
+      "inherits": [
+        "target-llvm-mingw-arm64",
+        "llvm-mingw-x64-release-user"
+      ],
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": null
+      },
+      "environment": {
+        "VCPKG_TARGET_TRIPLET": "qigao-arm64-windows-llvm-mingw"
+      }
     }
   ],
   "buildPresets": [
@@ -234,6 +269,22 @@
         "build-linux"
       ],
       "configurePreset": "gcc-release-user"
+    },
+    {
+      "name": "gcc-arm64-release-user",
+      "inherits": [
+        "base-build",
+        "build-linux"
+      ],
+      "configurePreset": "gcc-arm64-release-user"
+    },
+    {
+      "name": "install-gcc-arm64-release-user",
+      "inherits": [
+        "base-install",
+        "build-linux"
+      ],
+      "configurePreset": "gcc-arm64-release-user"
     },
     {
       "name": "android-release-user",
@@ -356,6 +407,26 @@
       "name": "install-ci-android-x64-release-user",
       "inherits": "install-android-x64-release-user",
       "configurePreset": "ci-android-x64-release-user"
+    },
+    {
+      "name": "msvc-arm64-release-user",
+      "inherits": "msvc-release-user",
+      "configurePreset": "msvc-arm64-release-user"
+    },
+    {
+      "name": "install-msvc-arm64-release-user",
+      "inherits": "install-msvc-release-user",
+      "configurePreset": "msvc-arm64-release-user"
+    },
+    {
+      "name": "llvm-mingw-native-arm64-release-user",
+      "inherits": "llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-native-arm64-release-user"
+    },
+    {
+      "name": "install-llvm-mingw-native-arm64-release-user",
+      "inherits": "install-llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-native-arm64-release-user"
     }
   ],
   "testPresets": [
@@ -400,6 +471,14 @@
       "configurePreset": "gcc-release-user"
     },
     {
+      "name": "gcc-arm64-release-user",
+      "inherits": [
+        "base-test",
+        "test-linux"
+      ],
+      "configurePreset": "gcc-arm64-release-user"
+    },
+    {
       "name": "llvm-mingw-x64-release-user",
       "inherits": [
         "base-test",
@@ -434,6 +513,16 @@
         "gcc-release-user"
       ],
       "configurePreset": "ci-gcc-release-user"
+    },
+    {
+      "name": "msvc-arm64-release-user",
+      "inherits": "msvc-release-user",
+      "configurePreset": "msvc-arm64-release-user"
+    },
+    {
+      "name": "llvm-mingw-native-arm64-release-user",
+      "inherits": "llvm-mingw-x64-release-user",
+      "configurePreset": "llvm-mingw-native-arm64-release-user"
     }
   ]
 }

@@ -30,6 +30,7 @@ typedef int chttp_h2_test_socket;
 
 enum { CHTTP_H2_TEST_TIMEOUT_MS = 5000 };
 enum { CHTTP_H2_TEST_DEADLINE_MS = 20 };
+enum { CHTTP_H2_TEST_PACE_MS = 320, CHTTP_H2_TEST_IDLE_MS = 800 };
 
 typedef struct chttp_h2_test_server {
   chttp_h2_test_socket listener;
@@ -311,7 +312,7 @@ static int chttp_h2_test_on_end(void *user, int32_t stream_id, int end_stream) {
     static const uint8_t paced[] = {'o','k','a','y'};
     if (chttp_h2_proto_submit_headers(server->protocol, stream_id, headers, 2u, 0) != 0) return -1;
     for (unsigned i = 0; i < 4u; ++i) {
-      if (i != 0u) sleep_ms(250u);
+      if (i != 0u) sleep_ms(CHTTP_H2_TEST_PACE_MS);
       if (chttp_h2_proto_submit_data(server->protocol, stream_id, paced+i, 1u, i==3u) != 0) return -1;
       chttp_h2_test_flush(server, server->accepted_socket);
       if (server->status != SALTS_OK) return -1;
@@ -1228,6 +1229,9 @@ static void chttp_test_async_file_retry(bool h2, bool download, bool changed, bo
   check_equal(tt_remove_file(path), 0); free(path);
 }
 
+enum { CHTTP_H1_TEST_PACE_MS = 200, CHTTP_H1_TEST_IDLE_MS = 600 };
+static const char chttp_h1_test_paced_body[] = "okay";
+
 static void chttp_h1_test_paced_peer(void *user) {
   chttp_h2_test_server *server = user;
   chttp_h2_test_socket socket_value = accept(server->listener, NULL, NULL);
@@ -1241,16 +1245,16 @@ static void chttp_h1_test_paced_peer(void *user) {
     used += (size_t)received; input[used] = '\0';
     if (used == sizeof(input)-1u) { server->status = SALTS_EMSGSIZE; break; }
   }
-  static const char headers[] = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n";
+  static const char headers[] = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n";
   if (server->status == SALTS_OK) server->status = chttp_h2_test_send_all(socket_value, headers, sizeof(headers)-1u);
-  for (size_t i = 0u; i < 2u && server->status == SALTS_OK; ++i) {
-    sleep_ms(80u);
-    server->status = chttp_h2_test_send_all(socket_value, "ok"+i, 1u);
+  for (size_t i = 0u; i < sizeof(chttp_h1_test_paced_body)-1u && server->status == SALTS_OK; ++i) {
+    sleep_ms(CHTTP_H1_TEST_PACE_MS);
+    server->status = chttp_h2_test_send_all(socket_value, chttp_h1_test_paced_body+i, 1u);
   }
   chttp_h2_test_close_socket(socket_value);
 }
 
-static void chttp_test_h1_timer(unsigned mode) {
+static void chttp_test_h1_timer(const chttp_request_timeouts timeouts, const char *timeout_stage) {
   chttp_async_client client = {0};
   chttp_client_config config = chttp_h2_test_config();
   check_equal(chttp_async_client_init(&client, &config), SALTS_OK);
@@ -1264,31 +1268,39 @@ static void chttp_test_h1_timer(unsigned mode) {
   const chttp_request_options options = {.connection_uri = uri, .authority = "timer.test", .target = "/",
       .method = CHTTP_METHOD_GET, .protocol = CHTTP_HTTP_1_1,
       .on_complete = chttp_h2_test_on_complete, .user = &completion};
-  const chttp_request_timeouts timeouts = {mode == 0u ? 120u : 1000u, mode == 1u ? 40u : 200u};
   chttp_request request;
   check_equal(chttp_async_client_submit_with_timeouts(&client, &options, &timeouts, &request), SALTS_OK);
   const uint64_t deadline = monotonic_ms()+5000u;
   while (completion.count == 0u && monotonic_ms() < deadline) {
     size_t count; check_equal(chttp_async_client_poll(&client, 1000u, &count), SALTS_OK);
   }
-  check_equal(completion.count, 1u);
-  check_equal(completion.statuses[0], mode == 2u ? SALTS_OK : SALTS_ETIMEDOUT);
-  if (mode != 2u) check_equal(completion.stages[0], mode == 0u ? "http-deadline" : "response-idle-timeout");
-  else check_equal(completion.bodies[0], "ok");
   check_equal(chttp_async_client_stop(&client, 5000u), SALTS_OK);
   check_equal(chttp_async_client_destroy(&client), SALTS_OK);
   check_equal(sync_thread_join(&thread), SALTS_OK); sync_thread_destroy(&thread);
   chttp_h2_test_close_socket(peer.listener);
+  check_equal(completion.count, 1u);
+  check_equal(completion.statuses[0], timeout_stage ? SALTS_ETIMEDOUT : SALTS_OK);
   check_equal(peer.accepted_connections, 1u);
-  /* A timeout deliberately closes the socket while the peer still writes. */
-  if (mode == 2u) check_equal(peer.status, SALTS_OK);
+  if (timeout_stage) {
+    check_equal(completion.stages[0], timeout_stage);
+  } else {
+    check_equal(completion.bodies[0], chttp_h1_test_paced_body);
+    check_equal(peer.status, SALTS_OK);
+  }
 }
 
 spec("CHTTP HTTP/2 client") {
   group("HTTP1 request timers") {
-    it("keeps the total deadline fixed during response progress") { chttp_test_h1_timer(0u); }
-    it("expires a stalled response independently") { chttp_test_h1_timer(1u); }
-    it("renews only the response idle budget") { chttp_test_h1_timer(2u); }
+    it("keeps the total deadline fixed during response progress") {
+      chttp_test_h1_timer((chttp_request_timeouts){500u, CHTTP_H1_TEST_IDLE_MS}, "http-deadline");
+    }
+    it("expires a stalled response independently") {
+      chttp_test_h1_timer((chttp_request_timeouts){2500u, 100u}, "response-idle-timeout");
+    }
+    it("renews only the response idle budget") {
+      /* Four paced bytes take at least 800 ms, with each gap below the 600 ms idle limit. */
+      chttp_test_h1_timer((chttp_request_timeouts){2500u, CHTTP_H1_TEST_IDLE_MS}, NULL);
+    }
   }
   group("asynchronous file replay") {
     it("reopens an H1 upload source") { chttp_test_async_file_retry(false, false, false, false); }
@@ -1639,7 +1651,8 @@ spec("CHTTP HTTP/2 client") {
     for (unsigned total = 0; total < 2u; ++total) {
       it("renews own-stream idle progress without extending total budget, total=%u", total) {
         chttp_request request = {0};
-        const chttp_request_timeouts timeouts = {total ? 700u : 2000u, 400u};
+        /* Three paced gaps cross both the initial idle budget and the short total deadline. */
+        const chttp_request_timeouts timeouts = {total ? 880u : 2500u, CHTTP_H2_TEST_IDLE_MS};
         chttp_request_options options = {.connection_uri = uri, .authority = "timer.test",
             .target = "/paced", .method = CHTTP_METHOD_GET, .protocol = CHTTP_HTTP_2,
             .on_complete = chttp_h2_test_on_complete, .user = &results[0]};
@@ -1653,7 +1666,7 @@ spec("CHTTP HTTP/2 client") {
         if (total) check_equal(results[0].stages[0], "http-deadline");
         else check_equal(results[0].bodies[0], "okay");
         /* Let the peer finish its late DATA before orderly connection shutdown. */
-        const uint64_t settle_until = monotonic_ms() + 150u;
+        const uint64_t settle_until = monotonic_ms() + CHTTP_H2_TEST_PACE_MS;
         while (monotonic_ms() < settle_until)
           check_equal(chttp_async_client_poll(&client, 5u, &completions), SALTS_OK);
         check_equal(results[0].count, 1u);
