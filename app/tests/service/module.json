@@ -1,0 +1,396 @@
+{
+  "include": [
+    "fixtures/module.json"
+  ],
+  "targets": {
+    "chttp_application_binding_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "../application_binding_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_cflow_fixture.idl",
+          "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl",
+          "../../src",
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_service_cflow_fixture_native",
+          "chttp_service_cflow_unsupported_fixture_native",
+          "saltsbase_tinytest",
+          "saltsbase_json",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_cnet",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsbase_query",
+          "chttp_service_cflow_fixture_idl_codegen",
+          "chttp_service_cflow_unsupported_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_body_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_application_body_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl",
+          "../../src",
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_worker_body_fixture_native",
+          "chttp_service_plugin_probe",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_cnet",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "chttp_worker_body_fixture_idl_codegen"
+        ],
+        "defines": {
+          "WORKER_BODY_PLUGIN_PATH": "\"$builddir/bin/chttp_worker_body_fixture_plugin.dll\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_worker_body_fixture_plugin"
+      ]
+    },
+    "chttp_application_output_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_application_output_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl",
+          "../../src",
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_worker_output_fixture_native",
+          "chttp_service_plugin_probe",
+          "saltsbase_tinytest",
+          "saltsbase_json",
+          "saltsbase_json_cserde",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_cnet",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsbase_query",
+          "saltsbase_cserde",
+          "chttp_worker_output_fixture_idl_codegen"
+        ],
+        "defines": {
+          "WORKER_OUTPUT_PLUGIN_PATH": "\"$builddir/bin/chttp_worker_output_fixture_plugin.dll\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_worker_output_fixture_plugin"
+      ]
+    },
+    "chttp_application_plugin_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_application_plugin_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl",
+          "../../src",
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_service_plugin_fixture_native",
+          "chttp_service_plugin_probe",
+          "saltsbase_tinytest",
+          "saltsbase_json",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_cnet",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsbase_query",
+          "chttp_service_plugin_fixture_idl_codegen"
+        ],
+        "defines": {
+          "GENERATED_CHTTP_SERVICE_PLUGIN_PATH": "\"$builddir/bin/chttp_service_plugin_fixture_plugin.dll\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_service_plugin_fixture_plugin"
+      ]
+    },
+    "chttp_service_generated_cflow_http_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_service_generated_cflow_http_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_cflow_fixture.idl",
+          "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl",
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_service_cflow_fixture_native",
+          "chttp_service_cflow_unsupported_fixture_native",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_cnet",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "chttp_service_cflow_fixture_idl_codegen",
+          "chttp_service_cflow_unsupported_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_generic_cross_tu_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_service_generic_cross_tu_test.c",
+          "chttp_service_generic_identity_a.c",
+          "chttp_service_generic_identity_b.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_generic_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_generic_fixture_native",
+          "cmeta_cmeta",
+          "salts_databind",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core",
+          "chttp_service_generic_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_header_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_service_header_cpp_test.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_http_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_service_http_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_http_fixture.idl",
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl",
+          "../../include",
+          "../../../http_server/include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_service_plugin_fixture_native",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_cnet",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "chttp_service_plugin_probe",
+          "chttp_service_http_fixture_idl_codegen",
+          "chttp_service_plugin_fixture_idl_codegen"
+        ],
+        "defines": {
+          "GENERATED_CHTTP_SERVICE_PLUGIN_PATH": "\"$builddir/bin/chttp_service_plugin_fixture_plugin.dll\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_service_plugin_fixture_plugin"
+      ]
+    }
+  }
+}

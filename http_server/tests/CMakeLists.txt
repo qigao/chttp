@@ -1,36 +1,3 @@
-add_subdirectory(fixtures/legacy_application)
-add_executable(chttp_server_example_test chttp_server_example_test.c)
-target_link_libraries(chttp_server_example_test PRIVATE
-  http_example_app CHttp::Client Salts::TinyTest llhttp::llhttp_static)
-target_include_directories(chttp_server_example_test PRIVATE
-  ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc
-  ${PROJECT_SOURCE_DIR}/http_server/src)
-target_compile_definitions(chttp_server_example_test PRIVATE
-  HTTP_EXAMPLE_TEST_FILE="${PROJECT_SOURCE_DIR}/http_server/tests/fixtures/legacy_application/http_example.schema"
-  HTTP_EXAMPLE_PLUGIN_PATH="$<TARGET_FILE:http_example_contract_plugin>"
-  HTTP_EXAMPLE_BAD_PLUGIN_PATH="$<TARGET_FILE:http_example_incompatible_plugin>")
-add_dependencies(chttp_server_example_test http_example_contract_plugin http_example_incompatible_plugin)
-set_target_properties(chttp_server_example_test PROPERTIES
-  FOLDER "http_server/tests" C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-add_test(NAME chttp_server_example_test COMMAND chttp_server_example_test)
-set_tests_properties(chttp_server_example_test PROPERTIES TIMEOUT 60)
-add_test(NAME chttp_server_example_plugin_test COMMAND chttp_server_example_test)
-set_tests_properties(chttp_server_example_plugin_test PROPERTIES TIMEOUT 60
-  ENVIRONMENT "HTTP_EXAMPLE_PLUGIN=$<TARGET_FILE:http_example_contract_plugin>")
-
-# Same operation ID but incompatible result width: reject before publication.
-salts_idl_target(
-  TARGET http_example_incompatible
-  IDL "${CMAKE_CURRENT_SOURCE_DIR}/http_example_incompatible.schema"
-  ARTIFACT_NAME http_example_incompatible
-  COMPONENT "HttpExample.CalculatorPlugin"
-  VERSION "1.0.0"
-  ARTIFACTS PLUGIN
-  BINARY_CODEC
-  SOURCES http_example_incompatible.c)
-set_target_properties(http_example_incompatible_plugin http_example_incompatible_plugin_client
-  http_example_incompatible_idl_codegen PROPERTIES FOLDER "http_server/tests")
-
 add_executable(chttp_server_retry_test chttp_server_retry_test.c)
 target_link_libraries(chttp_server_retry_test PRIVATE CHttp::Server CMeta::CFlow Salts::TinyTest)
 target_include_directories(chttp_server_retry_test PRIVATE
@@ -202,20 +169,3 @@ set_target_properties(chttp_rate_limit_test PROPERTIES FOLDER "http_server/tests
 
 # Generated RPC is a native Server/Client conformance fixture.
 add_subdirectory(rpc_generated)
-
-# Independent TLS provider interoperability belongs to the Server protocol owner.
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-if(DEFINED CHTTP_TEST_OPENSSL AND CHTTP_TEST_OPENSSL STREQUAL "")
-  message(FATAL_ERROR
-    "CHTTP_TEST_OPENSSL is empty; load its OpenSSL 3 executable path from .env or set -DCHTTP_TEST_OPENSSL=<absolute-path>")
-endif()
-find_program(CHTTP_TEST_OPENSSL NAMES openssl REQUIRED)
-add_executable(chttp_tls_openssl_server chttp_tls_openssl_server.c)
-target_link_libraries(chttp_tls_openssl_server PRIVATE CHttp::Server)
-target_include_directories(chttp_tls_openssl_server PRIVATE
-  ${PROJECT_SOURCE_DIR}/http_server/src ${PROJECT_SOURCE_DIR}/http_common/http)
-set_target_properties(chttp_tls_openssl_server PROPERTIES FOLDER "http_server/tests")
-add_test(NAME chttp_tls_openssl_test COMMAND ${Python3_EXECUTABLE}
-  ${CMAKE_CURRENT_SOURCE_DIR}/verify_tls_openssl.py
-  $<TARGET_FILE:chttp_tls_openssl_server> ${CHTTP_TEST_OPENSSL})
-set_tests_properties(chttp_tls_openssl_test PROPERTIES TIMEOUT 180)

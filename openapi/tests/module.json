@@ -1,0 +1,283 @@
+{
+  "include": [
+    "fixtures/module.json",
+    "scripts/module.json"
+  ],
+  "targets": {
+    "test_databind_http_provider": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_databind_http_provider.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/openapi/tests/openapi_databind_http_fixture.idl",
+          "../include"
+        ],
+        "deps": [
+          "openapi_generator",
+          "salts_databind",
+          "saltsbase_json",
+          "saltsbase_yaml_json",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "saltsbase_yaml",
+          "saltsbase_query",
+          "vcpkg_tree_sitter",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core",
+          "openapi_databind_http_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "test_generator": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_generator.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include"
+        ],
+        "deps": [
+          "vcpkg_tree_sitter_c",
+          "openapi_generator",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_json",
+          "saltsbase_yaml",
+          "saltsbase_query",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsbase_cserde"
+        ],
+        "defines": {
+          "C_PLUGIN": "\"$builddir/bin/openapi_c.dll\"",
+          "TEST_SOURCE_DIR": "\"$root/openapi/tests\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_c",
+        "openapi-gen"
+      ]
+    },
+    "test_ui_fragments": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_ui_fragments.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../app/include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "openapi_ui_model",
+          "saltsbase_json",
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "openapi_generator",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_yaml",
+          "saltsbase_core",
+          "saltsbase_query"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "test_ui_htmx": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_ui_htmx.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../app/include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "openapi_ui_model",
+          "saltsbase_json",
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "openapi_generator",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_yaml",
+          "saltsbase_core",
+          "saltsbase_query"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "test_ui_model": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_ui_model.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../app/include",
+          "../../http_server/include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "vcpkg_tree_sitter_c",
+          "openapi_ui_model",
+          "openapi_generator",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_json",
+          "saltsbase_yaml",
+          "saltsbase_query",
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_plugin",
+          "salts_jinja",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "defines": {
+          "C_PLUGIN": "\"$builddir/bin/openapi_c.dll\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_c"
+      ]
+    },
+    "test_ui_renderer": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_ui_renderer.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../app/include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "openapi_ui_model",
+          "saltsbase_json",
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "openapi_generator",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_yaml",
+          "saltsbase_core",
+          "saltsbase_query"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "targets": {
+    "openapi_databind_http_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/openapi/tests/test_databind_http.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/openapi/tests/openapi_databind_http_fixture.idl/openapi_databind_native.h",
+            "--artifact-name",
+            "openapi_databind",
+            "--transports",
+            "http",
+            "--projection-config",
+            "$root/openapi/tests/test_databind_http.projection.json"
+          ],
+          "inputs": [
+            "$root/openapi/tests/test_databind_http.schema",
+            "$root/openapi/tests/test_databind_http.projection.json",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/openapi/tests/openapi_databind_http_fixture.idl/openapi_databind_native.h",
+            "$builddir/openapi/tests/openapi_databind_http_fixture.idl/openapi_databind.http.h"
+          ]
+        }
+      ]
+    }
+  }
+}

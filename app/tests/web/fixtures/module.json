@@ -1,0 +1,387 @@
+{
+  "include": [
+    "scripts/module.json"
+  ],
+  "targets": {
+    "chttp_web_form_plan_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/web/chttp_web_form_plan.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan_native.h",
+            "--binary-codec",
+            "--artifact-name",
+            "chttp_web_form_plan",
+            "--artifacts",
+            "native",
+            "--transports",
+            "http",
+            "--source-output",
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan_native.c",
+            "--projection-config",
+            "$root/app/tests/web/chttp_web_form_plan.projection.json"
+          ],
+          "inputs": [
+            "$root/app/tests/web/chttp_web_form_plan.schema",
+            "$root/app/tests/web/chttp_web_form_plan.projection.json",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan_native.h",
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan_native.c",
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan.service_native.h",
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan.service_native.c",
+            "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan.http.h"
+          ]
+        }
+      ]
+    },
+    "chttp_web_authenticated_app_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_authenticated_app.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include",
+          "../../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core",
+          "saltsbase_cserde"
+        ],
+        "defines": {
+          "CHTTP_WEB_AUTH_APP_ASSET_ROOT": "\"$root/app/tests/web/fixtures/assets/authenticated_app\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_context_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_context_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_crud_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_crud_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_deferred_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_deferred_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_form_plan_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan_native.c",
+          "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl/chttp_web_form_plan.service_native.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/web/chttp_web_form_plan_fixture.idl"
+        ],
+        "deps": [
+          "chttp_web_form_plan_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_form_upload_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_form_upload_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_security_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_security_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_web_session_example": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_session_example.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../../include",
+          "../../../../http_server/include",
+          "../../../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

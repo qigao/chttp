@@ -1,0 +1,65 @@
+{
+  "include": [
+    "tests/module.json"
+  ],
+  "targets": {
+    "chttp_common": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "http/chttp_file_transfer.c",
+          "http/chttp_h2_frame.c",
+          "http/chttp_h2_hpack.c",
+          "http/chttp_h2_proto.c",
+          "http/chttp_tls.c",
+          "http/chttp_websocket_handshake.c",
+          "http/chttp_jwt_token.c",
+          "rpc/crpc_json.c",
+          "rpc/crpc_callable.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "include",
+          "../http_server/include",
+          "../vendor/cjwt/include",
+          "http"
+        ],
+        "deps": [
+          "vcpkg_llhttp",
+          "salts_cnet",
+          "saltsbase_core",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_cserde",
+          "saltsbase_json_cserde",
+          "saltsbase_json",
+          "chttp_cjwt",
+          "chttp_digest"
+        ]
+      }
+    },
+    "chttp_digest": {
+      "kind": "static",
+      "public": {
+        "includeDirs": [
+          "http"
+        ]
+      },
+      "sources": {
+        "files": [
+          "http/chttp_digest.c"
+        ]
+      },
+      "private": {
+        "deps": [
+          "salts_crypto",
+          "saltsbase_core"
+        ],
+        "flags": [
+          "-fvisibility=hidden"
+        ]
+      }
+    }
+  }
+}

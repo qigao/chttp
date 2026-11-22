@@ -1,0 +1,582 @@
+{
+  "include": [
+    "scripts/module.json"
+  ],
+  "forEach": [
+    {
+      "files": [
+        "chttp_api_test.c",
+        "chttp_h2_client_test.c",
+        "chttp_requests_test.c",
+        "crpc_api_test.c",
+        "crpc_transport_test.c"
+      ],
+      "target": {
+        "kind": "executable",
+        "private": {
+          "includeDirs": [
+            "../../http_common/tests/support",
+            "../../http_common/http",
+            "../../http_common/rpc",
+            "../src",
+            "../rpc",
+            "../include",
+            "../../http_common/include",
+            "../../http_server/include"
+          ],
+          "deps": [
+            "chttp_client",
+            "chttp_server",
+            "saltsbase_tinytest",
+            "salts_cnet",
+            "salts_databind",
+            "saltsbase_cserde",
+            "cmeta_cstl",
+            "cmeta_cflow",
+            "cmeta_cmeta",
+            "saltsbase_native_io",
+            "saltsbase_coroutine",
+            "saltsbase_core"
+          ],
+          "libs": [
+            "ws2_32"
+          ]
+        },
+        "test": {},
+        "when": {
+          "native": true
+        }
+      }
+    }
+  ],
+  "targets": {
+    "chttp_client_rpc_header_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_client_rpc_header_cpp_test.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_connection_recovery_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_connection_recovery_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../../http_common/tests/support",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "vcpkg_llhttp",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_destination_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_destination_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_file_sink_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_file_sink_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/tests/support",
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_managed_stream_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_managed_stream_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src"
+        ],
+        "deps": [
+          "salts_cnet",
+          "saltsbase_tinytest",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 15
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_pool_lifecycle_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_pool_lifecycle_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "vcpkg_llhttp",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_request_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_request_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/tests/support",
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "vcpkg_llhttp",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_response_owner_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_response_owner_test.c",
+          "chttp_response_scope_peer.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "salts_cnet",
+          "cmeta_cmeta",
+          "saltsbase_tinytest",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_response_scope_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_response_scope_cpp_test.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_response_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_response_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/tests/support",
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "vcpkg_llhttp",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_retry_budget_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_retry_budget_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_tls_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_tls_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/tests/support",
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_crypto",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "defines": {
+          "CHTTP_X509_FIXTURE_DIR": "\"$root/http_client/tests/fixtures\"",
+          "CHTTP_X509_INVALID_CA_FULLCHAIN": "\"$builddir/http_client/tests/chttp-invalid-ca-fullchain.pem\"",
+          "CHTTP_X509_P384_FULLCHAIN": "\"$builddir/http_client/tests/chttp-p384-server-fullchain.pem\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "p384_chain",
+          "tool": "cmake",
+          "inputs": [
+            "$root/http_client/tests/fixtures/WriteCertificateChain.cmake",
+            "$root/http_client/tests/fixtures/p384-chain-server-cert.pem",
+            "$root/http_client/tests/fixtures/p384-chain-intermediate-cert.pem"
+          ],
+          "outputs": [
+            "$builddir/http_client/tests/chttp-p384-server-fullchain.pem"
+          ],
+          "args": [
+            "-DCERTIFICATE=$root/http_client/tests/fixtures/p384-chain-server-cert.pem",
+            "-DISSUER_CERTIFICATE=$root/http_client/tests/fixtures/p384-chain-intermediate-cert.pem",
+            "-DCERTIFICATE_CHAIN=$builddir/http_client/tests/chttp-p384-server-fullchain.pem",
+            "-P",
+            "$root/http_client/tests/fixtures/WriteCertificateChain.cmake"
+          ]
+        },
+        {
+          "name": "invalid_ca_chain",
+          "tool": "cmake",
+          "inputs": [
+            "$root/http_client/tests/fixtures/WriteCertificateChain.cmake",
+            "$root/http_client/tests/fixtures/invalid-ca-server-cert.pem",
+            "$root/http_client/tests/fixtures/invalid-ca-issuer-cert.pem"
+          ],
+          "outputs": [
+            "$builddir/http_client/tests/chttp-invalid-ca-fullchain.pem"
+          ],
+          "args": [
+            "-DCERTIFICATE=$root/http_client/tests/fixtures/invalid-ca-server-cert.pem",
+            "-DISSUER_CERTIFICATE=$root/http_client/tests/fixtures/invalid-ca-issuer-cert.pem",
+            "-DCERTIFICATE_CHAIN=$builddir/http_client/tests/chttp-invalid-ca-fullchain.pem",
+            "-P",
+            "$root/http_client/tests/fixtures/WriteCertificateChain.cmake"
+          ]
+        }
+      ]
+    },
+    "chttp_websocket_pool_socket_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_websocket_pool_socket_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../include",
+          "../../http_common/include",
+          "../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "saltsbase_uri",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

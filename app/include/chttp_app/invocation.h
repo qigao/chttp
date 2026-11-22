@@ -65,6 +65,13 @@ int chttp_invocation_respond(const chttp_invocation *, unsigned int, const char 
 /* Opening-only explicit acceptance. Normal buffered respond() rejects the
  * upgrade. Session intents and entered hooks settle before native publication. */
 int chttp_invocation_websocket_accept(const chttp_invocation *);
+/* Opening-only, before the response is sealed. Copies the generation-checked
+ * peer value for identity and registers one worker terminal callback. Wait for
+ * ready before sending. On success terminal owns the cleanup obligation for
+ * user through rejection, failed publication, or upgraded peer retirement.
+ * On error no ownership transfers. Never wait for or close the App from terminal. */
+int chttp_invocation_websocket_attach(const chttp_invocation *,
+    chttp_server_websocket_session *, chttp_websocket_terminal_fn, void *);
 /** Selects a copied, case-sensitive token offered in this opening request.
  * EINVAL rejects invalid scope/token, EPROTO rejects an unoffered token, and
  * EALREADY rejects a sealed draft. Header budgets and ownership are unchanged. */

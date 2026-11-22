@@ -1,0 +1,478 @@
+{
+  "include": [
+    "rpc_generated/module.json"
+  ],
+  "forEach": [
+    {
+      "files": [
+        "chttp_h2_jwt_isolation_test.c",
+        "chttp_server_test.c",
+        "crpc_server_test.c"
+      ],
+      "target": {
+        "kind": "executable",
+        "private": {
+          "includeDirs": [
+            "../../http_common/tests/support",
+            "../../http_common/http",
+            "../../http_common/rpc",
+            "../src",
+            "../rpc",
+            "../../http_client/include",
+            "../../http_common/include",
+            "../include"
+          ],
+          "deps": [
+            "chttp_client",
+            "chttp_server",
+            "saltsbase_tinytest",
+            "salts_cnet",
+            "salts_databind",
+            "saltsbase_cserde",
+            "cmeta_cstl",
+            "cmeta_cflow",
+            "cmeta_cmeta",
+            "saltsbase_native_io",
+            "saltsbase_coroutine",
+            "saltsbase_core"
+          ],
+          "libs": [
+            "ws2_32"
+          ]
+        },
+        "test": {},
+        "when": {
+          "native": true
+        }
+      }
+    },
+    {
+      "files": [
+        "chttp_h2_server_test.c",
+        "chttp_jwt_test.c",
+        "chttp_server_deferred_token_test.c"
+      ],
+      "target": {
+        "kind": "executable",
+        "private": {
+          "includeDirs": [
+            "../../http_common/tests/support",
+            "../../http_common/http",
+            "../../http_common/rpc",
+            "../src",
+            "../rpc",
+            "../../http_client/include",
+            "../../http_common/include",
+            "../include"
+          ],
+          "deps": [
+            "chttp_client",
+            "chttp_server",
+            "cmeta_cflow",
+            "saltsbase_tinytest",
+            "salts_cnet",
+            "salts_databind",
+            "saltsbase_native_io",
+            "saltsbase_coroutine",
+            "saltsbase_cserde",
+            "cmeta_cstl",
+            "cmeta_cmeta",
+            "saltsbase_core"
+          ],
+          "libs": [
+            "ws2_32"
+          ]
+        },
+        "test": {},
+        "when": {
+          "native": true
+        }
+      }
+    }
+  ],
+  "targets": {
+    "chttp_cors_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_cors_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_client/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_rate_limit_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_rate_limit_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_server_configurator_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_configurator_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "vcpkg_llhttp",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_server_execution_options_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_execution_options_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_server_manager_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_manager_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 10
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_server_owner_topology_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_owner_topology_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../../http_client/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_server_parser_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_parser_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/tests/support",
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../../http_client/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "vcpkg_llhttp",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_server_retry_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_retry_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 10
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_session_snapshot_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_session_snapshot_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_websocket_commands_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_websocket_commands_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "vcpkg_llhttp",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 15
+      },
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

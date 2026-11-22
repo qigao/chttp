@@ -281,83 +281,6 @@ Chttp 和 CNet 配置，尚不能仅据该差异认定某个函数是 CPU 热点
 装配留在启动控制面，数据面执行预绑定操作；不为增加 Leader/Followers 模式迁移
 既有 poll owner。队列公平性修复不依赖这些 ABI 扩展，也不宣称已解决终态可观察性。
 
-## IDL + Configurator / Interceptor + Jinja 示例
-
-`crpc_server_example` 保留 `/rpc` 的 `example.ping`（返回 `null`）和可选 `/file`，
-新增 Jinja 首页 `/` 与 `GET /api/add?left=3&right=4`（返回 JSON 数字 `7`）。
-`left` 为 1..4294967295，`right` 为 0..4294967295；结果使用 `uint64`，不在 32 位相加时溢出。
-缺少/无法绑定参数返回 400，违反 IDL 的 `@Min(1)` 返回 422。
-
-| 职责 | 实现 |
-| --- | --- |
-| 契约与生成 | [http_example.schema](examples/http_example.schema) 定义请求、响应及页面模型；[HTTP projection](examples/http_example.projection.json) 定义路径与字段来源；`salts_idl_target` 调用 SaltsUtils IDL 编译器生成 native 类型、CMeta 描述符与 Service adapter |
-| Configurator | [http_example_configurator.c](examples/http_example_configurator.c) 复制应用配置、编译 MethodPlan、初始化模板/Service/限流器、绑定策略与路由；任一步失败按依赖顺序回滚，完成装配后由 main 启动监听 |
-| Interceptor / middleware | [http_example_interceptor.c](examples/http_example_interceptor.c) 保留全局 `X-Example`，增加 `nosniff`；首页与 IDL 接口的路由级 middleware 设置 `Cache-Control: no-store`，文件缓存不受影响 |
-| 业务与协议适配 | [http_example_business.c](examples/http_example_business.c) 实现生成的精确 typed operation，首页示例结果也来自此函数；[handlers](examples/http_example_handlers.c) 只适配页面、RPC 和文件响应 |
-| 页面 | [templates](examples/templates/page.html.jinja) 使用继承和条件渲染；直接消费 IDL 生成的 `HomePage` CMeta 描述符，无手写平行字段表；由 `CHttp::App` 自动 HTML 转义 |
-
-这是应用层的 ACE/POSA 职责划分，复用现有组件，没有新增 ACE 库依赖或通用服务定位器。
-相较继续把装配和处理器放在 main，分离后的配置与清理可直接被正式 HTTP 测试复用；
-现在支持启动期选择 native/DSO 后端，尚无在线替换。新增依赖仅在私有 example target，
-`CHttp::Server` 本身不依赖 `CHttp::App` 或 Jinja。
-
-`http_example_config_default()` 集中提供端口、标题、文件路径、三阶段 deadline 与限流参数。
-调用方可在 `http_example_configure()` 前修改该内部配置；配置成功后没有热更新接口。
-CLI 支持 `--port 0..65535`（默认 0，自动分配）、`--title TEXT`（1..256 字节）、`--plugin PATH` 和原有文件参数。
-默认仍只监听 `127.0.0.1`。配置复制标题和文件路径，CORS 策略使用不可变静态存储。
-
-应用 owner 的地址从配置到关闭必须稳定；单 Owner 串行使用不可重入的 Jinja renderer。
-模板在构建时嵌入，编辑 `.jinja` 后重新构建即可，不依赖启动目录；渲染输出上限为 8192 字节。
-关闭先 stop/destroy server，再销毁 Service、renderer、limiter、MethodPlan、codec 和拥有字符串的
-IDL 模型。stop 失败时保留整个 owner 和依赖，调用方必须重试关闭后再回收。
-原命令行与端点无需迁移；撤销示例层改动即可回到原 RPC 示例，服务端公开接口不变。
-
-使用已配置 Salts/SaltsUtils SDK 的用户 preset（`BUILD_EXAMPLES=ON`）：
-
-```powershell
-cmake --build --preset win-clang-release-user
-ctest --preset win-clang-release-user -R '^chttp_server_example.*test$' --output-on-failure
-./build/Clang-Release/bin/crpc_server_example.exe --port 8080 --title 'My service' ./README.md
-```
-
-访问 `http://127.0.0.1:8080/`，或用首页表单提交加法请求；按 Enter 停止。
-[正式测试](tests/chttp_server_example_test.c) 覆盖真实 HTTP 的生成绑定/校验/整数边界、
-Jinja 继承/转义及配置复制、RPC/CORS、文件 ETag/304、配置限流与初始化失败回滚。
-测试复用同一私有应用库，即使 `BUILD_EXAMPLES=OFF`，测试配置仍覆盖应用装配。
-
-### Calculator DSO 的装配与资源协议
-
-示例以 `--plugin PATH` 显式选择 `Salts::Plugin` DSO 后端；省略该选项继续使用 native 后端。
-两者来自同一 IDL/业务实现，加载或契约校验失败直接阻止启动，不自动切回 native。
-Configurator 拥有容量为 1 的 Plugin registry，以及单 worker、8 个任务容量的 CFlow executor；
-HTTP Owner 负责参数绑定，Service 将拥有型调用帧交给 executor，队列满返回 503，不重试或改用 native。
-回调中的 HTTP/CNet 借用视图不跨线程。请求返回后仍由任务 finalizer 完成帧清理。
-
-启动先加载并启动 DSO，生成的 typed Plugin client 在 lease 下校验契约并计算首页示例，
-随后释放该临时 client；HTTP mount 单独持有 lease，覆盖缓存的 execution、描述符与在途任务。
-页面模型及 Jinja renderer 属于宿主，不依赖 DSO 中的存储。服务器仍保持固定 I/O Owner。
-
-关闭在应用控制线程执行：停止服务端入场和 HTTP 活动，等待 executor 的所有任务完成，
-再销毁 server/Service、executor，停止插件、确认 quiescence、卸载并销毁 registry。
-等待受 `shutdown_timeout_ms` 限制，超时保留 owner 与依赖，可重试关闭；不强制卸载执行中的 DSO。
-服务端已停止但保留运行错误时，示例继续释放依赖，完成清理后返回原错误并将 owner 归零；
-清理尚未完成时继续保留 owner，后续 close 可以重试。
-原有 native 选择可用于回滚部署。本例尚不支持在线替换、依赖自动求解或插件 interceptor。
-
-`shutdown_timeout_ms` 默认为 5000，限制宿主的 stop/drain/quiescence 等待；同步插件
-生命周期回调必须自行及时返回，宿主无法抢占卡住的插件代码。DSO 是同进程代码，需使用可信模块。
-
-构建同时产出 `http_example.dll`（Linux 为 `.so`，macOS 为 `.dylib`）。显式运行 DSO 后端：
-
-```powershell
-./build/Clang-Release/bin/crpc_server_example.exe --plugin ./build/Clang-Release/bin/http_example.dll --port 8080
-```
-
-`chttp_server_example_plugin_test` 在 DSO 模式运行相同 HTTP/Jinja/RPC/文件回归。
-另有真实 DSO 用例验证加载失败不回退、同名操作的返回类型不匹配、在途 lease 阻止卸载、
-关闭超时后重试，以及 executor 满时 503、释放容量后恢复。测试 fixture 留在 `tests/`，
-使用另一份生成契约构建不兼容 DSO，不修改生产插件来注入测试行为。
-
 ## CNet 策略与 ACE 模式的应用边界
 
 服务端已经在真实 accept 路径调用 CNet Owner placement，再由有界 handoff 预留提交
@@ -542,14 +465,6 @@ HTTP/1.1、HTTP/2、WebSocket 路由和 RPC 共用 HTTP 中间件链。
 普通中间件在请求正文接收完成后执行。需要在正文接收前拒绝请求时，应使用已有的
 JWT admission 或路由 `body_open` 入口；流式上传不能依赖普通中间件提前阻止正文进入 sink。
 
-可运行示例见 [crpc_server_example.c](examples/crpc_server_example.c)：
-它在启动前注册全局中间件，为 RPC 响应添加 `X-Example: rpc-middleware`，再调用 `next`。
-完整配置、启动和清理均包含在示例中：
-
-```powershell
-cmake --build --preset win-release-user --target crpc_server_example
-```
-
 路由级绑定和 Session 联动见 [chttp_server_test.c](tests/chttp_server_test.c)，
 RPC 中间件回归见 [crpc_server_test.c](tests/crpc_server_test.c)。
 
@@ -640,16 +555,14 @@ server 保存 callback/user 绑定；应用持有 user，直至 server 销毁。
 
 本次在现有分层上增加独立配置入口，复用关闭和 deferred 原子终态；未新增后台定时线程，避免
 跨线程抢占 callback 和 buffer。部署时逐项设置预算，过小会中断合法慢请求；将预算设回零、
-移除 admission 绑定即可恢复原策略。示例 [crpc_server_example.c](examples/crpc_server_example.c)
-已设置三个阶段预算。协议边界参考 [HTTP/1.1 超时](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.5)
+移除 admission 绑定即可恢复原策略。协议边界参考 [HTTP/1.1 超时](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.5)
 与 [HTTP/2 stream 错误处理](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.4.2)。
 
 ## 内置限流
 
 包含 `<http_server/rate_limit.h>`，链接 `CHttp::Server`。`chttp_rate_limiter_init()`
 创建有界令牌桶，再通过 `chttp_server_set_admission(server, chttp_rate_limiter_admit, &limiter)`
-绑定。可运行的 [服务器示例](examples/crpc_server_example.c) 按真实 peer IP 分组，最多保留
-64 组，每组初始/最大 100 个令牌，每秒补充 50 个。配置由应用传入，初始化时复制。
+绑定。配置由应用传入，初始化时复制。
 
 | scope | 身份与隔离边界 |
 |---|---|
@@ -693,15 +606,7 @@ ctest --preset win-release-user -R "chttp_rate_limit_test|chttp_server_test|chtt
 按扩展名选择 MIME；具体选项和状态码见 [文件服务边界](../docs/HTTP.md#文件服务边界)。
 原 `chttp_server_response_file()` 继续作为不处理缓存条件的底层文件响应入口。
 
-示例可接受一个本地文件参数，将该文件挂到 `/file`；路径由应用显式指定：
-
-```powershell
-cmake --build --preset win-release-user --target crpc_server_example
-./build/Msvc-Release/bin/crpc_server_example.exe ./README.md
-```
-
-按程序输出的端口访问 `/file` 或发送 Range / If-None-Match。文件内容和路径绑定必须在传输期间
-保持不变。默认元数据 ETag 是弱标签；需要 `If-Range` 时由应用提供可靠的强 ETag。
+文件内容和路径绑定必须在传输期间保持不变。默认元数据 ETag 是弱标签；需要 `If-Range` 时由应用提供可靠的强 ETag。
 
 ## Inline/deferred CPU benchmark (#215)
 
@@ -751,28 +656,9 @@ HTTP status still fails immediately and per-repeat stderr is retained beside
 JSONL; do not replace the executor, retry rejected requests or substitute source
 SDKs to hide dependency failures. Historical failing runs remain recorded.
 
-## Independent TLS interoperability tests
+## TLS regression tests
 
-Native `BUILD_TESTS` requires Python and an independent OpenSSL 3.x command-line
-tool (`openssl` on PATH, or the CMake-discovered `CHTTP_TEST_OPENSSL` executable).
-The existing native CI selects the runner's OpenSSL tool explicitly; no OpenSSL
-library is added to CHttp. Published CNet/Crypto remains the product TLS provider.
-
-`chttp_tls_openssl_test` is a module-owned CTest using an internal Server fixture
-and fresh ephemeral ECDSA credentials. It checks TLS 1.3 P-256 and X25519-first
-HelloRetryRequest, each with/without outbound dummy CCS, using actual OpenSSL
-handshake message records. It verifies CA/hostname and mandatory client auth,
-checks the CNet-verified leaf fingerprint against an application pin, rejects
-missing/incorrect-CA/incorrect-EKU certificates before HTTP, and rejects a trusted
-but unpinned certificate despite a forged `X-Forwarded-Client-Cert` header.
-A final authorized request checks listener reuse after those rejections.
-
-Run through the configured user preset:
-
-```sh
-ctest --preset native-release-user --output-on-failure -R chttp_tls_openssl_test
-```
-
-This qualifies the HTTP/1.1 TLS engine against an independent client. It does not
-establish H2/mTLS deployment, real downstream application behavior, Android device
-execution or a production release. The fixture's registration API remains private.
+The [native TLS suite](../http_client/tests/chttp_tls_test.c) exercises the
+SaltsCNet TLS path with checked-in X.509 fixtures. Run it with the configured
+profile using `slate test --preset tests --filter chttp_tls_test` or
+`ctest --preset native-release-user --output-on-failure -R "^chttp_tls_test$"`.

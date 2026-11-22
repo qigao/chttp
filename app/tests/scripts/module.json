@@ -1,0 +1,38 @@
+{
+  "targets": {
+    "chttp_application_c_example_http": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_application_example"
+      ],
+      "test": {
+        "timeout": 60,
+        "tool": "python",
+        "args": [
+          "$root/app/tests/test_application_examples_http.py",
+          "${artifact:chttp_application_example}"
+        ]
+      }
+    },
+    "chttp_application_cpp_example_http": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_application_cpp_example"
+      ],
+      "test": {
+        "timeout": 60,
+        "tool": "python",
+        "args": [
+          "$root/app/tests/test_application_examples_http.py",
+          "${artifact:chttp_application_cpp_example}"
+        ]
+      }
+    }
+  }
+}

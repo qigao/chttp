@@ -77,6 +77,8 @@ int chttp_application_work_websocket_open(chttp_application_work *, chttp_websoc
     const chttp_server_request_view *, chttp_server_response *, const chttp_application_work_task *,
     const chttp_application_websocket_callbacks *);
 int chttp_application_work_websocket_accept(chttp_application_work_reply *);
+int chttp_application_work_websocket_attach(chttp_application_work_reply *,
+    chttp_server_websocket_session *, chttp_websocket_terminal_fn, void *);
 int chttp_application_work_websocket_subprotocol(chttp_application_work_reply *,
     const chttp_server_request_view *, const char *);
 /* Private owner bookkeeping. Open copies headers/reserves one shared record;

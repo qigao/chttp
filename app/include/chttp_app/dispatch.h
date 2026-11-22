@@ -37,6 +37,7 @@ typedef struct chttp_websocket_event_view {
   const chttp_websocket_event *event;
 } chttp_websocket_event_view;
 typedef int (*chttp_websocket_event_action_fn)(void *, const chttp_websocket_event_view *);
+typedef void (*chttp_websocket_terminal_fn)(void *, const chttp_response_outcome *);
 typedef struct chttp_asset_policy_result {
   bool immutable;
   const char *etag;

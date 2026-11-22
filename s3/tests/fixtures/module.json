@@ -1,0 +1,39 @@
+{
+  "targets": {
+    "s3_test_support": {
+      "kind": "static",
+      "public": {
+        "includeDirs": [
+          ".."
+        ],
+        "deps": [
+          "chttp_server"
+        ]
+      },
+      "sources": {
+        "files": [
+          "../s3_test_support.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "..",
+          "../../../http_client/include",
+          "../../../http_common/include",
+          "../../../http_server/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "saltsbase_core",
+          "chttp_client",
+          "cmeta_cmeta",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

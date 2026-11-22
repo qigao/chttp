@@ -1,0 +1,660 @@
+{
+  "targets": {
+    "chttp_service_http_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_service.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_service_http_fixture.idl/chttp_service_native.h",
+            "--artifact-name",
+            "chttp_service",
+            "--transports",
+            "http",
+            "--projection-config",
+            "$root/app/tests/service/chttp_service.projection.json"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_service.schema",
+            "$root/app/tests/service/chttp_service.projection.json",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_service_http_fixture.idl/chttp_service_native.h",
+            "$builddir/app/tests/service/chttp_service_http_fixture.idl/chttp_service.http.h"
+          ]
+        }
+      ]
+    },
+    "chttp_service_plugin_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_service_plugin.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.h",
+            "--binary-codec",
+            "--artifact-name",
+            "chttp_service_plugin",
+            "--artifacts",
+            "native,plugin",
+            "--transports",
+            "http",
+            "--source-output",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.c",
+            "--component",
+            "CHttpPlugin.CalcPlugin",
+            "--artifact-version",
+            "1.0.0",
+            "--projection-config",
+            "$root/app/tests/service/chttp_service_plugin.projection.json"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_service_plugin.schema",
+            "$root/app/tests/service/chttp_service_plugin.projection.json",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.h",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.c",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.service_native.h",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.service_native.c",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.plugin.h",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.plugin.c",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.plugin_client.h",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.plugin_client.c",
+            "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.http.h"
+          ]
+        }
+      ]
+    },
+    "chttp_worker_output_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_worker_output.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.h",
+            "--binary-codec",
+            "--artifact-name",
+            "chttp_worker_output",
+            "--artifacts",
+            "native,plugin",
+            "--source-output",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.c",
+            "--component",
+            "Output.OutputPlugin",
+            "--artifact-version",
+            "1.0.0"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_worker_output.schema",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.h",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.c",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.service_native.h",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.service_native.c",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.plugin.h",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.plugin.c",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.plugin_client.h",
+            "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.plugin_client.c"
+          ]
+        }
+      ]
+    },
+    "chttp_worker_body_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_worker_body.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.h",
+            "--binary-codec",
+            "--artifact-name",
+            "chttp_worker_body",
+            "--artifacts",
+            "native,plugin",
+            "--source-output",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.c",
+            "--component",
+            "BodyIngress.BodyPlugin",
+            "--artifact-version",
+            "1.0.0"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_worker_body.schema",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.h",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.c",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.service_native.h",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.service_native.c",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.plugin.h",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.plugin.c",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.plugin_client.h",
+            "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.plugin_client.c"
+          ]
+        }
+      ]
+    },
+    "chttp_service_cflow_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_service_cflow.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow_native.h",
+            "--binary-codec",
+            "--artifact-name",
+            "chttp_service_cflow",
+            "--artifacts",
+            "native",
+            "--transports",
+            "http",
+            "--source-output",
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow_native.c",
+            "--projection-config",
+            "$root/app/tests/service/chttp_service_cflow.projection.json"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_service_cflow.schema",
+            "$root/app/tests/service/chttp_service_cflow.projection.json",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow_native.h",
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow_native.c",
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow.service_native.h",
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow.service_native.c",
+            "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow.http.h"
+          ]
+        }
+      ]
+    },
+    "chttp_service_cflow_unsupported_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_service_cflow_unsupported.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported_native.h",
+            "--binary-codec",
+            "--artifact-name",
+            "chttp_service_cflow_unsupported",
+            "--artifacts",
+            "native",
+            "--source-output",
+            "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported_native.c"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_service_cflow_unsupported.schema",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported_native.h",
+            "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported_native.c",
+            "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported.service_native.h",
+            "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported.service_native.c"
+          ]
+        }
+      ]
+    },
+    "chttp_service_generic_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/app/tests/service/chttp_service_generic.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/app/tests/service/chttp_service_generic_fixture.idl/chttp_service_generic_native.h",
+            "--binary-codec",
+            "--source-output",
+            "$builddir/app/tests/service/chttp_service_generic_fixture.idl/chttp_service_generic_native.c"
+          ],
+          "inputs": [
+            "$root/app/tests/service/chttp_service_generic.schema",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/app/tests/service/chttp_service_generic_fixture.idl/chttp_service_generic_native.h",
+            "$builddir/app/tests/service/chttp_service_generic_fixture.idl/chttp_service_generic_native.c"
+          ]
+        }
+      ]
+    },
+    "chttp_service_cflow_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow_native.c",
+          "$builddir/app/tests/service/chttp_service_cflow_fixture.idl/chttp_service_cflow.service_native.c",
+          "../chttp_service_cflow_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_cflow_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_cflow_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_cflow_unsupported_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported_native.c",
+          "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl/chttp_service_cflow_unsupported.service_native.c",
+          "../chttp_service_cflow_unsupported_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_cflow_unsupported_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_cflow_unsupported_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_generic_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_service_generic_fixture.idl/chttp_service_generic_native.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_generic_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_generic_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_plugin_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.c",
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.service_native.c",
+          "../chttp_service_plugin_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_plugin_probe",
+          "chttp_service_plugin_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_plugin_fixture_plugin": {
+      "kind": "shared",
+      "outputPrefix": "",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.plugin.c",
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.c",
+          "../chttp_service_plugin_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl"
+        ],
+        "deps": [
+          "salts_databind",
+          "chttp_service_plugin_probe",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core",
+          "chttp_service_plugin_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_plugin_fixture_plugin_client": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin.plugin_client.c",
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl/chttp_service_plugin_native.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_service_plugin_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_plugin_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_service_plugin_probe": {
+      "kind": "shared",
+      "outputPrefix": "lib",
+      "sources": {
+        "files": [
+          "../chttp_service_plugin_probe.c"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_worker_body_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.c",
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.service_native.c",
+          "../chttp_worker_body_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_plugin_probe",
+          "chttp_worker_body_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_worker_body_fixture_plugin": {
+      "kind": "shared",
+      "outputPrefix": "",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.plugin.c",
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.c",
+          "../chttp_worker_body_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl"
+        ],
+        "deps": [
+          "salts_databind",
+          "chttp_service_plugin_probe",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core",
+          "chttp_worker_body_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_worker_body_fixture_plugin_client": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body.plugin_client.c",
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl/chttp_worker_body_native.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_body_fixture.idl"
+        ],
+        "deps": [
+          "chttp_worker_body_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_worker_output_fixture_native": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.c",
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.service_native.c",
+          "../chttp_worker_output_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl"
+        ],
+        "deps": [
+          "chttp_service_plugin_probe",
+          "chttp_worker_output_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_worker_output_fixture_plugin": {
+      "kind": "shared",
+      "outputPrefix": "",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.plugin.c",
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.c",
+          "../chttp_worker_output_business.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl"
+        ],
+        "deps": [
+          "salts_databind",
+          "chttp_service_plugin_probe",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core",
+          "chttp_worker_output_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_worker_output_fixture_plugin_client": {
+      "kind": "static",
+      "sources": {
+        "files": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output.plugin_client.c",
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl/chttp_worker_output_native.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/app/tests/service/chttp_worker_output_fixture.idl"
+        ],
+        "deps": [
+          "chttp_worker_output_fixture_idl_codegen",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

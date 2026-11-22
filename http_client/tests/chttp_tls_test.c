@@ -5,6 +5,7 @@
 #include <http_client/http.h>
 #include <http_server/http.h>
 #include <core/clock.h>
+#include <crypto/tls_ext.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -543,6 +544,13 @@ spec("CHTTP HTTPS adapter") {
   }
 
   it("qualifies common X.509 profiles through real HTTPS dispatch") {
+#ifdef CRYPTO_TLS_FEATURE_X509_RSA_PSS_SHA256
+    uint64_t features = 0u;
+    check_equal(crypto_tls_get_features_v1_1(&features), CRYPTO_TLS_OK);
+    const int rsa_pss = (features & CRYPTO_TLS_FEATURE_X509_RSA_PSS_SHA256) != 0u;
+#else
+    const int rsa_pss = 0;
+#endif
     const struct {
       const char *name;
       const char *ca_file;
@@ -565,6 +573,9 @@ spec("CHTTP HTTPS adapter") {
          CHTTP_X509_PATH("rsa3072-test-server-cert.pem"),
          CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 1},
         {"RSA-PSS certificate signature", CHTTP_X509_PATH("rsa3072-test-root-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-pss-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-key.pem"), rsa_pss},
+        {"RSA-PSS certificate signed by an untrusted CA", CHTTP_X509_PATH("p256-test-root-cert.pem"),
          CHTTP_X509_PATH("rsa3072-test-server-pss-cert.pem"),
          CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 0},
         {"ECDSA SHA512 certificate signature", CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),

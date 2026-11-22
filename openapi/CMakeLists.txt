@@ -37,26 +37,10 @@ target_link_libraries(openapi_ui_model PUBLIC OpenAPI::Generator CHttp::App)
 add_executable(openapi-gen src/main.c)
 target_link_libraries(openapi-gen PRIVATE openapi_generator)
 
-set(PLUGIN_NAME c)
-set(PLUGIN_SYMBOL tree_sitter_c)
-foreach(query IN ITEMS PLUGIN_QUERY PLUGIN_NAME_QUERY)
-        if(query STREQUAL "PLUGIN_QUERY")
-                set(query_file "${CMAKE_CURRENT_SOURCE_DIR}/queries/extract/c.scm")
-        else()
-                set(query_file "${CMAKE_CURRENT_SOURCE_DIR}/queries/extract/c-name.scm")
-        endif()
-        set_property(
-                DIRECTORY
-                APPEND
-                PROPERTY CMAKE_CONFIGURE_DEPENDS "${query_file}"
-        )
-        file(READ "${query_file}" ${query})
-        string(REPLACE "\\" "\\\\" ${query} "${${query}}")
-        string(REPLACE "\"" "\\\"" ${query} "${${query}}")
-        string(REPLACE "\r" "" ${query} "${${query}}")
-        string(REPLACE "\n" "\\n" ${query} "${${query}}")
-endforeach()
-configure_file(plugins/language.c.in generated/c.c @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             queries/extract/c.scm queries/extract/c-name.scm)
+set(OPENAPI_PLUGIN_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/c.c")
+include(plugins/GenerateLanguage.cmake)
 add_library(openapi_c MODULE "${CMAKE_CURRENT_BINARY_DIR}/generated/c.c")
 target_include_directories(openapi_c PRIVATE include)
 target_link_libraries(

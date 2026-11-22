@@ -1,0 +1,154 @@
+{
+  "forEach": [
+    {
+      "files": [
+        "test_cjwt.c",
+        "test_cjwt_new.c",
+        "test_encode.c",
+        "test_jwe.c",
+        "test_jwks.c",
+        "test_map.c",
+        "test_pbes2.c",
+        "test_print.c",
+        "test_salts_backend.c",
+        "test_utils.c"
+      ],
+      "namePrefix": "chttp_cjwt_",
+      "target": {
+        "kind": "executable",
+        "private": {
+          "includeDirs": [
+            "../include",
+            "../include/cjwt",
+            "../src"
+          ],
+          "deps": [
+            "chttp_cjwt",
+            "saltsbase_tinytest",
+            "saltsbase_json",
+            "saltsbase_query",
+            "salts_crypto",
+            "saltsbase_asn1",
+            "saltsbase_simd",
+            "saltsbase_core"
+          ],
+          "defines": {
+            "TEST_DATA_DIR": "\"$root/vendor/cjwt/tests\""
+          },
+          "libs": [
+            "bcrypt",
+            "ws2_32",
+            "crypt32"
+          ]
+        },
+        "test": {},
+        "when": {
+          "native": true
+        }
+      }
+    }
+  ],
+  "targets": {
+    "chttp_cjwt_public_c_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_public_api.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include"
+        ],
+        "deps": [
+          "chttp_cjwt",
+          "saltsbase_tinytest",
+          "saltsbase_json",
+          "saltsbase_query",
+          "salts_crypto",
+          "saltsbase_asn1",
+          "saltsbase_simd",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_cjwt_public_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_public_api.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include"
+        ],
+        "deps": [
+          "chttp_cjwt",
+          "saltsbase_tinytest",
+          "saltsbase_json",
+          "saltsbase_query",
+          "salts_crypto",
+          "saltsbase_asn1",
+          "saltsbase_simd",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_cjwt_test_jwk": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "test_jwk.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../include/cjwt",
+          "../src"
+        ],
+        "deps": [
+          "chttp_cjwt",
+          "saltsbase_tinytest",
+          "salts_crypto",
+          "saltsbase_asn1",
+          "saltsbase_simd",
+          "saltsbase_json",
+          "saltsbase_query",
+          "saltsbase_core"
+        ],
+        "defines": {
+          "TEST_DATA_DIR": "\"$root/vendor/cjwt/tests\""
+        },
+        "libs": [
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

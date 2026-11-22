@@ -121,7 +121,7 @@ set_target_properties(chttp_requests_test PROPERTIES
 
 
 add_executable(chttp_tls_test chttp_tls_test.c)
-target_link_libraries(chttp_tls_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest)
+target_link_libraries(chttp_tls_test PRIVATE CHttp::Client CHttp::Server Salts::TinyTest Salts::Crypto)
 target_include_directories(chttp_tls_test PRIVATE ${PROJECT_SOURCE_DIR}/http_common/tests/support ${PROJECT_SOURCE_DIR}/http_common/http ${PROJECT_SOURCE_DIR}/http_common/rpc ${PROJECT_SOURCE_DIR}/http_client/src ${PROJECT_SOURCE_DIR}/http_client/rpc)
 set(CHTTP_X509_MATRIX_FIXTURE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set(_chttp_x509_required
@@ -154,18 +154,17 @@ foreach(_fixture IN LISTS _chttp_x509_required)
     message(FATAL_ERROR "Missing CHttp X.509 matrix fixture: ${_fixture}")
   endif()
 endforeach()
-file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/p384-chain-server-cert.pem"
-  _chttp_p384_chain_leaf)
-file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/p384-chain-intermediate-cert.pem"
-  _chttp_p384_chain_issuer)
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/chttp-p384-server-fullchain.pem"
-  "${_chttp_p384_chain_leaf}${_chttp_p384_chain_issuer}")
-file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/invalid-ca-server-cert.pem"
-  _chttp_invalid_ca_leaf)
-file(READ "${CHTTP_X509_MATRIX_FIXTURE_DIR}/invalid-ca-issuer-cert.pem"
-  _chttp_invalid_ca_issuer)
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/chttp-invalid-ca-fullchain.pem"
-  "${_chttp_invalid_ca_leaf}${_chttp_invalid_ca_issuer}")
+set(CERTIFICATE "${CHTTP_X509_MATRIX_FIXTURE_DIR}/p384-chain-server-cert.pem")
+set(ISSUER_CERTIFICATE "${CHTTP_X509_MATRIX_FIXTURE_DIR}/p384-chain-intermediate-cert.pem")
+set(CERTIFICATE_CHAIN "${CMAKE_CURRENT_BINARY_DIR}/chttp-p384-server-fullchain.pem")
+include(fixtures/WriteCertificateChain.cmake)
+set(CERTIFICATE "${CHTTP_X509_MATRIX_FIXTURE_DIR}/invalid-ca-server-cert.pem")
+set(ISSUER_CERTIFICATE "${CHTTP_X509_MATRIX_FIXTURE_DIR}/invalid-ca-issuer-cert.pem")
+set(CERTIFICATE_CHAIN "${CMAKE_CURRENT_BINARY_DIR}/chttp-invalid-ca-fullchain.pem")
+include(fixtures/WriteCertificateChain.cmake)
+unset(CERTIFICATE)
+unset(ISSUER_CERTIFICATE)
+unset(CERTIFICATE_CHAIN)
 file(TO_CMAKE_PATH "${CHTTP_X509_MATRIX_FIXTURE_DIR}" _chttp_x509_fixture_dir)
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_BINARY_DIR}/chttp-p384-server-fullchain.pem"
   _chttp_p384_fullchain)
@@ -176,10 +175,6 @@ target_compile_definitions(chttp_tls_test PRIVATE
   "CHTTP_X509_P384_FULLCHAIN=\"${_chttp_p384_fullchain}\""
   "CHTTP_X509_INVALID_CA_FULLCHAIN=\"${_chttp_invalid_ca_fullchain}\"")
 unset(_chttp_x509_required)
-unset(_chttp_p384_chain_leaf)
-unset(_chttp_p384_chain_issuer)
-unset(_chttp_invalid_ca_leaf)
-unset(_chttp_invalid_ca_issuer)
 unset(_chttp_x509_fixture_dir)
 unset(_chttp_p384_fullchain)
 unset(_chttp_invalid_ca_fullchain)

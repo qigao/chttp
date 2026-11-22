@@ -1,0 +1,18 @@
+{
+  "targets": {
+    "chttp_retained_send_contract_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "test": {
+        "tool": "cmake",
+        "args": [
+          "-DPROJECT_SOURCE_DIR=$root",
+          "-P",
+          "$root/http_client/tests/chttp_retained_send_contract_test.cmake"
+        ]
+      }
+    }
+  }
+}

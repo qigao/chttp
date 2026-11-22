@@ -1,0 +1,94 @@
+{
+  "include": [
+    "tests/module.json"
+  ],
+  "targets": {
+    "chttp_client": {
+      "kind": "shared",
+      "outputPrefix": "lib",
+      "public": {
+        "includeDirs": [
+          "include",
+          "../http_common/include"
+        ],
+        "deps": [
+          "salts_cnet",
+          "cmeta_cmeta",
+          "saltsbase_cserde",
+          "salts_databind"
+        ]
+      },
+      "sources": {
+        "files": [
+          "rpc/chttp_client_rpc_service.c",
+          "rpc/crpc_direct_async.c",
+          "rpc/crpc_prepare_call.c",
+          "rpc/crpc_request_reply.c",
+          "src/chttp_auth.c",
+          "src/chttp_client.c",
+          "src/chttp_connection_recovery.c",
+          "src/chttp_file_sink.c",
+          "src/chttp_files.c",
+          "src/chttp_h2_session.c",
+          "src/chttp_logical_retry.c",
+          "src/chttp_request.c",
+          "src/chttp_requests.c",
+          "src/chttp_response.c",
+          "src/chttp_response_owner.c",
+          "src/chttp_retry.c",
+          "src/chttp_websocket_client.c",
+          "src/chttp_websocket_pool.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../http_common/http",
+          "../http_common/rpc",
+          "../vendor/cjwt/include"
+        ],
+        "deps": [
+          "vcpkg_llhttp",
+          "cmeta_cflow",
+          "saltsbase_uri",
+          "saltsbase_json",
+          "saltsbase_json_cserde",
+          "chttp_cjwt",
+          "chttp_digest",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "cmeta_cstl",
+          "saltsbase_query",
+          "salts_crypto",
+          "saltsbase_asn1",
+          "saltsbase_core",
+          "saltsbase_simd",
+          "chttp_common"
+        ],
+        "libs": [
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ],
+        "linkFlags": [
+          "-Wl,--export-all-symbols",
+          "-Wl,--whole-archive,-lchttp_common,--no-whole-archive"
+        ],
+        "libDirs": [
+          "$builddir/lib"
+        ]
+      },
+      "install": {
+        "headers": [
+          {
+            "from": "include",
+            "to": "include"
+          },
+          {
+            "from": "../http_common/include",
+            "to": "include"
+          }
+        ]
+      }
+    }
+  }
+}

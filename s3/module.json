@@ -1,0 +1,77 @@
+{
+  "include": [
+    "tests/module.json"
+  ],
+  "targets": {
+    "chttp_s3": {
+      "kind": "shared",
+      "outputPrefix": "lib",
+      "public": {
+        "includeDirs": [
+          "include"
+        ],
+        "deps": [
+          "chttp_client"
+        ]
+      },
+      "sources": {
+        "files": [
+          "src/s3_async.c",
+          "src/s3_bucket.c",
+          "src/s3_bucket_config.c",
+          "src/s3_client.c",
+          "src/s3_credentials.c",
+          "src/s3_file.c",
+          "src/s3_multipart.c",
+          "src/s3_object.c",
+          "src/s3_request.c",
+          "src/s3_response.c",
+          "src/s3_signer.c",
+          "src/s3_sse.c",
+          "src/s3_xml.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "src",
+          "../http_client/include",
+          "../http_common/include",
+          "../http_common/http"
+        ],
+        "deps": [
+          "saltsbase_xml",
+          "chttp_digest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_query",
+          "salts_crypto",
+          "saltsbase_asn1",
+          "saltsbase_core",
+          "saltsbase_simd"
+        ],
+        "libs": [
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ],
+        "linkFlags": [
+          "-Wl,--export-all-symbols"
+        ]
+      },
+      "install": {
+        "headers": [
+          {
+            "from": "include",
+            "to": "include"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -57,12 +57,12 @@ static struct {
   int connecting_destroy_status, connecting_done;
   unsigned int connecting_code;
   bool hold, hold_open, hold_close, release, entered, deny, fail_open, fail_event, gate;
-  bool hold_ready, ready_done;
-  int opens, afters, events, messages, closes, completions, destroyed, active[2], admissions;
+  bool hold_ready, ready_done, attach;
+  int opens, afters, events, messages, closes, completions, destroyed, active[2], admissions, terminals;
   uint16_t close_code;
   size_t bytes;
   unsigned char received[256];
-  chttp_server_websocket_session peer;
+  chttp_server_websocket_session peer, attached_peer;
   chttp_application_work_outcome outcome;
   _Atomic int invalid;
   _Atomic int subprotocol_status;
@@ -94,6 +94,14 @@ int ws_admit(void *self, const chttp_server_request_view *request, chttp_server_
   result->status_code = ws.deny ? 429u : 0u;
   return SALTS_OK;
 }
+static void ws_terminal(void *self, const chttp_response_outcome *outcome) {
+  ws_worker(self);
+  sync_mutex_lock(&ws.mutex);
+  if (!outcome || ws.completions) atomic_fetch_add(&ws.invalid, 1);
+  ++ws.terminals;
+  sync_mutex_unlock(&ws.mutex);
+}
+
 int ws_open(void *self, const chttp_invocation *invocation) {
   ws_worker(self);
   const chttp_server_request_view *request = chttp_invocation_request(invocation);
@@ -101,6 +109,15 @@ int ws_open(void *self, const chttp_invocation *invocation) {
       !chttp_server_request_param(request, "id")) return SALTS_EPROTO;
   if (ws.jwt.impl && (!request->jwt_claims || !request->jwt_claims->subject ||
       strcmp(request->jwt_claims->subject, "alice") != 0)) return SALTS_EPROTO;
+  if (ws.attach) {
+    int status = chttp_invocation_websocket_attach(
+        invocation, &ws.attached_peer, ws_terminal, self);
+    if (status != SALTS_OK) return status;
+    chttp_server_websocket_session duplicate = {0};
+    if (!ws.attached_peer.impl || chttp_invocation_websocket_attach(
+        invocation, &duplicate, ws_terminal, self) != SALTS_EALREADY ||
+        duplicate.impl) atomic_fetch_add(&ws.invalid, 1);
+  }
   sync_mutex_lock(&ws.mutex);
   ++ws.opens;
   if (ws.hold_open) {
@@ -142,6 +159,12 @@ int ws_ready(void *self, const chttp_application_websocket_event *scope) {
     atomic_fetch_add(&ws.invalid, 1);
   sync_mutex_lock(&ws.mutex);
   if (ws.afters != 1 || ws.events || ws.ready_done) atomic_fetch_add(&ws.invalid, 1);
+  if (ws.attach &&
+      (scope->peer->impl != ws.attached_peer.impl ||
+       scope->peer->connection_slot != ws.attached_peer.connection_slot ||
+       scope->peer->connection_generation != ws.attached_peer.connection_generation ||
+       scope->peer->stream_id != ws.attached_peer.stream_id))
+    atomic_fetch_add(&ws.invalid, 1);
   ws.entered = true; sync_cond_broadcast(&ws.changed);
   while (ws.hold_ready && !ws.release) sync_cond_wait(&ws.changed, &ws.mutex);
   ws.ready_done = true;
@@ -334,7 +357,7 @@ spec("Application worker WebSocket") {
   for (int protocol = CHTTP_HTTP_1_1; protocol <= CHTTP_HTTP_2; ++protocol) {
     it("sends the ready greeting before serial events (protocol=%d)", protocol) {
       ws.binding.ready = ws_ready; ws.binding.ready_abi = FunctionAbi(ws_ready);
-      ws_start(); unsigned int code = 0u;
+      ws.attach = true; ws_start(); unsigned int code = 0u;
       check_equal(ws_connect(0, (chttp_protocol)protocol, &code), SALTS_OK);
       chttp_websocket_event event = {0};
       check_equal(chttp_websocket_client_receive(&ws.clients[0], 5000u, &event), SALTS_OK);
@@ -344,7 +367,7 @@ spec("Application worker WebSocket") {
       check_equal(event.size, 2u); check_equal(event.data, "42", 2u);
       check_equal(chttp_websocket_client_close(&ws.clients[0], 1000u, NULL, 0u, 5000u), SALTS_OK);
       check_equal(chttp_websocket_client_destroy(&ws.clients[0], 5000u), SALTS_OK);
-      ws_settled(1); check_true(ws.ready_done); check_equal(ws.closes, 1);
+      ws_settled(1); check_true(ws.ready_done); check_equal(ws.closes, 1); check_equal(ws.terminals, 1);
     }
     it("retains a blocked ready callback through finite close (protocol=%d)", protocol) {
       ws.binding.ready = ws_ready; ws.binding.ready_abi = FunctionAbi(ws_ready); ws.hold_ready = true;
@@ -509,7 +532,7 @@ spec("Application worker WebSocket") {
       check_equal(ws.messages, 16); check_equal(ws.closes, 16); check_equal(ws.completions, 16);
     }
     it("retains a running opening across native cancellation and failed finite close (protocol=%d)", protocol) {
-      ws.hold_open = true; ws.config.deadlines.handler_ms = 30u; ws_start(); ws.connecting_protocol = (chttp_protocol)protocol;
+      ws.attach = true; ws.hold_open = true; ws.config.deadlines.handler_ms = 30u; ws_start(); ws.connecting_protocol = (chttp_protocol)protocol;
       check_equal(sync_thread_create(&ws.thread, ws_connect_background, NULL), SALTS_OK); ws.thread_live = true;
       ws_wait_entered(); check_not_equal(chttp_application_close(&ws.app, 20u), SALTS_OK); check_true(ws.app.impl != NULL);
       ws_wait(&ws.connecting_done, 1);
@@ -518,7 +541,7 @@ spec("Application worker WebSocket") {
       ws_release(); check_equal(sync_thread_join(&ws.thread), SALTS_OK); ws.thread_live = false;
       check_not_equal(ws.connecting_status, SALTS_OK); check_not_equal(ws.connecting_status, SALTS_ETIMEDOUT);
       check_equal(ws.connecting_destroy_status, SALTS_OK);
-      ws_settled(1); check_equal(ws.events, 0);
+      ws_settled(1); check_equal(ws.events, 0); check_equal(ws.terminals, 1);
     }
     for (int authenticated = 0; authenticated < 2; ++authenticated) {
       it("keeps JWT admission ahead of worker opening and copies claims into event scope (protocol=%d auth=%d)", protocol, authenticated) {
@@ -567,10 +590,10 @@ spec("Application worker WebSocket") {
       if (protocol == CHTTP_HTTP_1_1) check_equal(ws.outcome.transport_status, SALTS_OK);
     }
     it("denies an opening without creating accepted-peer event callbacks (protocol=%d)", protocol) {
-      ws.deny = true; ws_start(); unsigned int code = 0u;
+      ws.attach = true; ws.deny = true; ws_start(); unsigned int code = 0u;
       check_not_equal(ws_connect(0, (chttp_protocol)protocol, &code), SALTS_OK); check_equal(code, 403u);
       check_equal(chttp_websocket_client_destroy(&ws.clients[0], 5000u), SALTS_OK);
-      ws_settled(1); check_equal(ws.opens, 1); check_equal(ws.events, 0);
+      ws_settled(1); check_equal(ws.opens, 1); check_equal(ws.events, 0); check_equal(ws.terminals, 1);
     }
     it("preserves header admission before the opening Invocation (protocol=%d)", protocol) {
       ws.deny = true; ws.gate = true; ws_start(); unsigned int code = 0u;

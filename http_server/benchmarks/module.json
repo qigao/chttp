@@ -1,0 +1,258 @@
+{
+  "include": [
+    "scripts/module.json"
+  ],
+  "targets": {
+    "chttp_server_h2_tls_owner_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_h2_tls_owner_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../../http_common/tests/support",
+          "../../http_client/src",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "chttp_client",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    },
+    "chttp_server_listener_admission_stall_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_listener_admission_stall_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    },
+    "chttp_server_owner_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_owner_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    },
+    "chttp_server_owner_churn_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_owner_churn_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    },
+    "chttp_server_owner_handler_cpu_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_owner_handler_cpu_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/tests/support",
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cflow",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "labels": [
+          "benchmark"
+        ],
+        "timeout": 600,
+        "tool": "python",
+        "args": [
+          "$root/http_server/benchmarks/run_owner_handler_cpu_benchmark.py",
+          "$target",
+          "$builddir/benchmarks",
+          "$root",
+          "llvm-mingw-x64/Slate benchmark"
+        ]
+      },
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    },
+    "chttp_server_ws_owner_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_server_ws_owner_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../http_common/http",
+          "../../http_common/rpc",
+          "../../http_common/tests/support",
+          "../src",
+          "../rpc",
+          "../include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "chttp_client",
+          "cmeta_cflow",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    }
+  }
+}

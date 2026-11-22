@@ -1,0 +1,24 @@
+{
+  "tools": {
+    "python": {
+      "program": "python3"
+    },
+    "node": {
+      "program": "node"
+    },
+    "cmake": {
+      "program": "cmake"
+    },
+    "salts-idlc": {
+      "program": "cmake",
+      "args": [
+        "-E",
+        "env",
+        "--modify",
+        "PATH=path_list_prepend:${envPath:SALTS_BASE_ROOT}/bin",
+        "--",
+        "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}"
+      ]
+    }
+  }
+}

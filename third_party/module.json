@@ -1,0 +1,421 @@
+{
+  "targets": {
+    "saltsbase_core": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libsalts.dll.a"
+        ],
+        "defines": {
+          "HAS_ZSTD": "1"
+        }
+      },
+      "runtimeBins": [
+        "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll"
+      ]
+    },
+    "saltsbase_tinytest": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libsaltscore_tinytest.a"
+        ]
+      }
+    },
+    "saltsbase_asn1": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libasn1.a"
+        ],
+        "deps": [
+          "saltsbase_simd",
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_simd": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libsimd.a"
+        ]
+      }
+    },
+    "saltsbase_cserde": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libsaltscore_cserde.a"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_uri": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/liburi_parser.a"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_json": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libjson_parser.a"
+        ],
+        "deps": [
+          "saltsbase_query",
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_query": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libquery_vm.a"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_json_cserde": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libjson_cserde_adapter.a"
+        ],
+        "deps": [
+          "saltsbase_json",
+          "saltsbase_cserde"
+        ]
+      }
+    },
+    "saltsbase_yaml": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libcyaml.a"
+        ]
+      }
+    },
+    "saltsbase_yaml_json": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libcyaml_json_adapter.a"
+        ],
+        "deps": [
+          "saltsbase_yaml",
+          "saltsbase_json"
+        ]
+      }
+    },
+    "saltsbase_xml": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libxml_parser.a"
+        ],
+        "deps": [
+          "saltsbase_core",
+          "saltsbase_query"
+        ]
+      }
+    },
+    "saltsbase_datetime": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libdatetime_parser.a"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_coroutine": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libcoroutine.a"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "saltsbase_native_io": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_BASE_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_BASE_ROOT}/lib/libnative_io.a",
+          "ws2_32"
+        ],
+        "deps": [
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ]
+      }
+    },
+    "cmeta_cmeta": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:CMETA_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:CMETA_ROOT}/lib/libcmeta_cmeta.a"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "cmeta_cstl": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:CMETA_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:CMETA_ROOT}/lib/libcmeta_cstl.a"
+        ],
+        "deps": [
+          "cmeta_cmeta"
+        ]
+      }
+    },
+    "cmeta_plugin": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:CMETA_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:CMETA_ROOT}/lib/libcmeta_plugin.a"
+        ],
+        "deps": [
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ]
+      }
+    },
+    "cmeta_cflow": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:CMETA_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:CMETA_ROOT}/lib/libcmeta_cflow.a",
+          "ws2_32"
+        ],
+        "deps": [
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_core"
+        ],
+        "defines": {
+          "CFLOW_MACHINE_MAX_STATES": "65536",
+          "CFLOW_MACHINE_MAX_EVENTS": "65536",
+          "CFLOW_MACHINE_MAX_GUARDS": "65536",
+          "CFLOW_MACHINE_MAX_ACTIONS": "65536",
+          "CFLOW_MACHINE_MAX_TRANSITIONS": "1048576",
+          "CFLOW_STATECHART_MAX_ACTION_REFS": "1048576",
+          "CFLOW_STATECHART_MAX_INSTANCE_BYTES": "67108864"
+        }
+      }
+    },
+    "cmeta_ace": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:CMETA_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:CMETA_ROOT}/lib/libcmeta_ace.a"
+        ],
+        "deps": [
+          "cmeta_cstl",
+          "cmeta_cflow"
+        ]
+      }
+    },
+    "salts_cnet": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_CNET_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_CNET_ROOT}/lib/libcnet.dll.a",
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ],
+        "deps": [
+          "saltsbase_asn1",
+          "saltsbase_core"
+        ]
+      },
+      "runtimeBins": [
+        "${envPath:SALTS_CNET_ROOT}/bin/cnet.dll"
+      ]
+    },
+    "salts_crypto": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_CNET_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_CNET_ROOT}/lib/libsalts_crypto.dll.a"
+        ],
+        "deps": [
+          "saltsbase_native_io",
+          "saltsbase_core"
+        ]
+      },
+      "runtimeBins": [
+        "${envPath:SALTS_CNET_ROOT}/bin/salts_crypto.dll"
+      ]
+    },
+    "salts_databind": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_UTILS_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_UTILS_ROOT}/lib/libdata_bind.dll.a"
+        ],
+        "deps": [
+          "saltsbase_core",
+          "cmeta_cmeta",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_cflow"
+        ]
+      },
+      "runtimeBins": [
+        "${envPath:SALTS_UTILS_ROOT}/bin/libdata_bind.dll"
+      ]
+    },
+    "salts_jinja": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_UTILS_ROOT}/include"
+        ],
+        "libs": [
+          "${envPath:SALTS_UTILS_ROOT}/lib/libjinja_cmeta.dll.a"
+        ],
+        "deps": [
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ]
+      },
+      "runtimeBins": [
+        "${envPath:SALTS_UTILS_ROOT}/bin/libjinja_cmeta.dll"
+      ]
+    },
+    "saltsutils_headers": {
+      "kind": "header_only",
+      "public": {
+        "requiredIncludeDirs": [
+          "${envPath:SALTS_UTILS_ROOT}/include"
+        ]
+      }
+    },
+    "vcpkg_llhttp": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "$vcpkg/include"
+        ],
+        "libs": [
+          "$vcpkgConfig/lib/libllhttp.a"
+        ]
+      }
+    },
+    "vcpkg_tree_sitter": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "$vcpkg/include"
+        ],
+        "libs": [
+          "$vcpkgConfig/lib/libtree-sitter.a"
+        ]
+      }
+    },
+    "vcpkg_tree_sitter_c": {
+      "kind": "prebuilt",
+      "public": {
+        "requiredIncludeDirs": [
+          "$vcpkg/include"
+        ],
+        "libs": [
+          "$vcpkgConfig/lib/libtree-sitter-c.a"
+        ],
+        "deps": [
+          "vcpkg_tree_sitter"
+        ]
+      }
+    }
+  }
+}

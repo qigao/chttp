@@ -1,0 +1,145 @@
+{
+  "include": [
+    "examples/module.json",
+    "tests/module.json"
+  ],
+  "targets": {
+    "openapi-gen": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "src/main.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "include"
+        ],
+        "deps": [
+          "openapi_generator",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_json",
+          "saltsbase_yaml",
+          "saltsbase_query",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsbase_cserde"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "runtimeDeps": [
+        "openapi_c"
+      ]
+    },
+    "openapi_c": {
+      "kind": "cmeta_plugin",
+      "outputPrefix": "",
+      "preTasks": [
+        {
+          "name": "generate_openapi_c",
+          "tool": "cmake",
+          "args": [
+            "-DOPENAPI_PLUGIN_OUTPUT=$builddir/openapi/generated/c.c",
+            "-P",
+            "$root/openapi/plugins/GenerateLanguage.cmake"
+          ],
+          "inputs": [
+            "$root/openapi/plugins/GenerateLanguage.cmake",
+            "$root/openapi/plugins/language.c.in",
+            "$root/openapi/queries/extract/c.scm",
+            "$root/openapi/queries/extract/c-name.scm"
+          ],
+          "outputs": [
+            "$builddir/openapi/generated/c.c"
+          ]
+        }
+      ],
+      "sources": {
+        "files": [
+          "$builddir/openapi/generated/c.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "include"
+        ],
+        "deps": [
+          "vcpkg_tree_sitter_c",
+          "vcpkg_tree_sitter"
+        ]
+      }
+    },
+    "openapi_generator": {
+      "kind": "static",
+      "public": {
+        "includeDirs": [
+          "include"
+        ],
+        "deps": [
+          "vcpkg_tree_sitter",
+          "cmeta_cmeta",
+          "cmeta_cflow",
+          "saltsbase_json",
+          "saltsbase_yaml_json",
+          "salts_databind"
+        ]
+      },
+      "sources": {
+        "files": [
+          "src/plugin.c",
+          "src/extract.c",
+          "src/document.c",
+          "src/comment.c",
+          "src/databind_http.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "src"
+        ],
+        "deps": [
+          "saltsbase_core"
+        ]
+      }
+    },
+    "openapi_ui_model": {
+      "kind": "static",
+      "public": {
+        "includeDirs": [
+          "include"
+        ],
+        "deps": [
+          "openapi_generator",
+          "chttp_app"
+        ]
+      },
+      "sources": {
+        "files": [
+          "src/ui_model.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "src",
+          "../app/include",
+          "../http_server/include",
+          "../http_common/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "saltsutils_headers"
+        ]
+      }
+    }
+  }
+}

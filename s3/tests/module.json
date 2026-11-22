@@ -1,0 +1,124 @@
+{
+  "include": [
+    "fixtures/module.json"
+  ],
+  "forEach": [
+    {
+      "files": [
+        "s3_bucket_config_test.c",
+        "s3_client_test.c",
+        "s3_file_test.c",
+        "s3_multipart_test.c",
+        "s3_operations_test.c"
+      ],
+      "target": {
+        "kind": "executable",
+        "private": {
+          "includeDirs": [
+            "../include",
+            "../../http_client/include",
+            "../../http_common/include",
+            ".",
+            "../../http_server/include"
+          ],
+          "deps": [
+            "chttp_s3",
+            "saltsbase_tinytest",
+            "s3_test_support",
+            "chttp_client",
+            "chttp_server",
+            "salts_cnet",
+            "salts_databind",
+            "saltsbase_cserde",
+            "cmeta_cstl",
+            "cmeta_cflow",
+            "cmeta_cmeta",
+            "saltsbase_native_io",
+            "saltsbase_coroutine",
+            "saltsbase_core"
+          ],
+          "libs": [
+            "ws2_32"
+          ]
+        },
+        "test": {},
+        "when": {
+          "native": true
+        }
+      }
+    }
+  ],
+  "targets": {
+    "s3_header_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "s3_header_cpp_test.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_client/include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_s3",
+          "chttp_client",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "s3_signer_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "s3_signer_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_client/include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_s3",
+          "saltsbase_tinytest",
+          "chttp_client",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

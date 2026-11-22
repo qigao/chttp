@@ -1,0 +1,195 @@
+{
+  "targets": {
+    "openapi_databind_http_provider": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "test_databind_http_provider"
+      ],
+      "test": {
+        "program": "${artifact:test_databind_http_provider}"
+      }
+    },
+    "generator": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "test_generator"
+      ],
+      "test": {
+        "program": "${artifact:test_generator}"
+      }
+    },
+    "openapi_ui_model_case": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "test_ui_model"
+      ],
+      "test": {
+        "program": "${artifact:test_ui_model}",
+        "name": "openapi_ui_model"
+      }
+    },
+    "openapi_ui_renderer": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "test_ui_renderer"
+      ],
+      "test": {
+        "program": "${artifact:test_ui_renderer}"
+      }
+    },
+    "openapi_ui_fragments": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "test_ui_fragments"
+      ],
+      "test": {
+        "program": "${artifact:test_ui_fragments}"
+      }
+    },
+    "openapi_ui_htmx": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "test_ui_htmx"
+      ],
+      "test": {
+        "program": "${artifact:test_ui_htmx}"
+      }
+    },
+    "generator_conformance": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi-gen",
+        "openapi_c"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/openapi/tests/conformance.py",
+          "--generator",
+          "${artifact:openapi-gen}",
+          "--plugin",
+          "${artifact:openapi_c}",
+          "--node",
+          "node"
+        ]
+      }
+    },
+    "openapi_ui_tryit_logic": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "test": {
+        "tool": "node",
+        "args": [
+          "--test",
+          "$root/openapi/tests/tryit_test.cjs"
+        ]
+      }
+    },
+    "openapi_ui_final_audit": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/openapi/tests/ui_final_audit.py"
+        ]
+      }
+    },
+    "openapi_ui_security_http": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_ui_server"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/openapi/tests/ui_security_http_test.py",
+          "${artifact:openapi_ui_server}",
+          "$root/openapi/tests/../ui"
+        ]
+      }
+    },
+    "openapi_ui_http": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_ui_server"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/openapi/tests/ui_http_test.py",
+          "${artifact:openapi_ui_server}",
+          "$root/openapi/tests/../ui",
+          "$root/openapi/tests/../examples/openapi.json"
+        ]
+      }
+    },
+    "openapi_ui_fragment_http": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_ui_server"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/openapi/tests/ui_fragment_http_test.py",
+          "${artifact:openapi_ui_server}",
+          "$root/openapi/tests/../ui",
+          "$root/openapi/tests/../examples/openapi.json"
+        ]
+      }
+    },
+    "openapi_ui_tryit_http": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_ui_server"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/openapi/tests/ui_tryit_http_test.py",
+          "${artifact:openapi_ui_server}",
+          "$root/openapi/tests/../ui",
+          "$root/openapi/tests/../examples/openapi.json"
+        ]
+      }
+    }
+  }
+}

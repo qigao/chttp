@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 include("${CMAKE_CURRENT_LIST_DIR}/ChttpTargets.cmake")
-foreach(_chttp_component IN ITEMS Client Server App S3 JWT)
+foreach(_chttp_component IN ITEMS Client Server App S3 JWT WebSocketPeerLease)
   set(Chttp_${_chttp_component}_FOUND TRUE)
 endforeach()
 unset(_chttp_component)

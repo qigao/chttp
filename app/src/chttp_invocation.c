@@ -40,6 +40,13 @@ int chttp_invocation_websocket_accept(const chttp_invocation *invocation) {
   const chttp_invocation_state *state = invocation_state(invocation);
   return state ? chttp_application_work_websocket_accept(state->reply) : SALTS_EINVAL;
 }
+int chttp_invocation_websocket_attach(const chttp_invocation *invocation,
+    chttp_server_websocket_session *peer, chttp_websocket_terminal_fn terminal,
+    void *user) {
+  const chttp_invocation_state *state = invocation_state(invocation);
+  return state ? chttp_application_work_websocket_attach(state->reply, peer, terminal, user)
+               : SALTS_EINVAL;
+}
 int chttp_invocation_response_file(const chttp_invocation *invocation, unsigned int code,
     const char *type, const char *path) {
   const chttp_invocation_state *state = invocation_state(invocation);

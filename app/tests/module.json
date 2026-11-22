@@ -1,0 +1,357 @@
+{
+  "include": [
+    "scripts/module.json",
+    "service/module.json",
+    "web/module.json"
+  ],
+  "targets": {
+    "chttp_application_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_cpp_test.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_invocation_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_invocation_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_session_worker_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_session_worker_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_stream_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_stream_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_upload_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_upload_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_websocket_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_websocket_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_application_worker_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "application_worker_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../src",
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../../http_client/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_client",
+          "saltsbase_tinytest",
+          "chttp_server",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {
+        "timeout": 90
+      },
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "targets": {
+    "openapi_examples": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "openapi_c"
+      ],
+      "preTasks": [
+        {
+          "name": "generate_json",
+          "tool": "openapi-gen",
+          "args": [
+            "--plugin",
+            "$builddir/bin/openapi_c.dll",
+            "--format",
+            "json",
+            "--title",
+            "Pets API",
+            "--output",
+            "$builddir/openapi/examples/openapi.json",
+            "$root/openapi/examples/pets.c"
+          ],
+          "inputs": [
+            "$root/openapi/examples/pets.c"
+          ],
+          "outputs": [
+            "$builddir/openapi/examples/openapi.json"
+          ]
+        },
+        {
+          "name": "generate_yaml",
+          "tool": "openapi-gen",
+          "args": [
+            "--plugin",
+            "$builddir/bin/openapi_c.dll",
+            "--format",
+            "yaml",
+            "--title",
+            "Pets API",
+            "--output",
+            "$builddir/openapi/examples/openapi.yaml",
+            "$root/openapi/examples/pets.c"
+          ],
+          "inputs": [
+            "$root/openapi/examples/pets.c"
+          ],
+          "outputs": [
+            "$builddir/openapi/examples/openapi.yaml"
+          ]
+        }
+      ]
+    },
+    "openapi_ui_server": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "ui_server.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../app/include",
+          "../../http_server/include",
+          "../../http_common/include",
+          "../include"
+        ],
+        "deps": [
+          "saltsbase_json",
+          "openapi_ui_model",
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "openapi_generator",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "vcpkg_tree_sitter",
+          "saltsbase_yaml_json",
+          "saltsbase_yaml",
+          "saltsbase_core",
+          "saltsbase_query"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

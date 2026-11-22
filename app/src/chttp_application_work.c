@@ -77,6 +77,8 @@ struct work_item {
   bool upload_closed, upload_close_done, upload_attached, upload_business_started;
   chttp_application_websocket_callbacks websocket;
   chttp_server_websocket_session websocket_peer;
+  chttp_websocket_terminal_fn websocket_terminal;
+  void *websocket_terminal_user;
   chttp_websocket_event *websocket_events, websocket_close;
   unsigned char *websocket_data, *websocket_close_data;
   size_t websocket_stride, websocket_head, websocket_count;
@@ -560,6 +562,8 @@ static void notify_completion(void *arg) {
       if (hook->after_completion) hook->after_completion(hook->context, &completion);
     }
   }
+  if (item->websocket_terminal)
+    item->websocket_terminal(item->websocket_terminal_user, &item->outcome);
   if (item->task.after_completion)
     item->task.after_completion(item->task.user, &item->request, &item->outcome);
   work_impl *impl = item->owner;
@@ -1051,6 +1055,18 @@ static int charge_work(work_item *item, size_t bytes) {
   else count_event(&impl->stats.rejected);
   sync_mutex_unlock(&impl->mutex);
   return status;
+}
+int chttp_application_work_websocket_attach(chttp_application_work_reply *reply,
+    chttp_server_websocket_session *peer, chttp_websocket_terminal_fn terminal,
+    void *user) {
+  if (!chttp_application_work_reply_current(reply) || !reply->item->websocket.event ||
+      !peer || !terminal) return SALTS_EINVAL;
+  if (reply->sealed || reply->finalized || reply->item->websocket_terminal)
+    return SALTS_EALREADY;
+  *peer = reply->item->websocket_peer;
+  reply->item->websocket_terminal = terminal;
+  reply->item->websocket_terminal_user = user;
+  return SALTS_OK;
 }
 int chttp_application_work_websocket_accept(chttp_application_work_reply *reply) {
   if (!chttp_application_work_reply_current(reply) || !reply->item->websocket.event) return SALTS_EINVAL;

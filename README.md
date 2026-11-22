@@ -172,8 +172,7 @@ Windows requires `VSDEVCMD_BAT` and the selected compiler SDK. Linux/macOS use
 wrapper. Every module owns its tests. `BUILD_TESTS` and `BUILD_BENCHMARK` select
 the corresponding complete graphs; examples retain `BUILD_EXAMPLES`.
 
-Native TLS interoperability tests require an independent OpenSSL 3 executable
-on `PATH`. Linux sanitizer presets select `ENABLE_ASAN`, `ENABLE_UBSAN` and
+Linux sanitizer presets select `ENABLE_ASAN`, `ENABLE_UBSAN` and
 `ENABLE_TSAN`; TSan is exclusive with ASan/UBSan. Refresh existing build caches
 with the configure command above after migrating sanitizer option names.
 
@@ -187,6 +186,30 @@ cross-building and installation do not prove device execution.
 The checked-in matrix selects eight profiles: Windows MSVC and LLVM-MinGW x64,
 Linux GCC/Clang x64 plus Clang TSan, macOS ARM64, and Android ARM64/x64. Native
 profiles run formal CTest; Android profiles cross-build and install.
+
+## Build with Slate
+
+[`slate.json`](slate.json) defines a Windows x64 LLVM-MinGW profile using
+the same SDK roots and vcpkg triplet as `llvm-mingw-x64-release-user`.
+Slate reads those inputs directly from the local [`.env`](.env.example).
+Use a Slate CLI with executable task dependency staging and external test
+tool support. Put Ninja and CMake on `PATH`. The formal tests also use
+Python 3 and Node.js. TLS regressions use the installed SaltsCNet and Crypto SDK.
+
+```sh
+slate doctor --preset release
+slate build --preset release
+slate build --preset debug
+slate test --preset tests
+slate test --preset benchmark --filter benchmark
+slate build --preset tests --target openapi_examples
+```
+
+Slate generates Ninja compilation and linking rules. The IDL fixtures use
+the installed `salts-idlc`, and the native build tasks reuse the small CMake
+scripts that render OpenAPI and fixture sources. The tests remain under
+the modules that own them. For the CMake package exports and additional
+platforms, use the CMake presets above.
 
 ## Using CHTTP from CMake
 

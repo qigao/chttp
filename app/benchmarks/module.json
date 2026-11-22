@@ -1,0 +1,43 @@
+{
+  "targets": {
+    "chttp_web_benchmark": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_web_benchmark.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../include",
+          "../../http_server/include",
+          "../../http_common/include"
+        ],
+        "deps": [
+          "chttp_app",
+          "chttp_server",
+          "salts_cnet",
+          "cmeta_ace",
+          "cmeta_plugin",
+          "salts_jinja",
+          "salts_databind",
+          "cmeta_cflow",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cmeta",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      }
+    }
+  }
+}

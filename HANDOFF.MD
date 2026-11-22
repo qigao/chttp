@@ -21,11 +21,6 @@
   the validated protocol header; ordinary header setters continue rejecting
   reserved transport fields. Formal WebSocket tests cover H1/H2, unoffered and
   invalid tokens, reserved-header rejection and sealed-draft rejection.
-- Native test tools require their matching OpenSSL configuration. The local
-  Anaconda OpenSSL 3 installation needs `OPENSSL_CONF` pointing at its own
-  `Library/ssl/openssl.cnf`; an unset value makes credential generation fail
-  before a TLS connection. Preserve this failure instead of disabling TLS tests.
-
 - Private handwritten Controller actions now use an exact callback-scoped
   `int(void *, const chttp_invocation *)` contract with canonical
   `chttp.invocation` identity. Mount admits FunctionAbi before route publication,
@@ -1253,3 +1248,18 @@
   on the admitted stream before responding and reads until client shutdown.
   Windows LLVM-MinGW passed the full H2 client test five consecutive times with
   `ctest --preset native-release-user -R '^chttp_h2_client_test$' --repeat until-fail:5`.
+
+# Slate build profile
+
+- `slate.json` is the Windows x64 LLVM-MinGW entry point. It consumes the
+  same SDK roots and triplet as the native CMake profile. IDL task inputs
+  include the installed compiler and its templates, and the launcher
+  prepends the selected SaltsBase runtime directory for the host process.
+- Slate links the shared HTTP common objects into both Client and Server
+  via the common archive with whole-archive. Keep the private JWT and
+  digest objects compiled with hidden visibility. Their visibility matches
+  CMake and the five Windows shared artifacts have identical exported names.
+- The legacy server application fixture and independent OpenSSL interop suite
+  are retired from CMake and Slate. Native TLS validation uses the client
+  suite and its checked-in X.509 fixtures. The Application and generated RPC
+  suites cover the current native and plugin paths.

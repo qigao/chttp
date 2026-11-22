@@ -1,0 +1,96 @@
+{
+  "include": [
+    "benchmarks/module.json",
+    "tests/module.json"
+  ],
+  "targets": {
+    "chttp_server": {
+      "kind": "shared",
+      "outputPrefix": "lib",
+      "public": {
+        "includeDirs": [
+          "include",
+          "../http_common/include"
+        ],
+        "deps": [
+          "salts_cnet",
+          "cmeta_cmeta",
+          "saltsbase_cserde",
+          "salts_databind"
+        ]
+      },
+      "sources": {
+        "files": [
+          "rpc/chttp_server_rpc_service.c",
+          "rpc/crpc_server.c",
+          "src/chttp_h2_server.c",
+          "src/chttp_jwt.c",
+          "src/chttp_rate_limit.c",
+          "src/chttp_server.c",
+          "src/chttp_server_acceptor.c",
+          "src/chttp_server_configurator.c",
+          "src/chttp_server_cors.c",
+          "src/chttp_server_file_service.c",
+          "src/chttp_server_files.c",
+          "src/chttp_server_interceptor.c",
+          "src/chttp_server_parser.c",
+          "src/chttp_server_response.c",
+          "src/chttp_server_route.c",
+          "src/chttp_session.c",
+          "src/chttp_websocket_server.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../http_common/http",
+          "../http_common/rpc",
+          "../vendor/cjwt/include"
+        ],
+        "deps": [
+          "vcpkg_llhttp",
+          "cmeta_cflow",
+          "cmeta_plugin",
+          "saltsbase_uri",
+          "saltsbase_json",
+          "saltsbase_json_cserde",
+          "chttp_cjwt",
+          "chttp_digest",
+          "saltsbase_datetime",
+          "cmeta_cstl",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_query",
+          "salts_crypto",
+          "saltsbase_asn1",
+          "saltsbase_core",
+          "saltsbase_simd",
+          "chttp_common"
+        ],
+        "libs": [
+          "bcrypt",
+          "ws2_32",
+          "crypt32"
+        ],
+        "linkFlags": [
+          "-Wl,--export-all-symbols",
+          "-Wl,--whole-archive,-lchttp_common,--no-whole-archive"
+        ],
+        "libDirs": [
+          "$builddir/lib"
+        ]
+      },
+      "install": {
+        "headers": [
+          {
+            "from": "include",
+            "to": "include"
+          },
+          {
+            "from": "../http_common/include",
+            "to": "include"
+          }
+        ]
+      }
+    }
+  }
+}

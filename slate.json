@@ -1,0 +1,63 @@
+{
+  "include": [
+    "slates/Platforms.json",
+    "slates/Tools.json"
+  ],
+  "env": [
+    "LLVM_MINGW_ROOT",
+    "VCPKG_INSTALLED_DIR",
+    "SALTS_BASE_ROOT",
+    "CMETA_ROOT",
+    "SALTS_CNET_ROOT",
+    "SALTS_UTILS_ROOT"
+  ],
+  "defaultPreset": "release",
+  "modules": [
+    "third_party",
+    "vendor/cjwt",
+    "http_common",
+    "http_client",
+    "http_server",
+    "app",
+    "s3",
+    "openapi"
+  ],
+  "presets": {
+    "base": {
+      "cStd": "c11",
+      "cxxStd": "c++17",
+      "tests": false
+    },
+    "release": {
+      "inherits": "base",
+      "config": "release",
+      "options": {
+        "optimization": "speed"
+      },
+      "defines": {
+        "NDEBUG": null
+      }
+    },
+    "debug": {
+      "inherits": "base",
+      "config": "debug",
+      "options": {
+        "optimization": "none",
+        "debugInfo": "full"
+      }
+    },
+    "tests": {
+      "inherits": "release",
+      "tests": true
+    },
+    "debug-tests": {
+      "inherits": "debug",
+      "tests": true
+    },
+    "benchmark": {
+      "inherits": "release",
+      "config": "benchmark",
+      "tests": true
+    }
+  }
+}

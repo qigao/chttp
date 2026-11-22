@@ -1,0 +1,48 @@
+{
+  "include": [
+    "tests/module.json"
+  ],
+  "targets": {
+    "chttp_cjwt": {
+      "kind": "static",
+      "public": {
+        "includeDirs": [
+          "include"
+        ],
+        "deps": [
+          "saltsbase_json"
+        ]
+      },
+      "sources": {
+        "files": [
+          "src/cjwt.c",
+          "src/jwe_salts.c",
+          "src/jws_salts.c",
+          "src/print.c",
+          "src/utils.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "include/cjwt",
+          "src"
+        ],
+        "deps": [
+          "salts_crypto",
+          "saltsbase_core"
+        ],
+        "flags": [
+          "-fvisibility=hidden"
+        ]
+      },
+      "install": {
+        "headers": [
+          {
+            "from": "include/cjwt",
+            "to": "include/cjwt"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "targets": {
+    "chttp_websocket_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_websocket_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../support",
+          "../../http",
+          "../../rpc",
+          "../../../http_client/include",
+          "../../include",
+          "../../../http_server/include"
+        ],
+        "deps": [
+          "chttp_client",
+          "chttp_server",
+          "saltsbase_tinytest",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

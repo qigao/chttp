@@ -1,0 +1,44 @@
+{
+  "targets": {
+    "chttp_server_ws_owner_benchmark_legacy": {
+      "kind": "header_only",
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      },
+      "runtimeDeps": [
+        "chttp_server_ws_owner_benchmark"
+      ],
+      "test": {
+        "labels": [
+          "benchmark"
+        ],
+        "timeout": 180,
+        "program": "${artifact:chttp_server_ws_owner_benchmark}",
+        "environment": [
+          "CHTTP_OWNER_WS_WRITER=legacy"
+        ]
+      }
+    },
+    "chttp_server_ws_owner_benchmark_dedicated": {
+      "kind": "header_only",
+      "when": {
+        "native": true,
+        "config": "benchmark"
+      },
+      "runtimeDeps": [
+        "chttp_server_ws_owner_benchmark"
+      ],
+      "test": {
+        "labels": [
+          "benchmark"
+        ],
+        "timeout": 180,
+        "program": "${artifact:chttp_server_ws_owner_benchmark}",
+        "environment": [
+          "CHTTP_OWNER_WS_WRITER=dedicated"
+        ]
+      }
+    }
+  }
+}

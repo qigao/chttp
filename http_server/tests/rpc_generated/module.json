@@ -1,0 +1,125 @@
+{
+  "include": [
+    "fixtures/module.json"
+  ],
+  "targets": {
+    "chttp_rpc_owned_native_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_rpc_owned_native_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/http_server/tests/rpc_generated/chttp_rpc_service_fixture.idl",
+          "../../include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "chttp_client",
+          "salts_databind",
+          "cmeta_cmeta",
+          "saltsbase_tinytest",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "saltsbase_core",
+          "chttp_rpc_service_fixture_idl_codegen"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_rpc_service_header_cpp_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_rpc_service_header_cpp_test.cpp"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "../../include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "chttp_client",
+          "salts_cnet",
+          "salts_databind",
+          "saltsbase_cserde",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      }
+    },
+    "chttp_rpc_service_test": {
+      "kind": "executable",
+      "sources": {
+        "files": [
+          "chttp_rpc_service_test.c"
+        ]
+      },
+      "private": {
+        "includeDirs": [
+          "$builddir/http_server/tests/rpc_generated/chttp_rpc_service_fixture.idl",
+          "../../include",
+          "../../../http_common/include",
+          "../../../http_client/include"
+        ],
+        "deps": [
+          "chttp_server",
+          "chttp_client",
+          "salts_databind",
+          "cmeta_plugin",
+          "saltsbase_tinytest",
+          "cmeta_cstl",
+          "cmeta_cflow",
+          "salts_cnet",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_cserde",
+          "cmeta_cmeta",
+          "saltsbase_core",
+          "chttp_rpc_service_fixture_idl_codegen"
+        ],
+        "defines": {
+          "HTTP_RPC_GENERATION_PLUGIN_PATH": "\"$builddir/bin/libchttp_rpc_generation_dso.dll\""
+        },
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "test": {},
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_rpc_generation_dso"
+      ]
+    }
+  }
+}

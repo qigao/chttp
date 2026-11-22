@@ -73,8 +73,7 @@ release tag and successful producer CI, checks the SDK source trees, and
 verifies each archive against its digest and GitHub asset size.
 Windows LLVM-MinGW configuration passed with this SDK after restoring the
 missing Ed25519 test key and selecting Base's exported `Salts::URI` target.
-The existing `http_example_contract_idl_codegen` target and
-`chttp_thread_cpu_test` passed.
+The IDL fixture available at that time and `chttp_thread_cpu_test` passed.
 
 The JOSE primitive interface is supplied by SaltsCNet 0.1.14 through
 `Salts::Crypto`. The former cjwt-private adapter has moved upstream; CHttp

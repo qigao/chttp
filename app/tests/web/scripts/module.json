@@ -1,0 +1,99 @@
+{
+  "targets": {
+    "chttp_web_form_plan_boundary_contract": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "test": {
+        "tool": "cmake",
+        "args": [
+          "-DFORM_PLAN_SOURCE=$root/app/src/chttp_web_form_plan.c",
+          "-P",
+          "$root/app/tests/web/chttp_web_form_plan_contract_test.cmake"
+        ]
+      }
+    },
+    "chttp_web_http_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_web_example"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/app/tests/web/test_chttp_web_http.py",
+          "${artifact:chttp_web_example}"
+        ]
+      }
+    },
+    "chttp_web_context_http_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_web_context_example"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/app/tests/web/test_chttp_web_context_http.py",
+          "${artifact:chttp_web_context_example}"
+        ]
+      }
+    },
+    "chttp_web_session_http_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_web_session_example"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/app/tests/web/test_chttp_web_session_http.py",
+          "${artifact:chttp_web_session_example}"
+        ]
+      }
+    },
+    "chttp_web_security_http_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_web_security_example"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/app/tests/web/test_chttp_web_security_http.py",
+          "${artifact:chttp_web_security_example}",
+          "$root/openapi/ui/templates/layout.html"
+        ]
+      }
+    },
+    "chttp_web_form_upload_http_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_web_form_upload_example"
+      ],
+      "test": {
+        "tool": "python",
+        "args": [
+          "$root/app/tests/web/test_chttp_web_form_upload_http.py",
+          "${artifact:chttp_web_form_upload_example}"
+        ]
+      }
+    }
+  }
+}

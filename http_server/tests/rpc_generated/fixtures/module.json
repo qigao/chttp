@@ -1,0 +1,71 @@
+{
+  "targets": {
+    "chttp_rpc_service_fixture_idl_codegen": {
+      "kind": "header_only",
+      "testOnly": true,
+      "when": {
+        "native": true
+      },
+      "preTasks": [
+        {
+          "name": "generate_idl",
+          "tool": "salts-idlc",
+          "args": [
+            "$root/http_server/tests/rpc_generated/chttp_rpc_service.schema",
+            "--lang",
+            "c",
+            "--output",
+            "$builddir/http_server/tests/rpc_generated/chttp_rpc_service_fixture.idl/chttp_rpc_service_native.h",
+            "--artifact-name",
+            "chttp_rpc_service",
+            "--transports",
+            "rpc",
+            "--projection-config",
+            "$root/http_server/tests/rpc_generated/chttp_rpc_service.projection.json"
+          ],
+          "inputs": [
+            "$root/http_server/tests/rpc_generated/chttp_rpc_service.schema",
+            "$root/http_server/tests/rpc_generated/chttp_rpc_service.projection.json",
+            "${envPath:SALTS_UTILS_ROOT}/bin/salts-idlc${host:exe}",
+            "${envPath:SALTS_BASE_ROOT}/bin/libsalts.dll",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_guest_adapter.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_structs.mustache",
+            "${envPath:SALTS_UTILS_ROOT}/bin/templates/c/c_typed_source.mustache"
+          ],
+          "outputs": [
+            "$builddir/http_server/tests/rpc_generated/chttp_rpc_service_fixture.idl/chttp_rpc_service_native.h",
+            "$builddir/http_server/tests/rpc_generated/chttp_rpc_service_fixture.idl/chttp_rpc_service.rpc.h"
+          ]
+        }
+      ]
+    },
+    "chttp_rpc_generation_dso": {
+      "kind": "shared",
+      "outputPrefix": "lib",
+      "sources": {
+        "files": [
+          "../chttp_rpc_generation_dso.c"
+        ]
+      },
+      "private": {
+        "deps": [
+          "salts_databind",
+          "cmeta_cstl",
+          "saltsbase_cserde",
+          "cmeta_cflow",
+          "cmeta_cmeta",
+          "saltsbase_native_io",
+          "saltsbase_coroutine",
+          "saltsbase_core"
+        ],
+        "libs": [
+          "ws2_32"
+        ]
+      },
+      "testOnly": true,
+      "when": {
+        "native": true
+      }
+    }
+  }
+}

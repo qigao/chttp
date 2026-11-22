@@ -1,0 +1,19 @@
+{
+  "targets": {
+    "chttp_web_authenticated_app_test": {
+      "kind": "header_only",
+      "when": {
+        "native": true
+      },
+      "runtimeDeps": [
+        "chttp_web_authenticated_app_example"
+      ],
+      "test": {
+        "program": "${artifact:chttp_web_authenticated_app_example}",
+        "args": [
+          "--self-test"
+        ]
+      }
+    }
+  }
+}
