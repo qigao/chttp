@@ -201,7 +201,8 @@ static int chttp_tls_test_poll_until(chttp_async_client *client, chttp_tls_async
 
 static int chttp_tls_test_matrix_case(const char *name, const char *ca_file,
                                       const char *cert_file, const char *key_file,
-                                      int expect_success) {
+                                      int expect_success, cnet_tls_protocol_version version,
+                                      const cnet_tls_signature_scheme *cert_scheme) {
   static const char *h1[] = {"http/1.1"};
   chttp_server server = {0};
   chttp_client client = {0};
@@ -212,12 +213,20 @@ static int chttp_tls_test_matrix_case(const char *name, const char *ca_file,
   cnet_tls_server_config server_tls = {.size = sizeof(server_tls),
                                         .cert_file = cert_file,
                                         .key_file = key_file,
+                                        .minimum_version = version,
+                                        .maximum_version = version,
+                                        .certificate_signature_algorithms = cert_scheme,
+                                        .certificate_signature_algorithm_count = cert_scheme ? 1u : 0u,
                                         .client_auth = CNET_TLS_CLIENT_AUTH_NONE,
                                         .alpn_protocols = h1,
                                         .alpn_protocol_count = 1u};
   cnet_tls_client_config client_tls = {.size = sizeof(client_tls),
                                         .ca_file = ca_file,
                                         .server_name = "localhost",
+                                        .minimum_version = version,
+                                        .maximum_version = version,
+                                        .certificate_signature_algorithms = cert_scheme,
+                                        .certificate_signature_algorithm_count = cert_scheme ? 1u : 0u,
                                         .alpn_protocols = h1,
                                         .alpn_protocol_count = 1u};
   chttp_response response = {0};
@@ -578,7 +587,10 @@ spec("CHTTP HTTPS adapter") {
         {"RSA-PSS certificate signed by an untrusted CA", CHTTP_X509_PATH("p256-test-root-cert.pem"),
          CHTTP_X509_PATH("rsa3072-test-server-pss-cert.pem"),
          CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 0},
-        {"ECDSA SHA512 certificate signature", CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),
+        {"RSA-PSS certificate with a damaged signature", CHTTP_X509_PATH("rsa3072-test-root-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-pss-tampered-cert.pem"),
+         CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 0},
+        {"P-384/SHA-512 under default TLS policy", CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),
          CHTTP_X509_PATH("sha512-mixed-server-cert.pem"),
          CHTTP_X509_PATH("sha512-mixed-server-key.pem"), 0},
         {"P521 issuer", CHTTP_X509_PATH("unsupported-p521-root-cert.pem"),
@@ -592,8 +604,44 @@ spec("CHTTP HTTPS adapter") {
       check_equal(chttp_tls_test_matrix_case(
                       cases[case_index].name, cases[case_index].ca_file,
                       cases[case_index].cert_file, cases[case_index].key_file,
-                      cases[case_index].expect_success),
+                      cases[case_index].expect_success, 0, NULL),
                   SALTS_OK);
+    if (rsa_pss) {
+      const cnet_tls_signature_scheme pss = CRYPTO_TLS_SIGNATURE_RSA_PSS_RSAE_SHA256;
+      check_equal(chttp_tls_test_matrix_case(
+                      "TLS 1.2 with an explicit RSA-PSS certificate scheme",
+                      CHTTP_X509_PATH("rsa3072-test-root-cert.pem"),
+                      CHTTP_X509_PATH("rsa3072-test-server-pss-cert.pem"),
+                      CHTTP_X509_PATH("rsa3072-test-server-key.pem"), 1,
+                      CNET_TLS_PROTOCOL_VERSION_1_2, &pss),
+                  SALTS_OK);
+    }
+#ifdef CRYPTO_TLS_FEATURE_TLS12_X509_ECDSA_P384_SHA512
+    if (features & CRYPTO_TLS_FEATURE_TLS12_X509_ECDSA_P384_SHA512) {
+      const cnet_tls_signature_scheme sha512 = CRYPTO_TLS_SIGNATURE_ECDSA_SHA512_TLS12;
+      check_equal(chttp_tls_test_matrix_case(
+                      "TLS 1.2 with a P-384 issuer using SHA-512",
+                      CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),
+                      CHTTP_X509_PATH("sha512-mixed-server-cert.pem"),
+                      CHTTP_X509_PATH("sha512-mixed-server-key.pem"), 1,
+                      CNET_TLS_PROTOCOL_VERSION_1_2, &sha512),
+                  SALTS_OK);
+      check_equal(chttp_tls_test_matrix_case(
+                      "P-384/SHA-512 outside the TLS 1.2 certificate allowlist",
+                      CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),
+                      CHTTP_X509_PATH("sha512-mixed-server-cert.pem"),
+                      CHTTP_X509_PATH("sha512-mixed-server-key.pem"), 0,
+                      CNET_TLS_PROTOCOL_VERSION_1_2, NULL),
+                  SALTS_OK);
+      check_equal(chttp_tls_test_matrix_case(
+                      "TLS 1.2 with a damaged P-384/SHA-512 signature",
+                      CHTTP_X509_PATH("sha512-mixed-root-cert.pem"),
+                      CHTTP_X509_PATH("sha512-mixed-server-tampered-cert.pem"),
+                      CHTTP_X509_PATH("sha512-mixed-server-key.pem"), 0,
+                      CNET_TLS_PROTOCOL_VERSION_1_2, &sha512),
+                  SALTS_OK);
+    }
+#endif
   }
 
   it("serves HTTPS middleware and sessions across fixed owners") {
